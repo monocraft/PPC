@@ -14,17 +14,25 @@
         <span class="eyebrow">Interactive portfolio editor</span>
         <input id="boardTitle" class="board-title" aria-label="Board title">
       </div>
+
+      <div class="view-switch" role="tablist" aria-label="Portfolio view">
+        <button class="view-tab is-active" data-view="products" role="tab" aria-selected="true">Product cards</button>
+        <button class="view-tab" data-view="roadmap" role="tab" aria-selected="false">Roadmap</button>
+        <button class="view-tab" data-view="split" role="tab" aria-selected="false">Split view</button>
+      </div>
+
       <div class="toolbar-actions">
         <button id="addProduct" class="primary-button">+ Add product</button>
+        <button id="linkedView" disabled>View on roadmap</button>
+        <button id="editSelected">Edit selected</button>
         <button id="importJson">Import JSON</button>
         <button id="exportJson">Export JSON</button>
         <button id="exportPng">Export PNG</button>
-        <button id="openReference">Reference</button>
         <input id="importFile" class="visually-hidden" type="file" accept="application/json">
       </div>
     </header>
 
-    <section class="controlbar">
+    <section id="productControls" class="controlbar view-controls">
       <input id="searchInput" class="search-input" placeholder="Search product, status, or SKU…">
       <label class="inline-field">Sort
         <select id="sortMode">
@@ -37,40 +45,91 @@
         </select>
       </label>
       <button id="applySort">Apply sort</button>
-      <label class="checkbox-label control-checkbox"><input id="freeMove" type="checkbox">Free move</label>
       <label class="checkbox-label control-checkbox"><input id="showPrices" type="checkbox">Prices</label>
       <label class="checkbox-label control-checkbox"><input id="showSkus" type="checkbox">SKU footer</label>
       <button id="resetLayout">Reset layout</button>
       <div class="zoom-control">
         <button id="zoomOut" aria-label="Zoom out">−</button>
-        <span id="zoomLabel">82%</span>
+        <button id="zoomReset" class="zoom-reset" aria-label="Reset zoom to 100%">100%</button>
         <button id="zoomIn" aria-label="Zoom in">+</button>
       </div>
       <button id="restoreSample" class="text-button">Restore sample</button>
     </section>
 
+    <section id="roadmapControls" class="controlbar view-controls hidden">
+      <input id="roadmapSearch" class="search-input" placeholder="Search roadmap products…">
+      <label class="inline-field">From <input id="roadmapStart" class="month-input" type="month"></label>
+      <label class="inline-field">To <input id="roadmapEnd" class="month-input" type="month"></label>
+      <label class="inline-field">Snap
+        <select id="roadmapSnap">
+          <option value="month">Month</option>
+          <option value="quarter">Quarter</option>
+          <option value="half">Half-year</option>
+        </select>
+      </label>
+      <label class="inline-field">Color
+        <select id="roadmapColorBy">
+          <option value="status">Roadmap status</option>
+          <option value="product">Product status</option>
+        </select>
+      </label>
+      <button id="roadmapToday">Today</button>
+      <button id="roadmapFit">Fit timeline</button>
+      <button id="roadmapShowSelected">Show selected</button>
+      <span class="roadmap-help">Drag a bar to move it; drag either edge to resize.</span>
+    </section>
+
     <section class="workspace">
-      <div id="canvasScroll" class="canvas-scroll">
-        <canvas id="boardCanvas" aria-label="Interactive product portfolio canvas"></canvas>
-      </div>
-      <aside id="inspector" class="inspector"></aside>
+      <section id="productView" class="view-pane product-view">
+        <div id="canvasScroll" class="canvas-scroll">
+          <canvas id="boardCanvas" tabindex="0" aria-label="Interactive product portfolio canvas. Select a card, double-click it to edit, choose View more specifications, or drag the empty background horizontally to navigate."></canvas>
+        </div>
+
+        <nav id="boardNavigator" class="board-navigator hidden" aria-label="Horizontal board navigation">
+          <button id="navLeft" class="nav-step" aria-label="Scroll board left">‹</button>
+          <input id="navRange" class="nav-range" type="range" min="0" max="0" value="0" aria-label="Horizontal board position">
+          <button id="navRight" class="nav-step" aria-label="Scroll board right">›</button>
+          <button id="navSelected" class="nav-selected">Show selected</button>
+          <span id="navPosition" class="nav-position">0%</span>
+        </nav>
+      </section>
+
+      <section id="roadmapView" class="view-pane roadmap-view hidden">
+        <div id="roadmapScroll" class="canvas-scroll roadmap-scroll">
+          <canvas id="roadmapCanvas" tabindex="0" aria-label="Interactive roadmap. Drag product bars to move dates, drag bar edges to resize, and drag empty space horizontally to navigate."></canvas>
+        </div>
+        <nav id="roadmapNavigator" class="board-navigator hidden" aria-label="Horizontal roadmap navigation">
+          <button id="roadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
+          <input id="roadmapNavRange" class="nav-range" type="range" min="0" max="0" value="0" aria-label="Roadmap horizontal position">
+          <button id="roadmapNavRight" class="nav-step" aria-label="Scroll roadmap right">›</button>
+          <button id="roadmapNavSelected" class="nav-selected">Show selected</button>
+          <span id="roadmapNavPosition" class="nav-position">0%</span>
+        </nav>
+      </section>
+
+      <section id="splitView" class="view-pane split-view hidden">
+        <aside id="splitProduct" class="split-product"></aside>
+        <div class="split-roadmap-shell">
+          <div id="splitRoadmapScroll" class="canvas-scroll roadmap-scroll">
+            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap split view. Select or drag a product bar while reviewing the selected product details."></canvas>
+          </div>
+          <nav id="splitRoadmapNavigator" class="board-navigator hidden" aria-label="Split roadmap navigation">
+            <button id="splitRoadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
+            <input id="splitRoadmapNavRange" class="nav-range" type="range" min="0" max="0" value="0" aria-label="Split roadmap horizontal position">
+            <button id="splitRoadmapNavRight" class="nav-step" aria-label="Scroll roadmap right">›</button>
+            <button id="splitRoadmapNavSelected" class="nav-selected">Show selected</button>
+            <span id="splitRoadmapNavPosition" class="nav-position">0%</span>
+          </nav>
+        </div>
+      </section>
+
+      <aside id="inspector" class="inspector" aria-hidden="true"></aside>
     </section>
 
     <footer id="statusbar" class="statusbar"></footer>
   </main>
 
-  <div id="referenceModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="Original reference board">
-    <div class="reference-modal">
-      <div class="reference-heading">
-        <div>
-          <span class="eyebrow">Original visual reference</span>
-          <h2>Headset portfolio layout</h2>
-        </div>
-        <button id="closeReference" class="icon-button modal-close" aria-label="Close">×</button>
-      </div>
-      <img src="assets/reference-board.png" alt="Original headset portfolio reference">
-    </div>
-  </div>
+  <div id="specPopover" class="spec-popover hidden" role="dialog" aria-hidden="true" aria-label="Product specifications"></div>
 
   <script src="app.js"></script>
 </body>

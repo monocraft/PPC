@@ -16,22 +16,73 @@ const PRICE_BASELINE_OFFSET = 53;
 const DETAILS_TOP_OFFSET = 66;
 const PLACEHOLDER_IMAGE = "assets/headset-placeholder.svg";
 
+const ROADMAP_LEFT_WIDTH = 190;
+const ROADMAP_HEADER_HEIGHT = 112;
+const ROADMAP_GROUP_HEADER_HEIGHT = 28;
+const ROADMAP_ROW_HEIGHT = 38;
+const ROADMAP_BOTTOM_PADDING = 24;
+const ROADMAP_MIN_MONTH_WIDTH = 42;
+const ROADMAP_MAX_MONTH_WIDTH = 112;
+
 const $ = (selector) => document.querySelector(selector);
 const canvas = $("#boardCanvas");
 const ctx = canvas.getContext("2d");
+const canvasScroll = $("#canvasScroll");
+const boardNavigator = $("#boardNavigator");
+const navRange = $("#navRange");
+const navLeft = $("#navLeft");
+const navRight = $("#navRight");
+const navSelected = $("#navSelected");
+const navPosition = $("#navPosition");
 const inspector = $("#inspector");
+const specPopover = $("#specPopover");
+const editSelectedButton = $("#editSelected");
 const imageCache = new Map();
+const productView = $("#productView");
+const roadmapView = $("#roadmapView");
+const splitView = $("#splitView");
+const productControls = $("#productControls");
+const roadmapControls = $("#roadmapControls");
+const linkedViewButton = $("#linkedView");
+const roadmapCanvas = $("#roadmapCanvas");
+const roadmapScroll = $("#roadmapScroll");
+const roadmapNavigator = $("#roadmapNavigator");
+const roadmapNavRange = $("#roadmapNavRange");
+const roadmapNavLeft = $("#roadmapNavLeft");
+const roadmapNavRight = $("#roadmapNavRight");
+const roadmapNavSelected = $("#roadmapNavSelected");
+const roadmapNavPosition = $("#roadmapNavPosition");
+const splitRoadmapCanvas = $("#splitRoadmapCanvas");
+const splitRoadmapScroll = $("#splitRoadmapScroll");
+const splitRoadmapNavigator = $("#splitRoadmapNavigator");
+const splitRoadmapNavRange = $("#splitRoadmapNavRange");
+const splitRoadmapNavLeft = $("#splitRoadmapNavLeft");
+const splitRoadmapNavRight = $("#splitRoadmapNavRight");
+const splitRoadmapNavSelected = $("#splitRoadmapNavSelected");
+const splitRoadmapNavPosition = $("#splitRoadmapNavPosition");
+const splitProduct = $("#splitProduct");
 
-let board = loadBoard();
-let selectedId = board.products[0]?.id ?? null;
-let zoom = 0.82;
+let board = null;
+let selectedId = null;
+let zoom = 1;
 let searchQuery = "";
 let dragState = null;
+let panState = null;
 let renderedCards = [];
+let renderedSpecOverflow = [];
+let inspectorOpen = false;
 let saveTimer = null;
+let activeView = "products";
+let roadmapSearchQuery = "";
+let roadmapMonthWidth = 82;
+let roadmapHitRegions = new Map();
+let roadmapDragState = null;
+let roadmapPanState = null;
+let roadmapDraft = null;
 
 function id() {
-  return crypto.randomUUID();
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function spec(label, value) {
@@ -40,6 +91,104 @@ function spec(label, value) {
 
 function sku(code, colorName, colorHex) {
   return { id: id(), code, colorName, colorHex };
+}
+
+function makeRoadmap(family, startMonth, launchMonth, endMonth, status = "active", confidence = "high") {
+  return { family, startMonth, launchMonth, endMonth, status, confidence, predecessorId: "", successorId: "" };
+}
+
+const SAMPLE_ROADMAP = {
+  "cloud-stinger-2-core": makeRoadmap("Stinger", "2026-04", "2026-04", "2027-04", "active", "high"),
+  "cloud-jet-2": makeRoadmap("Jet", "2027-01", "2027-04", "2027-12", "embargo", "medium"),
+  "cloud-stinger-3": makeRoadmap("Stinger", "2026-04", "2026-07", "2027-12", "approved", "high"),
+  "cloud-ii": makeRoadmap("Cloud", "2026-04", "2026-04", "2027-12", "active", "high"),
+  "cloud-iii": makeRoadmap("Cloud", "2026-04", "2026-07", "2027-12", "active", "high"),
+  "cloud-alpha": makeRoadmap("Alpha", "2026-04", "2026-04", "2027-12", "active", "high"),
+  "cloud-alpha-air": makeRoadmap("Openback", "2026-09", "2027-04", "2027-12", "embargo", "medium"),
+  "cloud-jet-wireless": makeRoadmap("Jet", "2026-04", "2026-07", "2027-06", "active", "high"),
+  "cloud-jet-2-wireless": makeRoadmap("Jet", "2027-02", "2027-07", "2027-12", "embargo", "medium"),
+  "cloud-stinger-3-wireless": makeRoadmap("Stinger", "2026-04", "2026-10", "2027-12", "approved", "high"),
+  "cloud-flight-2-wireless": makeRoadmap("Flight", "2026-04", "2026-10", "2027-12", "active", "high"),
+  "cloud-iii-s-wireless": makeRoadmap("Cloud", "2026-04", "2026-10", "2027-12", "active", "high"),
+  "cloud-alpha-wireless": makeRoadmap("Alpha", "2026-04", "2026-04", "2027-12", "active", "high"),
+  "cloud-alpha-2-wireless": makeRoadmap("Alpha", "2026-04", "2026-10", "2027-12", "active", "high"),
+};
+
+function monthStringFromDate(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthIndex(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})/);
+  if (!match) return null;
+  return Number(match[1]) * 12 + Number(match[2]) - 1;
+}
+
+function monthString(index) {
+  const year = Math.floor(index / 12);
+  const month = index % 12;
+  return `${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
+function addMonths(value, amount) {
+  const index = monthIndex(value);
+  return monthString((index ?? monthIndex(monthStringFromDate())) + amount);
+}
+
+function normalizeMonth(value, fallback) {
+  const index = monthIndex(value);
+  return index == null ? fallback : monthString(index);
+}
+
+function inferFamily(name) {
+  const value = String(name || "").toLowerCase();
+  if (value.includes("jet")) return "Jet";
+  if (value.includes("stinger")) return "Stinger";
+  if (value.includes("flight")) return "Flight";
+  if (value.includes("alpha air")) return "Openback";
+  if (value.includes("alpha")) return "Alpha";
+  if (value.includes("cloud")) return "Cloud";
+  return "Other";
+}
+
+function defaultRoadmapForProduct(product, index = 0) {
+  if (SAMPLE_ROADMAP[product.id]) return { ...SAMPLE_ROADMAP[product.id] };
+  const current = monthStringFromDate();
+  const start = addMonths(current, Math.floor(index / 3));
+  return makeRoadmap(inferFamily(product.name), start, addMonths(start, 6), addMonths(start, 18), product.statusType === "embargo" ? "embargo" : "planned", "medium");
+}
+
+function ensureBoardSchema(target) {
+  target.settings = { ...target.settings, freeMove: false };
+  target.settings.roadmap = {
+    startMonth: "2026-01",
+    endMonth: "2027-12",
+    snap: "month",
+    colorBy: "status",
+    ...(target.settings.roadmap || {}),
+  };
+  if (monthIndex(target.settings.roadmap.endMonth) <= monthIndex(target.settings.roadmap.startMonth)) {
+    target.settings.roadmap.endMonth = addMonths(target.settings.roadmap.startMonth, 23);
+  }
+  target.products.forEach((product, index) => {
+    delete product.manualPosition;
+    const fallback = defaultRoadmapForProduct(product, index);
+    const existing = product.roadmap || {};
+    product.roadmap = {
+      ...fallback,
+      ...existing,
+      family: existing.family || fallback.family,
+      startMonth: normalizeMonth(existing.startMonth || existing.startDate, fallback.startMonth),
+      launchMonth: normalizeMonth(existing.launchMonth || existing.launchDate, fallback.launchMonth),
+      endMonth: normalizeMonth(existing.endMonth || existing.endDate, fallback.endMonth),
+      predecessorId: existing.predecessorId || "",
+      successorId: existing.successorId || "",
+    };
+    if (monthIndex(product.roadmap.endMonth) < monthIndex(product.roadmap.startMonth)) product.roadmap.endMonth = product.roadmap.startMonth;
+    if (monthIndex(product.roadmap.launchMonth) < monthIndex(product.roadmap.startMonth)) product.roadmap.launchMonth = product.roadmap.startMonth;
+    if (monthIndex(product.roadmap.launchMonth) > monthIndex(product.roadmap.endMonth)) product.roadmap.launchMonth = product.roadmap.endMonth;
+  });
+  return target;
 }
 
 function makeProduct(productId, name, price, laneId, order, options = {}) {
@@ -54,13 +203,14 @@ function makeProduct(productId, name, price, laneId, order, options = {}) {
     statusLabel: options.statusLabel || "",
     highlightEnabled: Boolean(options.highlightEnabled),
     highlightColor: options.highlightColor || "#e44168",
+    roadmap: options.roadmap || null,
     specs: options.specs || [],
     skus: options.skus || [],
   };
 }
 
 function createDefaultBoard() {
-  return {
+  const created = {
     version: 1,
     title: "Gaming Headset Portfolio",
     lanes: [
@@ -150,19 +300,24 @@ function createDefaultBoard() {
       ], skus: [sku("BLK", "Black", "#111111"), sku("WHT", "White", "#f0f0f0")] }),
     ],
   };
+  return ensureBoardSchema(created);
 }
 
 function loadBoard() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (parsed?.version === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.lanes)) return parsed;
+    if (parsed?.version === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.lanes)) {
+      return ensureBoardSchema(parsed);
+    }
   } catch (_) {}
-  return createDefaultBoard();
+  return ensureBoardSchema(createDefaultBoard());
 }
 
 function scheduleSave() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(board)), 120);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(board)); } catch (_) {}
+  }, 120);
 }
 
 function updateBoard(mutator, { inspector: updateInspector = false } = {}) {
@@ -170,7 +325,7 @@ function updateBoard(mutator, { inspector: updateInspector = false } = {}) {
   scheduleSave();
   syncControls();
   if (updateInspector) renderInspector();
-  renderBoard();
+  renderActiveView();
 }
 
 function sortedLanes() {
@@ -252,7 +407,7 @@ function loadImage(src) {
   const image = new Image();
   image.crossOrigin = "anonymous";
   const record = { image, ready: false, failed: false };
-  image.onload = () => { record.ready = true; renderBoard(); };
+  image.onload = () => { record.ready = true; renderActiveView(); };
   image.onerror = () => { record.failed = true; };
   image.src = src;
   imageCache.set(src, record);
@@ -282,6 +437,7 @@ function drawBoardTo(context, dimensions, includeSelection = true) {
   const lanes = sortedLanes();
   const products = visibleProducts();
   renderedCards = [];
+  renderedSpecOverflow = [];
 
   lanes.forEach((lane, laneIndex) => {
     const laneY = LANE_TOP + laneIndex * LANE_HEIGHT;
@@ -304,12 +460,91 @@ function drawBoardTo(context, dimensions, includeSelection = true) {
       .sort((a, b) => a.order - b.order)
       .forEach((product, displayIndex) => {
         const automatic = { x: GUTTER + displayIndex * (CARD_WIDTH + CARD_GAP), y: laneY };
-        let position = board.settings.freeMove && product.manualPosition ? product.manualPosition : automatic;
+        let position = automatic;
         if (dragState?.productId === product.id) position = dragState.position;
         renderedCards.push({ productId: product.id, laneId: lane.id, x: position.x, y: position.y, width: CARD_WIDTH, height: CARD_HEIGHT });
         drawCard(context, product, position.x, position.y, includeSelection && product.id === selectedId);
       });
   });
+}
+
+function specIconKind(label) {
+  const value = String(label || "").toLowerCase();
+  if (/wireless|connection|connectivity|usb|bluetooth/.test(value)) return "connection";
+  if (/battery|runtime|hours/.test(value)) return "battery";
+  if (/microphone|mic/.test(value)) return "microphone";
+  if (/driver|speaker|frequency/.test(value)) return "driver";
+  if (/audio|spatial|surround|sound/.test(value)) return "audio";
+  if (/cushion|foam|earpad|comfort/.test(value)) return "cushion";
+  if (/frame|material|construction/.test(value)) return "frame";
+  if (/control|button|dial|onboard|inline|in-line/.test(value)) return "controls";
+  return "generic";
+}
+
+function drawSpecIcon(context, label, centerX, centerY) {
+  const kind = specIconKind(label);
+  context.save();
+  context.translate(centerX, centerY);
+  context.strokeStyle = "#737873";
+  context.fillStyle = "#737873";
+  context.lineWidth = 1.25;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.beginPath();
+
+  if (kind === "connection") {
+    context.arc(-4, 0, 2.2, 0, Math.PI * 2);
+    context.moveTo(-1.8, 0); context.lineTo(2.5, 0);
+    context.moveTo(2.5, -3); context.lineTo(2.5, 3);
+    context.moveTo(2.5, -2); context.lineTo(6, -2);
+    context.moveTo(2.5, 2); context.lineTo(6, 2);
+  } else if (kind === "battery") {
+    context.rect(-7, -4, 12, 8);
+    context.moveTo(5, -2); context.lineTo(7, -2);
+    context.moveTo(7, -2); context.lineTo(7, 2);
+    context.moveTo(7, 2); context.lineTo(5, 2);
+  } else if (kind === "microphone") {
+    context.roundRect(-3.5, -7, 7, 11, 3.5);
+    context.moveTo(-6, 1); context.quadraticCurveTo(0, 8, 6, 1);
+    context.moveTo(0, 7); context.lineTo(0, 10);
+    context.moveTo(-3, 10); context.lineTo(3, 10);
+  } else if (kind === "driver") {
+    context.arc(0, 0, 7, 0, Math.PI * 2);
+    context.moveTo(0, -7); context.lineTo(0, -4);
+    context.moveTo(0, 4); context.lineTo(0, 7);
+    context.moveTo(-7, 0); context.lineTo(-4, 0);
+    context.moveTo(4, 0); context.lineTo(7, 0);
+    context.moveTo(-5, -5); context.lineTo(-3, -3);
+    context.moveTo(3, 3); context.lineTo(5, 5);
+    context.moveTo(5, -5); context.lineTo(3, -3);
+    context.moveTo(-3, 3); context.lineTo(-5, 5);
+    context.arc(0, 0, 2.2, 0, Math.PI * 2);
+  } else if (kind === "audio") {
+    context.arc(0, 0, 7, Math.PI, 0);
+    context.moveTo(-7, 0); context.lineTo(-7, 6);
+    context.moveTo(7, 0); context.lineTo(7, 6);
+    context.roundRect(-8, 3, 3, 6, 1);
+    context.roundRect(5, 3, 3, 6, 1);
+  } else if (kind === "cushion") {
+    context.moveTo(-7, -4); context.lineTo(0, 0); context.lineTo(7, -4);
+    context.moveTo(-7, 1); context.lineTo(0, 5); context.lineTo(7, 1);
+  } else if (kind === "frame") {
+    context.moveTo(0, -7); context.lineTo(7, -3); context.lineTo(0, 1); context.lineTo(-7, -3); context.closePath();
+    context.moveTo(-7, 2); context.lineTo(0, 6); context.lineTo(7, 2);
+  } else if (kind === "controls") {
+    context.arc(0, 0, 4, 0, Math.PI * 2);
+    for (let i = 0; i < 8; i += 1) {
+      const angle = (Math.PI * 2 * i) / 8;
+      context.moveTo(Math.cos(angle) * 5.2, Math.sin(angle) * 5.2);
+      context.lineTo(Math.cos(angle) * 7.5, Math.sin(angle) * 7.5);
+    }
+    context.moveTo(-1.5, 0); context.lineTo(1.5, 0);
+  } else {
+    context.moveTo(0, -6); context.lineTo(6, 0); context.lineTo(0, 6); context.lineTo(-6, 0); context.closePath();
+  }
+
+  context.stroke();
+  context.restore();
 }
 
 function drawCard(context, product, x, y, selected) {
@@ -356,27 +591,37 @@ function drawCard(context, product, x, y, selected) {
 
   const footerHeight = board.settings.showSkus && product.skus.length ? 72 : 0;
   const detailsBottom = y + CARD_HEIGHT - footerHeight;
-  const visibleSpecs = product.specs.slice(0, 8);
+  const rowHeight = 32;
+  const rowsTop = detailsTop + 9;
+  const overflowButtonHeight = 24;
+  const availableHeight = Math.max(0, detailsBottom - rowsTop);
+  let visibleSpecCount = Math.max(0, Math.floor(availableHeight / rowHeight));
+  if (product.specs.length > visibleSpecCount) {
+    visibleSpecCount = Math.max(0, Math.floor((availableHeight - overflowButtonHeight - 8) / rowHeight));
+  }
+  const visibleSpecs = product.specs.slice(0, visibleSpecCount);
   visibleSpecs.forEach((item, index) => {
-    const rowY = detailsTop + 11 + index * 34;
-    if (rowY + 31 > detailsBottom) return;
-    roundRect(context, x + 11, rowY + 2, 13, 13, 3, null, "#666a66");
-    context.fillStyle = "#777b77";
-    context.font = "10px Arial";
+    const rowY = rowsTop + index * rowHeight;
+    drawSpecIcon(context, item.label, x + 22, rowY + 11);
+    context.fillStyle = "#c9ccc9";
+    context.font = "11.5px Arial";
     context.textAlign = "left";
-    context.fillText(truncate(item.label, 14), x + 32, rowY + 10);
-    context.fillStyle = "#c7c9c7";
-    context.font = "11px Arial";
-    wrapText(context, item.value, x + 102, rowY + 10, 132, 13, 2, "left");
+    wrapText(context, item.value, x + 43, rowY + 10, CARD_WIDTH - 55, 13, 2, "left");
     context.strokeStyle = "#303230";
-    context.beginPath(); context.moveTo(x + 10, rowY + 27); context.lineTo(x + CARD_WIDTH - 10, rowY + 27); context.stroke();
+    context.beginPath(); context.moveTo(x + 10, rowY + 26); context.lineTo(x + CARD_WIDTH - 10, rowY + 26); context.stroke();
   });
 
-  if (product.specs.length > visibleSpecs.length) {
-    context.fillStyle = "#8d918d";
-    context.font = "10px Arial";
-    context.textAlign = "right";
-    context.fillText(`+ ${product.specs.length - visibleSpecs.length} more specifications`, x + CARD_WIDTH - 12, detailsBottom - 10);
+  const hiddenSpecCount = product.specs.length - visibleSpecs.length;
+  if (hiddenSpecCount > 0) {
+    const buttonX = x + 10;
+    const buttonY = detailsBottom - overflowButtonHeight - 7;
+    const buttonWidth = CARD_WIDTH - 20;
+    roundRect(context, buttonX, buttonY, buttonWidth, overflowButtonHeight, 4, "#2b2e2b", "#454945");
+    context.fillStyle = "#b7bbb7";
+    context.font = "700 10px Arial";
+    context.textAlign = "center";
+    context.fillText(`View ${hiddenSpecCount} more specification${hiddenSpecCount === 1 ? "" : "s"}  →`, x + CARD_WIDTH / 2, buttonY + 16);
+    renderedSpecOverflow.push({ productId: product.id, x: buttonX, y: buttonY, width: buttonWidth, height: overflowButtonHeight });
   }
 
   if (footerHeight) {
@@ -401,19 +646,722 @@ function drawCard(context, product, x, y, selected) {
   }
 }
 
-function renderBoard() {
-  const { context, dimensions } = setupCanvas(canvas, zoom);
-  drawBoardTo(context, dimensions, true);
-  $("#zoomLabel").textContent = `${Math.round(zoom * 100)}%`;
+function roadmapRange() {
+  const settings = board.settings.roadmap;
+  let start = monthIndex(settings.startMonth);
+  let end = monthIndex(settings.endMonth);
+  if (start == null) start = monthIndex("2026-01");
+  if (end == null || end <= start) end = start + 23;
+  return { start, end, count: end - start + 1 };
+}
+
+function visibleRoadmapProducts() {
+  const query = roadmapSearchQuery.trim().toLowerCase();
+  if (!query) return board.products;
+  return board.products.filter((product) => {
+    const roadmap = product.roadmap || {};
+    const haystack = [product.name, roadmap.family, roadmap.status, roadmap.confidence, product.statusLabel].join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function roadmapFamilyOrder(family) {
+  const order = ["Jet", "Stinger", "Flight", "Cloud", "Alpha", "Openback", "Other"];
+  const index = order.indexOf(family);
+  return index < 0 ? order.length : index;
+}
+
+function roadmapGroups() {
+  const groups = new Map();
+  visibleRoadmapProducts().forEach((product) => {
+    const family = product.roadmap?.family || inferFamily(product.name);
+    if (!groups.has(family)) groups.set(family, []);
+    groups.get(family).push(product);
+  });
+  return [...groups.entries()]
+    .sort((a, b) => roadmapFamilyOrder(a[0]) - roadmapFamilyOrder(b[0]) || a[0].localeCompare(b[0]))
+    .map(([family, products]) => ({
+      family,
+      products: products.sort((a, b) => monthIndex(a.roadmap.startMonth) - monthIndex(b.roadmap.startMonth) || a.name.localeCompare(b.name)),
+    }));
+}
+
+function roadmapDimensions() {
+  const range = roadmapRange();
+  const groups = roadmapGroups();
+  const rowsHeight = groups.reduce((sum, group) => sum + ROADMAP_GROUP_HEADER_HEIGHT + group.products.length * ROADMAP_ROW_HEIGHT, 0);
+  return {
+    width: ROADMAP_LEFT_WIDTH + range.count * roadmapMonthWidth + 24,
+    height: ROADMAP_HEADER_HEIGHT + rowsHeight + ROADMAP_BOTTOM_PADDING,
+    range,
+    groups,
+  };
+}
+
+function roadmapStatusColor(product) {
+  if (board.settings.roadmap.colorBy === "product") {
+    if (product.statusType === "embargo") return "#b83458";
+    if (product.statusType === "new") return "#4e8136";
+    if (product.statusType === "custom") return "#78642c";
+    return "#505450";
+  }
+  const status = product.roadmap?.status || "active";
+  return {
+    active: "#505450",
+    planned: "#365f45",
+    approved: "#4e8136",
+    concept: "#303430",
+    embargo: "#b83458",
+    "end-of-life": "#694049",
+  }[status] || "#505450";
+}
+
+function roadmapLabel(value) {
+  const index = monthIndex(value);
+  if (index == null) return "Unscheduled";
+  const year = Math.floor(index / 12);
+  const month = index % 12;
+  return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month]} ${year}`;
+}
+
+function roadmapQuarterLabel(value) {
+  const index = monthIndex(value);
+  if (index == null) return "—";
+  return `Q${Math.floor((index % 12) / 3) + 1} ${String(Math.floor(index / 12)).slice(-2)}`;
+}
+
+function effectiveRoadmap(product) {
+  if (roadmapDraft?.productId === product.id) return { ...product.roadmap, ...roadmapDraft.roadmap };
+  return product.roadmap;
+}
+
+function setupRoadmapCanvas(targetCanvas, dimensions) {
+  const dpr = window.devicePixelRatio || 1;
+  targetCanvas.width = Math.round(dimensions.width * dpr);
+  targetCanvas.height = Math.round(dimensions.height * dpr);
+  targetCanvas.style.width = `${dimensions.width}px`;
+  targetCanvas.style.height = `${dimensions.height}px`;
+  const context = targetCanvas.getContext("2d");
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  return context;
+}
+
+function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeSelection = true, exportMode = false) {
+  const { width, height, range, groups } = dimensions;
+  const stickyX = exportMode ? 0 : targetScroll.scrollLeft;
+  const stickyY = exportMode ? 0 : targetScroll.scrollTop;
+  const regions = [];
+
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#151715";
+  context.fillRect(0, 0, width, height);
+
+  context.save();
+  context.globalAlpha = 0.075;
+  context.fillStyle = "#ffffff";
+  for (let y = 7; y < height; y += 11) {
+    for (let x = 7 + ((y / 11) % 2) * 5; x < width; x += 11) context.fillRect(x, y, 1, 1);
+  }
+  context.restore();
+
+  const timelineX = ROADMAP_LEFT_WIDTH;
+  const timelineWidth = range.count * roadmapMonthWidth;
+
+  // Timeline grid and row content.
+  context.save();
+  context.beginPath();
+  context.rect(timelineX, ROADMAP_HEADER_HEIGHT, timelineWidth, height - ROADMAP_HEADER_HEIGHT);
+  context.clip();
+
+  for (let month = 0; month <= range.count; month += 1) {
+    const x = timelineX + month * roadmapMonthWidth;
+    const absolute = range.start + month;
+    const isQuarter = absolute % 3 === 0;
+    const isYear = absolute % 12 === 0;
+    context.strokeStyle = isYear ? "#4c514c" : isQuarter ? "#383d38" : "#292d29";
+    context.lineWidth = isYear ? 1.5 : 1;
+    context.beginPath();
+    context.moveTo(x, ROADMAP_HEADER_HEIGHT);
+    context.lineTo(x, height);
+    context.stroke();
+  }
+
+  let rowY = ROADMAP_HEADER_HEIGHT;
+  groups.forEach((group, groupIndex) => {
+    context.fillStyle = groupIndex % 2 ? "#191c19" : "#1b1e1b";
+    context.fillRect(timelineX, rowY, timelineWidth, ROADMAP_GROUP_HEADER_HEIGHT);
+    rowY += ROADMAP_GROUP_HEADER_HEIGHT;
+
+    group.products.forEach((product, productIndex) => {
+      const roadmap = effectiveRoadmap(product);
+      const rowTop = rowY;
+      context.fillStyle = productIndex % 2 ? "rgba(255,255,255,.012)" : "rgba(0,0,0,.08)";
+      context.fillRect(timelineX, rowTop, timelineWidth, ROADMAP_ROW_HEIGHT);
+      context.strokeStyle = "#2e322e";
+      context.beginPath();
+      context.moveTo(timelineX, rowTop + ROADMAP_ROW_HEIGHT);
+      context.lineTo(timelineX + timelineWidth, rowTop + ROADMAP_ROW_HEIGHT);
+      context.stroke();
+
+      const startIndex = monthIndex(roadmap.startMonth);
+      const endIndex = monthIndex(roadmap.endMonth);
+      if (startIndex != null && endIndex != null) {
+        const unclippedX = timelineX + (startIndex - range.start) * roadmapMonthWidth;
+        const unclippedRight = timelineX + (endIndex - range.start + 1) * roadmapMonthWidth;
+        const barX = Math.max(timelineX + 1, unclippedX + 2);
+        const barRight = Math.min(timelineX + timelineWidth - 1, unclippedRight - 2);
+        const barY = rowTop + 5;
+        const barHeight = ROADMAP_ROW_HEIGHT - 10;
+        const barWidth = Math.max(4, barRight - barX);
+        const selected = includeSelection && product.id === selectedId;
+        const color = roadmapStatusColor(product);
+
+        context.save();
+        if (selected) {
+          context.shadowColor = "rgba(255,255,255,.22)";
+          context.shadowBlur = 10;
+        }
+        roundRect(context, barX, barY, barWidth, barHeight, 3, color, selected ? "#f0f2f0" : product.statusType === "embargo" ? "#df456d" : "#666b66", selected ? 2 : 1);
+        context.restore();
+
+        if (roadmap.status === "concept") {
+          context.save();
+          context.setLineDash([6, 4]);
+          roundRect(context, barX + 1, barY + 1, Math.max(2, barWidth - 2), barHeight - 2, 3, null, "#8a8f8a", 1);
+          context.restore();
+        }
+
+        context.save();
+        context.beginPath();
+        context.rect(barX + 8, barY, Math.max(0, barWidth - 16), barHeight);
+        context.clip();
+        context.fillStyle = "#f3f4f3";
+        context.font = "700 12px Arial";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(product.name.toUpperCase(), barX + barWidth / 2, barY + barHeight / 2 + .5);
+        context.restore();
+
+        const launchIndex = monthIndex(roadmap.launchMonth);
+        if (launchIndex != null && launchIndex >= range.start && launchIndex <= range.end) {
+          const launchX = timelineX + (launchIndex - range.start + .5) * roadmapMonthWidth;
+          context.save();
+          context.translate(launchX, barY + barHeight / 2);
+          context.rotate(Math.PI / 4);
+          context.fillStyle = product.statusType === "embargo" || roadmap.status === "embargo" ? "#ff5a83" : "#99cc77";
+          context.fillRect(-4, -4, 8, 8);
+          context.restore();
+        }
+
+        if (selected && barWidth > 28) {
+          context.strokeStyle = "rgba(255,255,255,.72)";
+          context.lineWidth = 1.5;
+          context.beginPath();
+          context.moveTo(barX + 7, barY + 6);
+          context.lineTo(barX + 7, barY + barHeight - 6);
+          context.moveTo(barX + barWidth - 7, barY + 6);
+          context.lineTo(barX + barWidth - 7, barY + barHeight - 6);
+          context.stroke();
+        }
+
+        regions.push({
+          productId: product.id,
+          x: barX,
+          y: barY,
+          width: barWidth,
+          height: barHeight,
+          leftHandle: { x: barX, width: Math.min(12, barWidth / 3) },
+          rightHandle: { x: barX + barWidth - Math.min(12, barWidth / 3), width: Math.min(12, barWidth / 3) },
+        });
+      }
+      rowY += ROADMAP_ROW_HEIGHT;
+    });
+  });
+  context.restore();
+
+  // Today marker over the timeline body.
+  const todayIndex = monthIndex(monthStringFromDate());
+  if (todayIndex >= range.start && todayIndex <= range.end) {
+    const today = new Date();
+    const fraction = Math.min(.98, Math.max(.02, (today.getDate() - 1) / new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()));
+    const x = timelineX + (todayIndex - range.start + fraction) * roadmapMonthWidth;
+    context.strokeStyle = "rgba(226,65,104,.76)";
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(x, ROADMAP_HEADER_HEIGHT - 8);
+    context.lineTo(x, height);
+    context.stroke();
+  }
+
+  // Sticky family rail.
+  context.fillStyle = "#101210";
+  context.fillRect(stickyX, ROADMAP_HEADER_HEIGHT, ROADMAP_LEFT_WIDTH, height - ROADMAP_HEADER_HEIGHT);
+  context.fillStyle = "#090b09";
+  context.fillRect(stickyX, ROADMAP_HEADER_HEIGHT, 48, height - ROADMAP_HEADER_HEIGHT);
+  context.strokeStyle = "#303430";
+  context.beginPath();
+  context.moveTo(stickyX + ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
+  context.lineTo(stickyX + ROADMAP_LEFT_WIDTH, height);
+  context.stroke();
+
+  context.save();
+  context.translate(stickyX + 31, ROADMAP_HEADER_HEIGHT + Math.max(180, (height - ROADMAP_HEADER_HEIGHT) / 2));
+  context.rotate(-Math.PI / 2);
+  context.fillStyle = "#f0f2f0";
+  context.font = "700 20px Arial";
+  context.textAlign = "center";
+  context.fillText("PC AUDIO", 0, 0);
+  context.restore();
+
+  rowY = ROADMAP_HEADER_HEIGHT;
+  groups.forEach((group, groupIndex) => {
+    const groupHeight = ROADMAP_GROUP_HEADER_HEIGHT + group.products.length * ROADMAP_ROW_HEIGHT;
+    context.fillStyle = groupIndex % 2 ? "#171a17" : "#1a1d1a";
+    context.fillRect(stickyX + 48, rowY, ROADMAP_LEFT_WIDTH - 48, groupHeight);
+    context.strokeStyle = "#303430";
+    context.beginPath();
+    context.moveTo(stickyX + 48, rowY + groupHeight);
+    context.lineTo(stickyX + ROADMAP_LEFT_WIDTH, rowY + groupHeight);
+    context.stroke();
+    context.fillStyle = "#e6e8e6";
+    context.font = "700 12px Arial";
+    context.textAlign = "left";
+    context.textBaseline = "middle";
+    context.fillText(group.family.toUpperCase(), stickyX + 61, rowY + groupHeight / 2);
+    rowY += groupHeight;
+  });
+
+  // Sticky calendar header.
+  context.fillStyle = "#171a17";
+  context.fillRect(stickyX, stickyY, ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
+  context.fillStyle = "#101210";
+  context.fillRect(timelineX, stickyY, timelineWidth, ROADMAP_HEADER_HEIGHT);
+
+  // Year blocks.
+  let cursor = range.start;
+  while (cursor <= range.end) {
+    const year = Math.floor(cursor / 12);
+    const yearEnd = Math.min(range.end, year * 12 + 11);
+    const startOffset = cursor - range.start;
+    const monthCount = yearEnd - cursor + 1;
+    const x = timelineX + startOffset * roadmapMonthWidth;
+    const w = monthCount * roadmapMonthWidth;
+    context.fillStyle = "#1b1e1b";
+    context.fillRect(x, stickyY, w, 34);
+    context.strokeStyle = "#373b37";
+    context.strokeRect(x, stickyY, w, 34);
+    context.fillStyle = "#f0f2f0";
+    context.font = "700 22px Arial";
+    context.textAlign = "left";
+    context.textBaseline = "alphabetic";
+    context.fillText(String(year), x + 10, stickyY + 25);
+    cursor = yearEnd + 1;
+  }
+
+  // Quarter row.
+  for (let i = 0; i < range.count; i += 3) {
+    const absolute = range.start + i;
+    const quarter = Math.floor((absolute % 12) / 3) + 1;
+    const x = timelineX + i * roadmapMonthWidth;
+    const w = Math.min(3, range.count - i) * roadmapMonthWidth;
+    context.fillStyle = "#222522";
+    context.fillRect(x, stickyY + 34, w, 22);
+    context.strokeStyle = "#343834";
+    context.strokeRect(x, stickyY + 34, w, 22);
+    context.fillStyle = quarter === 1 || quarter === 4 ? "#cf3d63" : "#9ea39e";
+    context.font = "700 10px Arial";
+    context.textAlign = "center";
+    context.fillText(`Q${quarter}`, x + w / 2, stickyY + 49);
+  }
+
+  // Half-year band.
+  for (let i = 0; i < range.count; i += 6) {
+    const absolute = range.start + i;
+    const half = (absolute % 12) < 6 ? "1H" : "2H";
+    const x = timelineX + i * roadmapMonthWidth;
+    const w = Math.min(6, range.count - i) * roadmapMonthWidth;
+    context.fillStyle = i % 12 === 0 ? "#626762" : "#777c77";
+    context.fillRect(x, stickyY + 56, w, 22);
+    context.fillStyle = "#111311";
+    context.font = "700 11px Arial";
+    context.textAlign = "center";
+    context.fillText(half, x + w / 2, stickyY + 71);
+  }
+
+  // Month row.
+  for (let i = 0; i < range.count; i += 1) {
+    const absolute = range.start + i;
+    const month = absolute % 12;
+    const x = timelineX + i * roadmapMonthWidth;
+    context.fillStyle = "#090b09";
+    context.fillRect(x, stickyY + 78, roadmapMonthWidth, 34);
+    context.strokeStyle = "#242824";
+    context.strokeRect(x, stickyY + 78, roadmapMonthWidth, 34);
+    context.fillStyle = "#8f958f";
+    context.font = "11px Arial";
+    context.textAlign = "left";
+    context.fillText(["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month], x + 7, stickyY + 100);
+  }
+
+  context.fillStyle = "#171a17";
+  context.fillRect(stickyX, stickyY, ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
+  context.strokeStyle = "#373b37";
+  context.strokeRect(stickyX, stickyY, ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
+  context.fillStyle = "#7f857f";
+  context.font = "800 9px Arial";
+  context.textAlign = "left";
+  context.fillText("PORTFOLIO ROADMAP", stickyX + 14, stickyY + 22);
+  context.fillStyle = "#e7e9e7";
+  context.font = "700 15px Arial";
+  context.fillText(`${range.count} MONTH VIEW`, stickyX + 14, stickyY + 47);
+  context.fillStyle = "#8d938d";
+  context.font = "10px Arial";
+  context.fillText("◆ Launch marker", stickyX + 14, stickyY + 72);
+  context.fillText("Drag bar / resize edges", stickyX + 14, stickyY + 93);
+
+  roadmapHitRegions.set(targetCanvas, regions);
+}
+
+function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
+  if (!targetCanvas || !targetScroll || targetCanvas.closest(".hidden")) return;
+  const previousLeft = targetScroll.scrollLeft;
+  const previousTop = targetScroll.scrollTop;
+  const dimensions = roadmapDimensions();
+  const context = setupRoadmapCanvas(targetCanvas, dimensions);
+  targetScroll.scrollLeft = previousLeft;
+  targetScroll.scrollTop = previousTop;
+  drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
+  requestAnimationFrame(() => syncRoadmapNavigator(targetScroll, navigator));
+}
+
+function renderRoadmaps() {
+  if (activeView === "roadmap") renderRoadmapFor(roadmapCanvas, roadmapScroll, roadmapNavigatorRefs());
+  if (activeView === "split") {
+    renderSplitProduct();
+    renderRoadmapFor(splitRoadmapCanvas, splitRoadmapScroll, splitRoadmapNavigatorRefs());
+  }
+}
+
+function roadmapNavigatorRefs() {
+  return { element: roadmapNavigator, range: roadmapNavRange, left: roadmapNavLeft, right: roadmapNavRight, selected: roadmapNavSelected, position: roadmapNavPosition };
+}
+
+function splitRoadmapNavigatorRefs() {
+  return { element: splitRoadmapNavigator, range: splitRoadmapNavRange, left: splitRoadmapNavLeft, right: splitRoadmapNavRight, selected: splitRoadmapNavSelected, position: splitRoadmapNavPosition };
+}
+
+function syncRoadmapNavigator(targetScroll, refs) {
+  const max = Math.max(0, targetScroll.scrollWidth - targetScroll.clientWidth);
+  const current = Math.max(0, Math.min(max, targetScroll.scrollLeft));
+  const hasOverflow = max > 2;
+  refs.element.classList.toggle("hidden", !hasOverflow);
+  refs.range.max = String(Math.max(1, Math.round(max)));
+  refs.range.value = String(Math.round(current));
+  refs.left.disabled = !hasOverflow || current <= 1;
+  refs.right.disabled = !hasOverflow || current >= max - 1;
+  refs.selected.disabled = !selectedProduct();
+  refs.position.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
+}
+
+function scrollRoadmapSelected(targetScroll, smooth = true) {
+  const regions = roadmapHitRegions.get(targetScroll.querySelector("canvas")) || [];
+  const region = regions.find((item) => item.productId === selectedId);
+  if (!region) return;
+  const targetLeft = Math.max(0, region.x + region.width / 2 - targetScroll.clientWidth / 2);
+  const targetTop = Math.max(0, region.y + region.height / 2 - targetScroll.clientHeight / 2);
+  targetScroll.scrollTo({ left: targetLeft, top: targetTop, behavior: smooth ? "smooth" : "auto" });
+}
+
+function scrollRoadmapToday(targetScroll) {
+  const range = roadmapRange();
+  const today = monthIndex(monthStringFromDate());
+  const x = ROADMAP_LEFT_WIDTH + (today - range.start + .5) * roadmapMonthWidth;
+  targetScroll.scrollTo({ left: Math.max(0, x - targetScroll.clientWidth / 2), behavior: "smooth" });
+}
+
+function fitRoadmapTimeline() {
+  const targetScroll = activeView === "split" ? splitRoadmapScroll : roadmapScroll;
+  const range = roadmapRange();
+  const available = Math.max(320, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH - 24);
+  roadmapMonthWidth = Math.max(ROADMAP_MIN_MONTH_WIDTH, Math.min(ROADMAP_MAX_MONTH_WIDTH, available / range.count));
+  renderRoadmaps();
+}
+
+function roadmapPoint(event, targetCanvas) {
+  const rect = targetCanvas.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function hitRoadmapBar(targetCanvas, point) {
+  const regions = roadmapHitRegions.get(targetCanvas) || [];
+  return [...regions].reverse().find((region) => point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height);
+}
+
+function roadmapSnapIncrement() {
+  return { month: 1, quarter: 3, half: 6 }[board.settings.roadmap.snap] || 1;
+}
+
+function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
+  targetCanvas.addEventListener("pointerdown", (event) => {
+    closeSpecPopover();
+    const point = roadmapPoint(event, targetCanvas);
+    const hit = hitRoadmapBar(targetCanvas, point);
+    if (!hit) {
+      roadmapPanState = { targetCanvas, targetScroll, pointerId: event.pointerId, startX: event.clientX, scrollLeft: targetScroll.scrollLeft };
+      targetCanvas.setPointerCapture(event.pointerId);
+      targetScroll.classList.add("is-panning");
+      return;
+    }
+
+    selectedId = hit.productId;
+    renderInspector();
+    renderSplitProduct();
+    const product = selectedProduct();
+    const roadmap = product.roadmap;
+    const handleSize = Math.min(12, hit.width / 3);
+    const mode = point.x <= hit.x + handleSize ? "start" : point.x >= hit.x + hit.width - handleSize ? "end" : "move";
+    roadmapDragState = {
+      targetCanvas,
+      targetScroll,
+      pointerId: event.pointerId,
+      productId: product.id,
+      mode,
+      startClientX: event.clientX,
+      originalStart: monthIndex(roadmap.startMonth),
+      originalLaunch: monthIndex(roadmap.launchMonth),
+      originalEnd: monthIndex(roadmap.endMonth),
+    };
+    roadmapDraft = { productId: product.id, roadmap: { ...roadmap } };
+    targetCanvas.setPointerCapture(event.pointerId);
+    targetCanvas.style.cursor = mode === "move" ? "grabbing" : "ew-resize";
+    renderRoadmaps();
+  });
+
+  targetCanvas.addEventListener("pointermove", (event) => {
+    if (roadmapPanState?.targetCanvas === targetCanvas) {
+      targetScroll.scrollLeft = roadmapPanState.scrollLeft - (event.clientX - roadmapPanState.startX);
+      return;
+    }
+
+    if (roadmapDragState?.targetCanvas !== targetCanvas) {
+      const point = roadmapPoint(event, targetCanvas);
+      const hit = hitRoadmapBar(targetCanvas, point);
+      if (!hit) targetCanvas.style.cursor = "grab";
+      else {
+        const handleSize = Math.min(12, hit.width / 3);
+        targetCanvas.style.cursor = point.x <= hit.x + handleSize || point.x >= hit.x + hit.width - handleSize ? "ew-resize" : "grab";
+      }
+      return;
+    }
+
+    const viewport = targetScroll.getBoundingClientRect();
+    const edge = 72;
+    if (event.clientX < viewport.left + edge) targetScroll.scrollLeft -= Math.ceil((viewport.left + edge - event.clientX) / 5);
+    if (event.clientX > viewport.right - edge) targetScroll.scrollLeft += Math.ceil((event.clientX - (viewport.right - edge)) / 5);
+
+    const increment = roadmapSnapIncrement();
+    const rawDelta = (event.clientX - roadmapDragState.startClientX) / roadmapMonthWidth;
+    const delta = Math.round(rawDelta / increment) * increment;
+    let start = roadmapDragState.originalStart;
+    let launch = roadmapDragState.originalLaunch;
+    let end = roadmapDragState.originalEnd;
+    if (roadmapDragState.mode === "move") {
+      start += delta;
+      launch += delta;
+      end += delta;
+    } else if (roadmapDragState.mode === "start") {
+      start = Math.min(end, start + delta);
+      launch = Math.max(start, launch);
+    } else {
+      end = Math.max(start, end + delta);
+      launch = Math.min(end, launch);
+    }
+    roadmapDraft = {
+      productId: roadmapDragState.productId,
+      roadmap: { startMonth: monthString(start), launchMonth: monthString(launch), endMonth: monthString(end) },
+    };
+    renderRoadmaps();
+  });
+
+  function finishRoadmapPointer(event) {
+    if (roadmapPanState?.targetCanvas === targetCanvas) {
+      roadmapPanState = null;
+      targetScroll.classList.remove("is-panning");
+      if (targetCanvas.hasPointerCapture(event.pointerId)) targetCanvas.releasePointerCapture(event.pointerId);
+      syncRoadmapNavigator(targetScroll, navigatorRefsFactory());
+      return;
+    }
+    if (roadmapDragState?.targetCanvas !== targetCanvas) return;
+    const draft = roadmapDraft;
+    roadmapDragState = null;
+    roadmapDraft = null;
+    targetCanvas.style.cursor = "grab";
+    if (targetCanvas.hasPointerCapture(event.pointerId)) targetCanvas.releasePointerCapture(event.pointerId);
+    if (draft) {
+      updateRoadmap(draft.productId, draft.roadmap, true);
+    } else {
+      renderRoadmaps();
+    }
+  }
+
+  targetCanvas.addEventListener("pointerup", finishRoadmapPointer);
+  targetCanvas.addEventListener("pointercancel", finishRoadmapPointer);
+  targetCanvas.addEventListener("dblclick", (event) => {
+    const hit = hitRoadmapBar(targetCanvas, roadmapPoint(event, targetCanvas));
+    if (!hit) return;
+    selectedId = hit.productId;
+    openInspector("roadmapSection");
+    renderRoadmaps();
+  });
+
+  targetScroll.addEventListener("scroll", () => {
+    requestAnimationFrame(() => {
+      renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory());
+    });
+  }, { passive: true });
+
+  targetScroll.addEventListener("wheel", (event) => {
+    const max = Math.max(0, targetScroll.scrollWidth - targetScroll.clientWidth);
+    const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
+    if (max <= 0 || !horizontalIntent) return;
+    event.preventDefault();
+    targetScroll.scrollLeft += event.deltaX || event.deltaY;
+  }, { passive: false });
+}
+
+function renderSplitProduct() {
+  if (!splitProduct) return;
+  const product = selectedProduct();
+  if (!product) {
+    splitProduct.innerHTML = '<div class="split-empty"><h2>No product selected</h2><p>Select a roadmap bar to review its product details.</p></div>';
+    return;
+  }
+  const roadmap = product.roadmap;
+  const statusClass = product.statusType === "embargo" ? "status-embargo" : product.statusType === "new" ? "status-new" : "";
+  const iconByKind = { connection: "⌁", battery: "▭", microphone: "◉", driver: "⊙", audio: "◡", cushion: "≋", frame: "◇", controls: "⚙", generic: "◆" };
+  splitProduct.innerHTML = `
+    <article class="split-product-card ${product.highlightEnabled ? "is-highlighted" : ""}" style="--product-highlight:${escapeHtml(product.highlightColor)}">
+      <div class="split-status ${statusClass}">${escapeHtml(product.statusLabel || "SELECTED PRODUCT")}</div>
+      <img class="split-product-image" src="${escapeHtml(product.imageUrl || PLACEHOLDER_IMAGE)}" alt="">
+      <div class="split-product-body">
+        <span class="eyebrow">${escapeHtml(roadmap.family)} family</span>
+        <h2>${escapeHtml(product.name)}</h2>
+        <div class="split-price">${board.settings.showPrices ? (product.price == null ? "Price TBD" : `$${Number(product.price).toFixed(2)}`) : "Price hidden"}</div>
+        <div class="split-roadmap-summary">
+          <div class="split-metric"><span>Roadmap</span><strong>${escapeHtml(roadmapQuarterLabel(roadmap.startMonth))} → ${escapeHtml(roadmapQuarterLabel(roadmap.endMonth))}</strong></div>
+          <div class="split-metric"><span>Launch</span><strong>${escapeHtml(roadmapLabel(roadmap.launchMonth))}</strong></div>
+          <div class="split-metric"><span>Status</span><strong>${escapeHtml(roadmap.status)}</strong></div>
+          <div class="split-metric"><span>Confidence</span><strong>${escapeHtml(roadmap.confidence)}</strong></div>
+        </div>
+        <div class="split-actions">
+          <button id="splitOpenProduct">Product cards</button>
+          <button id="splitEditProduct" class="primary-button">Edit product</button>
+        </div>
+        <div class="split-spec-list">${product.specs.slice(0, 7).map((item) => {
+          const kind = specIconKind(item.label);
+          return `<div class="split-spec-row"><span class="split-spec-icon">${iconByKind[kind] || "◆"}</span><span class="split-spec-value">${escapeHtml(item.value)}</span></div>`;
+        }).join("")}</div>
+        ${product.skus.length ? `<div class="split-skus">${product.skus.map((item) => `<span class="split-sku"><i class="split-sku-swatch" style="background:${escapeHtml(item.colorHex)}"></i>${escapeHtml(item.code)}</span>`).join("")}</div>` : ""}
+      </div>
+    </article>`;
+  $("#splitOpenProduct").onclick = () => setView("products", { focusSelected: true });
+  $("#splitEditProduct").onclick = () => openInspector();
+}
+
+function updateLinkedViewButton() {
+  const hasSelection = Boolean(selectedProduct());
+  linkedViewButton.disabled = !hasSelection;
+  if (activeView === "products") linkedViewButton.textContent = "View on roadmap";
+  else if (activeView === "roadmap") linkedViewButton.textContent = "View product card";
+  else linkedViewButton.textContent = "Open product cards";
+}
+
+function setView(view, { focusSelected = false } = {}) {
+  activeView = ["products", "roadmap", "split"].includes(view) ? view : "products";
+  productView.classList.toggle("hidden", activeView !== "products");
+  roadmapView.classList.toggle("hidden", activeView !== "roadmap");
+  splitView.classList.toggle("hidden", activeView !== "split");
+  productControls.classList.toggle("hidden", activeView !== "products");
+  roadmapControls.classList.toggle("hidden", activeView === "products");
+  document.querySelectorAll(".view-tab").forEach((button) => {
+    const active = button.dataset.view === activeView;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  updateLinkedViewButton();
+  closeSpecPopover();
+  renderActiveView();
+  if (focusSelected) {
+    requestAnimationFrame(() => {
+      if (activeView === "products") scrollSelectedIntoView();
+      else scrollRoadmapSelected(activeView === "split" ? splitRoadmapScroll : roadmapScroll);
+    });
+  }
+}
+
+function renderActiveView() {
+  updateLinkedViewButton();
+  if (activeView === "products") renderBoard();
+  else renderRoadmaps();
   renderStatus();
 }
 
+function horizontalScrollMax() {
+  return Math.max(0, canvasScroll.scrollWidth - canvasScroll.clientWidth);
+}
+
+function syncBoardNavigator() {
+  const max = horizontalScrollMax();
+  const current = Math.max(0, Math.min(max, canvasScroll.scrollLeft));
+  const hasOverflow = max > 2;
+
+  boardNavigator.classList.toggle("hidden", !hasOverflow);
+  navRange.max = String(Math.max(1, Math.round(max)));
+  navRange.value = String(Math.round(current));
+  navLeft.disabled = !hasOverflow || current <= 1;
+  navRight.disabled = !hasOverflow || current >= max - 1;
+  navSelected.disabled = !selectedProduct();
+  navPosition.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
+}
+
+function scrollBoardBy(amount, smooth = true) {
+  canvasScroll.scrollBy({ left: amount, behavior: smooth ? "smooth" : "auto" });
+}
+
+function scrollSelectedIntoView() {
+  const card = renderedCards.find((item) => item.productId === selectedId);
+  if (!card) return;
+  const cardLeft = card.x * zoom;
+  const cardWidth = card.width * zoom;
+  const target = cardLeft - Math.max(20, (canvasScroll.clientWidth - cardWidth) / 2);
+  canvasScroll.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+}
+
+function renderBoard() {
+  const previousLeft = canvasScroll.scrollLeft;
+  const previousTop = canvasScroll.scrollTop;
+  const { context, dimensions } = setupCanvas(canvas, zoom);
+  drawBoardTo(context, dimensions, true);
+  canvasScroll.scrollLeft = previousLeft;
+  canvasScroll.scrollTop = previousTop;
+  $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
+  renderStatus();
+  requestAnimationFrame(syncBoardNavigator);
+}
+
 function renderStatus() {
+  const viewText = activeView === "products" ? "Product comparison" : activeView === "roadmap" ? "Roadmap slotting" : "Synchronized split view";
+  const interaction = activeView === "products"
+    ? "Drag cards to reorder; drag empty background horizontally"
+    : "Drag bars to move; drag bar edges to resize; ◆ marks launch";
   $("#statusbar").innerHTML = `
     <span>${board.products.length} products</span>
-    <span>${board.lanes.length} lanes</span>
+    <span>${board.lanes.length} product lanes</span>
+    <span>${viewText}</span>
     <span>Autosaved in this browser</span>
-    <span>${board.settings.freeMove ? "Free-position mode" : "Snap/reorder mode"}</span>`;
+    <span>${interaction}</span>`;
 }
 
 function selectedProduct() {
@@ -424,18 +1372,74 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 }
 
+function applyInspectorState(empty = false) {
+  inspector.className = `inspector${empty ? " inspector-empty" : ""}${inspectorOpen ? " is-open" : ""}`;
+  inspector.setAttribute("aria-hidden", String(!inspectorOpen));
+}
+
+function openInspector(sectionId = "") {
+  if (!selectedProduct()) return;
+  inspectorOpen = true;
+  renderInspector();
+  if (sectionId) {
+    requestAnimationFrame(() => inspector.querySelector(`#${sectionId}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  }
+}
+
+function closeInspector() {
+  inspectorOpen = false;
+  applyInspectorState(!selectedProduct());
+}
+
+function closeSpecPopover() {
+  specPopover.classList.add("hidden");
+  specPopover.setAttribute("aria-hidden", "true");
+  specPopover.innerHTML = "";
+}
+
+function openSpecPopover(productId, clientX, clientY) {
+  const product = board.products.find((item) => item.id === productId);
+  if (!product) return;
+  selectedId = productId;
+  renderInspector();
+  renderBoard();
+  specPopover.innerHTML = `
+    <div class="spec-popover-heading">
+      <div><span class="eyebrow">All specifications</span><h2>${escapeHtml(product.name)}</h2></div>
+      <button id="closeSpecPopover" class="icon-button" aria-label="Close specifications">×</button>
+    </div>
+    <div class="spec-popover-list">${product.specs.map((item) => `
+      <div class="spec-popover-row"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>`).join("")}</div>
+    <button id="editSpecs" class="secondary-button">Edit specifications</button>`;
+  specPopover.classList.remove("hidden");
+  specPopover.setAttribute("aria-hidden", "false");
+  const margin = 12;
+  const rect = specPopover.getBoundingClientRect();
+  const left = Math.max(margin, Math.min(clientX + 12, window.innerWidth - rect.width - margin));
+  const top = Math.max(margin, Math.min(clientY + 12, window.innerHeight - rect.height - margin));
+  specPopover.style.left = `${left}px`;
+  specPopover.style.top = `${top}px`;
+  $("#closeSpecPopover").onclick = closeSpecPopover;
+  $("#editSpecs").onclick = () => { closeSpecPopover(); openInspector("specificationsSection"); };
+}
+
 function renderInspector() {
   const product = selectedProduct();
   if (!product) {
-    inspector.className = "inspector inspector-empty";
-    inspector.innerHTML = "<h2>Product details</h2><p>Select a card to edit its product information, status, specifications, image, and SKUs.</p>";
+    applyInspectorState(true);
+    inspector.innerHTML = "<h2>Product details</h2><p>Select a card, then choose Edit selected to update its product information.</p>";
+    editSelectedButton.disabled = true;
     return;
   }
-  inspector.className = "inspector";
+  applyInspectorState(false);
+  editSelectedButton.disabled = false;
   inspector.innerHTML = `
     <div class="inspector-heading">
       <div><span class="eyebrow">Selected product</span><h2>${escapeHtml(product.name)}</h2></div>
-      <button id="deleteProduct" class="danger-button">Delete</button>
+      <div class="inspector-actions">
+        <button id="deleteProduct" class="danger-button">Delete</button>
+        <button id="closeInspector" class="icon-button" aria-label="Close editor">×</button>
+      </div>
     </div>
     <section class="panel-section">
       <h3>Product</h3>
@@ -462,7 +1466,42 @@ function renderInspector() {
         <input id="fieldHighlightColor" aria-label="Highlight color" type="color" value="${product.highlightColor}">
       </div>
     </section>
-    <section class="panel-section">
+    <section id="roadmapSection" class="panel-section">
+      <div class="section-heading-row"><h3>Roadmap slotting</h3><span class="eyebrow">Shared across views</span></div>
+      <div class="roadmap-section-grid">
+        <label class="full">Product family<input id="fieldRoadmapFamily" value="${escapeHtml(product.roadmap.family)}" placeholder="Cloud, Stinger, Jet…"></label>
+        <label>Start<input id="fieldRoadmapStart" type="month" value="${escapeHtml(product.roadmap.startMonth)}"></label>
+        <label>Launch<input id="fieldRoadmapLaunch" type="month" value="${escapeHtml(product.roadmap.launchMonth)}"></label>
+        <label>End<input id="fieldRoadmapEnd" type="month" value="${escapeHtml(product.roadmap.endMonth)}"></label>
+        <label>Status<select id="fieldRoadmapStatus">
+          <option value="active" ${product.roadmap.status === "active" ? "selected" : ""}>Active / current</option>
+          <option value="planned" ${product.roadmap.status === "planned" ? "selected" : ""}>Planned</option>
+          <option value="approved" ${product.roadmap.status === "approved" ? "selected" : ""}>Approved</option>
+          <option value="concept" ${product.roadmap.status === "concept" ? "selected" : ""}>Concept</option>
+          <option value="embargo" ${product.roadmap.status === "embargo" ? "selected" : ""}>Under embargo</option>
+          <option value="end-of-life" ${product.roadmap.status === "end-of-life" ? "selected" : ""}>End of life</option>
+        </select></label>
+        <label>Confidence<select id="fieldRoadmapConfidence">
+          <option value="low" ${product.roadmap.confidence === "low" ? "selected" : ""}>Low</option>
+          <option value="medium" ${product.roadmap.confidence === "medium" ? "selected" : ""}>Medium</option>
+          <option value="high" ${product.roadmap.confidence === "high" ? "selected" : ""}>High</option>
+        </select></label>
+        <label>Predecessor<select id="fieldRoadmapPredecessor">
+          <option value="">None</option>
+          ${board.products.filter((item) => item.id !== product.id).map((item) => `<option value="${item.id}" ${product.roadmap.predecessorId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+        </select></label>
+        <label>Successor<select id="fieldRoadmapSuccessor">
+          <option value="">None</option>
+          ${board.products.filter((item) => item.id !== product.id).map((item) => `<option value="${item.id}" ${product.roadmap.successorId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+        </select></label>
+      </div>
+      <div class="roadmap-link-actions">
+        <button id="inspectRoadmapView">View on roadmap</button>
+        <button id="inspectSplitView">Open split view</button>
+      </div>
+      <p class="roadmap-inline-note">The launch marker is independent of the lifecycle bar. Moving a bar shifts all three dates; resizing changes only the start or end boundary.</p>
+    </section>
+    <section id="specificationsSection" class="panel-section">
       <div class="section-heading-row"><h3>Specifications</h3><button id="addSpec" class="small-button">+ Add</button></div>
       <div class="stack-list">${product.specs.length ? product.specs.map((item, index) => `
         <div class="editable-row" data-spec-id="${item.id}">
@@ -483,6 +1522,7 @@ function renderInspector() {
     </section>`;
 
   $("#deleteProduct").onclick = deleteSelected;
+  $("#closeInspector").onclick = closeInspector;
   bindValue("#fieldName", "input", (value) => updateProduct(product.id, { name: value }, false));
   bindValue("#fieldPrice", "input", (value) => updateProduct(product.id, { price: value === "" ? null : Number(value) }, false));
   bindValue("#fieldLane", "change", (value) => moveProductToLane(product.id, value));
@@ -491,6 +1531,33 @@ function renderInspector() {
   bindValue("#fieldStatusLabel", "input", (value) => updateProduct(product.id, { statusLabel: value }, false));
   $("#fieldHighlight").onchange = (event) => updateProduct(product.id, { highlightEnabled: event.target.checked }, false);
   $("#fieldHighlightColor").oninput = (event) => updateProduct(product.id, { highlightColor: event.target.value }, false);
+  bindValue("#fieldRoadmapFamily", "input", (value) => updateRoadmap(product.id, { family: value || "Other" }));
+  bindValue("#fieldRoadmapStart", "change", (value) => updateRoadmap(product.id, (roadmap) => {
+    const startMonth = normalizeMonth(value, roadmap.startMonth);
+    return {
+      startMonth,
+      endMonth: monthIndex(roadmap.endMonth) < monthIndex(startMonth) ? startMonth : roadmap.endMonth,
+      launchMonth: monthIndex(roadmap.launchMonth) < monthIndex(startMonth) ? startMonth : roadmap.launchMonth,
+    };
+  }, true));
+  bindValue("#fieldRoadmapLaunch", "change", (value) => updateRoadmap(product.id, (roadmap) => {
+    const launchIndex = Math.max(monthIndex(roadmap.startMonth), Math.min(monthIndex(roadmap.endMonth), monthIndex(value) ?? monthIndex(roadmap.launchMonth)));
+    return { launchMonth: monthString(launchIndex) };
+  }, true));
+  bindValue("#fieldRoadmapEnd", "change", (value) => updateRoadmap(product.id, (roadmap) => {
+    const endMonth = normalizeMonth(value, roadmap.endMonth);
+    const normalizedEnd = monthIndex(endMonth) < monthIndex(roadmap.startMonth) ? roadmap.startMonth : endMonth;
+    return {
+      endMonth: normalizedEnd,
+      launchMonth: monthIndex(roadmap.launchMonth) > monthIndex(normalizedEnd) ? normalizedEnd : roadmap.launchMonth,
+    };
+  }, true));
+  bindValue("#fieldRoadmapStatus", "change", (value) => updateRoadmap(product.id, { status: value }));
+  bindValue("#fieldRoadmapConfidence", "change", (value) => updateRoadmap(product.id, { confidence: value }));
+  bindValue("#fieldRoadmapPredecessor", "change", (value) => updateRoadmap(product.id, { predecessorId: value }));
+  bindValue("#fieldRoadmapSuccessor", "change", (value) => updateRoadmap(product.id, { successorId: value }));
+  $("#inspectRoadmapView").onclick = () => { closeInspector(); setView("roadmap", { focusSelected: true }); };
+  $("#inspectSplitView").onclick = () => { closeInspector(); setView("split", { focusSelected: true }); };
   $("#fieldImageUpload").onchange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -534,7 +1601,25 @@ function bindValue(selector, eventName, handler) {
 function updateProduct(productId, patch, updateInspectorAfter) {
   updateBoard((current) => {
     const index = current.products.findIndex((product) => product.id === productId);
-    if (index >= 0) current.products[index] = { ...current.products[index], ...patch };
+    if (index < 0) return;
+    const existing = current.products[index];
+    current.products[index] = {
+      ...existing,
+      ...patch,
+      ...(patch.roadmap ? { roadmap: { ...existing.roadmap, ...patch.roadmap } } : {}),
+    };
+  }, { inspector: updateInspectorAfter });
+}
+
+function updateRoadmap(productId, updater, updateInspectorAfter = false) {
+  updateBoard((current) => {
+    const product = current.products.find((item) => item.id === productId);
+    if (!product) return;
+    const patch = typeof updater === "function" ? updater({ ...product.roadmap }) : updater;
+    product.roadmap = { ...product.roadmap, ...patch };
+    if (monthIndex(product.roadmap.endMonth) < monthIndex(product.roadmap.startMonth)) product.roadmap.endMonth = product.roadmap.startMonth;
+    if (monthIndex(product.roadmap.launchMonth) < monthIndex(product.roadmap.startMonth)) product.roadmap.launchMonth = product.roadmap.startMonth;
+    if (monthIndex(product.roadmap.launchMonth) > monthIndex(product.roadmap.endMonth)) product.roadmap.launchMonth = product.roadmap.endMonth;
   }, { inspector: updateInspectorAfter });
 }
 
@@ -577,13 +1662,14 @@ function addProduct() {
   const laneId = sortedLanes()[0]?.id || "default";
   const product = makeProduct(id(), "New Product", null, laneId, board.products.filter((item) => item.laneId === laneId).length, {
     statusType: "new", statusLabel: "NEW PRODUCT", highlightEnabled: true, highlightColor: "#5b8f3e",
+    roadmap: makeRoadmap("Other", monthStringFromDate(), addMonths(monthStringFromDate(), 6), addMonths(monthStringFromDate(), 18), "planned", "medium"),
     specs: [spec("Connection", "Add value"), spec("Feature", "Add value")],
     skus: [sku("BK", "Black", "#111111")],
   });
   updateBoard((current) => current.products.push(product), { inspector: true });
   selectedId = product.id;
-  renderInspector();
-  renderBoard();
+  openInspector();
+  renderActiveView();
 }
 
 function deleteSelected() {
@@ -595,7 +1681,7 @@ function deleteSelected() {
   });
   selectedId = board.products[0]?.id ?? null;
   renderInspector();
-  renderBoard();
+  renderActiveView();
 }
 
 function applySort() {
@@ -620,9 +1706,14 @@ function applySort() {
 
 function syncControls() {
   $("#boardTitle").value = board.title;
-  $("#freeMove").checked = board.settings.freeMove;
+  editSelectedButton.disabled = !selectedProduct();
   $("#showPrices").checked = board.settings.showPrices;
   $("#showSkus").checked = board.settings.showSkus;
+  $("#roadmapStart").value = board.settings.roadmap.startMonth;
+  $("#roadmapEnd").value = board.settings.roadmap.endMonth;
+  $("#roadmapSnap").value = board.settings.roadmap.snap;
+  $("#roadmapColorBy").value = board.settings.roadmap.colorBy;
+  updateLinkedViewButton();
 }
 
 function canvasPoint(event) {
@@ -634,10 +1725,31 @@ function hitCard(point) {
   return [...renderedCards].reverse().find((card) => point.x >= card.x && point.x <= card.x + card.width && point.y >= card.y && point.y <= card.y + card.height);
 }
 
+function hitSpecOverflow(point) {
+  return [...renderedSpecOverflow].reverse().find((region) => point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height);
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   const point = canvasPoint(event);
+  const overflow = hitSpecOverflow(point);
+  if (overflow) {
+    event.preventDefault();
+    event.stopPropagation();
+    openSpecPopover(overflow.productId, event.clientX, event.clientY);
+    return;
+  }
+  closeSpecPopover();
   const card = hitCard(point);
-  if (!card) return;
+  if (!card) {
+    panState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      scrollLeft: canvasScroll.scrollLeft,
+    };
+    canvas.setPointerCapture(event.pointerId);
+    canvasScroll.classList.add("is-panning");
+    return;
+  }
   selectedId = card.productId;
   renderInspector();
   const product = selectedProduct();
@@ -648,32 +1760,56 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!dragState) {
-    canvas.style.cursor = hitCard(canvasPoint(event)) ? "grab" : "default";
+  if (panState) {
+    canvasScroll.scrollLeft = panState.scrollLeft - (event.clientX - panState.startX);
     return;
   }
+
+  if (!dragState) {
+    const point = canvasPoint(event);
+    canvas.style.cursor = hitSpecOverflow(point) ? "pointer" : hitCard(point) ? "grab" : "grab";
+    return;
+  }
+
+  const viewport = canvasScroll.getBoundingClientRect();
+  const edge = 72;
+  if (event.clientX < viewport.left + edge) canvasScroll.scrollLeft -= Math.ceil((viewport.left + edge - event.clientX) / 5);
+  if (event.clientX > viewport.right - edge) canvasScroll.scrollLeft += Math.ceil((event.clientX - (viewport.right - edge)) / 5);
+
   const point = canvasPoint(event);
   dragState.position = { x: Math.max(GUTTER, point.x - dragState.offsetX), y: Math.max(LANE_TOP, point.y - dragState.offsetY) };
   renderBoard();
 });
 
 function finishDrag(event) {
+  if (panState) {
+    panState = null;
+    canvasScroll.classList.remove("is-panning");
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    syncBoardNavigator();
+    return;
+  }
   if (!dragState) return;
   const current = dragState;
   dragState = null;
   canvas.style.cursor = "grab";
   if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-  if (board.settings.freeMove) {
-    updateProduct(current.productId, { manualPosition: current.position }, false);
-  } else {
-    const lanes = sortedLanes();
-    const laneIndex = Math.max(0, Math.min(lanes.length - 1, Math.round((current.position.y - LANE_TOP) / LANE_HEIGHT)));
-    const targetIndex = Math.max(0, Math.round((current.position.x - GUTTER) / (CARD_WIDTH + CARD_GAP)));
-    reorderProduct(current.productId, lanes[laneIndex].id, targetIndex);
-  }
+  const lanes = sortedLanes();
+  const laneIndex = Math.max(0, Math.min(lanes.length - 1, Math.round((current.position.y - LANE_TOP) / LANE_HEIGHT)));
+  const targetIndex = Math.max(0, Math.round((current.position.x - GUTTER) / (CARD_WIDTH + CARD_GAP)));
+  reorderProduct(current.productId, lanes[laneIndex].id, targetIndex);
 }
 canvas.addEventListener("pointerup", finishDrag);
 canvas.addEventListener("pointercancel", finishDrag);
+canvas.addEventListener("dblclick", (event) => {
+  const point = canvasPoint(event);
+  if (hitSpecOverflow(point)) return;
+  const card = hitCard(point);
+  if (!card) return;
+  selectedId = card.productId;
+  openInspector();
+  renderBoard();
+});
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -691,19 +1827,36 @@ function safeFilename(extension) {
 
 function exportPng() {
   const exportCanvas = document.createElement("canvas");
-  const dimensions = getCanvasDimensions();
   const scale = 2;
+
+  if (activeView === "products") {
+    const dimensions = getCanvasDimensions();
+    exportCanvas.width = dimensions.width * scale;
+    exportCanvas.height = dimensions.height * scale;
+    const exportContext = exportCanvas.getContext("2d");
+    exportContext.setTransform(scale, 0, 0, scale, 0, 0);
+    exportContext.imageSmoothingEnabled = true;
+    exportContext.imageSmoothingQuality = "high";
+    drawBoardTo(exportContext, dimensions, false);
+    exportCanvas.toBlob((blob) => {
+      if (blob) downloadBlob(blob, safeFilename("png"));
+    }, "image/png");
+    renderBoard();
+    return;
+  }
+
+  const dimensions = roadmapDimensions();
   exportCanvas.width = dimensions.width * scale;
   exportCanvas.height = dimensions.height * scale;
   const exportContext = exportCanvas.getContext("2d");
   exportContext.setTransform(scale, 0, 0, scale, 0, 0);
   exportContext.imageSmoothingEnabled = true;
   exportContext.imageSmoothingQuality = "high";
-  drawBoardTo(exportContext, dimensions, false);
+  drawRoadmapTo(exportContext, dimensions, exportCanvas, { scrollLeft: 0, scrollTop: 0 }, false, true);
   exportCanvas.toBlob((blob) => {
-    if (blob) downloadBlob(blob, safeFilename("png"));
+    if (blob) downloadBlob(blob, safeFilename("roadmap.png"));
   }, "image/png");
-  renderBoard();
+  renderRoadmaps();
 }
 
 function importJson(file) {
@@ -712,12 +1865,12 @@ function importJson(file) {
     try {
       const parsed = JSON.parse(String(reader.result));
       if (parsed?.version !== 1 || !Array.isArray(parsed.products) || !Array.isArray(parsed.lanes)) throw new Error("Unsupported board file.");
-      board = parsed;
+      board = ensureBoardSchema(parsed);
       selectedId = board.products[0]?.id ?? null;
       scheduleSave();
       syncControls();
       renderInspector();
-      renderBoard();
+      renderActiveView();
     } catch (error) {
       alert(error.message || "Unable to import board file.");
     }
@@ -725,7 +1878,31 @@ function importJson(file) {
   reader.readAsText(file);
 }
 
+canvasScroll.addEventListener("scroll", syncBoardNavigator, { passive: true });
+canvasScroll.addEventListener("wheel", (event) => {
+  const max = horizontalScrollMax();
+  if (max <= 0) return;
+  const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
+  if (!horizontalIntent) return;
+  event.preventDefault();
+  canvasScroll.scrollLeft += event.deltaX || event.deltaY;
+}, { passive: false });
+
+canvas.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  scrollBoardBy(event.key === "ArrowLeft" ? -180 : 180, false);
+});
+
+navRange.addEventListener("input", () => {
+  canvasScroll.scrollLeft = Number(navRange.value);
+});
+navLeft.onclick = () => scrollBoardBy(-Math.max(260, canvasScroll.clientWidth * .75));
+navRight.onclick = () => scrollBoardBy(Math.max(260, canvasScroll.clientWidth * .75));
+navSelected.onclick = scrollSelectedIntoView;
+
 $("#addProduct").onclick = addProduct;
+$("#editSelected").onclick = () => openInspector();
 $("#applySort").onclick = applySort;
 $("#importJson").onclick = () => $("#importFile").click();
 $("#importFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) importJson(file); event.target.value = ""; };
@@ -733,28 +1910,77 @@ $("#exportJson").onclick = () => downloadBlob(new Blob([JSON.stringify(board, nu
 $("#exportPng").onclick = exportPng;
 $("#boardTitle").oninput = (event) => updateBoard((current) => { current.title = event.target.value; });
 $("#searchInput").oninput = (event) => { searchQuery = event.target.value; renderBoard(); };
-$("#freeMove").onchange = (event) => updateBoard((current) => { current.settings.freeMove = event.target.checked; });
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
-$("#resetLayout").onclick = () => updateBoard((current) => { current.products.forEach((product) => delete product.manualPosition); current.settings.freeMove = false; });
-$("#zoomOut").onclick = () => { zoom = Math.max(.45, Number((zoom - .1).toFixed(2))); renderBoard(); };
-$("#zoomIn").onclick = () => { zoom = Math.min(1.35, Number((zoom + .1).toFixed(2))); renderBoard(); };
+$("#resetLayout").onclick = () => updateBoard((current) => { current.products.forEach((product) => delete product.manualPosition); current.settings.freeMove = false; current.lanes.forEach((lane) => normalizeLaneOrders(lane.id)); });
+$("#zoomOut").onclick = () => { zoom = Math.max(.5, Number((zoom - .1).toFixed(2))); renderBoard(); };
+$("#zoomReset").onclick = () => { zoom = 1; renderBoard(); };
+$("#zoomIn").onclick = () => { zoom = Math.min(1.5, Number((zoom + .1).toFixed(2))); renderBoard(); };
 $("#restoreSample").onclick = () => {
   if (!confirm("Replace the current board with the original sample data?")) return;
   board = createDefaultBoard();
   selectedId = board.products[0]?.id ?? null;
   searchQuery = "";
+  roadmapSearchQuery = "";
   $("#searchInput").value = "";
+  $("#roadmapSearch").value = "";
   scheduleSave();
   syncControls();
   renderInspector();
-  renderBoard();
+  renderActiveView();
 };
-$("#openReference").onclick = () => $("#referenceModal").classList.remove("hidden");
-$("#closeReference").onclick = () => $("#referenceModal").classList.add("hidden");
-$("#referenceModal").addEventListener("click", (event) => { if (event.target.id === "referenceModal") event.currentTarget.classList.add("hidden"); });
-window.addEventListener("resize", renderBoard);
 
+document.querySelectorAll(".view-tab").forEach((button) => {
+  button.onclick = () => setView(button.dataset.view, { focusSelected: true });
+});
+linkedViewButton.onclick = () => {
+  if (activeView === "products") setView("roadmap", { focusSelected: true });
+  else setView("products", { focusSelected: true });
+};
+
+$("#roadmapSearch").oninput = (event) => { roadmapSearchQuery = event.target.value; renderRoadmaps(); };
+$("#roadmapStart").onchange = (event) => {
+  const startMonth = normalizeMonth(event.target.value, board.settings.roadmap.startMonth);
+  updateBoard((current) => {
+    current.settings.roadmap.startMonth = startMonth;
+    if (monthIndex(current.settings.roadmap.endMonth) <= monthIndex(startMonth)) current.settings.roadmap.endMonth = addMonths(startMonth, 11);
+  });
+};
+$("#roadmapEnd").onchange = (event) => {
+  let endMonth = normalizeMonth(event.target.value, board.settings.roadmap.endMonth);
+  if (monthIndex(endMonth) <= monthIndex(board.settings.roadmap.startMonth)) endMonth = addMonths(board.settings.roadmap.startMonth, 11);
+  updateBoard((current) => { current.settings.roadmap.endMonth = endMonth; });
+};
+$("#roadmapSnap").onchange = (event) => updateBoard((current) => { current.settings.roadmap.snap = event.target.value; });
+$("#roadmapColorBy").onchange = (event) => updateBoard((current) => { current.settings.roadmap.colorBy = event.target.value; });
+$("#roadmapToday").onclick = () => scrollRoadmapToday(activeView === "split" ? splitRoadmapScroll : roadmapScroll);
+$("#roadmapFit").onclick = fitRoadmapTimeline;
+$("#roadmapShowSelected").onclick = () => scrollRoadmapSelected(activeView === "split" ? splitRoadmapScroll : roadmapScroll);
+
+function bindRoadmapNavigatorControls(targetScroll, refs) {
+  refs.range.addEventListener("input", () => { targetScroll.scrollLeft = Number(refs.range.value); });
+  refs.left.onclick = () => targetScroll.scrollBy({ left: -Math.max(300, targetScroll.clientWidth * .75), behavior: "smooth" });
+  refs.right.onclick = () => targetScroll.scrollBy({ left: Math.max(300, targetScroll.clientWidth * .75), behavior: "smooth" });
+  refs.selected.onclick = () => scrollRoadmapSelected(targetScroll);
+}
+
+bindRoadmapCanvas(roadmapCanvas, roadmapScroll, roadmapNavigatorRefs);
+bindRoadmapCanvas(splitRoadmapCanvas, splitRoadmapScroll, splitRoadmapNavigatorRefs);
+bindRoadmapNavigatorControls(roadmapScroll, roadmapNavigatorRefs());
+bindRoadmapNavigatorControls(splitRoadmapScroll, splitRoadmapNavigatorRefs());
+
+specPopover.addEventListener("pointerdown", (event) => event.stopPropagation());
+document.addEventListener("pointerdown", (event) => { if (!specPopover.classList.contains("hidden") && !specPopover.contains(event.target)) closeSpecPopover(); });
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeSpecPopover();
+    closeInspector();
+  }
+});
+window.addEventListener("resize", () => { closeSpecPopover(); renderActiveView(); });
+
+board = loadBoard();
+selectedId = board.products[0]?.id ?? null;
 syncControls();
 renderInspector();
-renderBoard();
+setView("products");
