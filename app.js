@@ -23,6 +23,8 @@ const ROADMAP_ROW_HEIGHT = 38;
 const ROADMAP_BOTTOM_PADDING = 24;
 const ROADMAP_MIN_MONTH_WIDTH = 42;
 const ROADMAP_MAX_MONTH_WIDTH = 112;
+const PRODUCT_MIN_ZOOM = 0.2;
+const PRODUCT_MAX_ZOOM = 1.5;
 
 const $ = (selector) => document.querySelector(selector);
 const canvas = $("#boardCanvas");
@@ -1093,6 +1095,18 @@ function fitRoadmapTimeline() {
   renderRoadmaps();
 }
 
+function fitProductBoard() {
+  const dimensions = getCanvasDimensions();
+  const available = Math.max(280, canvasScroll.clientWidth - 18);
+  const fittedZoom = Math.floor((available / dimensions.width) * 100) / 100;
+  zoom = Math.max(PRODUCT_MIN_ZOOM, Math.min(1, fittedZoom));
+  renderBoard();
+  requestAnimationFrame(() => {
+    canvasScroll.scrollTo({ left: 0, behavior: "smooth" });
+    syncBoardNavigator();
+  });
+}
+
 function roadmapPoint(event, targetCanvas) {
   const rect = targetCanvas.getBoundingClientRect();
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -2036,9 +2050,10 @@ $("#searchInput").oninput = (event) => { searchQuery = event.target.value; rende
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
 $("#resetLayout").onclick = () => updateBoard((current) => { current.products.forEach((product) => delete product.manualPosition); current.settings.freeMove = false; current.lanes.forEach((lane) => normalizeLaneOrders(lane.id)); });
-$("#zoomOut").onclick = () => { zoom = Math.max(.5, Number((zoom - .1).toFixed(2))); renderBoard(); };
+$("#fitProducts").onclick = fitProductBoard;
+$("#zoomOut").onclick = () => { zoom = Math.max(PRODUCT_MIN_ZOOM, Number((zoom - .1).toFixed(2))); renderBoard(); };
 $("#zoomReset").onclick = () => { zoom = 1; renderBoard(); };
-$("#zoomIn").onclick = () => { zoom = Math.min(1.5, Number((zoom + .1).toFixed(2))); renderBoard(); };
+$("#zoomIn").onclick = () => { zoom = Math.min(PRODUCT_MAX_ZOOM, Number((zoom + .1).toFixed(2))); renderBoard(); };
 $("#restoreSample").onclick = () => {
   if (!confirm("Replace the current board with the original sample data?")) return;
   board = createDefaultBoard();
