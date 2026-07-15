@@ -1022,7 +1022,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.fillStyle = "#8d938d";
   context.font = "10px Arial";
   context.fillText("◆ Launch marker", stickyX + 14, stickyY + 72);
-  context.fillText(roadmapEditProductId ? "Editing selected slot" : "Timeline locked · drag to pan", stickyX + 14, stickyY + 93);
+  context.fillText(roadmapEditProductId ? "Editing selected slot" : "Locked · double-click for split", stickyX + 14, stickyY + 93);
 
   roadmapHitRegions.set(targetCanvas, regions);
 }
@@ -1266,7 +1266,16 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     if (!hit) return;
     if (selectedId !== hit.productId) stopRoadmapSlotEditing();
     selectedId = hit.productId;
-    openInspector("roadmapSection");
+    renderInspector();
+    renderSplitProduct();
+
+    // Double-click is an exploration shortcut, not an editing shortcut.
+    // Product and slot edits remain behind explicit controls.
+    if (targetCanvas === roadmapCanvas) {
+      setView("split", { focusSelected: true });
+      return;
+    }
+
     updateRoadmapEditControls();
     renderRoadmaps();
   });
@@ -1403,8 +1412,10 @@ function renderLaneRail(dimensions = getCanvasDimensions()) {
     const top = (LANE_TOP + laneIndex * LANE_HEIGHT - 4) * zoom;
     const height = (CARD_HEIGHT + 8) * zoom;
     return `<div class="lane-rail-item" style="top:${top}px;height:${height}px">
-      <span class="lane-rail-label">${escapeHtml(lane.label)}</span>
-      <span class="lane-rail-subtitle">${escapeHtml(lane.subtitle || "")}</span>
+      <div class="lane-rail-copy">
+        <span class="lane-rail-label">${escapeHtml(lane.label)}</span>
+        <span class="lane-rail-subtitle">${escapeHtml(lane.subtitle || "")}</span>
+      </div>
     </div>`;
   }).join("");
   syncLaneRail();
@@ -1465,7 +1476,7 @@ function renderStatus() {
     ? "Lane rail stays fixed; drag empty background horizontally"
     : roadmapSlotEditingActive()
       ? "Editing selected slot with dedicated handles; ◆ marks launch"
-      : "Timeline locked; drag the canvas to navigate; ◆ marks launch";
+      : "Timeline locked; double-click a product for Split view; drag the canvas to navigate; ◆ marks launch";
   $("#statusbar").innerHTML = `
     <span>${board.products.length} products</span>
     <span>${board.lanes.length} product lanes</span>

@@ -360,12 +360,12 @@ button:disabled:hover { background: #2a2d2a; }
 }
 
 
-/* Frozen product-lane rail: orientation remains visible during horizontal panning. */
+/* Frozen product-lane rail: compact vertical wording remains visible during horizontal panning. */
 .product-board-shell {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr);
+  grid-template-columns: 58px minmax(0, 1fr);
 }
 .lane-rail {
   position: relative;
@@ -388,10 +388,9 @@ button:disabled:hover { background: #2a2d2a; }
   left: 0;
   right: 0;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 18px 14px;
+  overflow: hidden;
   border-top: 1px solid #272b27;
   border-bottom: 1px solid #303530;
   background: linear-gradient(90deg, #151815 0%, #171a17 100%);
@@ -407,22 +406,29 @@ button:disabled:hover { background: #2a2d2a; }
   background: #4e8136;
   opacity: .72;
 }
+.lane-rail-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  white-space: nowrap;
+}
 .lane-rail-label {
   color: #f0f2f0;
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 800;
   letter-spacing: .025em;
 }
 .lane-rail-subtitle {
   color: #808680;
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
   letter-spacing: .08em;
-  line-height: 1.35;
   text-transform: uppercase;
 }
 .product-view > .board-navigator {
-  margin-left: 112px;
+  margin-left: 58px;
 }
 
 /* Roadmap changes are opt-in and restricted to explicit handles. */
@@ -452,11 +458,11 @@ button:disabled:hover { background: #2a2d2a; }
 }
 
 @media (max-width: 760px) {
-  .product-board-shell { grid-template-columns: 84px minmax(0, 1fr); }
-  .product-view > .board-navigator { margin-left: 84px; }
-  .lane-rail-item { padding-inline: 10px; }
-  .lane-rail-label { font-size: 14px; }
-  .lane-rail-subtitle { font-size: 8px; }
+  .product-board-shell { grid-template-columns: 48px minmax(0, 1fr); }
+  .product-view > .board-navigator { margin-left: 48px; }
+  .lane-rail-copy { gap: 6px; }
+  .lane-rail-label { font-size: 16px; }
+  .lane-rail-subtitle { font-size: 7px; }
 }
 
 /* Keep the dense roadmap toolbar clean; interaction guidance is repeated in the

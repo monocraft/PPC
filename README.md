@@ -88,3 +88,9 @@ Native browser page scrollbars remain hidden; scrolling is owned by the applicat
 - A user must select a product and choose **Edit selected slot** before any timeline date can change.
 - Even in edit mode, dragging the bar body pans the timeline. Only the visible center grip moves the slot and the two edge handles resize it.
 - A small movement threshold prevents click jitter from becoming an edit.
+
+## Compact lane rail and roadmap navigation
+
+- Product Cards keeps the Wired/Wireless wording rotated in a dedicated 58 px frozen rail, preserving canvas width without overlapping other views.
+- Double-clicking a product bar in Roadmap opens synchronized Split View and focuses that product.
+- Double-click no longer opens an editor. Product editing and roadmap slot editing remain explicit button actions.
