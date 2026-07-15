@@ -358,3 +358,112 @@ button:disabled:hover { background: #2a2d2a; }
   .split-view { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 42%) minmax(0, 1fr); }
   .split-product { border-right: 0; border-bottom: 1px solid #383d38; }
 }
+
+
+/* Frozen product-lane rail: orientation remains visible during horizontal panning. */
+.product-board-shell {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+}
+.lane-rail {
+  position: relative;
+  z-index: 6;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid #353a35;
+  background:
+    radial-gradient(circle at 40% 18%, rgba(255,255,255,.025), transparent 30%),
+    #111411;
+  box-shadow: 8px 0 18px rgba(0,0,0,.2);
+}
+.lane-rail-inner {
+  position: relative;
+  width: 100%;
+  will-change: transform;
+}
+.lane-rail-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 18px 14px;
+  border-top: 1px solid #272b27;
+  border-bottom: 1px solid #303530;
+  background: linear-gradient(90deg, #151815 0%, #171a17 100%);
+}
+.lane-rail-item::before {
+  content: "";
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: #4e8136;
+  opacity: .72;
+}
+.lane-rail-label {
+  color: #f0f2f0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: .025em;
+}
+.lane-rail-subtitle {
+  color: #808680;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+.product-view > .board-navigator {
+  margin-left: 112px;
+}
+
+/* Roadmap changes are opt-in and restricted to explicit handles. */
+.roadmap-edit-toggle.is-active {
+  border-color: #76aa56;
+  background: #4e8136;
+  color: #fff;
+  box-shadow: inset 0 0 0 1px #68a148;
+}
+.roadmap-edit-toggle.is-active:hover { background: #5a9140; }
+.roadmap-edit-status {
+  min-width: 94px;
+  padding: 6px 9px;
+  border: 1px solid #3b403b;
+  border-radius: 999px;
+  background: #171a17;
+  color: #8e948e;
+  font-size: 10px;
+  font-weight: 750;
+  text-align: center;
+  white-space: nowrap;
+}
+.roadmap-edit-status.is-active {
+  border-color: #5f913f;
+  background: rgba(78,129,54,.18);
+  color: #baddaa;
+}
+
+@media (max-width: 760px) {
+  .product-board-shell { grid-template-columns: 84px minmax(0, 1fr); }
+  .product-view > .board-navigator { margin-left: 84px; }
+  .lane-rail-item { padding-inline: 10px; }
+  .lane-rail-label { font-size: 14px; }
+  .lane-rail-subtitle { font-size: 8px; }
+}
+
+/* Keep the dense roadmap toolbar clean; interaction guidance is repeated in the
+   canvas legend and status bar instead of competing for horizontal space. */
+.roadmap-help { display: none; }
+.roadmap-edit-status {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

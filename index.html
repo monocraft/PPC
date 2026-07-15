@@ -76,13 +76,20 @@
       <button id="roadmapToday">Today</button>
       <button id="roadmapFit">Fit timeline</button>
       <button id="roadmapShowSelected">Show selected</button>
-      <span class="roadmap-help">Drag a bar to move it; drag either edge to resize.</span>
+      <button id="roadmapEditSelected" class="roadmap-edit-toggle" disabled>Edit selected slot</button>
+      <span id="roadmapEditStatus" class="roadmap-edit-status">Timeline locked</span>
+      <span id="roadmapHelp" class="roadmap-help">Select a product, then explicitly enable slot editing.</span>
     </section>
 
     <section class="workspace">
       <section id="productView" class="view-pane product-view">
-        <div id="canvasScroll" class="canvas-scroll">
-          <canvas id="boardCanvas" tabindex="0" aria-label="Interactive product portfolio canvas. Select a card, double-click it to edit, choose View more specifications, or drag the empty background horizontally to navigate."></canvas>
+        <div class="product-board-shell">
+          <aside id="laneRail" class="lane-rail" aria-label="Product lanes">
+            <div id="laneRailInner" class="lane-rail-inner"></div>
+          </aside>
+          <div id="canvasScroll" class="canvas-scroll">
+            <canvas id="boardCanvas" tabindex="0" aria-label="Interactive product portfolio canvas. Select a card, double-click it to edit, choose View more specifications, or drag the empty background horizontally to navigate."></canvas>
+          </div>
         </div>
 
         <nav id="boardNavigator" class="board-navigator hidden" aria-label="Horizontal board navigation">
@@ -96,7 +103,7 @@
 
       <section id="roadmapView" class="view-pane roadmap-view hidden">
         <div id="roadmapScroll" class="canvas-scroll roadmap-scroll">
-          <canvas id="roadmapCanvas" tabindex="0" aria-label="Interactive roadmap. Drag product bars to move dates, drag bar edges to resize, and drag empty space horizontally to navigate."></canvas>
+          <canvas id="roadmapCanvas" tabindex="0" aria-label="Interactive roadmap. Select a product bar. The timeline is locked by default; enable Edit selected slot before using the visible handles. Drag empty space horizontally to navigate."></canvas>
         </div>
         <nav id="roadmapNavigator" class="board-navigator hidden" aria-label="Horizontal roadmap navigation">
           <button id="roadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
@@ -111,7 +118,7 @@
         <aside id="splitProduct" class="split-product"></aside>
         <div class="split-roadmap-shell">
           <div id="splitRoadmapScroll" class="canvas-scroll roadmap-scroll">
-            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap split view. Select or drag a product bar while reviewing the selected product details."></canvas>
+            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap split view. Select a product bar while reviewing its details. Slot editing requires the explicit Edit selected slot control."></canvas>
           </div>
           <nav id="splitRoadmapNavigator" class="board-navigator hidden" aria-label="Split roadmap navigation">
             <button id="splitRoadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>

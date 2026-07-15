@@ -80,3 +80,11 @@ The product and roadmap canvases retain readable fixed-size content rather than 
 - **Fit timeline** to fit the selected date range into the available width
 
 Native browser page scrollbars remain hidden; scrolling is owned by the application workspace.
+
+## v1.6 interaction safeguards
+
+- Product lanes now use a frozen left rail that remains visible during horizontal panning and appears only in Product Cards mode.
+- Roadmap dates are locked by default.
+- A user must select a product and choose **Edit selected slot** before any timeline date can change.
+- Even in edit mode, dragging the bar body pans the timeline. Only the visible center grip moves the slot and the two edge handles resize it.
+- A small movement threshold prevents click jitter from becoming an edit.
