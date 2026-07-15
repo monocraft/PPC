@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151715">
+  <title>Product Portfolio Canvas</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="eyebrow">Interactive portfolio editor</span>
+        <input id="boardTitle" class="board-title" aria-label="Board title">
+      </div>
+      <div class="toolbar-actions">
+        <button id="addProduct" class="primary-button">+ Add product</button>
+        <button id="importJson">Import JSON</button>
+        <button id="exportJson">Export JSON</button>
+        <button id="exportPng">Export PNG</button>
+        <button id="openReference">Reference</button>
+        <input id="importFile" class="visually-hidden" type="file" accept="application/json">
+      </div>
+    </header>
+
+    <section class="controlbar">
+      <input id="searchInput" class="search-input" placeholder="Search product, status, or SKU…">
+      <label class="inline-field">Sort
+        <select id="sortMode">
+          <option value="custom">Custom order</option>
+          <option value="name-asc">Name A–Z</option>
+          <option value="price-asc">Price low–high</option>
+          <option value="price-desc">Price high–low</option>
+          <option value="status">Status</option>
+          <option value="sku-count">Most SKUs</option>
+        </select>
+      </label>
+      <button id="applySort">Apply sort</button>
+      <label class="checkbox-label control-checkbox"><input id="freeMove" type="checkbox">Free move</label>
+      <label class="checkbox-label control-checkbox"><input id="showPrices" type="checkbox">Prices</label>
+      <label class="checkbox-label control-checkbox"><input id="showSkus" type="checkbox">SKU footer</label>
+      <button id="resetLayout">Reset layout</button>
+      <div class="zoom-control">
+        <button id="zoomOut" aria-label="Zoom out">−</button>
+        <span id="zoomLabel">82%</span>
+        <button id="zoomIn" aria-label="Zoom in">+</button>
+      </div>
+      <button id="restoreSample" class="text-button">Restore sample</button>
+    </section>
+
+    <section class="workspace">
+      <div id="canvasScroll" class="canvas-scroll">
+        <canvas id="boardCanvas" aria-label="Interactive product portfolio canvas"></canvas>
+      </div>
+      <aside id="inspector" class="inspector"></aside>
+    </section>
+
+    <footer id="statusbar" class="statusbar"></footer>
+  </main>
+
+  <div id="referenceModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="Original reference board">
+    <div class="reference-modal">
+      <div class="reference-heading">
+        <div>
+          <span class="eyebrow">Original visual reference</span>
+          <h2>Headset portfolio layout</h2>
+        </div>
+        <button id="closeReference" class="icon-button modal-close" aria-label="Close">×</button>
+      </div>
+      <img src="assets/reference-board.png" alt="Original headset portfolio reference">
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
