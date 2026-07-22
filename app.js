@@ -1635,7 +1635,7 @@ function drawSpecIcon(context, label, centerX, centerY) {
   }
 
   context.stroke();
-  context.restore();
+  context.();
 }
 
 function productPresentation(product) {
@@ -4332,7 +4332,7 @@ $("#zoomReset").onclick = () => { zoom = 1; renderBoard(); };
 $("#zoomIn").onclick = () => { zoom = Math.min(PRODUCT_MAX_ZOOM, Number((zoom + .1).toFixed(2))); renderBoard(); };
 $("#restoreSample").onclick = async () => {
   closePopupMenus();
-  if (!confirm("Replace all categories with the complete reference catalog and category templates? Uploaded image assets in this browser will also be removed.")) return;
+  if (!confirm("Remove all products? Make sure to export your work before doing this.")) return;
   try { await imageStoreClear(); } catch (_) {}
   imageAssetUrlCache.forEach((url) => URL.revokeObjectURL(url));
   imageAssetUrlCache.clear();
