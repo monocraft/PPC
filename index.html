@@ -44,11 +44,12 @@
             <button id="importJson" role="menuitem"><span>Import data file</span><small>Open a lightweight .data or legacy .json file without image binaries</small></button>
             <button id="exportJson" role="menuitem"><span>Export data file</span><small>Create a lightweight .data backup with image references</small></button>
             <button id="exportPng" role="menuitem"><span>Export PNG</span><small>Save the active view as an image</small></button>
+            <button id="exportPptx" role="menuitem"><span>Export PPTX</span><small>Choose Product Portfolio, Roadmap, or both</small></button>
             <div class="popup-menu-separator"></div>
             <button id="restoreSample" class="menu-danger" role="menuitem"><span>Restore sample</span><small>Reset all category workspaces</small></button>
           </div>
         </div>
-        <input id="importFile" class="visually-hidden" type="file" accept=".data,.json,application/json,text/plain">
+        <input id="importFile" class="visually-hidden" type="file" accept=".data,.json,.js,application/json,text/javascript,text/plain">
         <input id="importPackageFile" class="visually-hidden" type="file" accept=".pkg,.zip,application/octet-stream,application/zip">
       </div>
     </header>
@@ -87,7 +88,7 @@
     </section>
 
     <section id="roadmapControls" class="controlbar view-controls hidden">
-      <input id="roadmapSearch" class="search-input" placeholder="Search roadmap products…">
+      <input id="roadmapSearch" class="search-input" placeholder="Search roadmap product, family, or SKU…">
       <div class="popup-menu-shell">
         <button id="roadmapMenuButton" class="menu-trigger" aria-haspopup="menu" aria-expanded="false">Timeline <span aria-hidden="true">▾</span></button>
         <div id="roadmapMenu" class="popup-menu timeline-menu hidden" role="menu" aria-label="Timeline options">
@@ -110,6 +111,13 @@
                   <option value="quarter">Quarter</option>
                   <option value="half">Half-year</option>
                 </select>
+              </label>
+              <label class="menu-checkbox timeline-display-toggle">
+                <input id="roadmapShowMsrp" type="checkbox">
+                <span>
+                  Show MSRP on roadmap bars
+                  <small>Applies to every product and category</small>
+                </span>
               </label>
               <span class="menu-subheading">Stage colors</span>
               <div class="timeline-color-grid">
@@ -156,7 +164,9 @@
             <div id="laneRailInner" class="lane-rail-inner"></div>
           </aside>
           <div id="canvasScroll" class="canvas-scroll">
-            <canvas id="boardCanvas" tabindex="0" aria-label="Product portfolio viewer. Select a card, double-click it to open the synchronized roadmap, hover color SKUs to preview assigned hero images, hover or click a plus-variant chip to reveal hidden variants, or drag the canvas horizontally to navigate. Editing is available from the Data menu."></canvas>
+            <canvas id="boardCanvas" tabindex="0" aria-label="Product portfolio viewer. Select a card, use its information button to open or close read-only product details, double-click it to open the synchronized roadmap, hover color SKUs to preview assigned hero images, hover or click a plus-variant chip to reveal hidden variants, or drag the canvas horizontally to navigate. Editing is available from the Data menu."></canvas>
+            <aside id="viewerInfo" class="viewer-info" aria-hidden="true" aria-label="Product information"></aside>
+            <div id="viewerInfoOutline" class="viewer-info-outline" aria-hidden="true"></div>
           </div>
         </div>
 
@@ -204,6 +214,61 @@
     <footer id="statusbar" class="statusbar"></footer>
   </main>
 
+  <div id="pptxExportDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pptxExportTitle">
+    <form id="pptxExportForm" class="settings-dialog pptx-export-dialog">
+      <div class="settings-dialog-heading">
+        <div>
+          <span class="eyebrow">PowerPoint export</span>
+          <h2 id="pptxExportTitle">Choose slide content</h2>
+        </div>
+        <button id="closePptxExport" class="icon-button" type="button" aria-label="Close PowerPoint export">×</button>
+      </div>
+
+      <p class="settings-note">The selected content is exported for every category using the current theme and each category's configured timeline.</p>
+
+      <div class="pptx-export-options" role="radiogroup" aria-label="PowerPoint slide content">
+        <label class="pptx-export-option">
+          <input type="radio" name="pptxExportScope" value="products">
+          <span class="pptx-export-option-copy">
+            <span class="pptx-export-option-mark">P</span>
+            <strong>Product portfolio</strong>
+            <small>One product-card slide per category</small>
+          </span>
+        </label>
+
+        <label class="pptx-export-option">
+          <input type="radio" name="pptxExportScope" value="roadmap">
+          <span class="pptx-export-option-copy">
+            <span class="pptx-export-option-mark">R</span>
+            <strong>Roadmap</strong>
+            <small>One timeline slide per category</small>
+          </span>
+        </label>
+
+        <label class="pptx-export-option">
+          <input type="radio" name="pptxExportScope" value="both" checked>
+          <span class="pptx-export-option-copy">
+            <span class="pptx-export-option-mark">P+R</span>
+            <strong>Both</strong>
+            <small>Product portfolio followed by roadmap</small>
+          </span>
+        </label>
+      </div>
+
+      <div class="pptx-export-summary">
+        <span>Categories</span>
+        <strong id="pptxExportCategoryCount">0</strong>
+        <span>Slides</span>
+        <strong id="pptxExportSlideCount">0</strong>
+      </div>
+
+      <div class="settings-actions">
+        <button id="cancelPptxExport" type="button">Cancel</button>
+        <button id="confirmPptxExport" class="primary-button" type="submit">Export PowerPoint</button>
+      </div>
+    </form>
+  </div>
+
   <div id="categorySettingsDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="categorySettingsTitle">
     <form id="categorySettingsForm" class="settings-dialog">
       <div class="settings-dialog-heading">
@@ -232,6 +297,7 @@
   <div id="specPopover" class="spec-popover hidden" role="dialog" aria-hidden="true" aria-label="Product specifications"></div>
   <div id="variantPopover" class="variant-popover hidden" role="dialog" aria-hidden="true" aria-label="Additional product variants"></div>
 
+  <script src="vendor/pptxgen.bundle.js"></script>
   <script src="catalog-data.js"></script>
   <script src="app.js"></script>
 </body>

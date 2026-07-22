@@ -32,6 +32,10 @@ const ROADMAP_MIN_MONTH_WIDTH = 8;
 const ROADMAP_MAX_MONTH_WIDTH = 112;
 const PRODUCT_MIN_ZOOM = 0.2;
 const PRODUCT_MAX_ZOOM = 1.5;
+const VIEWER_INFO_GAP = 0;
+const VIEWER_INFO_ANIMATION_MS = 240;
+const INFO_BUTTON_WIDTH = 25;
+const INFO_BUTTON_HEIGHT = 22;
 const FULL_SPEC_MIN_CARD_HEIGHT = 650;
 const FULL_SPEC_IMAGE_HEIGHT = 210;
 const FULL_SPEC_TITLE_TOP = STATUS_BANNER_HEIGHT + 10 + FULL_SPEC_IMAGE_HEIGHT + 8;
@@ -105,6 +109,8 @@ const STANDARD_CARD_STATUSES = {
   embargo: { label: "UPCOMING UNDER EMBARGO", color: "#b83458" },
 };
 
+const PRODUCT_TIER_OPTIONS = ["", "Core", "Core+", "Hero", "Star", "Star+"];
+
 
 const $ = (selector) => document.querySelector(selector);
 const canvas = $("#boardCanvas");
@@ -118,6 +124,8 @@ const navRight = $("#navRight");
 const navSelected = $("#navSelected");
 const navPosition = $("#navPosition");
 const inspector = $("#inspector");
+const viewerInfo = $("#viewerInfo");
+const viewerInfoOutline = $("#viewerInfoOutline");
 const specPopover = $("#specPopover");
 const variantPopover = $("#variantPopover");
 const editSelectedButton = $("#editSelected");
@@ -161,6 +169,9 @@ const dataMenu = $("#dataMenu");
 const categorySelect = $("#categorySelect");
 const categorySettingsDialog = $("#categorySettingsDialog");
 const categorySettingsForm = $("#categorySettingsForm");
+const pptxExportDialog = $("#pptxExportDialog");
+const pptxExportForm = $("#pptxExportForm");
+const confirmPptxExportButton = $("#confirmPptxExport");
 const laneSettingsList = $("#laneSettingsList");
 let categorySettingsDraftLanes = [];
 
@@ -176,6 +187,8 @@ let renderedCards = [];
 let renderedSpecOverflow = [];
 let renderedVariantOverflow = [];
 let renderedHeroVariantRegions = [];
+let renderedInfoButtons = [];
+let hoveredInfoButtonProductId = "";
 let hoveredHeroVariant = null;
 const pinnedHeroVariantByProduct = new Map();
 let variantPopoverPinned = false;
@@ -183,6 +196,10 @@ let variantPopoverKey = "";
 let variantHoverOpenTimer = null;
 let variantHoverCloseTimer = null;
 let inspectorOpen = false;
+let viewerInfoOpen = false;
+let viewerInfoProductId = null;
+let viewerInfoProgress = 0;
+let viewerInfoAnimationFrame = null;
 let saveTimer = null;
 let activeView = "products";
 let roadmapSearchQuery = "";
@@ -755,7 +772,11 @@ function normalizeMonth(value, fallback) {
 }
 
 function categoryDefinition(categoryId = activeCategoryId) {
-  return CATEGORY_DEFINITIONS.find((item) => item.id === categoryId) || CATEGORY_DEFINITIONS[0];
+  const definition = CATEGORY_DEFINITIONS.find((item) => item.id === categoryId) || CATEGORY_DEFINITIONS[0];
+  if (!definition) {
+    throw new Error("No category definitions are available. Confirm catalog-data.js loads before app.js and contains at least one category.");
+  }
+  return definition;
 }
 
 function categorySpecSets(categoryId = activeCategoryId) {
@@ -800,6 +821,67 @@ function defaultRoadmapForProduct(product, index = 0) {
   const current = monthStringFromDate();
   const start = addMonths(current, Math.floor(index / 3));
   return makeRoadmap(inferFamily(product.name), start, start, addMonths(start, 18), product.statusType === "embargo" ? "in-planning" : "in-planning", "medium");
+}
+
+function normalizeProductInfoDate(value) {
+  const normalized = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
+}
+
+function normalizePartSku(item, index = 0) {
+  if (typeof item === "string") {
+    return {
+      id: `part-sku-${index + 1}-${item.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      code: item.trim(),
+    };
+  }
+  const code = String(item?.code || item?.sku || item?.value || "").trim();
+  return {
+    id: String(item?.id || `part-sku-${index + 1}-${code.toLowerCase().replace(/[^a-z0-9]+/g, "-") || id()}`),
+    code,
+  };
+}
+
+function partSku(code = "") {
+  return { id: id(), code: String(code || "").trim() };
+}
+
+function productTierOptionsHtml(currentTier) {
+  const normalized = PRODUCT_TIER_OPTIONS.includes(currentTier) ? currentTier : "";
+  return PRODUCT_TIER_OPTIONS.map((tier) => `
+    <option value="${escapeHtml(tier)}" ${tier === normalized ? "selected" : ""}>${tier || "Not set"}</option>`).join("");
+}
+
+function formatProductInfoDate(value) {
+  const normalized = normalizeProductInfoDate(value);
+  if (!normalized) return "TBD";
+  const [year, month, day] = normalized.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+async function copyTextToClipboard(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  }
 }
 
 function ensureBoardSchema(target, definition = categoryDefinition()) {
@@ -849,6 +931,14 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     const existing = product.roadmap || {};
     product.imageAssetId = String(product.imageAssetId || "");
     product.priceLabel = String(product.priceLabel || "");
+    product.codename = String(product.codename || "");
+    product.tier = PRODUCT_TIER_OPTIONS.includes(product.tier) ? product.tier : "";
+    product.ffsDate = normalizeProductInfoDate(product.ffsDate);
+    product.globalAnnouncementDate = normalizeProductInfoDate(product.globalAnnouncementDate);
+    product.webReadinessDate = normalizeProductInfoDate(product.webReadinessDate);
+    product.finalAssetsDate = normalizeProductInfoDate(product.finalAssetsDate);
+    product.partSkus = (Array.isArray(product.partSkus) ? product.partSkus : [])
+      .map((item, partSkuIndex) => normalizePartSku(item, partSkuIndex));
     if (product.statusType === "custom") {
       product.variantLabel = product.variantLabel || product.statusLabel || "VARIANT";
       product.variantColor = product.variantColor || product.highlightColor || "#3f6f91";
@@ -897,6 +987,13 @@ function makeProduct(productId, name, price, laneId, order, options = {}) {
     price,
     priceLabel: String(options.priceLabel || ""),
     imageAssetId: String(options.imageAssetId || ""),
+    codename: String(options.codename || ""),
+    tier: PRODUCT_TIER_OPTIONS.includes(options.tier) ? options.tier : "",
+    ffsDate: normalizeProductInfoDate(options.ffsDate),
+    globalAnnouncementDate: normalizeProductInfoDate(options.globalAnnouncementDate),
+    webReadinessDate: normalizeProductInfoDate(options.webReadinessDate),
+    finalAssetsDate: normalizeProductInfoDate(options.finalAssetsDate),
+    partSkus: (Array.isArray(options.partSkus) ? options.partSkus : []).map((item, index) => normalizePartSku(item, index)),
     laneId,
     order,
     statusType,
@@ -967,6 +1064,13 @@ function productFromBlueprint(blueprint, definition, index) {
   return makeProduct(blueprint.id, blueprint.name, blueprint.price, blueprint.laneId, blueprint.order ?? index, {
     priceLabel: blueprint.priceLabel || "",
     imageAssetId: catalogImageAssetId(definition.id, blueprint.id),
+    codename: blueprint.codename || "",
+    tier: blueprint.tier || "",
+    ffsDate: blueprint.ffsDate || "",
+    globalAnnouncementDate: blueprint.globalAnnouncementDate || "",
+    webReadinessDate: blueprint.webReadinessDate || "",
+    finalAssetsDate: blueprint.finalAssetsDate || "",
+    partSkus: blueprint.partSkus || [],
     statusType: status,
     statusLabel: standardizedStatus(status).label,
     variantLabel: blueprint.variantLabel || "",
@@ -1005,9 +1109,16 @@ function createCategoryBoard(definition) {
 }
 
 function createDefaultPortfolio() {
+  const firstDefinition = CATEGORY_DEFINITIONS[0];
+  if (!firstDefinition) {
+    throw new Error("catalog-data.js did not provide any category definitions. Keep catalog-data.js beside index.html and load it before app.js.");
+  }
   return {
     version: 4,
-    activeCategoryId: CATEGORY_DEFINITIONS[0].id,
+    activeCategoryId: firstDefinition.id,
+    settings: {
+      showRoadmapMsrp: false,
+    },
     imageAssets: catalogImageAssets(),
     categories: CATEGORY_DEFINITIONS.map((definition) => ({
       id: definition.id,
@@ -1018,10 +1129,18 @@ function createDefaultPortfolio() {
 }
 
 function ensurePortfolioSchema(target) {
+  if (!CATEGORY_DEFINITIONS.length) {
+    throw new Error("Cannot load portfolio data because catalog-data.js has no categories or did not load before app.js.");
+  }
   const normalized = target && Array.isArray(target.categories)
     ? target
     : createDefaultPortfolio();
   normalized.version = 4;
+  normalized.settings = {
+    showRoadmapMsrp: false,
+    ...(normalized.settings || {}),
+  };
+  normalized.settings.showRoadmapMsrp = normalized.settings.showRoadmapMsrp === true;
   normalized.categories = Array.isArray(normalized.categories) ? normalized.categories.filter((category) => CATEGORY_DEFINITIONS.some((definition) => definition.id === category.id)) : [];
   ensureImageAssetRegistry(normalized);
   const catalogAssets = catalogImageAssets();
@@ -1036,9 +1155,11 @@ function ensurePortfolioSchema(target) {
     category.name = String(category.name || definition.name).trim() || definition.name;
     category.board = ensureBoardSchema(category.board || createCategoryBoard(definition), definition);
   });
+  const fallbackCategoryId = CATEGORY_DEFINITIONS[0]?.id;
   normalized.activeCategoryId = normalized.categories.some((item) => item.id === normalized.activeCategoryId)
     ? normalized.activeCategoryId
-    : CATEGORY_DEFINITIONS[0].id;
+    : fallbackCategoryId;
+  if (!normalized.activeCategoryId) throw new Error("The imported portfolio does not contain a usable category.");
   migrateLegacyProductImages(normalized);
   return normalized;
 }
@@ -1076,8 +1197,21 @@ function scheduleSave() {
 }
 
 function activateCategory(categoryId, { render = true, fitVertical = true } = {}) {
-  const category = portfolio.categories.find((item) => item.id === categoryId) || portfolio.categories[0];
-  if (!category) return;
+  const category = portfolio?.categories?.find((item) => item.id === categoryId) || portfolio?.categories?.[0];
+  if (!category) throw new Error("The portfolio contains no usable categories.");
+
+  // Viewer details belong to the current category. Clear them before the
+  // active board changes so a product from the previous category cannot leak
+  // into the next category.
+  closeViewerInfo({ render: false });
+  viewerInfoProgress = 0;
+  viewerInfoProductId = null;
+  viewerInfoOpen = false;
+  if (viewerInfoOutline) {
+    viewerInfoOutline.classList.remove("is-open");
+    viewerInfoOutline.style.width = "0px";
+  }
+
   activeCategoryId = category.id;
   portfolio.activeCategoryId = category.id;
   board = ensureBoardSchema(category.board, categoryDefinition(category.id));
@@ -1116,8 +1250,19 @@ function visibleProducts() {
   const query = searchQuery.trim().toLowerCase();
   if (!query) return board.products;
   return board.products.filter((product) => {
-    const variantTerms = productVariantGroups(product).flatMap((group) => [group.label, ...group.items.flatMap((item) => [item.code, item.label, item.colorName, item.colorName2])]);
-    const haystack = [product.name, product.statusLabel, product.variantLabel, ...variantTerms, ...product.specs.flatMap((item) => [item.label, item.value])].join(" ").toLowerCase();
+    const variantTerms = productVariantGroups(product)
+      .flatMap((group) => [group.label, ...group.items.flatMap((item) => [item.code, item.label, item.colorName, item.colorName2])]);
+    const hpSkuTerms = productPartSkus(product).map((item) => item.code);
+    const haystack = [
+      product.name,
+      product.codename,
+      product.tier,
+      product.statusLabel,
+      product.variantLabel,
+      ...hpSkuTerms,
+      ...variantTerms,
+      ...product.specs.flatMap((item) => [item.label, item.value]),
+    ].join(" ").toLowerCase();
     return haystack.includes(query);
   });
 }
@@ -1221,6 +1366,30 @@ function productCardLayout() {
   };
 }
 
+function viewerInfoVisualWidth() {
+  return Math.round(CARD_WIDTH * Math.max(PRODUCT_MIN_ZOOM, zoom || 1));
+}
+
+function viewerInfoVisualHeight() {
+  return Math.round(productCardLayout().cardHeight * Math.max(PRODUCT_MIN_ZOOM, zoom || 1));
+}
+
+function viewerInfoReserveLogical() {
+  if (activeView !== "products" || !viewerInfoProductId || viewerInfoProgress <= 0) return 0;
+  return CARD_WIDTH * viewerInfoProgress;
+}
+
+function viewerInfoGapIndex(laneProducts) {
+  if (activeView !== "products" || !viewerInfoProductId || viewerInfoProgress <= 0) return -1;
+  return laneProducts.findIndex((product) => product.id === viewerInfoProductId);
+}
+
+function cardXForDisplayIndex(laneProducts, displayIndex) {
+  const gapIndex = viewerInfoGapIndex(laneProducts);
+  const shift = gapIndex >= 0 && displayIndex > gapIndex ? viewerInfoReserveLogical() : 0;
+  return GUTTER + displayIndex * (CARD_WIDTH + CARD_GAP) + shift;
+}
+
 function getCanvasDimensions() {
   const lanes = sortedLanes();
   const products = visibleProducts();
@@ -1229,7 +1398,7 @@ function getCanvasDimensions() {
   const editorRevealReserve = inspectorOpen && activeView === "products" && inspector?.offsetWidth
     ? Math.ceil((inspector.offsetWidth + 28) / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
     : 0;
-  const contentWidth = GUTTER + maxCount * (CARD_WIDTH + CARD_GAP) + SIDE_PADDING + editorRevealReserve;
+  const contentWidth = GUTTER + maxCount * (CARD_WIDTH + CARD_GAP) + SIDE_PADDING + editorRevealReserve + viewerInfoReserveLogical();
   const viewportLogicalWidth = canvasScroll?.clientWidth
     ? Math.ceil(canvasScroll.clientWidth / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
     : 0;
@@ -1508,8 +1677,8 @@ function drawDetailedFamilyHeaders(context, laneProducts, laneY) {
   });
 
   runs.forEach((run) => {
-    const startX = GUTTER + run.startIndex * (CARD_WIDTH + CARD_GAP);
-    const endX = GUTTER + run.endIndex * (CARD_WIDTH + CARD_GAP) + CARD_WIDTH;
+    const startX = cardXForDisplayIndex(laneProducts, run.startIndex);
+    const endX = cardXForDisplayIndex(laneProducts, run.endIndex) + CARD_WIDTH;
     const centerX = startX + (endX - startX) / 2;
     context.fillStyle = "rgba(224,228,224,.18)";
     context.font = "700 10px Arial";
@@ -1539,6 +1708,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
   renderedSpecOverflow = [];
   renderedVariantOverflow = [];
   renderedHeroVariantRegions = [];
+  renderedInfoButtons = [];
 
   lanes.forEach((lane, laneIndex) => {
     const laneY = LANE_TOP + laneIndex * layout.laneHeight;
@@ -1550,7 +1720,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
 
     laneProducts
       .forEach((product, displayIndex) => {
-        const automatic = { x: GUTTER + displayIndex * (CARD_WIDTH + CARD_GAP), y: laneY };
+        const automatic = { x: cardXForDisplayIndex(laneProducts, displayIndex), y: laneY };
         let position = automatic;
         if (dragState?.productId === product.id) position = dragState.position;
         renderedCards.push({ productId: product.id, laneId: lane.id, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
@@ -1726,6 +1896,43 @@ function drawDetailedSpecs(context, product, x, startY) {
   return cursorY;
 }
 
+function drawProductInfoButton(context, product, x, y, layout) {
+  const buttonX = x + CARD_WIDTH - INFO_BUTTON_WIDTH - 8;
+  const buttonY = y + STATUS_BANNER_HEIGHT + 7;
+  const isOpen = viewerInfoProductId === product.id && viewerInfoProgress > .01;
+  const isHovered = hoveredInfoButtonProductId === product.id;
+
+  context.save();
+  context.shadowColor = isHovered || isOpen ? "rgba(0,0,0,.42)" : "transparent";
+  context.shadowBlur = isHovered || isOpen ? 6 : 0;
+  roundRect(
+    context,
+    buttonX,
+    buttonY,
+    INFO_BUTTON_WIDTH,
+    INFO_BUTTON_HEIGHT,
+    11,
+    isOpen ? "#f4f6f4" : isHovered ? "#343934" : "rgba(17,19,17,.78)",
+    isOpen ? "#ffffff" : isHovered ? "#697269" : "#4a504a",
+    1,
+  );
+  context.restore();
+
+  context.fillStyle = isOpen ? "#171917" : "#d9ddd9";
+  context.font = "800 13px Arial";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText("i", buttonX + INFO_BUTTON_WIDTH / 2, buttonY + INFO_BUTTON_HEIGHT / 2 + .5);
+
+  renderedInfoButtons.push({
+    productId: product.id,
+    x: buttonX,
+    y: buttonY,
+    width: INFO_BUTTON_WIDTH,
+    height: INFO_BUTTON_HEIGHT,
+  });
+}
+
 function drawCard(context, product, x, y, selected, layout = productCardLayout()) {
   const presentation = productPresentation(product);
   const cardHeight = layout.cardHeight;
@@ -1836,13 +2043,20 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   // Selection remains the top-most interaction layer above status banners,
   // custom variant banners, and every SKU footer.
-  if (selected) {
+  const selectedAsExpandedGroup = selected
+    && viewerInfoProductId === product.id
+    && viewerInfoProgress > .001;
+
+  if (selected && !selectedAsExpandedGroup) {
     context.save();
     context.shadowColor = "rgba(255,255,255,.32)";
     context.shadowBlur = 8;
     roundRect(context, x + 1.5, y + 1.5, CARD_WIDTH - 3, cardHeight - 3, 4, null, "#f4f6f4", 3);
     context.restore();
   }
+
+  // Keep the explicit viewer control above the selected-card outline.
+  drawProductInfoButton(context, product, x, y, layout);
 }
 
 function roadmapRange() {
@@ -1859,7 +2073,21 @@ function visibleRoadmapProducts() {
   if (!query) return board.products;
   return board.products.filter((product) => {
     const roadmap = product.roadmap || {};
-    const haystack = [product.name, roadmap.family, roadmap.status, roadmap.confidence, product.statusLabel, product.variantLabel].join(" ").toLowerCase();
+    const variantTerms = productVariantGroups(product)
+      .flatMap((group) => [group.label, ...group.items.flatMap((item) => [item.code, item.label, item.colorName, item.colorName2])]);
+    const hpSkuTerms = productPartSkus(product).map((item) => item.code);
+    const haystack = [
+      product.name,
+      product.codename,
+      product.tier,
+      roadmap.family,
+      roadmap.status,
+      roadmap.confidence,
+      product.statusLabel,
+      product.variantLabel,
+      ...hpSkuTerms,
+      ...variantTerms,
+    ].join(" ").toLowerCase();
     return haystack.includes(query);
   });
 }
@@ -2012,6 +2240,12 @@ function setupRoadmapCanvas(targetCanvas, dimensions) {
   return context;
 }
 
+function roadmapProductBarLabel(product) {
+  const name = String(product?.name || "Product").toUpperCase();
+  if (!portfolio?.settings?.showRoadmapMsrp) return name;
+  return `${name}  ·  ${productPriceText(product)}`;
+}
+
 function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeSelection = true, exportMode = false) {
   const { width, height, range, groups } = dimensions;
   const stickyX = exportMode ? 0 : targetScroll.scrollLeft;
@@ -2133,10 +2367,10 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         context.rect(barX + 8, barY, Math.max(0, barWidth - 16), barHeight);
         context.clip();
         context.fillStyle = "#f3f4f3";
-        context.font = "700 12px Arial";
+        context.font = portfolio?.settings?.showRoadmapMsrp ? "700 11px Arial" : "700 12px Arial";
         context.textAlign = "center";
         context.textBaseline = "middle";
-        context.fillText(product.name.toUpperCase(), barX + barWidth / 2, barY + barHeight / 2 + .5);
+        context.fillText(roadmapProductBarLabel(product), barX + barWidth / 2, barY + barHeight / 2 + .5);
         context.restore();
 
         // Draw selection after the stage fill so it always
@@ -2699,41 +2933,144 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   }, { passive: false });
 }
 
+function splitRoadmapStatusLabel(status) {
+  const labels = {
+    launched: "Launched",
+    "in-development": "In development",
+    "in-planning": "In planning",
+    embargo: "Under embargo",
+    "end-of-life": "End of life",
+  };
+  return labels[status] || "Not set";
+}
+
+function splitDateCardsHtml(product) {
+  const dates = [
+    ["FFS", product.ffsDate],
+    ["Global announcement", product.globalAnnouncementDate],
+    ["Web readiness", product.webReadinessDate],
+    ["Final assets", product.finalAssetsDate],
+  ];
+  return dates.map(([label, value]) => `
+    <div class="split-detail-card split-date-card ${value ? "" : "is-tbd"}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatProductInfoDate(value))}</strong>
+    </div>`).join("");
+}
+
+function splitHpSkusHtml(product) {
+  const items = productPartSkus(product);
+  if (!items.length) return '<div class="split-detail-empty">No HP SKUs assigned.</div>';
+  return `<div class="split-hp-sku-list">${items.map((item) => `
+    <button class="split-hp-sku" type="button" data-split-copy-sku="${escapeHtml(item.code)}" title="Copy ${escapeHtml(item.code)}">
+      <span>${escapeHtml(item.code)}</span>
+      <small>Copy</small>
+    </button>`).join("")}</div>`;
+}
+
 function renderSplitProduct() {
   if (!splitProduct) return;
   const product = selectedProduct();
   if (!product) {
-    splitProduct.innerHTML = '<div class="split-empty"><h2>No product selected</h2><p>Select a roadmap bar to review its product details.</p></div>';
+    splitProduct.innerHTML = '<div class="split-empty"><h2>No product selected</h2><p>Select a roadmap bar to review its complete product information.</p></div>';
     return;
   }
-  const roadmap = product.roadmap;
+
+  const roadmap = product.roadmap || {};
   const presentation = productPresentation(product);
+  const category = activeCategoryRecord();
+  const lane = board.lanes.find((item) => item.id === product.laneId);
   const statusClass = product.statusType === "embargo" ? "status-embargo" : product.statusType === "new" ? "status-new" : "";
+  const roadmapStatus = roadmap.status || "";
   const iconByKind = { connection: "⌁", battery: "▭", microphone: "◉", driver: "⊙", audio: "◡", cushion: "≋", frame: "◇", controls: "⚙", generic: "◆" };
+  const specs = Array.isArray(product.specs) ? product.specs : [];
+  const variantHtml = splitVariantGroupsHtml(product);
+
   splitProduct.innerHTML = `
-    <article class="split-product-card ${presentation.primaryLabel ? "is-highlighted" : ""}" style="--product-highlight:${escapeHtml(presentation.outlineColor)}">
+    <article class="split-product-card split-product-card--detail ${presentation.primaryLabel ? "is-highlighted" : ""}" style="--product-highlight:${escapeHtml(presentation.outlineColor)}">
       <div class="split-status ${statusClass}" style="background:${escapeHtml(presentation.primaryColor)}">${escapeHtml(presentation.primaryLabel || "SELECTED PRODUCT")}</div>
-      <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
-      <div class="split-product-body">
-        <span class="eyebrow">${escapeHtml(roadmap.family)} family</span>
-        <h2>${escapeHtml(product.name)}</h2>
-        <div class="split-price">${board.settings.showPrices ? (productPriceText(product)) : "Price hidden"}</div>
-        <div class="split-roadmap-summary">
-          <div class="split-metric"><span>Launch → lifecycle end</span><strong>${escapeHtml(roadmapQuarterLabel(roadmap.startMonth))} → ${escapeHtml(roadmapQuarterLabel(roadmap.endMonth))}</strong></div>
-          <div class="split-metric"><span>Status</span><strong>${escapeHtml(roadmap.status)}</strong></div>
-          <div class="split-metric"><span>Confidence</span><strong>${escapeHtml(roadmap.confidence)}</strong></div>
+
+      <div class="split-product-hero">
+        <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
+        <div class="split-product-title">
+          <span class="eyebrow">${escapeHtml(roadmap.family || "Portfolio product")}</span>
+          <h2>${escapeHtml(product.name)}</h2>
+          <div class="split-price">${board.settings.showPrices ? productPriceText(product) : "Price hidden"}</div>
         </div>
-        <div class="split-actions split-actions-single">
+      </div>
+
+      <div class="split-product-body split-product-body--detail">
+        <section class="split-detail-section">
+          <span class="split-detail-heading">Portfolio overview</span>
+          <div class="split-detail-grid split-detail-grid--two">
+            <div class="split-detail-card"><span>Category</span><strong>${escapeHtml(category?.name || categoryDefinition().name)}</strong></div>
+            <div class="split-detail-card"><span>Lane</span><strong>${escapeHtml(lane?.label || "Unassigned")}</strong></div>
+            <div class="split-detail-card"><span>Codename</span><strong class="${product.codename ? "" : "is-muted"}">${escapeHtml(product.codename || "Not set")}</strong></div>
+            <div class="split-detail-card"><span>Product tier</span><strong class="${product.tier ? "" : "is-muted"}">${escapeHtml(productTier(product))}</strong></div>
+          </div>
+        </section>
+
+        <section class="split-detail-section">
+          <span class="split-detail-heading">Key dates</span>
+          <div class="split-detail-grid split-detail-grid--two">
+            ${splitDateCardsHtml(product)}
+          </div>
+        </section>
+
+        <section class="split-detail-section">
+          <span class="split-detail-heading">Roadmap context</span>
+          <div class="split-detail-grid split-detail-grid--two">
+            <div class="split-detail-card"><span>Launch month</span><strong>${escapeHtml(roadmapLabel(roadmap.startMonth))}</strong></div>
+            <div class="split-detail-card"><span>Lifecycle end</span><strong>${escapeHtml(roadmapLabel(roadmap.endMonth))}</strong></div>
+            <div class="split-detail-card"><span>Status</span><strong class="split-roadmap-status split-roadmap-status--${escapeHtml(roadmapStatus || "unset")}">${escapeHtml(splitRoadmapStatusLabel(roadmapStatus))}</strong></div>
+            <div class="split-detail-card"><span>Confidence</span><strong>${escapeHtml(roadmap.confidence || "Not set")}</strong></div>
+            <div class="split-detail-card is-full"><span>Product family</span><strong>${escapeHtml(roadmap.family || "Not set")}</strong></div>
+          </div>
+        </section>
+
+        <section class="split-detail-section">
+          <span class="split-detail-heading">HP SKU</span>
+          ${splitHpSkusHtml(product)}
+        </section>
+
+        <section class="split-detail-section">
+          <span class="split-detail-heading">Specifications</span>
+          <div class="split-spec-list split-spec-list--complete">${specs.length ? specs.map((item) => {
+            const kind = specIconKind(item.label);
+            return `<div class="split-spec-row">
+              <span class="split-spec-icon">${iconByKind[kind] || "◆"}</span>
+              <span class="split-spec-copy"><small>${escapeHtml(item.label || "Specification")}</small><strong>${escapeHtml(item.value)}</strong></span>
+            </div>`;
+          }).join("") : '<div class="split-detail-empty">No specifications assigned.</div>'}</div>
+        </section>
+
+        <section class="split-detail-section">
+          <span class="split-detail-heading">Color / layout variants</span>
+          ${variantHtml || '<div class="split-detail-empty">No variants assigned.</div>'}
+        </section>
+
+        <div class="split-actions split-actions-single split-actions-sticky">
           <button id="splitOpenProduct">Open product cards</button>
         </div>
-        <div class="split-spec-list">${product.specs.slice(0, 7).map((item) => {
-          const kind = specIconKind(item.label);
-          return `<div class="split-spec-row"><span class="split-spec-icon">${iconByKind[kind] || "◆"}</span><span class="split-spec-value">${escapeHtml(item.value)}</span></div>`;
-        }).join("")}</div>
-        ${splitVariantGroupsHtml(product)}
       </div>
     </article>`;
+
   $("#splitOpenProduct").onclick = () => setView("products", { focusSelected: true });
+
+  splitProduct.querySelectorAll("[data-split-copy-sku]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const copied = await copyTextToClipboard(button.dataset.splitCopySku);
+      const label = button.querySelector("small");
+      if (!label) return;
+      const original = label.textContent;
+      label.textContent = copied ? "Copied" : "Failed";
+      button.classList.toggle("is-copied", copied);
+      setTimeout(() => {
+        label.textContent = original;
+        button.classList.remove("is-copied");
+      }, 1100);
+    });
+  });
 }
 
 function updateLinkedViewButton() {
@@ -2830,6 +3167,7 @@ function setView(view, { focusSelected = false } = {}) {
 }
 
 function renderActiveView() {
+  renderViewerInfo();
   updateLinkedViewButton();
   updateRoadmapEditControls();
   updateProductLayoutEditControls();
@@ -2902,6 +3240,7 @@ function renderBoard() {
   canvasScroll.scrollTop = previousTop;
   $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
   renderStatus();
+  positionViewerInfo();
   requestAnimationFrame(syncBoardNavigator);
 }
 
@@ -2910,7 +3249,7 @@ function renderStatus() {
   const interaction = activeView === "products"
     ? productLayoutEditing
       ? "Layout editing enabled from Data; drag cards to reorder or move lanes; hover color SKUs to preview hero images"
-      : "Viewer mode; double-click a product for Roadmap; drag anywhere horizontally; hover color SKUs to preview hero images"
+      : "Viewer mode; toggle details with the white i button; while open, selecting another card updates the same drawer"
     : roadmapSlotEditingActive()
       ? "Roadmap slot editing enabled from Data; use dedicated handles; click empty space or press Escape to deselect"
       : "Viewer mode; double-click a roadmap product for Split view; drag the canvas to navigate; editing is under Data";
@@ -2926,10 +3265,257 @@ function selectedProduct() {
   return board.products.find((product) => product.id === selectedId) || null;
 }
 
+function infoProduct() {
+  return board.products.find((product) => product.id === viewerInfoProductId) || selectedProduct();
+}
+
+function productSpecValue(product, patterns) {
+  const specs = Array.isArray(product?.specs) ? product.specs : [];
+  const matchers = patterns.map((pattern) => pattern instanceof RegExp ? pattern : new RegExp(String(pattern), "i"));
+  const found = specs.find((item) => matchers.some((pattern) => pattern.test(String(item.label || ""))));
+  return found?.value ? String(found.value) : "";
+}
+
+function productTier(product) {
+  return PRODUCT_TIER_OPTIONS.includes(product?.tier) && product.tier ? product.tier : "Not set";
+}
+
+function productPartSkus(product) {
+  return (Array.isArray(product?.partSkus) ? product.partSkus : [])
+    .map((item, index) => normalizePartSku(item, index))
+    .filter((item) => item.code);
+}
+
+function viewerPartSkusHtml(product) {
+  const items = productPartSkus(product);
+  if (!items.length) return '<div class="viewer-info-empty">No HP SKUs assigned.</div>';
+  return `<div class="viewer-part-sku-list">${items.map((item) => `
+    <button type="button" class="viewer-part-sku" data-copy-part-sku="${escapeHtml(item.code)}" title="Copy ${escapeHtml(item.code)}">
+      <span>${escapeHtml(item.code)}</span>
+      <small>Copy</small>
+    </button>`).join("")}</div>`;
+}
+
+function viewerDateRowsHtml(product) {
+  const rows = [
+    ["FFS", product.ffsDate],
+    ["Global announcement", product.globalAnnouncementDate],
+    ["Web readiness", product.webReadinessDate],
+    ["Final assets", product.finalAssetsDate],
+  ];
+  return `<div class="viewer-info-date-list">${rows.map(([label, value]) => `
+    <div class="viewer-info-date-row">
+      <span>${escapeHtml(label)}</span>
+      <strong class="${value ? "" : "is-tbd"}">${escapeHtml(formatProductInfoDate(value))}</strong>
+    </div>`).join("")}</div>`;
+}
+
+function renderViewerInfo() {
+  if (!viewerInfo) return;
+  const product = infoProduct();
+  const visible = Boolean(product && (viewerInfoOpen || viewerInfoProgress > .001));
+  viewerInfo.classList.toggle("is-open", visible);
+  viewerInfo.setAttribute("aria-hidden", String(!visible));
+  if (!visible || !product) {
+    if (!viewerInfoOpen && viewerInfoProgress <= .001) viewerInfo.innerHTML = "";
+    if (viewerInfoOutline) {
+      viewerInfoOutline.classList.remove("is-open");
+      viewerInfoOutline.style.width = "0px";
+    }
+    return;
+  }
+
+  const category = activeCategoryRecord();
+  const variantHtml = splitVariantGroupsHtml(product);
+  viewerInfo.innerHTML = `
+    <div class="viewer-info-body">
+      <section class="viewer-info-section viewer-identity-section">
+        <span class="viewer-info-label">Identity</span>
+        <div class="viewer-info-identity">
+          <div><span>Category</span><strong>${escapeHtml(category?.name || categoryDefinition().name)}</strong></div>
+          <div><span>Codename</span><strong class="${product.codename ? "" : "is-empty"}">${escapeHtml(product.codename || "Not set")}</strong></div>
+          <div><span>Product tier</span><strong class="${product.tier ? "" : "is-empty"}">${escapeHtml(productTier(product))}</strong></div>
+        </div>
+      </section>
+      <section class="viewer-info-section">
+        <span class="viewer-info-label">Key dates</span>
+        ${viewerDateRowsHtml(product)}
+      </section>
+      <section class="viewer-info-section">
+        <span class="viewer-info-label">HP SKU</span>
+        ${viewerPartSkusHtml(product)}
+      </section>
+      <section class="viewer-info-section">
+        <span class="viewer-info-label">Color / layout variants</span>
+        ${variantHtml || '<div class="viewer-info-empty">No variants assigned.</div>'}
+      </section>
+    </div>`;
+
+  viewerInfo.querySelectorAll("[data-copy-part-sku]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const copied = await copyTextToClipboard(button.dataset.copyPartSku);
+      const copyLabel = button.querySelector("small");
+      if (!copyLabel) return;
+      const original = copyLabel.textContent;
+      copyLabel.textContent = copied ? "Copied" : "Failed";
+      button.classList.toggle("is-copied", copied);
+      setTimeout(() => {
+        copyLabel.textContent = original;
+        button.classList.remove("is-copied");
+      }, 1100);
+    });
+  });
+}
+
+function positionViewerInfo() {
+  if (!viewerInfo || !viewerInfoProductId || activeView !== "products" || viewerInfoProgress <= 0) return null;
+  const card = renderedCards.find((item) => item.productId === viewerInfoProductId);
+  if (!card) return null;
+  const width = viewerInfoVisualWidth();
+  const height = viewerInfoVisualHeight();
+  const left = (card.x + card.width) * zoom;
+  const top = card.y * zoom;
+  const hiddenPercent = Math.max(0, Math.min(100, (1 - viewerInfoProgress) * 100));
+  const visibleWidth = width * viewerInfoProgress;
+
+  viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
+  viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
+  viewerInfo.style.left = `${left}px`;
+  viewerInfo.style.top = `${top}px`;
+  viewerInfo.style.transform = "none";
+  viewerInfo.style.opacity = "1";
+  viewerInfo.style.clipPath = `inset(0 ${hiddenPercent}% 0 0)`;
+  viewerInfo.style.pointerEvents = viewerInfoProgress > .96 ? "auto" : "none";
+
+  if (viewerInfoOutline) {
+    const outlineWidth = (CARD_WIDTH * zoom) + visibleWidth;
+    viewerInfoOutline.classList.toggle("is-open", viewerInfoProgress > .001);
+    viewerInfoOutline.style.left = `${card.x * zoom}px`;
+    viewerInfoOutline.style.top = `${top}px`;
+    viewerInfoOutline.style.width = `${outlineWidth}px`;
+    viewerInfoOutline.style.height = `${height}px`;
+  }
+
+  return {
+    cardLeft: card.x * zoom,
+    cardTop: card.y * zoom,
+    paneLeft: left,
+    paneRight: left + visibleWidth,
+    paneBottom: top + height,
+  };
+}
+
+function revealViewerInfoBesideProduct() {
+  const placement = positionViewerInfo();
+  if (!placement) return;
+  const padding = 18;
+  const viewportWidth = canvasScroll.clientWidth;
+  const viewportHeight = canvasScroll.clientHeight;
+  const combinedWidth = placement.paneRight - placement.cardLeft;
+  let targetLeft = canvasScroll.scrollLeft;
+  if (combinedWidth <= viewportWidth - padding * 2) {
+    targetLeft = placement.cardLeft - Math.max(padding, (viewportWidth - combinedWidth) / 2);
+  } else {
+    targetLeft = placement.cardLeft - padding;
+  }
+  const maxLeft = Math.max(0, canvasScroll.scrollWidth - viewportWidth);
+  targetLeft = Math.max(0, Math.min(maxLeft, targetLeft));
+
+  let targetTop = canvasScroll.scrollTop;
+  if (placement.cardTop < targetTop + padding || placement.paneBottom > targetTop + viewportHeight - padding) {
+    targetTop = Math.max(0, placement.cardTop - padding);
+  }
+  canvasScroll.scrollTo({ left: targetLeft, top: targetTop, behavior: "smooth" });
+}
+
+function viewerInfoEase(progress) {
+  return progress < .5
+    ? 4 * progress * progress * progress
+    : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+}
+
+function animateViewerInfo(targetProgress, onComplete) {
+  cancelAnimationFrame(viewerInfoAnimationFrame);
+  const startProgress = viewerInfoProgress;
+  const difference = targetProgress - startProgress;
+  if (Math.abs(difference) < .001) {
+    viewerInfoProgress = targetProgress;
+    renderBoard();
+    positionViewerInfo();
+    onComplete?.();
+    return;
+  }
+
+  const startedAt = performance.now();
+  const duration = VIEWER_INFO_ANIMATION_MS * Math.max(.45, Math.abs(difference));
+  const step = (now) => {
+    const elapsed = Math.min(1, (now - startedAt) / duration);
+    viewerInfoProgress = startProgress + difference * viewerInfoEase(elapsed);
+    renderBoard();
+    positionViewerInfo();
+    if (elapsed < 1) {
+      viewerInfoAnimationFrame = requestAnimationFrame(step);
+      return;
+    }
+    viewerInfoProgress = targetProgress;
+    viewerInfoAnimationFrame = null;
+    renderBoard();
+    positionViewerInfo();
+    onComplete?.();
+  };
+  viewerInfoAnimationFrame = requestAnimationFrame(step);
+}
+
+function openViewerInfo(productId = selectedId) {
+  if (!productId) return;
+
+  if (viewerInfoOpen && viewerInfoProductId === productId) {
+    closeViewerInfo();
+    return;
+  }
+
+  viewerInfoProductId = productId;
+  viewerInfoOpen = true;
+  selectedId = productId;
+  renderInspector();
+  renderViewerInfo();
+  renderBoard();
+
+  requestAnimationFrame(() => {
+    animateViewerInfo(1, () => requestAnimationFrame(revealViewerInfoBesideProduct));
+  });
+}
+
+function closeViewerInfo({ render = true } = {}) {
+  if (!viewerInfoProductId && viewerInfoProgress <= .001) return;
+  viewerInfoOpen = false;
+  cancelAnimationFrame(viewerInfoAnimationFrame);
+  viewerInfoAnimationFrame = null;
+
+  if (!render || activeView !== "products") {
+    viewerInfoProgress = 0;
+    viewerInfoProductId = null;
+    if (viewerInfoOutline) {
+      viewerInfoOutline.classList.remove("is-open");
+      viewerInfoOutline.style.width = "0px";
+    }
+    renderViewerInfo();
+    return;
+  }
+
+  animateViewerInfo(0, () => {
+    viewerInfoProductId = null;
+    renderViewerInfo();
+    renderBoard();
+    requestAnimationFrame(scrollSelectedIntoView);
+  });
+}
+
 function clearSelection({ render = true } = {}) {
-  const changed = Boolean(selectedId || inspectorOpen || roadmapEditProductId);
+  const changed = Boolean(selectedId || inspectorOpen || roadmapEditProductId || viewerInfoProductId);
   selectedId = null;
   inspectorOpen = false;
+  closeViewerInfo({ render: false });
   closeSpecPopover();
   closeVariantPopover({ force: true });
   stopRoadmapSlotEditing();
@@ -3318,6 +3904,72 @@ function renderInspector() {
       <p class="image-storage-note">Uploaded images are stored as binary assets in the browser image library. Product records keep only a small image ID, so autosave and JSON stay lightweight.</p>
       ${product.imageAssetId ? '<button id="clearImage" class="secondary-button">Use placeholder image</button>' : ""}
     </section>
+    <section id="productInformationSection" class="panel-section product-information-section">
+      <div class="section-heading-row">
+        <div>
+          <span class="eyebrow">Viewer details</span>
+          <h3>Product information</h3>
+        </div>
+        <span class="section-badge">Read-only pane</span>
+      </div>
+      <div class="portfolio-info-card">
+        <div class="category-move-control">
+          <label>Category
+            <select id="fieldProductCategory">
+              ${portfolio.categories.map((category) => `<option value="${escapeHtml(category.id)}" ${category.id === activeCategoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}
+            </select>
+          </label>
+          <button id="moveProductCategory" type="button" class="small-button" disabled>Move</button>
+        </div>
+        <p class="field-help">Changing category moves this product into the first lane of the selected category.</p>
+        <div class="portfolio-info-grid">
+          <label>Codename<input id="fieldCodename" value="${escapeHtml(product.codename || "")}" placeholder="Internal codename"></label>
+          <label>Product tier<select id="fieldProductTier">${productTierOptionsHtml(product.tier)}</select></label>
+        </div>
+        <div class="portfolio-date-grid">
+          <label class="portfolio-date-field">FFS date
+            <span class="portfolio-date-control">
+              <input id="fieldFfsDate" type="date" value="${escapeHtml(product.ffsDate || "")}">
+              <button id="fieldFfsDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
+            </span>
+          </label>
+          <label class="portfolio-date-field">Global announcement
+            <span class="portfolio-date-control">
+              <input id="fieldGlobalAnnouncementDate" type="date" value="${escapeHtml(product.globalAnnouncementDate || "")}">
+              <button id="fieldGlobalAnnouncementDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
+            </span>
+          </label>
+          <label class="portfolio-date-field">Web readiness
+            <span class="portfolio-date-control">
+              <input id="fieldWebReadinessDate" type="date" value="${escapeHtml(product.webReadinessDate || "")}">
+              <button id="fieldWebReadinessDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
+            </span>
+          </label>
+          <label class="portfolio-date-field">Final assets
+            <span class="portfolio-date-control">
+              <input id="fieldFinalAssetsDate" type="date" value="${escapeHtml(product.finalAssetsDate || "")}">
+              <button id="fieldFinalAssetsDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
+            </span>
+          </label>
+        </div>
+        <p class="field-help date-field-help">Leave a date blank or select <strong>TBD</strong> when the milestone date is not determined.</p>
+      </div>
+      <div class="part-sku-editor">
+        <div class="section-heading-row part-sku-heading">
+          <div>
+            <span class="eyebrow">HP part numbers</span>
+            <h3>HP SKU</h3>
+          </div>
+          <button id="addPartSku" class="small-button" type="button">+ Add HP SKU</button>
+        </div>
+        <div class="part-sku-list">${product.partSkus.length ? product.partSkus.map((item, index) => `
+          <div class="part-sku-row" data-part-sku-id="${escapeHtml(item.id)}">
+            <input data-part-sku-code value="${escapeHtml(item.code)}" placeholder="BS1T9AA" aria-label="HP SKU ${index + 1}">
+            <button type="button" class="part-sku-copy" data-copy-editor-sku title="Copy HP SKU">Copy</button>
+            <button type="button" class="icon-button part-sku-remove" data-remove-part-sku aria-label="Remove HP SKU ${index + 1}">×</button>
+          </div>`).join("") : '<div class="empty-list">No HP SKUs</div>'}</div>
+      </div>
+    </section>
     ${colorwayHeroImagesEditorHtml(product)}
     <section class="panel-section">
       <h3>Status and variant banner</h3>
@@ -3391,6 +4043,74 @@ function renderInspector() {
   bindValue("#fieldPrice", "input", (value) => updateProduct(product.id, { price: value === "" ? null : Number(value) }, false));
   bindValue("#fieldPriceLabel", "input", (value) => updateProduct(product.id, { priceLabel: value }, false));
   bindValue("#fieldLane", "change", (value) => moveProductToLane(product.id, value));
+  bindValue("#fieldCodename", "input", (value) => updateProduct(product.id, { codename: value }, false));
+  bindValue("#fieldProductTier", "change", (value) => updateProduct(product.id, {
+    tier: PRODUCT_TIER_OPTIONS.includes(value) ? value : "",
+  }, false));
+  const bindProductDate = (inputSelector, tbdButtonSelector, fieldName) => {
+    const input = $(inputSelector);
+    const tbdButton = $(tbdButtonSelector);
+    if (!input || !tbdButton) return;
+
+    const syncTbdState = () => {
+      const isTbd = !normalizeProductInfoDate(input.value);
+      tbdButton.classList.toggle("is-active", isTbd);
+      tbdButton.setAttribute("aria-pressed", String(isTbd));
+    };
+
+    input.addEventListener("change", () => {
+      updateProduct(product.id, { [fieldName]: normalizeProductInfoDate(input.value) }, false);
+      syncTbdState();
+    });
+
+    tbdButton.addEventListener("click", () => {
+      input.value = "";
+      updateProduct(product.id, { [fieldName]: "" }, false);
+      syncTbdState();
+    });
+
+    syncTbdState();
+  };
+
+  bindProductDate("#fieldFfsDate", "#fieldFfsDateTbd", "ffsDate");
+  bindProductDate("#fieldGlobalAnnouncementDate", "#fieldGlobalAnnouncementDateTbd", "globalAnnouncementDate");
+  bindProductDate("#fieldWebReadinessDate", "#fieldWebReadinessDateTbd", "webReadinessDate");
+  bindProductDate("#fieldFinalAssetsDate", "#fieldFinalAssetsDateTbd", "finalAssetsDate");
+
+  const categorySelectField = $("#fieldProductCategory");
+  const moveCategoryButton = $("#moveProductCategory");
+  const syncMoveCategoryButton = () => {
+    moveCategoryButton.disabled = !categorySelectField.value || categorySelectField.value === activeCategoryId;
+  };
+  categorySelectField.addEventListener("change", syncMoveCategoryButton);
+  moveCategoryButton.addEventListener("click", () => moveProductToCategory(product.id, categorySelectField.value));
+  syncMoveCategoryButton();
+
+  $("#addPartSku").addEventListener("click", () => updatePartSkus(product.id, (items) => [...items, partSku("")], true));
+  inspector.querySelectorAll("[data-part-sku-id]").forEach((row) => {
+    const partSkuId = row.dataset.partSkuId;
+    const input = row.querySelector("[data-part-sku-code]");
+    const copyButton = row.querySelector("[data-copy-editor-sku]");
+    const removeButton = row.querySelector("[data-remove-part-sku]");
+
+    input.addEventListener("input", () => updatePartSkus(product.id, (items) => items.map((item) => (
+      item.id === partSkuId ? { ...item, code: input.value.trim().toUpperCase() } : item
+    )), false));
+
+    copyButton.addEventListener("click", async () => {
+      const copied = await copyTextToClipboard(input.value);
+      const original = copyButton.textContent;
+      copyButton.textContent = copied ? "Copied" : "Failed";
+      copyButton.classList.toggle("is-copied", copied);
+      setTimeout(() => {
+        copyButton.textContent = original;
+        copyButton.classList.remove("is-copied");
+      }, 1100);
+    });
+
+    removeButton.addEventListener("click", () => updatePartSkus(product.id, (items) => items.filter((item) => item.id !== partSkuId), true));
+  });
+
   $("#fieldImageUrl").addEventListener("change", async (event) => {
     const value = event.target.value.trim();
     const imageAssetId = value ? createUrlImageAsset(value, product.name) : "";
@@ -3615,6 +4335,53 @@ function updateProduct(productId, patch, updateInspectorAfter) {
   }, { inspector: updateInspectorAfter });
 }
 
+function updatePartSkus(productId, updater, updateInspectorAfter = false) {
+  updateBoard((current) => {
+    const product = current.products.find((item) => item.id === productId);
+    if (!product) return;
+    const existing = (Array.isArray(product.partSkus) ? product.partSkus : []).map((item, index) => normalizePartSku(item, index));
+    product.partSkus = (updater(existing) || existing).map((item, index) => normalizePartSku(item, index));
+  }, { inspector: updateInspectorAfter });
+}
+
+function normalizeOrdersForBoard(targetBoard, laneId) {
+  targetBoard.products
+    .filter((product) => product.laneId === laneId)
+    .sort((a, b) => a.order - b.order)
+    .forEach((product, index) => { product.order = index; });
+}
+
+function moveProductToCategory(productId, targetCategoryId) {
+  const sourceCategory = activeCategoryRecord();
+  const targetCategory = portfolio.categories.find((category) => category.id === targetCategoryId);
+  if (!sourceCategory || !targetCategory || sourceCategory.id === targetCategory.id) return;
+
+  const sourceBoard = board;
+  const sourceIndex = sourceBoard.products.findIndex((product) => product.id === productId);
+  if (sourceIndex < 0) return;
+
+  const [product] = sourceBoard.products.splice(sourceIndex, 1);
+  normalizeOrdersForBoard(sourceBoard, product.laneId);
+
+  const targetDefinition = categoryDefinition(targetCategory.id);
+  const targetBoard = ensureBoardSchema(targetCategory.board, targetDefinition);
+  targetCategory.board = targetBoard;
+  const targetLaneId = [...targetBoard.lanes].sort((a, b) => a.order - b.order)[0]?.id || "default";
+
+  product.laneId = targetLaneId;
+  product.order = targetBoard.products.filter((item) => item.laneId === targetLaneId).length;
+  targetBoard.products.push(product);
+
+  scheduleSave();
+  activateCategory(targetCategory.id, { render: false, fitVertical: true });
+  selectedId = product.id;
+  inspectorOpen = true;
+  syncControls();
+  renderInspector();
+  renderActiveView();
+  requestAnimationFrame(revealSelectedProductBesideInspector);
+}
+
 function updateRoadmap(productId, updater, updateInspectorAfter = false) {
   updateBoard((current) => {
     const product = current.products.find((item) => item.id === productId);
@@ -3725,6 +4492,7 @@ function syncControls() {
   $("#roadmapStart").value = board.settings.roadmap.startMonth;
   $("#roadmapEnd").value = board.settings.roadmap.endMonth;
   $("#roadmapSnap").value = board.settings.roadmap.snap;
+  $("#roadmapShowMsrp").checked = portfolio.settings?.showRoadmapMsrp === true;
   $("#roadmapColorLaunched").value = board.settings.roadmap.statusColors.launched;
   $("#roadmapColorDevelopment").value = board.settings.roadmap.statusColors["in-development"];
   $("#roadmapColorPlanning").value = board.settings.roadmap.statusColors["in-planning"];
@@ -3760,8 +4528,19 @@ function hitHeroVariant(point) {
   return [...renderedHeroVariantRegions].reverse().find((region) => point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height);
 }
 
+function hitInfoButton(point) {
+  return [...renderedInfoButtons].reverse().find((region) => point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height);
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   const point = canvasPoint(event);
+  const infoButton = hitInfoButton(point);
+  if (infoButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    openViewerInfo(infoButton.productId);
+    return;
+  }
   const heroVariant = hitHeroVariant(point);
   if (heroVariant) {
     event.preventDefault();
@@ -3807,9 +4586,18 @@ canvas.addEventListener("pointerdown", (event) => {
     canvasScroll.classList.add("is-panning");
     return;
   }
-  selectedId = card.productId;
+  // When the information drawer is already open, selecting another card
+  // retargets the drawer to that product. This keeps selection ownership and
+  // the combined outline on one product instead of leaving the old drawer
+  // attached while a second card receives a selection border.
+  if (viewerInfoProductId && viewerInfoProgress > .001 && viewerInfoProductId !== card.productId) {
+    openViewerInfo(card.productId);
+  } else {
+    selectedId = card.productId;
+    renderInspector();
+  }
+
   stopRoadmapSlotEditing();
-  renderInspector();
   const product = selectedProduct();
   if (productLayoutEditing) {
     dragState = { productId: card.productId, offsetX: point.x - card.x, offsetY: point.y - card.y, position: { x: card.x, y: card.y } };
@@ -3847,8 +4635,15 @@ canvas.addEventListener("pointermove", (event) => {
     const variantOverflow = hitVariantOverflow(point);
     if (variantOverflow) scheduleVariantPopoverOpen(variantOverflow, event.clientX, event.clientY);
     else scheduleVariantPopoverClose();
+    const infoButton = hitInfoButton(point);
+    const nextInfoHoverId = infoButton?.productId || "";
+    if (nextInfoHoverId !== hoveredInfoButtonProductId) {
+      hoveredInfoButtonProductId = nextInfoHoverId;
+      renderBoard();
+      return;
+    }
     const card = hitCard(point);
-    canvas.style.cursor = heroVariant || variantOverflow || hitSpecOverflow(point)
+    canvas.style.cursor = heroVariant || variantOverflow || infoButton || hitSpecOverflow(point)
       ? "pointer"
       : productLayoutEditing && card
         ? "move"
@@ -3868,6 +4663,10 @@ canvas.addEventListener("pointermove", (event) => {
 
 canvas.addEventListener("pointerleave", () => {
   scheduleVariantPopoverClose();
+  if (hoveredInfoButtonProductId) {
+    hoveredInfoButtonProductId = "";
+    renderBoard();
+  }
   if (hoveredHeroVariant) setHoveredHeroVariant();
 });
 
@@ -3897,7 +4696,7 @@ canvas.addEventListener("pointerup", finishDrag);
 canvas.addEventListener("pointercancel", finishDrag);
 canvas.addEventListener("dblclick", (event) => {
   const point = canvasPoint(event);
-  if (hitSpecOverflow(point) || hitVariantOverflow(point) || hitHeroVariant(point)) return;
+  if (hitSpecOverflow(point) || hitVariantOverflow(point) || hitHeroVariant(point) || hitInfoButton(point)) return;
   const card = hitCard(point);
   if (!card) return;
   selectedId = card.productId;
@@ -4102,6 +4901,286 @@ async function importProjectPackage(file) {
   activateCategory(portfolio.activeCategoryId, { fitVertical: true });
 }
 
+
+function waitForImageSource(src, timeoutMs = 7000) {
+  if (!src) return Promise.resolve();
+  const record = loadImage(src);
+  if (record.ready || record.failed) return Promise.resolve();
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      record.image.removeEventListener("load", finish);
+      record.image.removeEventListener("error", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    record.image.addEventListener("load", finish, { once: true });
+    record.image.addEventListener("error", finish, { once: true });
+  });
+}
+
+async function preloadCategoryImagesForPptx(products) {
+  const assetIds = [...new Set(products.map((product) => productDisplayImageAssetId(product)).filter(Boolean))];
+  assetIds.forEach((assetId) => loadLocalImageAsset(assetId));
+  const localLoads = assetIds.map((assetId) => imageAssetLoadPromises.get(assetId)).filter(Boolean);
+  if (localLoads.length) await Promise.allSettled(localLoads);
+  await Promise.allSettled(products.map((product) => waitForImageSource(productImageSource(product))));
+}
+
+async function renderCategoryImageForPptx(category) {
+  const previous = {
+    activeCategoryId,
+    board,
+    selectedId,
+    searchQuery,
+    roadmapSearchQuery,
+    inspectorOpen,
+    viewerInfoOpen,
+    viewerInfoProductId,
+  };
+
+  try {
+    activeCategoryId = category.id;
+    board = ensureBoardSchema(category.board, categoryDefinition(category.id));
+    category.board = board;
+    selectedId = null;
+    searchQuery = "";
+    roadmapSearchQuery = "";
+    inspectorOpen = false;
+    viewerInfoOpen = false;
+    viewerInfoProductId = null;
+
+    await preloadCategoryImagesForPptx(board.products);
+    const dimensions = getCanvasDimensions();
+    const exportCanvas = document.createElement("canvas");
+    const maxPixelWidth = 2800;
+    const scale = Math.min(1, maxPixelWidth / dimensions.width);
+    exportCanvas.width = Math.max(1, Math.round(dimensions.width * scale));
+    exportCanvas.height = Math.max(1, Math.round(dimensions.height * scale));
+    const exportContext = exportCanvas.getContext("2d");
+    exportContext.setTransform(scale, 0, 0, scale, 0, 0);
+    exportContext.imageSmoothingEnabled = true;
+    exportContext.imageSmoothingQuality = "high";
+    drawBoardTo(exportContext, dimensions, false, true);
+    return {
+      data: exportCanvas.toDataURL("image/jpeg", .9),
+      width: exportCanvas.width,
+      height: exportCanvas.height,
+    };
+  } finally {
+    activeCategoryId = previous.activeCategoryId;
+    board = previous.board;
+    selectedId = previous.selectedId;
+    searchQuery = previous.searchQuery;
+    roadmapSearchQuery = previous.roadmapSearchQuery;
+    inspectorOpen = previous.inspectorOpen;
+    viewerInfoOpen = previous.viewerInfoOpen;
+    viewerInfoProductId = previous.viewerInfoProductId;
+  }
+}
+
+async function renderCategoryRoadmapImageForPptx(category) {
+  const previous = {
+    activeCategoryId,
+    board,
+    selectedId,
+    searchQuery,
+    roadmapSearchQuery,
+    inspectorOpen,
+    viewerInfoOpen,
+    viewerInfoProductId,
+    viewerInfoProgress,
+    roadmapMonthWidth,
+  };
+
+  try {
+    activeCategoryId = category.id;
+    board = ensureBoardSchema(category.board, categoryDefinition(category.id));
+    category.board = board;
+    selectedId = null;
+    searchQuery = "";
+    roadmapSearchQuery = "";
+    inspectorOpen = false;
+    viewerInfoOpen = false;
+    viewerInfoProductId = null;
+    viewerInfoProgress = 0;
+
+    // Keep the configured timeline range, but choose a month width that
+    // produces a readable export without generating an excessively wide image.
+    const range = roadmapRange();
+    const targetPixelWidth = 2600;
+    roadmapMonthWidth = Math.max(
+      ROADMAP_MIN_MONTH_WIDTH,
+      Math.min(64, Math.floor((targetPixelWidth - ROADMAP_LEFT_WIDTH - 24) / Math.max(1, range.count))),
+    );
+
+    const dimensions = roadmapDimensions();
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = Math.max(1, Math.round(dimensions.width));
+    exportCanvas.height = Math.max(1, Math.round(dimensions.height));
+
+    const exportContext = exportCanvas.getContext("2d");
+    exportContext.imageSmoothingEnabled = true;
+    exportContext.imageSmoothingQuality = "high";
+    drawRoadmapTo(
+      exportContext,
+      dimensions,
+      exportCanvas,
+      { scrollLeft: 0, scrollTop: 0 },
+      false,
+      true,
+    );
+
+    return {
+      data: exportCanvas.toDataURL("image/jpeg", .92),
+      width: exportCanvas.width,
+      height: exportCanvas.height,
+    };
+  } finally {
+    activeCategoryId = previous.activeCategoryId;
+    board = previous.board;
+    selectedId = previous.selectedId;
+    searchQuery = previous.searchQuery;
+    roadmapSearchQuery = previous.roadmapSearchQuery;
+    inspectorOpen = previous.inspectorOpen;
+    viewerInfoOpen = previous.viewerInfoOpen;
+    viewerInfoProductId = previous.viewerInfoProductId;
+    viewerInfoProgress = previous.viewerInfoProgress;
+    roadmapMonthWidth = previous.roadmapMonthWidth;
+  }
+}
+
+function addPptxPortfolioSlide(pptx, title, slideNumber, slideCount, image) {
+  const slide = pptx.addSlide();
+  slide.background = { color: "151715" };
+  slide.addText(title, {
+    x: .38, y: .16, w: 11.9, h: .38,
+    fontFace: "Arial", fontSize: 20, bold: true,
+    color: "F0F2F0", margin: 0, breakLine: false,
+  });
+  slide.addText(`${slideNumber} / ${slideCount}`, {
+    x: .38, y: .5, w: 1.4, h: .16,
+    fontFace: "Arial", fontSize: 8, color: "7F857F",
+    align: "left", margin: 0,
+  });
+  slide.addShape(pptx.ShapeType.line, {
+    x: .38, y: .7, w: 12.55, h: 0,
+    line: { color: "343834", width: 1 },
+  });
+  const placement = containRect(image.width, image.height, .38, .82, 12.55, 6.25, "left");
+  slide.addImage({ data: image.data, ...placement });
+}
+
+function containRect(sourceWidth, sourceHeight, targetX, targetY, targetWidth, targetHeight, align = "center") {
+  const scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const width = sourceWidth * scale;
+  const height = sourceHeight * scale;
+  return {
+    x: align === "left" ? targetX : targetX + (targetWidth - width) / 2,
+    y: align === "left" ? targetY : targetY + (targetHeight - height) / 2,
+    w: width,
+    h: height,
+  };
+}
+
+function pptxExportScope() {
+  return pptxExportForm?.querySelector('input[name="pptxExportScope"]:checked')?.value || "both";
+}
+
+function pptxSlideCountForScope(scope, categoryCount) {
+  return categoryCount * (scope === "both" ? 2 : 1);
+}
+
+function syncPptxExportSummary() {
+  if (!pptxExportDialog) return;
+  const categoryCount = (portfolio?.categories || []).filter((category) => category?.board).length;
+  const scope = pptxExportScope();
+  $("#pptxExportCategoryCount").textContent = String(categoryCount);
+  $("#pptxExportSlideCount").textContent = String(pptxSlideCountForScope(scope, categoryCount));
+}
+
+function openPptxExportDialog() {
+  closePopupMenus();
+  syncPptxExportSummary();
+  pptxExportDialog.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    const selected = pptxExportForm.querySelector('input[name="pptxExportScope"]:checked');
+    selected?.focus();
+  });
+}
+
+function closePptxExportDialog() {
+  if (confirmPptxExportButton?.disabled) return;
+  pptxExportDialog.classList.add("hidden");
+}
+
+function pptxExportFilename(scope) {
+  if (scope === "products") return "product-portfolio.pptx";
+  if (scope === "roadmap") return "product-roadmaps.pptx";
+  return "product-portfolio-and-roadmaps.pptx";
+}
+
+async function exportPptx(scope = "both") {
+  closePopupMenus();
+  if (typeof PptxGenJS !== "function") throw new Error("The PowerPoint export library did not load. Refresh the page and try again.");
+  const categories = (portfolio?.categories || []).filter((category) => category?.board);
+  if (!categories.length) throw new Error("There are no categories to export.");
+
+  const pptx = new PptxGenJS();
+  pptx.layout = "LAYOUT_WIDE";
+  pptx.author = "Product Portfolio Canvas";
+  pptx.company = "Product Portfolio";
+  pptx.subject = scope === "products"
+    ? "Product category portfolio boards"
+    : scope === "roadmap"
+      ? "Product category roadmaps"
+      : "Product category portfolio boards and roadmaps";
+  pptx.title = scope === "products"
+    ? "Product Portfolio"
+    : scope === "roadmap"
+      ? "Product Roadmaps"
+      : "Product Portfolio and Roadmaps";
+  pptx.lang = "en-US";
+
+  const slideCount = pptxSlideCountForScope(scope, categories.length);
+  let slideNumber = 1;
+
+  for (let index = 0; index < categories.length; index += 1) {
+    const category = categories[index];
+    const categoryName = category.name || category.id || `Category ${index + 1}`;
+
+    if (scope === "products" || scope === "both") {
+      const productImage = await renderCategoryImageForPptx(category);
+      addPptxPortfolioSlide(
+        pptx,
+        `${categoryName} — Product Portfolio`,
+        slideNumber,
+        slideCount,
+        productImage,
+      );
+      slideNumber += 1;
+    }
+
+    if (scope === "roadmap" || scope === "both") {
+      const roadmapImage = await renderCategoryRoadmapImageForPptx(category);
+      addPptxPortfolioSlide(
+        pptx,
+        `${categoryName} — Roadmap`,
+        slideNumber,
+        slideCount,
+        roadmapImage,
+      );
+      slideNumber += 1;
+    }
+  }
+
+  await pptx.writeFile({ fileName: pptxExportFilename(scope) });
+  renderActiveView();
+}
+
 function exportPng() {
   const exportCanvas = document.createElement("canvas");
   const scale = 2;
@@ -4223,28 +5302,98 @@ function saveCategorySettings() {
   requestAnimationFrame(fitProductLanesVertically);
 }
 
+function parsePortfolioImportText(rawText) {
+  let source = String(rawText || "").trim();
+  if (!source) throw new Error("The selected data file is empty.");
+
+  // Allow the categories-only catalog-data.js baseline to be imported directly.
+  const catalogAssignment = source.match(/^window\.PORTFOLIO_CATALOG\s*=\s*([\s\S]*?)\s*;?\s*$/);
+  if (catalogAssignment) source = catalogAssignment[1];
+
+  try {
+    return JSON.parse(source);
+  } catch (_) {
+    throw new Error("Unable to read this file. Import a .data/.json workspace, or a catalog-data.js file containing window.PORTFOLIO_CATALOG.");
+  }
+}
+
+function emptyBoardFromCatalogCategory(category, definition) {
+  const lanes = Array.isArray(category?.lanes) && category.lanes.length
+    ? category.lanes.map((lane, order) => ({ ...lane, order }))
+    : definition.lanes.map((lane, order) => ({ ...lane, order }));
+  return ensureBoardSchema({
+    version: 1,
+    title: category?.boardTitle || definition.boardTitle,
+    lanes,
+    products: [],
+    settings: {
+      showPrices: true,
+      showSkus: true,
+      fullSingleLaneSpecs: true,
+      freeMove: false,
+      roadmap: {
+        categoryLabel: category?.categoryLabel || definition.categoryLabel,
+        familyOrder: Array.isArray(category?.familyOrder) ? [...category.familyOrder] : [...definition.familyOrder],
+      },
+    },
+  }, definition);
+}
+
+function portfolioFromCatalogImport(parsed) {
+  if (!Array.isArray(parsed?.categories)) throw new Error("The catalog file does not contain categories.");
+  const categories = CATEGORY_DEFINITIONS.map((definition) => {
+    const imported = parsed.categories.find((category) => category?.id === definition.id);
+    return {
+      id: definition.id,
+      name: String(imported?.name || definition.name),
+      board: emptyBoardFromCatalogCategory(imported, definition),
+    };
+  });
+  return {
+    version: 4,
+    activeCategoryId: categories[0]?.id || "",
+    imageAssets: [],
+    categories,
+  };
+}
+
+function normalizeImportedPortfolio(parsed) {
+  if ([4, 3, 2].includes(parsed?.version) && Array.isArray(parsed.categories)) {
+    const hasWorkspaceBoards = parsed.categories.some((category) => category && category.board);
+    return hasWorkspaceBoards
+      ? ensurePortfolioSchema(parsed)
+      : ensurePortfolioSchema(portfolioFromCatalogImport(parsed));
+  }
+  if (parsed?.version === 1 && Array.isArray(parsed.categories)) {
+    return ensurePortfolioSchema(portfolioFromCatalogImport(parsed));
+  }
+  if (parsed?.version === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.lanes)) {
+    const migrated = createDefaultPortfolio();
+    const category = migrated.categories.find((item) => item.id === activeCategoryId) || migrated.categories[0];
+    if (!category) throw new Error("No category is available for the legacy board import.");
+    category.board = ensureBoardSchema(parsed, categoryDefinition(category.id));
+    migrated.activeCategoryId = category.id;
+    migrateLegacyProductImages(migrated);
+    return migrated;
+  }
+  throw new Error("Unsupported portfolio file. Use Export data (.data), Export full project (.pkg), or a categories-only catalog-data.js baseline.");
+}
+
 function importJson(file) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const parsed = JSON.parse(String(reader.result));
-      if ([4, 3, 2].includes(parsed?.version) && Array.isArray(parsed.categories)) {
-        portfolio = ensurePortfolioSchema(parsed);
-      } else if (parsed?.version === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.lanes)) {
-        portfolio = createDefaultPortfolio();
-        const category = portfolio.categories.find((item) => item.id === activeCategoryId) || portfolio.categories[0];
-        category.board = ensureBoardSchema(parsed, categoryDefinition(category.id));
-        portfolio.activeCategoryId = category.id;
-        migrateLegacyProductImages(portfolio);
-      } else {
-        throw new Error("Unsupported portfolio file.");
-      }
+      const parsed = parsePortfolioImportText(reader.result);
+      portfolio = normalizeImportedPortfolio(parsed);
+      selectedId = null;
       activateCategory(portfolio.activeCategoryId, { fitVertical: true });
       flushPendingLegacyImages();
     } catch (error) {
+      console.error("Portfolio import failed:", error);
       alert(error.message || "Unable to import portfolio file.");
     }
   };
+  reader.onerror = () => alert("Unable to read the selected portfolio file.");
   reader.readAsText(file);
 }
 
@@ -4314,6 +5463,30 @@ $("#importJson").onclick = () => { closePopupMenus(); $("#importFile").click(); 
 $("#importFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) importJson(file); event.target.value = ""; };
 $("#exportJson").onclick = () => { closePopupMenus(); downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data"); };
 $("#exportPng").onclick = () => { closePopupMenus(); exportPng(); };
+$("#exportPptx").addEventListener("click", openPptxExportDialog);
+pptxExportForm.addEventListener("change", syncPptxExportSummary);
+pptxExportForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const scope = pptxExportScope();
+  const originalText = confirmPptxExportButton.textContent;
+  confirmPptxExportButton.disabled = true;
+  confirmPptxExportButton.textContent = "Exporting…";
+  try {
+    await exportPptx(scope);
+    pptxExportDialog.classList.add("hidden");
+  } catch (error) {
+    console.error(error);
+    alert(error.message || "Could not export PPTX.");
+  } finally {
+    confirmPptxExportButton.disabled = false;
+    confirmPptxExportButton.textContent = originalText;
+  }
+});
+$("#closePptxExport").onclick = closePptxExportDialog;
+$("#cancelPptxExport").onclick = closePptxExportDialog;
+pptxExportDialog.addEventListener("pointerdown", (event) => {
+  if (event.target === pptxExportDialog) closePptxExportDialog();
+});
 $("#searchInput").oninput = (event) => { searchQuery = event.target.value; renderBoard(); };
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
@@ -4368,6 +5541,16 @@ $("#roadmapEnd").onchange = (event) => {
   updateBoard((current) => { current.settings.roadmap.endMonth = endMonth; });
 };
 $("#roadmapSnap").onchange = (event) => updateBoard((current) => { current.settings.roadmap.snap = event.target.value; });
+$("#roadmapShowMsrp").onchange = (event) => {
+  portfolio.settings = {
+    showRoadmapMsrp: false,
+    ...(portfolio.settings || {}),
+  };
+  portfolio.settings.showRoadmapMsrp = event.target.checked;
+  scheduleSave();
+  renderRoadmaps();
+  syncControls();
+};
 bindPresetColor($("#roadmapColorLaunchedPreset"), $("#roadmapColorLaunched"), (value) => updateBoard((current) => { current.settings.roadmap.statusColors.launched = value; }));
 bindPresetColor($("#roadmapColorDevelopmentPreset"), $("#roadmapColorDevelopment"), (value) => updateBoard((current) => { current.settings.roadmap.statusColors["in-development"] = value; }));
 bindPresetColor($("#roadmapColorPlanningPreset"), $("#roadmapColorPlanning"), (value) => updateBoard((current) => { current.settings.roadmap.statusColors["in-planning"] = value; }));
@@ -4442,6 +5625,7 @@ window.addEventListener("keydown", (event) => {
   closePopupMenus();
   closeSpecPopover();
   closeVariantPopover({ force: true });
+  closePptxExportDialog();
   closeCategorySettings();
   if (productLayoutEditing) {
     productLayoutEditing = false;
