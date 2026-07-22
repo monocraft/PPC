@@ -11,8 +11,11 @@
   <main class="app-shell">
     <header class="topbar">
       <div class="brand-block">
-        <span class="eyebrow">Interactive portfolio editor</span>
-        <input id="boardTitle" class="board-title" aria-label="Board title">
+        <span class="eyebrow">Portfolio workspace</span>
+        <div class="brand-row">
+          <select id="categorySelect" class="category-select" aria-label="Product category"></select>
+          <h1 id="boardTitle" class="board-title"></h1>
+        </div>
       </div>
 
       <div class="view-switch" role="tablist" aria-label="Portfolio view">
@@ -22,13 +25,31 @@
       </div>
 
       <div class="toolbar-actions">
-        <button id="addProduct" class="primary-button">+ Add product</button>
         <button id="linkedView" disabled>View on roadmap</button>
-        <button id="editSelected">Edit selected</button>
-        <button id="importJson">Import JSON</button>
-        <button id="exportJson">Export JSON</button>
-        <button id="exportPng">Export PNG</button>
-        <input id="importFile" class="visually-hidden" type="file" accept="application/json">
+        <div class="popup-menu-shell">
+          <button id="dataMenuButton" class="menu-trigger" aria-haspopup="menu" aria-expanded="false">Data <span aria-hidden="true">▾</span></button>
+          <div id="dataMenu" class="popup-menu hidden" role="menu" aria-label="Import and export settings">
+            <span class="popup-menu-heading">Manage portfolio</span>
+            <button id="addProduct" class="menu-primary" role="menuitem"><span>Add product</span><small>Create and edit a new product in the active category</small></button>
+            <button id="editSelected" role="menuitem" disabled><span>Edit selected product</span><small>Open the protected product editor</small></button>
+            <button id="roadmapEditSelected" class="roadmap-edit-toggle" role="menuitem" disabled><span>Edit selected roadmap slot</span><small>Enable protected timeline handles for the selected product</small></button>
+            <button id="productLayoutEditToggle" class="layout-edit-toggle" role="menuitem"><span>Reorder product cards</span><small>Enable protected drag-and-drop lane editing</small></button>
+            <button id="categorySettings" role="menuitem"><span>Category settings</span><small>Edit protected titles, labels, and lanes</small></button>
+            <div class="popup-menu-separator"></div>
+            <span class="popup-menu-heading">Project package</span>
+            <button id="importPackage" role="menuitem"><span>Import project package</span><small>Open a .pkg project with portfolio data and image files</small></button>
+            <button id="exportPackage" role="menuitem"><span>Export project package</span><small>Create a .pkg project containing data and separate image assets</small></button>
+            <div class="popup-menu-separator"></div>
+            <span class="popup-menu-heading">Lightweight data</span>
+            <button id="importJson" role="menuitem"><span>Import data file</span><small>Open a lightweight .data or legacy .json file without image binaries</small></button>
+            <button id="exportJson" role="menuitem"><span>Export data file</span><small>Create a lightweight .data backup with image references</small></button>
+            <button id="exportPng" role="menuitem"><span>Export PNG</span><small>Save the active view as an image</small></button>
+            <div class="popup-menu-separator"></div>
+            <button id="restoreSample" class="menu-danger" role="menuitem"><span>Restore sample</span><small>Reset all category workspaces</small></button>
+          </div>
+        </div>
+        <input id="importFile" class="visually-hidden" type="file" accept=".data,.json,application/json,text/plain">
+        <input id="importPackageFile" class="visually-hidden" type="file" accept=".pkg,.zip,application/octet-stream,application/zip">
       </div>
     </header>
 
@@ -45,41 +66,87 @@
         </select>
       </label>
       <button id="applySort">Apply sort</button>
-      <label class="checkbox-label control-checkbox"><input id="showPrices" type="checkbox">Prices</label>
-      <label class="checkbox-label control-checkbox"><input id="showSkus" type="checkbox">SKU footer</label>
-      <button id="resetLayout">Reset layout</button>
-      <button id="fitProducts" title="Scale the longest visible product lane to the available width">Fit products</button>
+      <div class="popup-menu-shell">
+        <button id="productMenuButton" class="menu-trigger" aria-haspopup="menu" aria-expanded="false">Settings <span aria-hidden="true">▾</span></button>
+        <div id="productMenu" class="popup-menu product-settings-menu hidden" role="menu" aria-label="Product card settings">
+          <span class="popup-menu-heading">Card display</span>
+          <label class="menu-checkbox"><input id="showPrices" type="checkbox"><span>Show prices</span></label>
+          <label class="menu-checkbox"><input id="showSkus" type="checkbox"><span>Show SKU footer</span></label>
+          <label class="menu-checkbox"><input id="fullSingleLaneSpecs" type="checkbox"><span>Full specifications for supported categories</span></label>
+          <div class="popup-menu-separator"></div>
+          <span class="popup-menu-heading">Layout</span>
+          <button id="fitProducts" role="menuitem"><span>Fit products</span><small>Scale the longest visible lane to the available width</small></button>
+          <button id="resetLayout" role="menuitem"><span>Reset layout</span><small>Restore automatic lane order and 100% zoom</small></button>
+        </div>
+      </div>
       <div class="zoom-control">
         <button id="zoomOut" aria-label="Zoom out">−</button>
         <button id="zoomReset" class="zoom-reset" aria-label="Reset zoom to 100%">100%</button>
         <button id="zoomIn" aria-label="Zoom in">+</button>
       </div>
-      <button id="restoreSample" class="text-button">Restore sample</button>
     </section>
 
     <section id="roadmapControls" class="controlbar view-controls hidden">
       <input id="roadmapSearch" class="search-input" placeholder="Search roadmap products…">
-      <label class="inline-field">From <input id="roadmapStart" class="month-input" type="month"></label>
-      <label class="inline-field">To <input id="roadmapEnd" class="month-input" type="month"></label>
-      <label class="inline-field">Snap
-        <select id="roadmapSnap">
-          <option value="month">Month</option>
-          <option value="quarter">Quarter</option>
-          <option value="half">Half-year</option>
-        </select>
-      </label>
-      <label class="inline-field">Color
-        <select id="roadmapColorBy">
-          <option value="status">Roadmap status</option>
-          <option value="product">Product status</option>
-        </select>
-      </label>
-      <button id="roadmapToday">Today</button>
-      <button id="roadmapFit">Fit timeline</button>
-      <button id="roadmapShowSelected">Show selected</button>
-      <button id="roadmapEditSelected" class="roadmap-edit-toggle" disabled>Edit selected slot</button>
-      <span id="roadmapEditStatus" class="roadmap-edit-status">Timeline locked</span>
-      <span id="roadmapHelp" class="roadmap-help">Select a product, then explicitly enable slot editing.</span>
+      <div class="popup-menu-shell">
+        <button id="roadmapMenuButton" class="menu-trigger" aria-haspopup="menu" aria-expanded="false">Timeline <span aria-hidden="true">▾</span></button>
+        <div id="roadmapMenu" class="popup-menu timeline-menu hidden" role="menu" aria-label="Timeline options">
+          <span class="popup-menu-heading">View range</span>
+          <div class="menu-choice-grid" role="group" aria-label="Timeline year span">
+            <button data-roadmap-years="3" role="menuitem">3 years</button>
+            <button data-roadmap-years="5" role="menuitem">5 years</button>
+            <button data-roadmap-years="10" role="menuitem">10 years</button>
+          </div>
+          <details class="menu-settings">
+            <summary>Timeline configuration</summary>
+            <div class="menu-settings-body">
+              <div class="menu-form-grid">
+                <label>From<input id="roadmapStart" class="month-input" type="month"></label>
+                <label>To<input id="roadmapEnd" class="month-input" type="month"></label>
+              </div>
+              <label>Snap interval
+                <select id="roadmapSnap">
+                  <option value="month">Month</option>
+                  <option value="quarter">Quarter</option>
+                  <option value="half">Half-year</option>
+                </select>
+              </label>
+              <span class="menu-subheading">Stage colors</span>
+              <div class="timeline-color-grid">
+                <label><span>Launched</span><select id="roadmapColorLaunchedPreset" aria-label="Launched color preset"><option value="#666c66">Neutral gray</option>
+                    <option value="#4e8136">Portfolio green</option>
+                    <option value="#8b7136">Planning amber</option>
+                    <option value="#3f6f91">Product blue</option>
+                    <option value="#3f8c7a">Teal</option>
+                    <option value="#76528e">Violet</option>
+                    <option value="#b83458">Portfolio pink</option>
+                    <option value="custom">Custom color…</option></select><input id="roadmapColorLaunched" type="color" aria-label="Custom launched color"></label>
+                <label><span>In development</span><select id="roadmapColorDevelopmentPreset" aria-label="In-development color preset"><option value="#666c66">Neutral gray</option>
+                    <option value="#4e8136">Portfolio green</option>
+                    <option value="#8b7136">Planning amber</option>
+                    <option value="#3f6f91">Product blue</option>
+                    <option value="#3f8c7a">Teal</option>
+                    <option value="#76528e">Violet</option>
+                    <option value="#b83458">Portfolio pink</option>
+                    <option value="custom">Custom color…</option></select><input id="roadmapColorDevelopment" type="color" aria-label="Custom in-development color"></label>
+                <label><span>In planning</span><select id="roadmapColorPlanningPreset" aria-label="In-planning color preset"><option value="#666c66">Neutral gray</option>
+                    <option value="#4e8136">Portfolio green</option>
+                    <option value="#8b7136">Planning amber</option>
+                    <option value="#3f6f91">Product blue</option>
+                    <option value="#3f8c7a">Teal</option>
+                    <option value="#76528e">Violet</option>
+                    <option value="#b83458">Portfolio pink</option>
+                    <option value="custom">Custom color…</option></select><input id="roadmapColorPlanning" type="color" aria-label="Custom in-planning color"></label>
+              </div>
+            </div>
+          </details>
+          <div class="popup-menu-separator"></div>
+          <button id="roadmapToday" role="menuitem"><span>Go to today</span><small>Center the current month</small></button>
+          <button id="roadmapFit" role="menuitem"><span>Fit timeline</span><small>Fit the selected range to the viewport</small></button>
+          <button id="roadmapShowSelected" role="menuitem"><span>Show selected</span><small>Center the selected product slot</small></button>
+
+        </div>
+      </div>
     </section>
 
     <section class="workspace">
@@ -89,7 +156,7 @@
             <div id="laneRailInner" class="lane-rail-inner"></div>
           </aside>
           <div id="canvasScroll" class="canvas-scroll">
-            <canvas id="boardCanvas" tabindex="0" aria-label="Interactive product portfolio canvas. Select a card, double-click it to edit, choose View more specifications, or drag the empty background horizontally to navigate."></canvas>
+            <canvas id="boardCanvas" tabindex="0" aria-label="Product portfolio viewer. Select a card, double-click it to open the synchronized roadmap, hover color SKUs to preview assigned hero images, hover or click a plus-variant chip to reveal hidden variants, or drag the canvas horizontally to navigate. Editing is available from the Data menu."></canvas>
           </div>
         </div>
 
@@ -104,7 +171,7 @@
 
       <section id="roadmapView" class="view-pane roadmap-view hidden">
         <div id="roadmapScroll" class="canvas-scroll roadmap-scroll">
-          <canvas id="roadmapCanvas" tabindex="0" aria-label="Interactive roadmap. Select a product bar or double-click it to open synchronized Split view. The timeline is locked by default; enable Edit selected slot before using the visible handles. Drag empty space horizontally to navigate."></canvas>
+          <canvas id="roadmapCanvas" tabindex="0" aria-label="Roadmap viewer. Select a product bar or double-click it to open synchronized Split view. Timeline changes are protected under Data → Edit selected roadmap slot. Drag the canvas horizontally to navigate."></canvas>
         </div>
         <nav id="roadmapNavigator" class="board-navigator hidden" aria-label="Horizontal roadmap navigation">
           <button id="roadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
@@ -119,7 +186,7 @@
         <aside id="splitProduct" class="split-product"></aside>
         <div class="split-roadmap-shell">
           <div id="splitRoadmapScroll" class="canvas-scroll roadmap-scroll">
-            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap split view. Select a product bar while reviewing its details. Product and slot editing require explicit controls."></canvas>
+            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap split view. Select a product bar while reviewing its details. Editing is available from the Data menu."></canvas>
           </div>
           <nav id="splitRoadmapNavigator" class="board-navigator hidden" aria-label="Split roadmap navigation">
             <button id="splitRoadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
@@ -137,8 +204,35 @@
     <footer id="statusbar" class="statusbar"></footer>
   </main>
 
-  <div id="specPopover" class="spec-popover hidden" role="dialog" aria-hidden="true" aria-label="Product specifications"></div>
+  <div id="categorySettingsDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="categorySettingsTitle">
+    <form id="categorySettingsForm" class="settings-dialog">
+      <div class="settings-dialog-heading">
+        <div><span class="eyebrow">Protected workspace settings</span><h2 id="categorySettingsTitle">Category settings</h2></div>
+        <button id="closeCategorySettings" class="icon-button" type="button" aria-label="Close settings">×</button>
+      </div>
+      <label>Category name<input id="settingsCategoryName" required></label>
+      <label>Board title<input id="settingsBoardTitle" required></label>
+      <label>Roadmap side label<input id="settingsRoadmapLabel" required></label>
+      <section class="lane-settings-section">
+        <div class="section-heading-row">
+          <div><span class="eyebrow">Product card layout</span><h3>Lanes</h3></div>
+          <button id="addLaneSetting" class="small-button" type="button">+ Add lane</button>
+        </div>
+        <p class="settings-note">Lanes are category-specific. Rename, reorder, add, or remove them here; products assigned to a removed lane move to the first remaining lane.</p>
+        <div id="laneSettingsList" class="lane-settings-list"></div>
+      </section>
+      <p class="settings-note">Protected category fields and lane structure are edited here so they cannot be changed accidentally from the main header.</p>
+      <div class="settings-actions">
+        <button id="cancelCategorySettings" type="button">Cancel</button>
+        <button class="primary-button" type="submit">Save settings</button>
+      </div>
+    </form>
+  </div>
 
+  <div id="specPopover" class="spec-popover hidden" role="dialog" aria-hidden="true" aria-label="Product specifications"></div>
+  <div id="variantPopover" class="variant-popover hidden" role="dialog" aria-hidden="true" aria-label="Additional product variants"></div>
+
+  <script src="catalog-data.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
