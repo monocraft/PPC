@@ -1,0 +1,15 @@
+{
+  "name": "product-portfolio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static product portfolio and roadmap workspace",
+  "type": "module",
+  "scripts": {
+    "serve": "node scripts/serve.mjs",
+    "validate": "node scripts/validate-project.mjs",
+    "test": "node scripts/validate-project.mjs && node scripts/test-ascm-import.mjs && node scripts/test-pptx-pagination.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

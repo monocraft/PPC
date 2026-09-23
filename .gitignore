@@ -1,0 +1,31 @@
+# Local runtime logs
+pwsh.log
+*.log
+
+# Private project packages and local portfolio data
+project-data/private/
+*.pkg
+
+# Dependency/build output
+node_modules/
+_site/
+dist/
+coverage/
+
+# Environment and local overrides
+.env
+.env.*
+!.env.example
+
+# Editor settings and temporary files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
