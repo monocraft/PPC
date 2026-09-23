@@ -24,11 +24,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate source and deployment closure
+        run: node scripts/validate-project.mjs
+
       - name: Prepare static site
         run: |
-          mkdir _site
-          cp index.html styles.css app.js _site/
-          cp -R assets _site/assets
+          mkdir -p _site
+          cp index.html styles.css app.js ascm-import.js catalog-data.js pptx-pagination.js _site/
+          cp -R assets vendor _site/
+
+          for required_path in index.html styles.css app.js ascm-import.js catalog-data.js pptx-pagination.js assets vendor; do
+            test -e "_site/${required_path}"
+          done
+          test ! -e _site/project-data/private
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

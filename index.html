@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#151715">
+  <meta name="theme-color" content="#020306">
   <title>Product Portfolio Canvas</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -36,6 +36,9 @@
             <button id="productLayoutEditToggle" class="layout-edit-toggle" role="menuitem"><span>Reorder product cards</span><small>Enable protected drag-and-drop lane editing</small></button>
             <button id="categorySettings" role="menuitem"><span>Category settings</span><small>Edit protected titles, labels, and lanes</small></button>
             <div class="popup-menu-separator"></div>
+            <span class="popup-menu-heading">ASCM updates</span>
+            <button id="importAscm" class="menu-primary" role="menuitem"><span>Import ASCM report</span><small>Preview new products and update ASCM-owned fields from an .xlsx report</small></button>
+            <div class="popup-menu-separator"></div>
             <span class="popup-menu-heading">Project package</span>
             <button id="importPackage" role="menuitem"><span>Import project package</span><small>Open a .pkg project with portfolio data and image files</small></button>
             <button id="exportPackage" role="menuitem"><span>Export project package</span><small>Create a .pkg project containing data and separate image assets</small></button>
@@ -51,6 +54,7 @@
         </div>
         <input id="importFile" class="visually-hidden" type="file" accept=".data,.json,.js,application/json,text/javascript,text/plain">
         <input id="importPackageFile" class="visually-hidden" type="file" accept=".pkg,.zip,application/octet-stream,application/zip">
+        <input id="importAscmFile" class="visually-hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
       </div>
     </header>
 
@@ -121,29 +125,29 @@
               </label>
               <span class="menu-subheading">Stage colors</span>
               <div class="timeline-color-grid">
-                <label><span>Launched</span><select id="roadmapColorLaunchedPreset" aria-label="Launched color preset"><option value="#666c66">Neutral gray</option>
-                    <option value="#4e8136">Portfolio green</option>
-                    <option value="#8b7136">Planning amber</option>
-                    <option value="#3f6f91">Product blue</option>
-                    <option value="#3f8c7a">Teal</option>
-                    <option value="#76528e">Violet</option>
-                    <option value="#b83458">Portfolio pink</option>
+                <label><span>Launched</span><select id="roadmapColorLaunchedPreset" aria-label="Launched color preset"><option value="#373a3f">Gunmetal</option>
+                    <option value="#285c70">Japanese indigo</option>
+                    <option value="#60899b">Steel teal</option>
+                    <option value="#b1af9a">Foggy</option>
+                    <option value="#989898">Mid grey</option>
+                    <option value="#e2ddda">Star dust</option>
+                    <option value="#e0335a">Amaranth</option>
                     <option value="custom">Custom color…</option></select><input id="roadmapColorLaunched" type="color" aria-label="Custom launched color"></label>
-                <label><span>In development</span><select id="roadmapColorDevelopmentPreset" aria-label="In-development color preset"><option value="#666c66">Neutral gray</option>
-                    <option value="#4e8136">Portfolio green</option>
-                    <option value="#8b7136">Planning amber</option>
-                    <option value="#3f6f91">Product blue</option>
-                    <option value="#3f8c7a">Teal</option>
-                    <option value="#76528e">Violet</option>
-                    <option value="#b83458">Portfolio pink</option>
+                <label><span>In development</span><select id="roadmapColorDevelopmentPreset" aria-label="In-development color preset"><option value="#373a3f">Gunmetal</option>
+                    <option value="#285c70">Japanese indigo</option>
+                    <option value="#60899b">Steel teal</option>
+                    <option value="#b1af9a">Foggy</option>
+                    <option value="#989898">Mid grey</option>
+                    <option value="#e2ddda">Star dust</option>
+                    <option value="#e0335a">Amaranth</option>
                     <option value="custom">Custom color…</option></select><input id="roadmapColorDevelopment" type="color" aria-label="Custom in-development color"></label>
-                <label><span>In planning</span><select id="roadmapColorPlanningPreset" aria-label="In-planning color preset"><option value="#666c66">Neutral gray</option>
-                    <option value="#4e8136">Portfolio green</option>
-                    <option value="#8b7136">Planning amber</option>
-                    <option value="#3f6f91">Product blue</option>
-                    <option value="#3f8c7a">Teal</option>
-                    <option value="#76528e">Violet</option>
-                    <option value="#b83458">Portfolio pink</option>
+                <label><span>In planning</span><select id="roadmapColorPlanningPreset" aria-label="In-planning color preset"><option value="#373a3f">Gunmetal</option>
+                    <option value="#285c70">Japanese indigo</option>
+                    <option value="#60899b">Steel teal</option>
+                    <option value="#b1af9a">Foggy</option>
+                    <option value="#989898">Mid grey</option>
+                    <option value="#e2ddda">Star dust</option>
+                    <option value="#e0335a">Amaranth</option>
                     <option value="custom">Custom color…</option></select><input id="roadmapColorPlanning" type="color" aria-label="Custom in-planning color"></label>
               </div>
             </div>
@@ -214,6 +218,39 @@
     <footer id="statusbar" class="statusbar"></footer>
   </main>
 
+  <div id="ascmImportDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="ascmImportTitle">
+    <form id="ascmImportForm" class="settings-dialog ascm-import-dialog">
+      <div class="settings-dialog-heading">
+        <div>
+          <span class="eyebrow">ASCM automatic updater</span>
+          <h2 id="ascmImportTitle">Review ASCM changes</h2>
+        </div>
+        <button id="closeAscmImport" class="icon-button" type="button" aria-label="Close ASCM import">×</button>
+      </div>
+
+      <p id="ascmImportSource" class="settings-note"></p>
+      <div id="ascmImportSummary" class="ascm-import-summary" aria-live="polite"></div>
+
+      <div class="ascm-import-options">
+        <label><input id="ascmApplyUpdates" type="checkbox" checked><span><strong>Update matched products</strong><small>Refresh full name, HP part numbers, exact GA/EM dates, roadmap months, and ASCM color options.</small></span></label>
+        <label><input id="ascmAddProducts" type="checkbox" checked><span><strong>Add new products</strong><small>Create products that have no safe match. Ambiguous matches remain skipped for review.</small></span></label>
+      </div>
+
+      <div class="ascm-import-table-shell">
+        <table class="ascm-import-table">
+          <thead><tr><th>Action</th><th>Portfolio category</th><th>Product</th><th>Base PNs</th><th>GA</th><th>EM</th></tr></thead>
+          <tbody id="ascmImportPreview"></tbody>
+        </table>
+      </div>
+      <p id="ascmImportNote" class="settings-note"></p>
+
+      <div class="settings-actions">
+        <button id="cancelAscmImport" type="button">Cancel</button>
+        <button id="confirmAscmImport" class="primary-button" type="submit">Apply ASCM update</button>
+      </div>
+    </form>
+  </div>
+
   <div id="pptxExportDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pptxExportTitle">
     <form id="pptxExportForm" class="settings-dialog pptx-export-dialog">
       <div class="settings-dialog-heading">
@@ -224,7 +261,7 @@
         <button id="closePptxExport" class="icon-button" type="button" aria-label="Close PowerPoint export">×</button>
       </div>
 
-      <p class="settings-note">The selected content is exported for every category using the current theme and each category's configured timeline.</p>
+      <p class="settings-note">The selected content is exported for every category using the current theme and each category's configured timeline. Long roadmaps are split into slides with up to 22 products each.</p>
 
       <div class="pptx-export-options" role="radiogroup" aria-label="PowerPoint slide content">
         <label class="pptx-export-option">
@@ -241,7 +278,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">R</span>
             <strong>Roadmap</strong>
-            <small>One timeline slide per category</small>
+            <small>Up to 22 roadmap products per slide</small>
           </span>
         </label>
 
@@ -250,7 +287,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">P+R</span>
             <strong>Both</strong>
-            <small>Product portfolio followed by roadmap</small>
+            <small>Product portfolio followed by paginated roadmap</small>
           </span>
         </label>
       </div>
@@ -299,6 +336,8 @@
 
   <script src="vendor/pptxgen.bundle.js"></script>
   <script src="catalog-data.js"></script>
+  <script src="ascm-import.js"></script>
+  <script src="pptx-pagination.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

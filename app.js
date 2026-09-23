@@ -30,6 +30,9 @@ const ROADMAP_MIN_BODY_HEIGHT = 156;
 const ROADMAP_CATEGORY_LABEL_FONT_SIZE = 13;
 const ROADMAP_MIN_MONTH_WIDTH = 8;
 const ROADMAP_MAX_MONTH_WIDTH = 112;
+const {
+  paginateRoadmapGroups: paginateRoadmapGroupsForPptx,
+} = globalThis.PPTXPagination;
 const PRODUCT_MIN_ZOOM = 0.2;
 const PRODUCT_MAX_ZOOM = 1.5;
 const VIEWER_INFO_GAP = 0;
@@ -40,14 +43,42 @@ const FULL_SPEC_MIN_CARD_HEIGHT = 650;
 const FULL_SPEC_IMAGE_HEIGHT = 210;
 const FULL_SPEC_TITLE_TOP = STATUS_BANNER_HEIGHT + 10 + FULL_SPEC_IMAGE_HEIGHT + 8;
 const FULL_SPEC_DETAILS_TOP_OFFSET = 66;
+
+// Canvas colors mirror the CSS design tokens in styles.css. Product/SKU colors
+// remain independent because they describe merchandise rather than application UI.
+const UI_PALETTE = Object.freeze({
+  trueBlack: "#020306",
+  inkBlack: "#071018",
+  carbon: "#1d2025",
+  jetBlack: "#182a31",
+  gunmetal: "#373a3f",
+  greyOlive: "#9b9b9a",
+  silver: "#bec5c2",
+  whiteSmoke: "#efefed",
+  amaranth: "#e0335a",
+  charcoal900: "#090909",
+  charcoal800: "#111111",
+  charcoal700: "#232323",
+  charcoal600: "#2c2c2c",
+  charcoal500: "#353535",
+  indigoDark: "#16303d",
+  indigo: "#285c70",
+  steelTeal: "#60899b",
+  steelTealLight: "#6c9bad",
+  midGrey: "#989898",
+  foggyDark: "#9e9c8a",
+  foggy: "#b1af9a",
+  starDust: "#e2ddda",
+});
+
 const COLOR_PRESETS = [
-  { value: "#666c66", label: "Neutral gray" },
-  { value: "#4e8136", label: "Portfolio green" },
-  { value: "#8b7136", label: "Planning amber" },
-  { value: "#3f6f91", label: "Product blue" },
-  { value: "#3f8c7a", label: "Teal" },
-  { value: "#76528e", label: "Violet" },
-  { value: "#b83458", label: "Portfolio pink" },
+  { value: UI_PALETTE.gunmetal, label: "Gunmetal" },
+  { value: UI_PALETTE.indigo, label: "Japanese indigo" },
+  { value: UI_PALETTE.steelTeal, label: "Steel teal" },
+  { value: UI_PALETTE.foggy, label: "Foggy" },
+  { value: UI_PALETTE.midGrey, label: "Mid grey" },
+  { value: UI_PALETTE.starDust, label: "Star dust" },
+  { value: UI_PALETTE.amaranth, label: "Amaranth" },
 ];
 
 const STANDARD_PRODUCT_COLORS = [
@@ -104,9 +135,9 @@ const CATEGORY_SPEC_SETS = new Map(
 );
 
 const STANDARD_CARD_STATUSES = {
-  none: { label: "", color: "#383b38" },
-  new: { label: "NEW PRODUCT", color: "#4e8136" },
-  embargo: { label: "UPCOMING UNDER EMBARGO", color: "#b83458" },
+  none: { label: "", color: UI_PALETTE.carbon },
+  new: { label: "NEW PRODUCT", color: UI_PALETTE.steelTeal },
+  embargo: { label: "UPCOMING UNDER EMBARGO", color: UI_PALETTE.amaranth },
 };
 
 const PRODUCT_TIER_OPTIONS = ["", "Core", "Core+", "Hero", "Star", "Star+"];
@@ -172,8 +203,12 @@ const categorySettingsForm = $("#categorySettingsForm");
 const pptxExportDialog = $("#pptxExportDialog");
 const pptxExportForm = $("#pptxExportForm");
 const confirmPptxExportButton = $("#confirmPptxExport");
+const ascmImportDialog = $("#ascmImportDialog");
+const ascmImportForm = $("#ascmImportForm");
+const confirmAscmImportButton = $("#confirmAscmImport");
 const laneSettingsList = $("#laneSettingsList");
 let categorySettingsDraftLanes = [];
+let pendingAscmImport = null;
 
 let portfolio = null;
 let board = null;
@@ -588,7 +623,7 @@ function colorVariant(code = "BK", colorKey = "black", customName = "", customHe
     code: code || preset?.code || "SKU",
     colorKey: preset ? preset.key : "custom",
     colorName: preset?.label || customName || "Custom",
-    colorHex: preset?.hex || customHex,
+    colorHex: preset?.hex || normalizeHexColor(customHex, "#777777"),
     colorKey2: "",
     colorName2: "",
     colorHex2: "",
@@ -631,10 +666,10 @@ function normalizeColorVariant(item) {
     code: String(item.code || primaryPreset?.code || "SKU"),
     colorKey: primaryKey,
     colorName: primaryPreset?.label || String(item.colorName || "Custom"),
-    colorHex: primaryPreset?.hex || item.colorHex || "#777777",
+    colorHex: primaryPreset?.hex || normalizeHexColor(item.colorHex, "#777777"),
     colorKey2: secondaryKey,
     colorName2: secondaryKey ? (secondaryPreset?.label || String(item.colorName2 || "Custom")) : "",
-    colorHex2: secondaryKey ? (secondaryPreset?.hex || item.colorHex2 || "#ffffff") : "",
+    colorHex2: secondaryKey ? (secondaryPreset?.hex || normalizeHexColor(item.colorHex2, "#ffffff")) : "",
     imageAssetId: String(item.imageAssetId || ""),
   };
 }
@@ -828,6 +863,54 @@ function normalizeProductInfoDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
 }
 
+function normalizeAscmRecord(item) {
+  const basePartNumber = String(item?.basePartNumber || item?.basePn || "").trim().toUpperCase();
+  return {
+    basePartNumber,
+    featureId: String(item?.featureId || "").trim(),
+    category: String(item?.category || "").trim(),
+    fullProductName: String(item?.fullProductName || item?.description || "").trim(),
+    codeName: String(item?.codeName || "").trim(),
+    generalAvailabilityDate: normalizeProductInfoDate(item?.generalAvailabilityDate || item?.gaDate || item?.ga),
+    endManufacturingDate: normalizeProductInfoDate(item?.endManufacturingDate || item?.emDate || item?.em),
+    colorCode: String(item?.colorCode || item?.color?.code || item?.inferredColor?.code || "").trim().toUpperCase(),
+    rowNumber: Number.isFinite(Number(item?.rowNumber ?? item?.sourceRow)) ? Number(item.rowNumber ?? item.sourceRow) : null,
+  };
+}
+
+function normalizeAscmProductMetadata(value) {
+  if (!value || typeof value !== "object") return null;
+  const records = (Array.isArray(value.records) ? value.records : [])
+    .map(normalizeAscmRecord)
+    .filter((record) => record.basePartNumber && record.fullProductName);
+  const basePartNumbers = [...new Set([
+    ...(Array.isArray(value.basePartNumbers) ? value.basePartNumbers : []),
+    ...records.map((record) => record.basePartNumber),
+  ].map((item) => String(item || "").trim().toUpperCase()).filter(Boolean))];
+  return {
+    key: String(value.key || "").trim(),
+    sourceCategory: String(value.sourceCategory || value.category || "").trim(),
+    sourceFile: String(value.sourceFile || "").trim(),
+    exportedAt: String(value.exportedAt || "").trim(),
+    importedAt: String(value.importedAt || "").trim(),
+    basePartNumbers,
+    colorCodes: [...new Set((Array.isArray(value.colorCodes) ? value.colorCodes : records.map((record) => record.colorCode))
+      .map((item) => String(item || "").trim().toUpperCase()).filter(Boolean))],
+    records,
+  };
+}
+
+function normalizeAscmSnapshot(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    sourceFile: String(value.sourceFile || "").trim(),
+    exportedAt: String(value.exportedAt || "").trim(),
+    importedAt: String(value.importedAt || "").trim(),
+    basePartNumbers: [...new Set((Array.isArray(value.basePartNumbers) ? value.basePartNumbers : [])
+      .map((item) => String(item || "").trim().toUpperCase()).filter(Boolean))],
+  };
+}
+
 function normalizePartSku(item, index = 0) {
   if (typeof item === "string") {
     return {
@@ -899,18 +982,31 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     categoryLabel: definition.categoryLabel,
     familyOrder: [...definition.familyOrder],
     statusColors: {
-      launched: "#666c66",
-      "in-development": "#4e8136",
-      "in-planning": "#8b7136",
+      launched: UI_PALETTE.gunmetal,
+      "in-development": UI_PALETTE.steelTeal,
+      "in-planning": UI_PALETTE.foggyDark,
     },
     ...(target.settings.roadmap || {}),
   };
   target.settings.roadmap.statusColors = {
-    launched: "#666c66",
-    "in-development": "#4e8136",
-    "in-planning": "#8b7136",
+    launched: UI_PALETTE.gunmetal,
+    "in-development": UI_PALETTE.steelTeal,
+    "in-planning": UI_PALETTE.foggyDark,
     ...(target.settings.roadmap.statusColors || {}),
   };
+  const legacyRoadmapColors = {
+    launched: ["#666c66", UI_PALETTE.gunmetal],
+    "in-development": ["#4e8136", UI_PALETTE.steelTeal],
+    "in-planning": ["#8b7136", UI_PALETTE.foggyDark],
+  };
+  Object.entries(legacyRoadmapColors).forEach(([status, [legacyColor, replacement]]) => {
+    if (String(target.settings.roadmap.statusColors[status] || "").toLowerCase() === legacyColor) {
+      target.settings.roadmap.statusColors[status] = replacement;
+    }
+  });
+  target.settings.roadmap.statusColors.launched = normalizeHexColor(target.settings.roadmap.statusColors.launched, UI_PALETTE.gunmetal);
+  target.settings.roadmap.statusColors["in-development"] = normalizeHexColor(target.settings.roadmap.statusColors["in-development"], UI_PALETTE.steelTeal);
+  target.settings.roadmap.statusColors["in-planning"] = normalizeHexColor(target.settings.roadmap.statusColors["in-planning"], UI_PALETTE.foggyDark);
   target.settings.roadmap.familyOrder = Array.isArray(target.settings.roadmap.familyOrder)
     ? target.settings.roadmap.familyOrder
     : [...definition.familyOrder];
@@ -937,17 +1033,22 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     product.globalAnnouncementDate = normalizeProductInfoDate(product.globalAnnouncementDate);
     product.webReadinessDate = normalizeProductInfoDate(product.webReadinessDate);
     product.finalAssetsDate = normalizeProductInfoDate(product.finalAssetsDate);
+    product.generalAvailabilityDate = normalizeProductInfoDate(product.generalAvailabilityDate);
+    product.endManufacturingDate = normalizeProductInfoDate(product.endManufacturingDate);
+    product.ascm = normalizeAscmProductMetadata(product.ascm);
     product.partSkus = (Array.isArray(product.partSkus) ? product.partSkus : [])
       .map((item, partSkuIndex) => normalizePartSku(item, partSkuIndex));
     if (product.statusType === "custom") {
       product.variantLabel = product.variantLabel || product.statusLabel || "VARIANT";
-      product.variantColor = product.variantColor || product.highlightColor || "#3f6f91";
+      product.variantColor = product.variantColor || product.highlightColor || UI_PALETTE.steelTeal;
       product.statusType = "none";
     }
     product.statusType = ["new", "embargo"].includes(product.statusType) ? product.statusType : "none";
     product.statusLabel = standardizedStatus(product.statusType).label;
     product.variantLabel = String(product.variantLabel || "");
-    product.variantColor = String(product.variantColor || product.highlightColor || "#3f6f91");
+    product.variantColor = String(product.variantColor || product.highlightColor || UI_PALETTE.steelTeal);
+    if (product.variantColor.toLowerCase() === "#3f6f91") product.variantColor = UI_PALETTE.steelTeal;
+    product.variantColor = normalizeHexColor(product.variantColor, UI_PALETTE.steelTeal);
     product.highlightEnabled = false;
     product.highlightColor = product.variantColor;
     product.specs = Array.isArray(product.specs) ? product.specs : [];
@@ -993,15 +1094,18 @@ function makeProduct(productId, name, price, laneId, order, options = {}) {
     globalAnnouncementDate: normalizeProductInfoDate(options.globalAnnouncementDate),
     webReadinessDate: normalizeProductInfoDate(options.webReadinessDate),
     finalAssetsDate: normalizeProductInfoDate(options.finalAssetsDate),
+    generalAvailabilityDate: normalizeProductInfoDate(options.generalAvailabilityDate),
+    endManufacturingDate: normalizeProductInfoDate(options.endManufacturingDate),
+    ascm: normalizeAscmProductMetadata(options.ascm),
     partSkus: (Array.isArray(options.partSkus) ? options.partSkus : []).map((item, index) => normalizePartSku(item, index)),
     laneId,
     order,
     statusType,
     statusLabel: standardizedStatus(statusType).label,
     variantLabel: String(options.variantLabel || ""),
-    variantColor: String(options.variantColor || "#3f6f91"),
+    variantColor: normalizeHexColor(options.variantColor, UI_PALETTE.steelTeal),
     highlightEnabled: false,
-    highlightColor: String(options.variantColor || options.highlightColor || "#3f6f91"),
+    highlightColor: normalizeHexColor(options.variantColor || options.highlightColor, UI_PALETTE.steelTeal),
     roadmap: options.roadmap || null,
     specs: options.specs || [],
     featuredVariantId: String(options.featuredVariantId || ""),
@@ -1070,11 +1174,14 @@ function productFromBlueprint(blueprint, definition, index) {
     globalAnnouncementDate: blueprint.globalAnnouncementDate || "",
     webReadinessDate: blueprint.webReadinessDate || "",
     finalAssetsDate: blueprint.finalAssetsDate || "",
+    generalAvailabilityDate: blueprint.generalAvailabilityDate || "",
+    endManufacturingDate: blueprint.endManufacturingDate || "",
+    ascm: blueprint.ascm || null,
     partSkus: blueprint.partSkus || [],
     statusType: status,
     statusLabel: standardizedStatus(status).label,
     variantLabel: blueprint.variantLabel || "",
-    variantColor: blueprint.variantColor || "#3f6f91",
+    variantColor: blueprint.variantColor || UI_PALETTE.steelTeal,
     roadmap: makeRoadmap(
       blueprint.family || "Other",
       launchMonth,
@@ -1119,6 +1226,7 @@ function createDefaultPortfolio() {
     settings: {
       showRoadmapMsrp: false,
     },
+    ascmSnapshot: null,
     imageAssets: catalogImageAssets(),
     categories: CATEGORY_DEFINITIONS.map((definition) => ({
       id: definition.id,
@@ -1141,6 +1249,7 @@ function ensurePortfolioSchema(target) {
     ...(normalized.settings || {}),
   };
   normalized.settings.showRoadmapMsrp = normalized.settings.showRoadmapMsrp === true;
+  normalized.ascmSnapshot = normalizeAscmSnapshot(normalized.ascmSnapshot);
   normalized.categories = Array.isArray(normalized.categories) ? normalized.categories.filter((category) => CATEGORY_DEFINITIONS.some((definition) => definition.id === category.id)) : [];
   ensureImageAssetRegistry(normalized);
   const catalogAssets = catalogImageAssets();
@@ -1434,7 +1543,7 @@ function drawSkuSwatch(context, x, y, width, height, primary, secondary = "") {
   context.beginPath();
   context.rect(x, y, width, height);
   context.clip();
-  context.fillStyle = primary || "#777777";
+  context.fillStyle = primary || UI_PALETTE.gunmetal;
   context.fillRect(x, y, width, height);
   if (secondary) {
     context.fillStyle = secondary;
@@ -1446,7 +1555,7 @@ function drawSkuSwatch(context, x, y, width, height, primary, secondary = "") {
     context.fill();
   }
   context.restore();
-  context.strokeStyle = "#a7aaa7";
+  context.strokeStyle = UI_PALETTE.greyOlive;
   context.lineWidth = .5;
   context.strokeRect(x, y, width, height);
 }
@@ -1512,11 +1621,11 @@ function registerHeroVariantRegion(region) {
 }
 
 function drawVariantFooter(context, product, x, y, layout) {
-  roundRect(context, x, y, CARD_WIDTH, layout.height, [0, 0, 4, 4], "#284f1d");
+  roundRect(context, x, y, CARD_WIDTH, layout.height, [0, 0, 4, 4], UI_PALETTE.steelTeal);
   const activeHeroVariantId = activeHeroVariant(product)?.id || "";
   let cursorY = y + 9;
   layout.groups.forEach((group, groupIndex) => {
-    context.fillStyle = "#7eb45d";
+    context.fillStyle = UI_PALETTE.steelTealLight;
     context.font = "700 9px Arial";
     context.textAlign = "left";
     context.fillText(group.label.toUpperCase(), x + 12, cursorY + 8);
@@ -1525,9 +1634,9 @@ function drawVariantFooter(context, product, x, y, layout) {
       const groupChipHeight = 14;
       const groupChipX = x + CARD_WIDTH - 12 - groupChipWidth;
       const groupChipY = cursorY - 3;
-      roundRect(context, groupChipX, groupChipY, groupChipWidth, groupChipHeight, 7, "rgba(16,42,12,.78)", "rgba(183,215,164,.38)", .75);
+      roundRect(context, groupChipX, groupChipY, groupChipWidth, groupChipHeight, 7, "rgba(22,48,61,.88)", "rgba(108,155,173,.42)", .75);
       context.textAlign = "center";
-      context.fillStyle = "#b9d6aa";
+      context.fillStyle = UI_PALETTE.steelTealLight;
       context.font = "700 8px Arial";
       context.fillText(`+${layout.hiddenGroupCount} GROUP`, groupChipX + groupChipWidth / 2, groupChipY + 10);
       registerVariantOverflowRegion({
@@ -1555,8 +1664,8 @@ function drawVariantFooter(context, product, x, y, layout) {
         const chipHeight = 14;
         const chipX = cellX - 2;
         const chipY = cellY - 2;
-        roundRect(context, chipX, chipY, chipWidth, chipHeight, 7, "rgba(17,47,13,.82)", "rgba(192,222,173,.45)", .75);
-        context.fillStyle = "#c7dfb9";
+        roundRect(context, chipX, chipY, chipWidth, chipHeight, 7, "rgba(28,62,78,.88)", "rgba(108,155,173,.48)", .75);
+        context.fillStyle = UI_PALETTE.silver;
         context.font = "800 9px Arial";
         context.textAlign = "center";
         context.fillText(item.code, chipX + chipWidth / 2, chipY + 10);
@@ -1575,15 +1684,15 @@ function drawVariantFooter(context, product, x, y, layout) {
       } else if (group.type === "color") {
         const hasHeroImage = Boolean(item.imageAssetId);
         const isActiveHero = activeHeroVariantId === item.id;
-        context.fillStyle = isActiveHero ? "#ffffff" : "#f0f0f0";
+        context.fillStyle = isActiveHero ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
         context.font = `${isActiveHero ? "800" : "700"} 9.5px Arial`;
         drawSkuSwatch(context, cellX, cellY + 1, 10, 10, item.colorHex, item.colorHex2);
         if (hasHeroImage) {
           context.save();
-          context.strokeStyle = isActiveHero ? "#ffffff" : "#a8c997";
+          context.strokeStyle = isActiveHero ? UI_PALETTE.whiteSmoke : UI_PALETTE.steelTealLight;
           context.lineWidth = isActiveHero ? 1.5 : 1;
           context.strokeRect(cellX - 1, cellY, 12, 12);
-          context.fillStyle = isActiveHero ? "#ffffff" : "#b9d6aa";
+          context.fillStyle = isActiveHero ? UI_PALETTE.whiteSmoke : UI_PALETTE.steelTealLight;
           context.beginPath();
           context.arc(cellX + 10, cellY + 1, 2.2, 0, Math.PI * 2);
           context.fill();
@@ -1599,14 +1708,14 @@ function drawVariantFooter(context, product, x, y, layout) {
         }
         context.fillText(truncate(String(item.code || "SKU"), 9), cellX + 15, cellY + 10, Math.max(10, cellWidth - 17));
       } else {
-        context.fillStyle = "#f0f0f0";
+        context.fillStyle = UI_PALETTE.whiteSmoke;
         context.font = "700 9.5px Arial";
         context.fillText(truncate(String(item.code || "SKU"), group.type === "layout" ? 7 : 9), cellX, cellY + 10, Math.max(10, cellWidth - 4));
       }
     });
     cursorY += group.rows * 18;
     if (groupIndex < layout.groups.length - 1) {
-      context.strokeStyle = "rgba(130,180,93,.25)";
+      context.strokeStyle = "rgba(96,137,155,.3)";
       context.beginPath();
       context.moveTo(x + 12, cursorY + 1);
       context.lineTo(x + CARD_WIDTH - 12, cursorY + 1);
@@ -1680,11 +1789,11 @@ function drawDetailedFamilyHeaders(context, laneProducts, laneY) {
     const startX = cardXForDisplayIndex(laneProducts, run.startIndex);
     const endX = cardXForDisplayIndex(laneProducts, run.endIndex) + CARD_WIDTH;
     const centerX = startX + (endX - startX) / 2;
-    context.fillStyle = "rgba(224,228,224,.18)";
+    context.fillStyle = "rgba(226,221,218,.18)";
     context.font = "700 10px Arial";
     context.textAlign = "center";
     context.fillText(run.family.toUpperCase(), centerX, laneY - 13, Math.max(20, endX - startX - 8));
-    context.strokeStyle = "rgba(224,228,224,.08)";
+    context.strokeStyle = "rgba(226,221,218,.08)";
     context.beginPath();
     context.moveTo(startX, laneY - 8);
     context.lineTo(endX, laneY - 8);
@@ -1693,7 +1802,7 @@ function drawDetailedFamilyHeaders(context, laneProducts, laneY) {
 }
 
 function drawProductBoardExportBackground(context, dimensions) {
-  context.fillStyle = "#141614";
+  context.fillStyle = UI_PALETTE.charcoal800;
   context.fillRect(0, 0, dimensions.width, dimensions.height);
 }
 
@@ -1712,7 +1821,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
 
   lanes.forEach((lane, laneIndex) => {
     const laneY = LANE_TOP + laneIndex * layout.laneHeight;
-    roundRect(context, 0, laneY - 4, dimensions.width, layout.cardHeight + 8, 0, "#171917");
+    roundRect(context, 0, laneY - 4, dimensions.width, layout.cardHeight + 8, 0, UI_PALETTE.charcoal800);
     const laneProducts = products
       .filter((product) => product.laneId === lane.id)
       .sort((a, b) => a.order - b.order);
@@ -1746,8 +1855,8 @@ function drawSpecIcon(context, label, centerX, centerY) {
   const kind = specIconKind(label);
   context.save();
   context.translate(centerX, centerY);
-  context.strokeStyle = "#737873";
-  context.fillStyle = "#737873";
+  context.strokeStyle = UI_PALETTE.greyOlive;
+  context.fillStyle = UI_PALETTE.greyOlive;
   context.lineWidth = 1.25;
   context.lineCap = "round";
   context.lineJoin = "round";
@@ -1815,13 +1924,13 @@ function productPresentation(product) {
     status,
     hasStatus: Boolean(status.label),
     variantLabel: String(product.variantLabel || "").trim(),
-    variantColor: String(product.variantColor || "#3f6f91"),
+    variantColor: normalizeHexColor(product.variantColor, UI_PALETTE.steelTeal),
     primaryLabel: hasVariant ? String(product.variantLabel || "").trim() : status.label,
-    primaryColor: hasVariant ? String(product.variantColor || "#3f6f91") : status.color,
+    primaryColor: hasVariant ? normalizeHexColor(product.variantColor, UI_PALETTE.steelTeal) : status.color,
     outlineColor: product.statusType === "embargo" ? STANDARD_CARD_STATUSES.embargo.color
       : product.statusType === "new" ? STANDARD_CARD_STATUSES.new.color
-      : hasVariant ? String(product.variantColor || "#3f6f91")
-      : "#383b38",
+      : hasVariant ? normalizeHexColor(product.variantColor, UI_PALETTE.steelTeal)
+      : UI_PALETTE.charcoal600,
   };
 }
 
@@ -1830,15 +1939,49 @@ function productPriceText(product) {
   return String(product.priceLabel || "Price TBD");
 }
 
+function parseHexColor(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const shortMatch = normalized.match(/^#([0-9a-f]{3})$/i);
+  const longMatch = normalized.match(/^#([0-9a-f]{6})$/i);
+  const hex = longMatch?.[1] || (shortMatch?.[1] ? shortMatch[1].split("").map((character) => character.repeat(2)).join("") : "");
+  if (!hex) return null;
+  return [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+}
+
+function normalizeHexColor(value, fallback = UI_PALETTE.gunmetal) {
+  const rgb = parseHexColor(value) || parseHexColor(fallback) || [55, 58, 63];
+  return `#${rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function relativeLuminance(color) {
+  const rgb = parseHexColor(color);
+  if (!rgb) return null;
+  const channels = rgb.map((channel) => {
+    const value = channel / 255;
+    return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+  });
+  return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+}
+
+function contrastTextColor(fill) {
+  const fillLuminance = relativeLuminance(fill);
+  if (fillLuminance == null) return UI_PALETTE.whiteSmoke;
+  const darkLuminance = relativeLuminance(UI_PALETTE.trueBlack);
+  const lightLuminance = relativeLuminance(UI_PALETTE.whiteSmoke);
+  const darkContrast = (Math.max(fillLuminance, darkLuminance) + .05) / (Math.min(fillLuminance, darkLuminance) + .05);
+  const lightContrast = (Math.max(fillLuminance, lightLuminance) + .05) / (Math.min(fillLuminance, lightLuminance) + .05);
+  return darkContrast >= lightContrast ? UI_PALETTE.trueBlack : UI_PALETTE.whiteSmoke;
+}
+
 function detailedValueColor(value) {
   const normalized = String(value || "").trim().toLowerCase();
-  if (/^(yes|internal|external|removable|integrated|optical|magnetic|modular)$/.test(normalized)) return "#00a8d6";
-  if (/^(no|none|—|-)$/.test(normalized)) return "#676c67";
-  return "#d4d7d4";
+  if (/^(yes|internal|external|removable|integrated|optical|magnetic|modular)$/.test(normalized)) return UI_PALETTE.steelTeal;
+  if (/^(no|none|—|-)$/.test(normalized)) return UI_PALETTE.greyOlive;
+  return UI_PALETTE.silver;
 }
 
 function drawDetailedSpecLabel(context, label, x, y, maxWidth) {
-  context.fillStyle = "#747974";
+  context.fillStyle = UI_PALETTE.greyOlive;
   context.font = "700 8px Arial";
   context.textAlign = "left";
   context.fillText(String(label || "Specification").toUpperCase(), x, y, maxWidth);
@@ -1850,7 +1993,7 @@ function drawDetailedSpecs(context, product, x, startY) {
 
   rows.forEach((row) => {
     const height = detailedSpecRowHeight(row);
-    context.strokeStyle = "#303330";
+    context.strokeStyle = UI_PALETTE.charcoal700;
     context.beginPath();
     context.moveTo(x + 10, cursorY + height - 1);
     context.lineTo(x + CARD_WIDTH - 10, cursorY + height - 1);
@@ -1912,13 +2055,13 @@ function drawProductInfoButton(context, product, x, y, layout) {
     INFO_BUTTON_WIDTH,
     INFO_BUTTON_HEIGHT,
     11,
-    isOpen ? "#f4f6f4" : isHovered ? "#343934" : "rgba(17,19,17,.78)",
-    isOpen ? "#ffffff" : isHovered ? "#697269" : "#4a504a",
+    isOpen ? UI_PALETTE.whiteSmoke : isHovered ? UI_PALETTE.charcoal600 : "rgba(29,32,37,.82)",
+    isOpen ? UI_PALETTE.whiteSmoke : isHovered ? UI_PALETTE.gunmetal : UI_PALETTE.charcoal500,
     1,
   );
   context.restore();
 
-  context.fillStyle = isOpen ? "#171917" : "#d9ddd9";
+  context.fillStyle = isOpen ? UI_PALETTE.charcoal800 : UI_PALETTE.starDust;
   context.font = "800 13px Arial";
   context.textAlign = "center";
   context.textBaseline = "middle";
@@ -1940,12 +2083,12 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   context.shadowColor = "rgba(0,0,0,.45)";
   context.shadowBlur = 8;
   context.shadowOffsetY = 3;
-  roundRect(context, x, y, CARD_WIDTH, cardHeight, 4, "#232523", presentation.outlineColor, presentation.primaryLabel ? 2 : 1);
+  roundRect(context, x, y, CARD_WIDTH, cardHeight, 4, UI_PALETTE.carbon, presentation.outlineColor, presentation.primaryLabel ? 2 : 1);
   context.restore();
 
   if (presentation.primaryLabel) {
     roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
-    context.fillStyle = "#ffffff";
+    context.fillStyle = contrastTextColor(presentation.primaryColor);
     context.font = "700 10px Arial";
     context.textAlign = "center";
     context.fillText(presentation.primaryLabel.toUpperCase(), x + CARD_WIDTH / 2, y + 16);
@@ -1955,7 +2098,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     context.font = "700 8px Arial";
     const badgeWidth = Math.min(CARD_WIDTH - 24, Math.max(74, context.measureText(label).width + 18));
     roundRect(context, x + (CARD_WIDTH - badgeWidth) / 2, y + STATUS_BANNER_HEIGHT + 5, badgeWidth, 18, 9, presentation.status.color);
-    context.fillStyle = "#ffffff";
+    context.fillStyle = contrastTextColor(presentation.status.color);
     context.textAlign = "center";
     context.fillText(label, x + CARD_WIDTH / 2, y + STATUS_BANNER_HEIGHT + 17);
   }
@@ -1965,19 +2108,19 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   if (imageRecord.ready) drawContainedImage(context, imageRecord.image, x + 18, imageTop, CARD_WIDTH - 36, layout.imageSlotHeight);
 
   const titleTop = y + layout.titleBlockTop;
-  context.fillStyle = "#f2f2f2";
+  context.fillStyle = UI_PALETTE.whiteSmoke;
   context.font = "700 16px Arial";
   context.textAlign = "center";
   wrapText(context, product.name, x + CARD_WIDTH / 2, titleTop + 15, CARD_WIDTH - 24, 18, 2, "center");
 
   if (board.settings.showPrices) {
-    context.fillStyle = "#777b77";
+    context.fillStyle = UI_PALETTE.greyOlive;
     context.font = "16px Arial";
     context.fillText(productPriceText(product), x + CARD_WIDTH / 2, titleTop + layout.priceBaselineOffset);
   }
 
   const detailsTop = titleTop + layout.detailsTopOffset;
-  context.strokeStyle = "#383b38";
+  context.strokeStyle = UI_PALETTE.charcoal600;
   context.lineWidth = 1;
   context.beginPath(); context.moveTo(x, detailsTop); context.lineTo(x + CARD_WIDTH, detailsTop); context.stroke();
 
@@ -2000,11 +2143,11 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     visibleSpecs.forEach((item, index) => {
       const rowY = rowsTop + index * rowHeight;
       drawSpecIcon(context, item.label, x + 22, rowY + 11);
-      context.fillStyle = "#c9ccc9";
+      context.fillStyle = UI_PALETTE.silver;
       context.font = "11.5px Arial";
       context.textAlign = "left";
       wrapText(context, item.value, x + 43, rowY + 10, CARD_WIDTH - 55, 13, 2, "left");
-      context.strokeStyle = "#303230";
+      context.strokeStyle = UI_PALETTE.charcoal700;
       context.beginPath(); context.moveTo(x + 10, rowY + 26); context.lineTo(x + CARD_WIDTH - 10, rowY + 26); context.stroke();
     });
 
@@ -2013,8 +2156,8 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
       const buttonX = x + 10;
       const buttonY = detailsBottom - overflowButtonHeight - 7;
       const buttonWidth = CARD_WIDTH - 20;
-      roundRect(context, buttonX, buttonY, buttonWidth, overflowButtonHeight, 4, "#2b2e2b", "#454945");
-      context.fillStyle = "#b7bbb7";
+      roundRect(context, buttonX, buttonY, buttonWidth, overflowButtonHeight, 4, UI_PALETTE.charcoal700, UI_PALETTE.charcoal500);
+      context.fillStyle = UI_PALETTE.silver;
       context.font = "700 10px Arial";
       context.textAlign = "center";
       context.fillText(`View ${hiddenSpecCount} more specification${hiddenSpecCount === 1 ? "" : "s"}  →`, x + CARD_WIDTH / 2, buttonY + 16);
@@ -2051,7 +2194,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     context.save();
     context.shadowColor = "rgba(255,255,255,.32)";
     context.shadowBlur = 8;
-    roundRect(context, x + 1.5, y + 1.5, CARD_WIDTH - 3, cardHeight - 3, 4, null, "#f4f6f4", 3);
+    roundRect(context, x + 1.5, y + 1.5, CARD_WIDTH - 3, cardHeight - 3, 4, null, UI_PALETTE.whiteSmoke, 3);
     context.restore();
   }
 
@@ -2092,30 +2235,34 @@ function visibleRoadmapProducts() {
   });
 }
 
-function roadmapFamilyOrder(family) {
-  const order = board.settings.roadmap.familyOrder || categoryDefinition().familyOrder;
+function roadmapFamilyOrder(family, targetBoard = board, definition = categoryDefinition()) {
+  const order = targetBoard.settings?.roadmap?.familyOrder || definition.familyOrder || [];
   const index = order.indexOf(family);
   return index < 0 ? order.length : index;
 }
 
-function roadmapGroups() {
+function roadmapGroupsForProducts(products, targetBoard = board, definition = categoryDefinition()) {
   const groups = new Map();
-  visibleRoadmapProducts().forEach((product) => {
+  products.forEach((product) => {
     const family = product.roadmap?.family || inferFamily(product.name);
     if (!groups.has(family)) groups.set(family, []);
     groups.get(family).push(product);
   });
   return [...groups.entries()]
-    .sort((a, b) => roadmapFamilyOrder(a[0]) - roadmapFamilyOrder(b[0]) || a[0].localeCompare(b[0]))
+    .sort((a, b) => roadmapFamilyOrder(a[0], targetBoard, definition) - roadmapFamilyOrder(b[0], targetBoard, definition) || a[0].localeCompare(b[0]))
     .map(([family, products]) => ({
       family,
-      products: products.sort((a, b) => monthIndex(a.roadmap.startMonth) - monthIndex(b.roadmap.startMonth) || a.name.localeCompare(b.name)),
+      products: products.slice().sort((a, b) => monthIndex(a.roadmap.startMonth) - monthIndex(b.roadmap.startMonth) || a.name.localeCompare(b.name)),
     }));
 }
 
-function roadmapDimensions() {
+function roadmapGroups() {
+  return roadmapGroupsForProducts(visibleRoadmapProducts(), board, categoryDefinition());
+}
+
+function roadmapDimensions(groupsOverride = null) {
   const range = roadmapRange();
-  const groups = roadmapGroups();
+  const groups = Array.isArray(groupsOverride) ? groupsOverride : roadmapGroups();
   const rowsHeight = groups.reduce((sum, group) => sum + ROADMAP_GROUP_HEADER_HEIGHT + group.products.length * ROADMAP_ROW_HEIGHT, 0);
   const bodyHeight = Math.max(ROADMAP_MIN_BODY_HEIGHT, rowsHeight + ROADMAP_BOTTOM_PADDING);
   return {
@@ -2128,9 +2275,9 @@ function roadmapDimensions() {
 
 function roadmapStatusColor(product) {
   const status = normalizeRoadmapStatus(product.roadmap?.status);
-  if (status === "embargo") return "#b83458";
-  if (status === "end-of-life") return "#694049";
-  return board.settings.roadmap.statusColors?.[status] || "#666c66";
+  if (status === "embargo") return UI_PALETTE.amaranth;
+  if (status === "end-of-life") return UI_PALETTE.amaranth;
+  return normalizeHexColor(board.settings.roadmap.statusColors?.[status], UI_PALETTE.gunmetal);
 }
 
 function roadmapLabel(value) {
@@ -2195,7 +2342,7 @@ function drawFixedVerticalRoadmapLabel(context, label, x, top, availableHeight) 
   const lineHeight = ROADMAP_CATEGORY_LABEL_FONT_SIZE + 1;
   context.translate(x, top + availableHeight / 2);
   context.rotate(-Math.PI / 2);
-  context.fillStyle = "#f0f2f0";
+  context.fillStyle = UI_PALETTE.whiteSmoke;
   lines.forEach((line, index) => {
     const offset = (index - (lines.length - 1) / 2) * lineHeight;
     context.fillText(line, 0, offset);
@@ -2253,7 +2400,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   const regions = [];
 
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#151715";
+  context.fillStyle = UI_PALETTE.charcoal800;
   context.fillRect(0, 0, width, height);
 
   const timelineX = ROADMAP_LEFT_WIDTH;
@@ -2266,7 +2413,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       if (absolute % 12 !== 0) continue;
       const x = Math.round(timelineX + month * roadmapMonthWidth) + .5;
       context.save();
-      context.strokeStyle = `rgba(116,126,116,${opacity})`;
+      context.strokeStyle = `rgba(55,58,63,${opacity})`;
       context.lineWidth = 1;
       context.beginPath();
       context.moveTo(x, yStart);
@@ -2304,8 +2451,8 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const x = timelineX + month * roadmapMonthWidth;
     const isQuarter = absolute % 3 === 0;
     context.strokeStyle = isQuarter
-      ? "rgba(105,114,105,.16)"
-      : "rgba(96,104,96,.07)";
+      ? "rgba(55,58,63,.28)"
+      : "rgba(55,58,63,.12)";
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT);
@@ -2318,7 +2465,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
 
   let rowY = ROADMAP_HEADER_HEIGHT;
   groups.forEach((group, groupIndex) => {
-    context.fillStyle = groupIndex % 2 ? "#191c19" : "#1b1e1b";
+    context.fillStyle = groupIndex % 2 ? UI_PALETTE.charcoal800 : UI_PALETTE.carbon;
     context.fillRect(timelineX, rowY, timelineWidth, ROADMAP_GROUP_HEADER_HEIGHT);
     drawYearSeamSegment(rowY, rowY + ROADMAP_GROUP_HEADER_HEIGHT, .32);
     rowY += ROADMAP_GROUP_HEADER_HEIGHT;
@@ -2328,7 +2475,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       const rowTop = rowY;
       context.fillStyle = productIndex % 2 ? "rgba(255,255,255,.012)" : "rgba(0,0,0,.08)";
       context.fillRect(timelineX, rowTop, timelineWidth, ROADMAP_ROW_HEIGHT);
-      context.strokeStyle = "rgba(104,112,104,.18)";
+      context.strokeStyle = "rgba(55,58,63,.3)";
       context.beginPath();
       context.moveTo(timelineX, rowTop + ROADMAP_ROW_HEIGHT);
       context.lineTo(timelineX + timelineWidth, rowTop + ROADMAP_ROW_HEIGHT);
@@ -2352,13 +2499,13 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         const color = roadmapStatusColor(product);
 
         context.save();
-        roundRect(context, barX, barY, barWidth, barHeight, 3, color, product.statusType === "embargo" ? "#df456d" : "#666b66", 1);
+        roundRect(context, barX, barY, barWidth, barHeight, 3, color, product.statusType === "embargo" ? UI_PALETTE.amaranth : UI_PALETTE.gunmetal, 1);
         context.restore();
 
         if (roadmap.status === "concept") {
           context.save();
           context.setLineDash([6, 4]);
-          roundRect(context, barX + 1, barY + 1, Math.max(2, barWidth - 2), barHeight - 2, 3, null, "#8a8f8a", 1);
+          roundRect(context, barX + 1, barY + 1, Math.max(2, barWidth - 2), barHeight - 2, 3, null, UI_PALETTE.midGrey, 1);
           context.restore();
         }
 
@@ -2366,7 +2513,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         context.beginPath();
         context.rect(barX + 8, barY, Math.max(0, barWidth - 16), barHeight);
         context.clip();
-        context.fillStyle = "#f3f4f3";
+        context.fillStyle = contrastTextColor(color);
         context.font = portfolio?.settings?.showRoadmapMsrp ? "700 11px Arial" : "700 12px Arial";
         context.textAlign = "center";
         context.textBaseline = "middle";
@@ -2379,7 +2526,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
           context.save();
           context.shadowColor = "rgba(255,255,255,.28)";
           context.shadowBlur = 9;
-          roundRect(context, barX + 1, barY + 1, Math.max(2, barWidth - 2), barHeight - 2, 3, null, "#f4f6f4", 2.5);
+          roundRect(context, barX + 1, barY + 1, Math.max(2, barWidth - 2), barHeight - 2, 3, null, UI_PALETTE.whiteSmoke, 2.5);
           context.restore();
         }
 
@@ -2390,10 +2537,10 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
 
         if (editingThisSlot && barWidth > 28) {
           context.save();
-          context.fillStyle = "rgba(244,247,244,.94)";
-          roundRect(context, barX + 3, barY + 5, Math.max(5, handleWidth - 5), barHeight - 10, 2, "rgba(244,247,244,.92)");
-          roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(5, handleWidth - 5), barHeight - 10, 2, "rgba(244,247,244,.92)");
-          roundRect(context, moveHandleX, barY + 5, moveHandleWidth, barHeight - 10, 4, "rgba(18,21,18,.82)", "rgba(255,255,255,.68)", 1);
+          context.fillStyle = "rgba(239,239,237,.94)";
+          roundRect(context, barX + 3, barY + 5, Math.max(5, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
+          roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(5, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
+          roundRect(context, moveHandleX, barY + 5, moveHandleWidth, barHeight - 10, 4, "rgba(7,16,24,.86)", "rgba(239,239,237,.7)", 1);
           context.fillStyle = "rgba(255,255,255,.82)";
           for (let dot = -1; dot <= 1; dot += 1) {
             context.beginPath();
@@ -2429,7 +2576,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const today = new Date();
     const fraction = Math.min(.98, Math.max(.02, (today.getDate() - 1) / new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()));
     const x = timelineX + (todayIndex - range.start + fraction) * roadmapMonthWidth;
-    context.strokeStyle = "rgba(226,65,104,.76)";
+    context.strokeStyle = "rgba(224,51,90,.82)";
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT - 8);
@@ -2438,11 +2585,11 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   }
 
   // Sticky family rail.
-  context.fillStyle = "#101210";
+  context.fillStyle = UI_PALETTE.inkBlack;
   context.fillRect(stickyX, ROADMAP_HEADER_HEIGHT, ROADMAP_LEFT_WIDTH, height - ROADMAP_HEADER_HEIGHT);
-  context.fillStyle = "#090b09";
+  context.fillStyle = UI_PALETTE.inkBlack;
   context.fillRect(stickyX, ROADMAP_HEADER_HEIGHT, 48, height - ROADMAP_HEADER_HEIGHT);
-  context.strokeStyle = "#303430";
+  context.strokeStyle = UI_PALETTE.charcoal700;
   context.beginPath();
   context.moveTo(stickyX + ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
   context.lineTo(stickyX + ROADMAP_LEFT_WIDTH, height);
@@ -2460,25 +2607,31 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   rowY = ROADMAP_HEADER_HEIGHT;
   groups.forEach((group, groupIndex) => {
     const groupHeight = ROADMAP_GROUP_HEADER_HEIGHT + group.products.length * ROADMAP_ROW_HEIGHT;
-    context.fillStyle = groupIndex % 2 ? "#171a17" : "#1a1d1a";
+    context.fillStyle = groupIndex % 2 ? UI_PALETTE.charcoal800 : UI_PALETTE.carbon;
     context.fillRect(stickyX + 48, rowY, ROADMAP_LEFT_WIDTH - 48, groupHeight);
-    context.strokeStyle = "#303430";
+    context.strokeStyle = UI_PALETTE.charcoal700;
     context.beginPath();
     context.moveTo(stickyX + 48, rowY + groupHeight);
     context.lineTo(stickyX + ROADMAP_LEFT_WIDTH, rowY + groupHeight);
     context.stroke();
-    context.fillStyle = "#e6e8e6";
+    context.fillStyle = UI_PALETTE.starDust;
     context.font = "700 12px Arial";
     context.textAlign = "left";
     context.textBaseline = "middle";
-    context.fillText(group.family.toUpperCase(), stickyX + 61, rowY + groupHeight / 2);
+    const familyCenterY = rowY + groupHeight / 2;
+    context.fillText(group.family.toUpperCase(), stickyX + 61, familyCenterY - (group.continued ? 6 : 0));
+    if (group.continued) {
+      context.fillStyle = UI_PALETTE.foggy;
+      context.font = "700 8px Arial";
+      context.fillText("CONTINUED", stickyX + 61, familyCenterY + 9);
+    }
     rowY += groupHeight;
   });
 
   // Sticky calendar header.
-  context.fillStyle = "#171a17";
+  context.fillStyle = UI_PALETTE.charcoal800;
   context.fillRect(stickyX, stickyY, ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
-  context.fillStyle = "#101210";
+  context.fillStyle = UI_PALETTE.inkBlack;
   context.fillRect(timelineX, stickyY, timelineWidth, ROADMAP_HEADER_HEIGHT);
 
   // Year blocks use a continuous surface with alternating neutral tones.
@@ -2492,10 +2645,10 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const monthCount = yearEnd - cursor + 1;
     const x = timelineX + startOffset * roadmapMonthWidth;
     const w = monthCount * roadmapMonthWidth;
-    context.fillStyle = year % 2 === 0 ? "#1b1e1b" : "#191c19";
+    context.fillStyle = year % 2 === 0 ? UI_PALETTE.carbon : UI_PALETTE.charcoal800;
     context.fillRect(x, stickyY, w, 34);
     // Year seams are rendered once, later, as a single continuous line.
-    context.fillStyle = "#f0f2f0";
+    context.fillStyle = UI_PALETTE.whiteSmoke;
     context.font = "700 22px Arial";
     context.textAlign = "left";
     context.textBaseline = "alphabetic";
@@ -2510,11 +2663,11 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const quarter = Math.floor((absolute % 12) / 3) + 1;
     const x = timelineX + i * roadmapMonthWidth;
     const w = Math.min(3, range.count - i) * roadmapMonthWidth;
-    context.fillStyle = "#222522";
+    context.fillStyle = UI_PALETTE.carbon;
     context.fillRect(x, stickyY + 34, w, 22);
-    context.strokeStyle = "#343834";
+    context.strokeStyle = UI_PALETTE.charcoal600;
     context.strokeRect(x, stickyY + 34, w, 22);
-    context.fillStyle = "#cf3d63";
+    context.fillStyle = UI_PALETTE.amaranth;
     context.font = "700 10px Arial";
     context.textAlign = "center";
     context.fillText(`Q${quarter}`, x + w / 2, stickyY + 49);
@@ -2526,9 +2679,9 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const half = (absolute % 12) < 6 ? "1H" : "2H";
     const x = timelineX + i * roadmapMonthWidth;
     const w = Math.min(6, range.count - i) * roadmapMonthWidth;
-    context.fillStyle = i % 12 === 0 ? "#626762" : "#777c77";
+    context.fillStyle = i % 12 === 0 ? UI_PALETTE.indigo : UI_PALETTE.indigoDark;
     context.fillRect(x, stickyY + 56, w, 22);
-    context.fillStyle = "#111311";
+    context.fillStyle = UI_PALETTE.whiteSmoke;
     context.font = "700 11px Arial";
     context.textAlign = "center";
     context.fillText(half, x + w / 2, stickyY + 71);
@@ -2544,19 +2697,19 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const x = timelineX + i * roadmapMonthWidth;
     // Alternate full calendar years. January receives a quiet theme tint rather
     // than a border, keeping the year transition visible without looking selected.
-    context.fillStyle = year % 2 === 0 ? "#0d100d" : "#131613";
+    context.fillStyle = year % 2 === 0 ? UI_PALETTE.inkBlack : UI_PALETTE.charcoal800;
     context.fillRect(x, stickyY + 78, roadmapMonthWidth, 34);
     if (month === 0) {
-      context.fillStyle = "rgba(126,177,91,.055)";
+      context.fillStyle = "rgba(96,137,155,.08)";
       context.fillRect(x, stickyY + 78, roadmapMonthWidth, 34);
     }
     if (month !== 0) {
-      context.fillStyle = "rgba(86,94,86,.14)";
+      context.fillStyle = "rgba(55,58,63,.22)";
       context.fillRect(Math.round(x), stickyY + 78, 1, 34);
     }
     const monthText = roadmapMonthWidth >= 58 ? fullMonthNames[month] : roadmapMonthWidth >= 28 ? shortMonthNames[month] : "";
     if (monthText) {
-      context.fillStyle = month === 0 ? "#a6afa3" : year % 2 === 0 ? "#9aa09a" : "#858b85";
+      context.fillStyle = month === 0 ? UI_PALETTE.greyOlive : UI_PALETTE.midGrey;
       context.font = roadmapMonthWidth >= 58 ? "11px Arial" : "10px Arial";
       context.textAlign = "left";
       context.fillText(monthText, x + Math.min(7, Math.max(3, roadmapMonthWidth * .12)), stickyY + 100);
@@ -2577,18 +2730,18 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       const rangeX = timelineX + (visibleStart - range.start) * roadmapMonthWidth + 1;
       const rangeWidth = (visibleEnd - visibleStart + 1) * roadmapMonthWidth - 2;
       context.save();
-      context.fillStyle = "rgba(126,177,91,.08)";
+      context.fillStyle = "rgba(96,137,155,.12)";
       context.fillRect(rangeX, stickyY + 79, rangeWidth, 32);
-      context.strokeStyle = "rgba(155,200,125,.94)";
+      context.strokeStyle = "rgba(108,155,173,.94)";
       context.lineWidth = 2;
       context.strokeRect(rangeX, stickyY + 79, rangeWidth, 32);
       context.restore();
     }
     if (selectedGuides.launchVisible) {
       const launchCellX = timelineX + (selectedGuides.launch - range.start) * roadmapMonthWidth + 1;
-      const launchColor = selectedGuides.product.statusType === "embargo" || selectedGuides.roadmap.status === "embargo" ? "#ff5a83" : "#cf3d63";
+      const launchColor = UI_PALETTE.amaranth;
       context.save();
-      context.fillStyle = "rgba(207,61,99,.13)";
+      context.fillStyle = "rgba(224,51,90,.14)";
       context.fillRect(launchCellX, stickyY + 79, roadmapMonthWidth - 2, 32);
       context.strokeStyle = launchColor;
       context.lineWidth = 2;
@@ -2597,23 +2750,23 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     }
   }
 
-  context.fillStyle = "#171a17";
+  context.fillStyle = UI_PALETTE.charcoal800;
   context.fillRect(stickyX, stickyY, ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
-  context.strokeStyle = "#373b37";
+  context.strokeStyle = UI_PALETTE.charcoal600;
   context.strokeRect(stickyX, stickyY, ROADMAP_LEFT_WIDTH, ROADMAP_HEADER_HEIGHT);
-  context.fillStyle = "#7f857f";
+  context.fillStyle = UI_PALETTE.midGrey;
   context.font = "800 9px Arial";
   context.textAlign = "left";
   context.fillText("PORTFOLIO ROADMAP", stickyX + 14, stickyY + 22);
-  context.fillStyle = "#e7e9e7";
+  context.fillStyle = UI_PALETTE.starDust;
   context.font = "700 15px Arial";
   context.fillText(roadmapSpanLabel(range.count), stickyX + 14, stickyY + 47);
-  context.fillStyle = "#8d938d";
+  context.fillStyle = UI_PALETTE.midGrey;
   context.font = "10px Arial";
   if (selectedGuides) {
-    context.fillStyle = "#b9dba7";
+    context.fillStyle = UI_PALETTE.steelTealLight;
     context.fillText(truncate(`Launch · ${roadmapLabel(selectedGuides.roadmap.startMonth)}`, 30), stickyX + 14, stickyY + 72);
-    context.fillStyle = "#a8ada8";
+    context.fillStyle = UI_PALETTE.greyOlive;
     context.fillText(truncate(`Lifecycle end · ${roadmapLabel(selectedGuides.roadmap.endMonth)}`, 30), stickyX + 14, stickyY + 93);
   } else {
     context.fillText("Launch month starts each roadmap bar", stickyX + 14, stickyY + 72);
@@ -2946,6 +3099,8 @@ function splitRoadmapStatusLabel(status) {
 
 function splitDateCardsHtml(product) {
   const dates = [
+    ["General availability", product.generalAvailabilityDate],
+    ["End of manufacturing", product.endManufacturingDate],
     ["FFS", product.ffsDate],
     ["Global announcement", product.globalAnnouncementDate],
     ["Web readiness", product.webReadinessDate],
@@ -2968,6 +3123,21 @@ function splitHpSkusHtml(product) {
     </button>`).join("")}</div>`;
 }
 
+function splitAscmSourceHtml(product) {
+  const source = normalizeAscmProductMetadata(product?.ascm);
+  if (!source?.records.length) return "";
+  const descriptions = [...new Set(source.records.map((record) => record.fullProductName).filter(Boolean))];
+  return `
+    <section class="split-detail-section">
+      <span class="split-detail-heading">ASCM source</span>
+      <div class="split-detail-grid split-detail-grid--two">
+        <div class="split-detail-card"><span>ASCM category</span><strong>${escapeHtml(source.sourceCategory || "Not set")}</strong></div>
+        <div class="split-detail-card"><span>Last imported</span><strong>${escapeHtml(source.importedAt ? formatProductInfoDate(source.importedAt.slice(0, 10)) : "TBD")}</strong></div>
+        <div class="split-detail-card is-full"><span>GPG 40 char AMO Description</span><div class="split-ascm-name-list">${descriptions.map((description) => `<strong>${escapeHtml(description)}</strong>`).join("")}</div></div>
+      </div>
+    </section>`;
+}
+
 function renderSplitProduct() {
   if (!splitProduct) return;
   const product = selectedProduct();
@@ -2988,14 +3158,14 @@ function renderSplitProduct() {
 
   splitProduct.innerHTML = `
     <article class="split-product-card split-product-card--detail ${presentation.primaryLabel ? "is-highlighted" : ""}" style="--product-highlight:${escapeHtml(presentation.outlineColor)}">
-      <div class="split-status ${statusClass}" style="background:${escapeHtml(presentation.primaryColor)}">${escapeHtml(presentation.primaryLabel || "SELECTED PRODUCT")}</div>
+      <div class="split-status ${statusClass}" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(contrastTextColor(presentation.primaryColor))}">${escapeHtml(presentation.primaryLabel || "SELECTED PRODUCT")}</div>
 
       <div class="split-product-hero">
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
         <div class="split-product-title">
           <span class="eyebrow">${escapeHtml(roadmap.family || "Portfolio product")}</span>
           <h2>${escapeHtml(product.name)}</h2>
-          <div class="split-price">${board.settings.showPrices ? productPriceText(product) : "Price hidden"}</div>
+          <div class="split-price">${escapeHtml(board.settings.showPrices ? productPriceText(product) : "Price hidden")}</div>
         </div>
       </div>
 
@@ -3032,6 +3202,8 @@ function renderSplitProduct() {
           <span class="split-detail-heading">HP SKU</span>
           ${splitHpSkusHtml(product)}
         </section>
+
+        ${splitAscmSourceHtml(product)}
 
         <section class="split-detail-section">
           <span class="split-detail-heading">Specifications</span>
@@ -3246,6 +3418,9 @@ function renderBoard() {
 
 function renderStatus() {
   const viewText = activeView === "products" ? "Product comparison" : activeView === "roadmap" ? "Roadmap slotting" : "Synchronized split view";
+  const ascmStatus = portfolio?.ascmSnapshot?.importedAt
+    ? `ASCM updated ${formatProductInfoDate(portfolio.ascmSnapshot.importedAt.slice(0, 10))}`
+    : "ASCM not imported";
   const interaction = activeView === "products"
     ? productLayoutEditing
       ? "Layout editing enabled from Data; drag cards to reorder or move lanes; hover color SKUs to preview hero images"
@@ -3257,6 +3432,7 @@ function renderStatus() {
     <span>${board.products.length} products</span>
     <span>${board.lanes.length} product lanes</span>
     <span>${viewText}</span>
+    <span>${ascmStatus}</span>
     <span>Data autosaved · images stored separately</span>
     <span>${interaction}</span>`;
 }
@@ -3298,6 +3474,8 @@ function viewerPartSkusHtml(product) {
 
 function viewerDateRowsHtml(product) {
   const rows = [
+    ["General availability", product.generalAvailabilityDate],
+    ["End of manufacturing", product.endManufacturingDate],
     ["FFS", product.ffsDate],
     ["Global announcement", product.globalAnnouncementDate],
     ["Web readiness", product.webReadinessDate],
@@ -3620,7 +3798,7 @@ function colorVariantEditorHtml(group, item, index) {
   const primaryCustom = item.colorKey === "custom";
   const secondaryCustom = item.colorKey2 === "custom";
   return `
-    <div class="variant-item color-variant-item" data-variant-item-id="${item.id}">
+    <div class="variant-item color-variant-item" data-variant-item-id="${escapeHtml(item.id)}">
       <span class="sku-color-preview ${hasSecondary ? "is-dual" : ""}" style="--sku-primary:${escapeHtml(item.colorHex)};--sku-secondary:${escapeHtml(item.colorHex2 || item.colorHex)}" aria-hidden="true"></span>
       <label class="variant-code-field">SKU code<input data-variant-field="code" value="${escapeHtml(item.code)}" aria-label="Variant ${index + 1} SKU code"></label>
       <label>Primary color<select data-color-role="primary">${standardProductColorOptionsHtml(item.colorKey)}</select></label>
@@ -3628,17 +3806,17 @@ function colorVariantEditorHtml(group, item, index) {
       <label class="sku-dual-toggle"><input data-variant-dual type="checkbox" ${hasSecondary ? "checked" : ""}>Two-tone colorway</label>
       ${hasSecondary ? `<label>Secondary color<select data-color-role="secondary">${standardProductColorOptionsHtml(item.colorKey2)}</select></label>` : ""}
       ${hasSecondary && secondaryCustom ? `<label>Custom secondary name<input data-variant-field="colorName2" value="${escapeHtml(item.colorName2)}"></label><label>Custom secondary color<input data-variant-field="colorHex2" class="color-input" type="color" value="${escapeHtml(item.colorHex2 || "#ffffff")}"></label>` : ""}
-      <button data-remove-variant="${item.id}" class="icon-button variant-remove" aria-label="Remove color variant ${index + 1}">×</button>
+      <button data-remove-variant="${escapeHtml(item.id)}" class="icon-button variant-remove" aria-label="Remove color variant ${index + 1}">×</button>
     </div>`;
 }
 
 function layoutVariantEditorHtml(group, item, index) {
   return `
-    <div class="variant-item layout-variant-item" data-variant-item-id="${item.id}">
+    <div class="variant-item layout-variant-item" data-variant-item-id="${escapeHtml(item.id)}">
       <label>Common layout<select data-layout-preset>${keyboardLayoutOptionsHtml(item.code)}</select></label>
       <label>Layout SKU code<input data-variant-field="code" value="${escapeHtml(item.code)}" aria-label="Layout variant ${index + 1} code"></label>
       <label>Display name<input data-variant-field="label" value="${escapeHtml(item.label || "")}" placeholder="Optional full market or locale name"></label>
-      <button data-remove-variant="${item.id}" class="icon-button variant-remove" aria-label="Remove layout variant ${index + 1}">×</button>
+      <button data-remove-variant="${escapeHtml(item.id)}" class="icon-button variant-remove" aria-label="Remove layout variant ${index + 1}">×</button>
     </div>`;
 }
 
@@ -3648,16 +3826,16 @@ function variantGroupsEditorHtml(product) {
     <section id="variantsSection" class="panel-section">
       <div class="section-heading-row"><div><h3>Product variants</h3><p class="section-subtitle">Use compact layout codes for keyboard markets and named colors for product colorways.</p></div><button id="addVariantGroup" class="small-button">+ Group</button></div>
       <div class="variant-group-list">${groups.length ? groups.map((group, groupIndex) => `
-        <div class="variant-group-card" data-variant-group-id="${group.id}">
+        <div class="variant-group-card" data-variant-group-id="${escapeHtml(group.id)}">
           <div class="variant-group-heading">
             <label>Footer label<input data-variant-group-field="label" value="${escapeHtml(group.label)}" aria-label="Variant group ${groupIndex + 1} label"></label>
             <label>Variant type<select data-variant-group-field="type">
               <option value="color" ${group.type === "color" ? "selected" : ""}>Color SKU</option>
               <option value="layout" ${group.type === "layout" ? "selected" : ""}>Layout / locale SKU</option>
             </select></label>
-            ${group.type === "layout" ? `<button data-add-layout-set="${group.id}" class="small-button">+ Common set</button>` : ""}
-            <button data-add-variant="${group.id}" class="small-button">+ Variant</button>
-            <button data-remove-variant-group="${group.id}" class="icon-button" aria-label="Remove variant group ${groupIndex + 1}">×</button>
+            ${group.type === "layout" ? `<button data-add-layout-set="${escapeHtml(group.id)}" class="small-button">+ Common set</button>` : ""}
+            <button data-add-variant="${escapeHtml(group.id)}" class="small-button">+ Variant</button>
+            <button data-remove-variant-group="${escapeHtml(group.id)}" class="icon-button" aria-label="Remove variant group ${groupIndex + 1}">×</button>
           </div>
           <div class="variant-item-list">${group.items.length
             ? group.items.map((item, index) => group.type === "layout" ? layoutVariantEditorHtml(group, item, index) : colorVariantEditorHtml(group, item, index)).join("")
@@ -3894,8 +4072,8 @@ function renderInspector() {
       <h3>Product</h3>
       <label>Name<input id="fieldName" value="${escapeHtml(product.name)}"></label>
       <div class="two-column">
-        <label>Price<input id="fieldPrice" type="number" step="0.01" value="${product.price ?? ""}"></label>
-        <label>Lane<select id="fieldLane">${sortedLanes().map((lane) => `<option value="${lane.id}" ${lane.id === product.laneId ? "selected" : ""}>${escapeHtml(lane.label)}</option>`).join("")}</select></label>
+        <label>Price<input id="fieldPrice" type="number" step="0.01" value="${escapeHtml(product.price ?? "")}"></label>
+        <label>Lane<select id="fieldLane">${sortedLanes().map((lane) => `<option value="${escapeHtml(lane.id)}" ${lane.id === product.laneId ? "selected" : ""}>${escapeHtml(lane.label)}</option>`).join("")}</select></label>
       </div>
       <label>Price display override<input id="fieldPriceLabel" value="${escapeHtml(product.priceLabel || "")}" placeholder="Example: $ Varies or Contact sales"></label>
       <label>Product image URL<input id="fieldImageUrl" placeholder="https://... or upload below" value="${escapeHtml(productImageWebUrl(product))}"></label>
@@ -3927,6 +4105,18 @@ function renderInspector() {
           <label>Product tier<select id="fieldProductTier">${productTierOptionsHtml(product.tier)}</select></label>
         </div>
         <div class="portfolio-date-grid">
+          <label class="portfolio-date-field">General availability (GA)
+            <span class="portfolio-date-control">
+              <input id="fieldGeneralAvailabilityDate" type="date" value="${escapeHtml(product.generalAvailabilityDate || "")}">
+              <button id="fieldGeneralAvailabilityDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
+            </span>
+          </label>
+          <label class="portfolio-date-field">End of manufacturing (EM)
+            <span class="portfolio-date-control">
+              <input id="fieldEndManufacturingDate" type="date" value="${escapeHtml(product.endManufacturingDate || "")}">
+              <button id="fieldEndManufacturingDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
+            </span>
+          </label>
           <label class="portfolio-date-field">FFS date
             <span class="portfolio-date-control">
               <input id="fieldFfsDate" type="date" value="${escapeHtml(product.ffsDate || "")}">
@@ -3975,16 +4165,16 @@ function renderInspector() {
       <h3>Status and variant banner</h3>
       <label>Status<select id="fieldStatus">
         <option value="none" ${product.statusType === "none" ? "selected" : ""}>None</option>
-        <option value="new" ${product.statusType === "new" ? "selected" : ""}>New product — standardized green</option>
-        <option value="embargo" ${product.statusType === "embargo" ? "selected" : ""}>Upcoming under embargo — standardized pink</option>
+        <option value="new" ${product.statusType === "new" ? "selected" : ""}>New product — standardized Steel Teal</option>
+        <option value="embargo" ${product.statusType === "embargo" ? "selected" : ""}>Upcoming under embargo — standardized Amaranth</option>
       </select></label>
       <p class="standard-status-note">New Product and Upcoming Under Embargo use protected labels and theme colors. They cannot be renamed or recolored.</p>
       <label class="checkbox-label"><input id="fieldVariantEnabled" type="checkbox" ${product.variantLabel ? "checked" : ""}>Show a custom variant banner</label>
       <div id="variantBannerFields" class="${product.variantLabel ? "" : "is-disabled"}">
         <label>Variant label<input id="fieldVariantLabel" value="${escapeHtml(product.variantLabel || "")}" placeholder="PLAYSTATION, XBOX, SUNSETTING…"></label>
         <div class="highlight-color-control">
-          <label>Variant color preset<select id="fieldVariantColorPreset">${colorPresetOptionsHtml(product.variantColor || "#3f6f91")}</select></label>
-          <label>Custom color<input id="fieldVariantColor" aria-label="Variant color" type="color" value="${escapeHtml(product.variantColor || "#3f6f91")}"></label>
+          <label>Variant color preset<select id="fieldVariantColorPreset">${colorPresetOptionsHtml(product.variantColor || UI_PALETTE.steelTeal)}</select></label>
+          <label>Custom color<input id="fieldVariantColor" aria-label="Variant color" type="color" value="${escapeHtml(product.variantColor || UI_PALETTE.steelTeal)}"></label>
         </div>
       </div>
     </section>
@@ -4008,11 +4198,11 @@ function renderInspector() {
         </select></label>
         <label>Predecessor<select id="fieldRoadmapPredecessor">
           <option value="">None</option>
-          ${board.products.filter((item) => item.id !== product.id).map((item) => `<option value="${item.id}" ${product.roadmap.predecessorId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+          ${board.products.filter((item) => item.id !== product.id).map((item) => `<option value="${escapeHtml(item.id)}" ${product.roadmap.predecessorId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
         </select></label>
         <label>Successor<select id="fieldRoadmapSuccessor">
           <option value="">None</option>
-          ${board.products.filter((item) => item.id !== product.id).map((item) => `<option value="${item.id}" ${product.roadmap.successorId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+          ${board.products.filter((item) => item.id !== product.id).map((item) => `<option value="${escapeHtml(item.id)}" ${product.roadmap.successorId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
         </select></label>
       </div>
       <div class="roadmap-link-actions">
@@ -4028,10 +4218,10 @@ function renderInspector() {
         <button id="addSpecSet" class="small-button" type="button">+ Add missing fields</button>
       </div>
       <div class="stack-list">${product.specs.length ? product.specs.map((item, index) => `
-        <div class="editable-row" data-spec-id="${item.id}">
+        <div class="editable-row" data-spec-id="${escapeHtml(item.id)}">
           <input data-spec-field="label" value="${escapeHtml(item.label)}" aria-label="Specification ${index + 1} label">
           <input data-spec-field="value" value="${escapeHtml(item.value)}" aria-label="Specification ${index + 1} value">
-          <button data-remove-spec="${item.id}" class="icon-button" aria-label="Remove specification ${index + 1}">×</button>
+          <button data-remove-spec="${escapeHtml(item.id)}" class="icon-button" aria-label="Remove specification ${index + 1}">×</button>
         </div>`).join("") : '<div class="empty-list">No specifications</div>'}</div>
     </section>
     ${variantGroupsEditorHtml(product)}
@@ -4073,6 +4263,8 @@ function renderInspector() {
   };
 
   bindProductDate("#fieldFfsDate", "#fieldFfsDateTbd", "ffsDate");
+  bindProductDate("#fieldGeneralAvailabilityDate", "#fieldGeneralAvailabilityDateTbd", "generalAvailabilityDate");
+  bindProductDate("#fieldEndManufacturingDate", "#fieldEndManufacturingDateTbd", "endManufacturingDate");
   bindProductDate("#fieldGlobalAnnouncementDate", "#fieldGlobalAnnouncementDateTbd", "globalAnnouncementDate");
   bindProductDate("#fieldWebReadinessDate", "#fieldWebReadinessDateTbd", "webReadinessDate");
   bindProductDate("#fieldFinalAssetsDate", "#fieldFinalAssetsDateTbd", "finalAssetsDate");
@@ -4944,8 +5136,9 @@ async function renderCategoryImageForPptx(category) {
 
   try {
     activeCategoryId = category.id;
-    board = ensureBoardSchema(category.board, categoryDefinition(category.id));
-    category.board = board;
+    const categoryBoard = ensureBoardSchema(category.board, categoryDefinition(category.id));
+    category.board = categoryBoard;
+    board = categoryBoard;
     selectedId = null;
     searchQuery = "";
     roadmapSearchQuery = "";
@@ -4982,7 +5175,7 @@ async function renderCategoryImageForPptx(category) {
   }
 }
 
-async function renderCategoryRoadmapImageForPptx(category) {
+async function renderCategoryRoadmapImageForPptx(category, groups = null) {
   const previous = {
     activeCategoryId,
     board,
@@ -4998,8 +5191,13 @@ async function renderCategoryRoadmapImageForPptx(category) {
 
   try {
     activeCategoryId = category.id;
-    board = ensureBoardSchema(category.board, categoryDefinition(category.id));
-    category.board = board;
+    const categoryBoard = ensureBoardSchema(category.board, categoryDefinition(category.id));
+    category.board = categoryBoard;
+    const pageGroups = Array.isArray(groups) ? groups : null;
+    board = {
+      ...categoryBoard,
+      products: pageGroups ? pageGroups.flatMap((group) => group.products) : categoryBoard.products,
+    };
     selectedId = null;
     searchQuery = "";
     roadmapSearchQuery = "";
@@ -5017,7 +5215,7 @@ async function renderCategoryRoadmapImageForPptx(category) {
       Math.min(64, Math.floor((targetPixelWidth - ROADMAP_LEFT_WIDTH - 24) / Math.max(1, range.count))),
     );
 
-    const dimensions = roadmapDimensions();
+    const dimensions = roadmapDimensions(pageGroups);
     const exportCanvas = document.createElement("canvas");
     exportCanvas.width = Math.max(1, Math.round(dimensions.width));
     exportCanvas.height = Math.max(1, Math.round(dimensions.height));
@@ -5086,20 +5284,52 @@ function containRect(sourceWidth, sourceHeight, targetX, targetY, targetWidth, t
   };
 }
 
+function buildPptxExportPlan(scope, categories) {
+  const includeProducts = scope === "products" || scope === "both";
+  const includeRoadmap = scope === "roadmap" || scope === "both";
+  const slides = [];
+
+  categories.forEach((category, categoryIndex) => {
+    const definition = categoryDefinition(category.id);
+    const targetBoard = ensureBoardSchema(category.board, definition);
+
+    if (includeProducts) {
+      slides.push({ category, categoryIndex, kind: "products", pageIndex: 0, pageCount: 1 });
+    }
+
+    if (includeRoadmap) {
+      const groups = roadmapGroupsForProducts(targetBoard.products, targetBoard, definition);
+      const pages = paginateRoadmapGroupsForPptx(groups);
+      pages.forEach((pageGroups, pageIndex) => {
+        slides.push({ category, categoryIndex, kind: "roadmap", groups: pageGroups, pageIndex, pageCount: pages.length });
+      });
+    }
+  });
+
+  return slides;
+}
+
+function pptxPlanSlideTitle(planItem) {
+  const categoryName = planItem.category.name || planItem.category.id || `Category ${planItem.categoryIndex + 1}`;
+  const viewName = planItem.kind === "products" ? "Product Portfolio" : "Roadmap";
+  const pageLabel = planItem.pageCount > 1 ? ` (${planItem.pageIndex + 1} of ${planItem.pageCount})` : "";
+  return `${categoryName} — ${viewName}${pageLabel}`;
+}
+
 function pptxExportScope() {
   return pptxExportForm?.querySelector('input[name="pptxExportScope"]:checked')?.value || "both";
 }
 
-function pptxSlideCountForScope(scope, categoryCount) {
-  return categoryCount * (scope === "both" ? 2 : 1);
+function pptxSlideCountForScope(scope, categories) {
+  return buildPptxExportPlan(scope, categories).length;
 }
 
 function syncPptxExportSummary() {
   if (!pptxExportDialog) return;
-  const categoryCount = (portfolio?.categories || []).filter((category) => category?.board).length;
+  const categories = (portfolio?.categories || []).filter((category) => category?.board);
   const scope = pptxExportScope();
-  $("#pptxExportCategoryCount").textContent = String(categoryCount);
-  $("#pptxExportSlideCount").textContent = String(pptxSlideCountForScope(scope, categoryCount));
+  $("#pptxExportCategoryCount").textContent = String(categories.length);
+  $("#pptxExportSlideCount").textContent = String(pptxSlideCountForScope(scope, categories));
 }
 
 function openPptxExportDialog() {
@@ -5145,36 +5375,21 @@ async function exportPptx(scope = "both") {
       : "Product Portfolio and Roadmaps";
   pptx.lang = "en-US";
 
-  const slideCount = pptxSlideCountForScope(scope, categories.length);
-  let slideNumber = 1;
+  const exportPlan = buildPptxExportPlan(scope, categories);
+  const slideCount = exportPlan.length;
 
-  for (let index = 0; index < categories.length; index += 1) {
-    const category = categories[index];
-    const categoryName = category.name || category.id || `Category ${index + 1}`;
-
-    if (scope === "products" || scope === "both") {
-      const productImage = await renderCategoryImageForPptx(category);
-      addPptxPortfolioSlide(
-        pptx,
-        `${categoryName} — Product Portfolio`,
-        slideNumber,
-        slideCount,
-        productImage,
-      );
-      slideNumber += 1;
-    }
-
-    if (scope === "roadmap" || scope === "both") {
-      const roadmapImage = await renderCategoryRoadmapImageForPptx(category);
-      addPptxPortfolioSlide(
-        pptx,
-        `${categoryName} — Roadmap`,
-        slideNumber,
-        slideCount,
-        roadmapImage,
-      );
-      slideNumber += 1;
-    }
+  for (let index = 0; index < exportPlan.length; index += 1) {
+    const planItem = exportPlan[index];
+    const image = planItem.kind === "products"
+      ? await renderCategoryImageForPptx(planItem.category)
+      : await renderCategoryRoadmapImageForPptx(planItem.category, planItem.groups);
+    addPptxPortfolioSlide(
+      pptx,
+      pptxPlanSlideTitle(planItem),
+      index + 1,
+      slideCount,
+      image,
+    );
   }
 
   await pptx.writeFile({ fileName: pptxExportFilename(scope) });
@@ -5397,6 +5612,404 @@ function importJson(file) {
   reader.readAsText(file);
 }
 
+function ascmGroupBasePartNumbers(group) {
+  return [...new Set((Array.isArray(group?.basePns) ? group.basePns : (group?.records || []).map((record) => record.basePn))
+    .map((value) => String(value || "").trim().toUpperCase()).filter(Boolean))].sort();
+}
+
+function ascmGroupDates(group) {
+  return {
+    gaDate: normalizeProductInfoDate(group?.gaDate || group?.records?.map((record) => record.ga).filter(Boolean).sort()[0]),
+    emDate: normalizeProductInfoDate(group?.emDate || group?.records?.map((record) => record.em).filter(Boolean).sort().at(-1)),
+  };
+}
+
+function ascmGroupMetadata(group, dataset, importedAt) {
+  const sourceCategory = (group?.sourceCategories || []).join(" / ");
+  const records = (Array.isArray(group?.records) ? group.records : []).map((record) => normalizeAscmRecord({
+    ...record,
+    category: record.category || sourceCategory,
+  }));
+  return normalizeAscmProductMetadata({
+    key: group?.ascmKey || group?.key,
+    sourceCategory,
+    sourceFile: dataset?.metadata?.fileName || "ASCM report.xlsx",
+    exportedAt: dataset?.metadata?.exportedAt || "",
+    importedAt,
+    basePartNumbers: ascmGroupBasePartNumbers(group),
+    colorCodes: (group?.colorVariants || []).map((variant) => variant.canonicalCode || variant.code),
+    records,
+  });
+}
+
+function ascmRecordSignature(record) {
+  const normalized = normalizeAscmRecord(record);
+  return [
+    normalized.basePartNumber,
+    normalized.featureId,
+    normalized.category,
+    normalized.fullProductName,
+    normalized.codeName,
+    normalized.generalAvailabilityDate,
+    normalized.endManufacturingDate,
+    normalized.colorCode,
+  ].join("\u001f");
+}
+
+function ascmProductNeedsUpdate(group, match) {
+  if (match?.status !== "matched" || !match.product) return true;
+  const current = normalizeAscmProductMetadata(match.product.ascm);
+  if (!current || current.key !== String(group.ascmKey || group.key || "")) return true;
+  const incomingPns = ascmGroupBasePartNumbers(group);
+  if (current.basePartNumbers.join("|") !== incomingPns.join("|")) return true;
+  const currentRecords = current.records.map(ascmRecordSignature).sort();
+  const sourceCategory = (group.sourceCategories || []).join(" / ");
+  const incomingRecords = (group.records || []).map((record) => ascmRecordSignature({
+    ...record,
+    category: record.category || sourceCategory,
+  })).sort();
+  if (currentRecords.join("\n") !== incomingRecords.join("\n")) return true;
+  const dates = ascmGroupDates(group);
+  if (match.product.generalAvailabilityDate !== dates.gaDate || match.product.endManufacturingDate !== dates.emDate) return true;
+  return match.categoryId !== group.categoryId;
+}
+
+function buildAscmImportPlan(dataset) {
+  const importer = globalThis.ASCMImporter;
+  if (!importer?.buildProductGroups || !importer?.matchProductGroup) throw new Error("The ASCM importer is unavailable. Reload the app and try again.");
+  const groups = importer.buildProductGroups(dataset);
+  const previousPns = new Set((portfolio?.ascmSnapshot?.basePartNumbers || []).map((value) => String(value).toUpperCase()));
+  const currentPns = [...new Set(dataset.rows.map((row) => String(row.basePn || "").trim().toUpperCase()).filter(Boolean))].sort();
+  const currentPnSet = new Set(currentPns);
+  const newBasePns = currentPns.filter((value) => !previousPns.has(value));
+  const missingBasePns = [...previousPns].filter((value) => !currentPnSet.has(value)).sort();
+  const items = groups.map((group) => {
+    const match = importer.matchProductGroup(group, portfolio);
+    let action = "new";
+    if (!group.categoryId) action = "ambiguous";
+    else if (match.status === "ambiguous") action = "ambiguous";
+    else if (match.status === "matched") action = ascmProductNeedsUpdate(group, match) ? "update" : "unchanged";
+    return {
+      group,
+      match,
+      action,
+      matchedProductId: match.product?.id || "",
+      matchedCategoryId: match.categoryId || "",
+      matchedProductName: match.product?.name || "",
+    };
+  });
+  const itemsByMatchedProduct = new Map();
+  for (const item of items) {
+    if (item.match.status !== "matched" || !item.matchedProductId) continue;
+    const matches = itemsByMatchedProduct.get(item.matchedProductId) || [];
+    matches.push(item);
+    itemsByMatchedProduct.set(item.matchedProductId, matches);
+  }
+  for (const matches of itemsByMatchedProduct.values()) {
+    if (matches.length < 2) continue;
+    for (const item of matches) {
+      item.action = "ambiguous";
+      item.match = {
+        ...item.match,
+        status: "ambiguous",
+        ambiguous: true,
+        reason: "multiple-ascm-groups-match-one-product",
+      };
+    }
+  }
+  return { dataset, groups, items, currentPns, newBasePns, missingBasePns };
+}
+
+function ascmActionLabel(item) {
+  if (item.action === "new") return "New product";
+  if (item.action === "update") return "Update";
+  if (item.action === "unchanged") return "Unchanged";
+  return item.group.categoryId ? "Review match" : "Unmapped";
+}
+
+function portfolioCategoryName(categoryId) {
+  return portfolio?.categories?.find((category) => category.id === categoryId)?.name
+    || CATEGORY_DEFINITIONS.find((category) => category.id === categoryId)?.name
+    || "Needs review";
+}
+
+function renderAscmImportPreview(plan) {
+  const counts = plan.items.reduce((result, item) => {
+    result[item.action] = (result[item.action] || 0) + 1;
+    return result;
+  }, {});
+  const metrics = [
+    ["Source rows", plan.dataset.metadata?.sourceDataRows ?? plan.dataset.rows.length],
+    ["Canonical Base PNs", plan.currentPns.length],
+    ["New Base PNs", plan.newBasePns.length],
+    ["New products", counts.new || 0],
+    ["Products to update", counts.update || 0],
+  ];
+  $("#ascmImportSummary").innerHTML = metrics.map(([label, value]) => `
+    <div class="ascm-import-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+
+  const metadata = plan.dataset.metadata || {};
+  const exported = metadata.exportedAt ? ` · Exported ${escapeHtml(metadata.exportedAt)}` : "";
+  $("#ascmImportSource").innerHTML = `<strong>${escapeHtml(metadata.fileName || "ASCM report.xlsx")}</strong> · ${escapeHtml(metadata.sheetName || "ASCM Report")} · header row ${escapeHtml(metadata.headerRow || "?")}${exported}`;
+
+  const previewLimit = 250;
+  $("#ascmImportPreview").innerHTML = plan.items.slice(0, previewLimit).map((item) => {
+    const descriptions = [...new Set((item.group.records || []).map((record) => String(record.description || "").trim()).filter(Boolean))];
+    const descriptionSummary = descriptions.length > 1 ? `${descriptions[0]} (+${descriptions.length - 1})` : descriptions[0] || item.group.displayName;
+    const productName = item.matchedProductName
+      ? `${escapeHtml(item.matchedProductName)}<small class="ascm-import-source-name">GPG: ${escapeHtml(descriptionSummary)}</small>`
+      : `${escapeHtml(item.group.displayName || "Unnamed product")}<small class="ascm-import-source-name">GPG: ${escapeHtml(descriptionSummary)}</small>`;
+    const basePns = ascmGroupBasePartNumbers(item.group);
+    const basePnSummary = basePns.length > 1 ? `${basePns[0]} +${basePns.length - 1}` : basePns[0] || "—";
+    return `<tr>
+      <td><span class="ascm-import-action is-${escapeHtml(item.action)}">${escapeHtml(ascmActionLabel(item))}</span></td>
+      <td>${escapeHtml(portfolioCategoryName(item.group.categoryId))}</td>
+      <td>${productName}</td>
+      <td class="ascm-import-pns" title="${escapeHtml(basePns.join(", "))}">${escapeHtml(basePnSummary)}</td>
+      <td>${escapeHtml(item.group.gaDate || "TBD")}</td>
+      <td>${escapeHtml(item.group.emDate || "TBD")}</td>
+    </tr>`;
+  }).join("");
+
+  const notes = [];
+  const localized = Number(metadata.localizedRowsFiltered || 0);
+  if (localized) notes.push(`${localized} localized duplicate rows were excluded in favor of their canonical Base PN rows.`);
+  const invalidRows = Number(metadata.invalidRowsFiltered || 0);
+  const invalidLocalRows = Number(metadata.invalidLocalRowsFiltered || 0);
+  const duplicateBasePns = Number(metadata.duplicateBasePnRows || 0);
+  if (invalidRows) notes.push(`${invalidRows} row(s) with missing or invalid required values were skipped.`);
+  if (invalidLocalRows) notes.push(`${invalidLocalRows} row(s) with an invalid Local flag were skipped.`);
+  if (duplicateBasePns) notes.push(`${duplicateBasePns} duplicate canonical Base PN row(s) were skipped; the earliest valid row was retained.`);
+  if (counts.ambiguous) notes.push(`${counts.ambiguous} product group(s) need review and will be skipped.`);
+  if (plan.missingBasePns.length) notes.push(`${plan.missingBasePns.length} Base PN(s) from the previous ASCM snapshot are absent; no products will be deleted.`);
+  if (plan.items.length > previewLimit) notes.push(`The preview shows the first ${previewLimit} of ${plan.items.length} product groups.`);
+  if (!notes.length) notes.push("No ambiguous mappings or missing prior Base PNs were found.");
+  $("#ascmImportNote").textContent = notes.join(" ");
+}
+
+function closeAscmImportDialog() {
+  pendingAscmImport = null;
+  ascmImportDialog?.classList.add("hidden");
+  if (confirmAscmImportButton) {
+    confirmAscmImportButton.disabled = false;
+    confirmAscmImportButton.textContent = "Apply ASCM update";
+  }
+}
+
+async function openAscmImport(file) {
+  const importer = globalThis.ASCMImporter;
+  if (!importer?.parseAscmWorkbook) throw new Error("The ASCM workbook reader did not load. Reload the app and try again.");
+  const dataset = await importer.parseAscmWorkbook(file);
+  const plan = buildAscmImportPlan(dataset);
+  pendingAscmImport = plan;
+  renderAscmImportPreview(plan);
+  $("#ascmApplyUpdates").checked = true;
+  $("#ascmAddProducts").checked = true;
+  ascmImportDialog.classList.remove("hidden");
+}
+
+function ascmColorCodeParts(value) {
+  const canonical = globalThis.ASCMImporter?.helpers?.canonicalColorCode?.(value) || "";
+  return canonical ? canonical.split("/") : null;
+}
+
+function ascmVariantCode(value) {
+  return globalThis.ASCMImporter?.helpers?.normalizeColorCode?.(value)
+    || String(value || "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function ascmColorIdentity(item) {
+  const sourceCode = item?.canonicalCode || item?.code;
+  if (ascmColorCodeParts(sourceCode)) return `code:${ascmVariantCode(sourceCode)}`;
+  const primary = String(item?.colorKey || "").trim().toLowerCase();
+  const secondary = String(item?.colorKey2 || "").trim().toLowerCase();
+  return primary ? `color:${primary}/${secondary}` : `code:${ascmVariantCode(sourceCode)}`;
+}
+
+function mergeAscmColorVariants(product, group) {
+  const incoming = Array.isArray(group?.colorVariants) ? group.colorVariants : [];
+  const previousCodes = new Set((product?.ascm?.colorCodes || []).map(ascmVariantCode));
+  const groups = productVariantGroups(product).map((variant) => ({
+    ...variant,
+    items: (variant.items || []).map((item) => ({ ...item })),
+  }));
+  let colorGroup = groups.find((variant) => variant.type === "color") || null;
+  const existingItems = colorGroup?.items || [];
+  const incomingCodes = new Set(incoming.map((variant) => ascmVariantCode(variant.canonicalCode || variant.code)));
+  const manualItems = existingItems.filter((item) => {
+    const code = ascmVariantCode(item.code);
+    return !previousCodes.has(code) && !incomingCodes.has(code);
+  });
+  const nextItems = incoming.map((variant) => {
+    const code = String(variant.code || variant.canonicalCode || "SKU").trim().toUpperCase();
+    const identity = ascmColorIdentity(variant);
+    const existing = existingItems.find((item) => ascmVariantCode(item.code) === ascmVariantCode(code))
+      || existingItems.find((item) => ascmColorCodeParts(item.code) && ascmColorIdentity(item) === identity);
+    return normalizeColorVariant({
+      id: existing?.id || id(),
+      code,
+      colorKey: variant.colorKey || "custom",
+      colorName: variant.colorName || "Custom",
+      colorHex: variant.colorHex || "#777777",
+      colorKey2: variant.colorKey2 || "",
+      colorName2: variant.colorName2 || "",
+      colorHex2: variant.colorHex2 || "",
+      imageAssetId: existing?.imageAssetId || "",
+    });
+  });
+  const mergedItems = [...manualItems, ...nextItems];
+  if (!colorGroup && mergedItems.length) {
+    colorGroup = variantGroup("color", "COLOR SKU", mergedItems);
+    groups.push(colorGroup);
+  } else if (colorGroup) {
+    colorGroup.items = mergedItems;
+    if (!colorGroup.items.length) groups.splice(groups.indexOf(colorGroup), 1);
+  }
+  product.variantGroups = groups;
+}
+
+function mergeAscmPartSkus(product, group) {
+  const previousPns = new Set((product?.ascm?.basePartNumbers || []).map((value) => String(value).toUpperCase()));
+  const existing = productPartSkus(product);
+  const incoming = ascmGroupBasePartNumbers(group);
+  const manual = existing.filter((item) => !previousPns.has(item.code.toUpperCase()) && !incoming.includes(item.code.toUpperCase()));
+  const imported = incoming.map((code) => existing.find((item) => item.code.toUpperCase() === code) || partSku(code));
+  product.partSkus = [...manual, ...imported];
+}
+
+function ascmRoadmapStatus(gaDate, emDate) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (emDate && emDate < today) return "end-of-life";
+  if (gaDate && gaDate > today) return "in-planning";
+  return "launched";
+}
+
+function applyAscmGroupToProduct(product, group, dataset, importedAt, isNewProduct) {
+  const dates = ascmGroupDates(group);
+  mergeAscmPartSkus(product, group);
+  mergeAscmColorVariants(product, group);
+  product.generalAvailabilityDate = dates.gaDate;
+  product.endManufacturingDate = dates.emDate;
+  if (isNewProduct && group.codename) product.codename = String(group.codename);
+  const startMonth = group.launchMonth || dates.gaDate.slice(0, 7) || monthStringFromDate();
+  const endMonth = group.endMonth || dates.emDate.slice(0, 7) || addMonths(startMonth, 24);
+  const existingRoadmap = product.roadmap || {};
+  product.roadmap = {
+    ...makeRoadmap(inferFamily(product.name), startMonth, startMonth, endMonth, ascmRoadmapStatus(dates.gaDate, dates.emDate), "medium"),
+    ...existingRoadmap,
+    family: existingRoadmap.family || inferFamily(product.name),
+    startMonth,
+    launchMonth: startMonth,
+    endMonth,
+    status: isNewProduct ? ascmRoadmapStatus(dates.gaDate, dates.emDate) : normalizeRoadmapStatus(existingRoadmap.status),
+  };
+  product.ascm = ascmGroupMetadata(group, dataset, importedAt);
+}
+
+function ascmProductId(group, state) {
+  const slug = String(group?.displayName || "product").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 44) || "product";
+  let hash = 2166136261;
+  for (const character of String(group?.ascmKey || group?.key || slug)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  const base = `ascm-${slug}-${hash.toString(36)}`;
+  const ids = new Set(state.categories.flatMap((category) => category.board.products.map((product) => product.id)));
+  if (!ids.has(base)) return base;
+  let suffix = 2;
+  while (ids.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
+function findPortfolioProductLocation(state, productId) {
+  for (const category of state.categories) {
+    const index = category.board.products.findIndex((product) => product.id === productId);
+    if (index >= 0) return { category, index, product: category.board.products[index] };
+  }
+  return null;
+}
+
+function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {}) {
+  const next = clonePortfolioData();
+  const importedAt = new Date().toISOString();
+  let added = 0;
+  let updated = 0;
+  let unchanged = 0;
+  let skipped = 0;
+
+  for (const item of plan.items) {
+    if (item.action === "ambiguous") {
+      skipped += 1;
+      continue;
+    }
+    if (item.match.status === "matched") {
+      if (!updateMatched) {
+        skipped += 1;
+        continue;
+      }
+      const location = findPortfolioProductLocation(next, item.matchedProductId);
+      const targetCategory = next.categories.find((category) => category.id === item.group.categoryId);
+      if (!location || !targetCategory) {
+        skipped += 1;
+        continue;
+      }
+      let product = location.product;
+      if (location.category.id !== targetCategory.id) {
+        location.category.board.products.splice(location.index, 1);
+        product.laneId = targetCategory.board.lanes.some((lane) => lane.id === item.group.laneId)
+          ? item.group.laneId
+          : targetCategory.board.lanes[0]?.id || "default";
+        product.order = targetCategory.board.products.length;
+        targetCategory.board.products.push(product);
+      }
+      applyAscmGroupToProduct(product, item.group, plan.dataset, importedAt, false);
+      if (item.action === "unchanged") unchanged += 1;
+      else updated += 1;
+      continue;
+    }
+    if (!addNew) {
+      skipped += 1;
+      continue;
+    }
+    const category = next.categories.find((candidate) => candidate.id === item.group.categoryId);
+    if (!category) {
+      skipped += 1;
+      continue;
+    }
+    const laneId = category.board.lanes.some((lane) => lane.id === item.group.laneId)
+      ? item.group.laneId
+      : category.board.lanes[0]?.id || "default";
+    const product = makeProduct(
+      ascmProductId(item.group, next),
+      String(item.group.displayName || item.group.records?.[0]?.description || "ASCM product"),
+      null,
+      laneId,
+      category.board.products.length,
+      { priceLabel: "Price TBD", roadmap: null }
+    );
+    applyAscmGroupToProduct(product, item.group, plan.dataset, importedAt, true);
+    category.board.products.push(product);
+    added += 1;
+  }
+
+  for (const category of next.categories) {
+    for (const lane of category.board.lanes) normalizeOrdersForBoard(category.board, lane.id);
+  }
+  next.ascmSnapshot = normalizeAscmSnapshot({
+    sourceFile: plan.dataset.metadata?.fileName || "ASCM report.xlsx",
+    exportedAt: plan.dataset.metadata?.exportedAt || "",
+    importedAt,
+    basePartNumbers: plan.currentPns,
+  });
+  portfolio = ensurePortfolioSchema(next);
+  const returnCategoryId = portfolio.categories.some((category) => category.id === activeCategoryId)
+    ? activeCategoryId
+    : portfolio.activeCategoryId;
+  selectedId = null;
+  activateCategory(returnCategoryId, { fitVertical: true });
+  return { added, updated, unchanged, skipped };
+}
+
 canvasScroll.addEventListener("scroll", () => { syncBoardNavigator(); syncLaneRail(); }, { passive: true });
 canvasScroll.addEventListener("wheel", (event) => {
   const max = horizontalScrollMax();
@@ -5448,6 +6061,42 @@ dataMenu.addEventListener("click", (event) => event.stopPropagation());
 roadmapMenu.addEventListener("click", (event) => event.stopPropagation());
 productMenu.addEventListener("click", (event) => event.stopPropagation());
 $("#importPackage").onclick = () => { closePopupMenus(); $("#importPackageFile").click(); };
+$("#importAscm").onclick = () => { closePopupMenus(); $("#importAscmFile").click(); };
+$("#importAscmFile").onchange = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    await openAscmImport(file);
+  } catch (error) {
+    console.error("ASCM import preview failed:", error);
+    alert(error.message || "Unable to read the ASCM report.");
+  }
+};
+ascmImportForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!pendingAscmImport) return;
+  confirmAscmImportButton.disabled = true;
+  confirmAscmImportButton.textContent = "Applying…";
+  try {
+    const result = applyAscmImportPlan(pendingAscmImport, {
+      updateMatched: $("#ascmApplyUpdates").checked,
+      addNew: $("#ascmAddProducts").checked,
+    });
+    closeAscmImportDialog();
+    alert(`ASCM update complete: ${result.added} product(s) added, ${result.updated} updated, ${result.unchanged} already current, and ${result.skipped} skipped.`);
+  } catch (error) {
+    console.error("ASCM update failed:", error);
+    confirmAscmImportButton.disabled = false;
+    confirmAscmImportButton.textContent = "Apply ASCM update";
+    alert(error.message || "Unable to apply the ASCM update.");
+  }
+});
+$("#closeAscmImport").onclick = closeAscmImportDialog;
+$("#cancelAscmImport").onclick = closeAscmImportDialog;
+ascmImportDialog.addEventListener("pointerdown", (event) => {
+  if (event.target === ascmImportDialog) closeAscmImportDialog();
+});
 $("#importPackageFile").onchange = async (event) => {
   const file = event.target.files?.[0];
   event.target.value = "";
@@ -5625,6 +6274,7 @@ window.addEventListener("keydown", (event) => {
   closePopupMenus();
   closeSpecPopover();
   closeVariantPopover({ force: true });
+  closeAscmImportDialog();
   closePptxExportDialog();
   closeCategorySettings();
   if (productLayoutEditing) {
