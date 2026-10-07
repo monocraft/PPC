@@ -9,6 +9,8 @@
   const panels = [...document.querySelectorAll("[data-settings-panel]")];
   const select = get("categorySelect");
   const app = document.querySelector(".app-shell");
+  const header = document.querySelector(".topbar");
+  const controls = document.querySelector(".workspace-controls");
   let restoreFocus = null;
   let activeTab = "display";
   let snapshot = null;
@@ -58,6 +60,13 @@
     const active = categories.find((category) => category.id === activeId);
     const total = detail?.productCount ?? active?.count;
     const selected = detail?.selectedName;
+    const hasPortfolioProducts = total > 0 || categories.some((category) => category.count > 0);
+    const emptyPortfolio = total === 0 && !hasPortfolioProducts;
+
+    app.classList.toggle("is-empty-portfolio", emptyPortfolio);
+    header.classList.toggle("hidden", emptyPortfolio);
+    controls.classList.toggle("hidden", emptyPortfolio);
+    get("statusbar").classList.toggle("hidden", emptyPortfolio);
 
     get("settingsActiveCategory").textContent = active?.name || select.selectedOptions[0]?.textContent || "Active category";
     const visible = detail?.visibleCount;
@@ -65,7 +74,7 @@
     if (detail) get("workspaceSelection").textContent = selected || "No product selected";
     get("quickEditSelected").disabled = get("editSelected").disabled;
     get("workspaceEmpty").classList.toggle("hidden", total !== 0);
-    get("workspaceEmptyTitle").textContent = categories.some((category) => category.count > 0) ? "This category is empty" : "Start your portfolio";
+    get("workspaceEmptyTitle").textContent = hasPortfolioProducts ? "This category is empty" : "Start your portfolio";
     updateTimelineSummary();
   }
 
