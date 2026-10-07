@@ -28,6 +28,14 @@ const category = {
   },
 };
 const savedCategory = JSON.stringify(category);
+const exportPage = {
+  width: 4000, height: 1100,
+  layout: { detailed: true, cardHeight: 450, laneHeight: 550 },
+  rows: [
+    { lane: category.board.lanes[0], products: [category.board.products[2], category.board.products[0]], continued: false },
+    { lane: category.board.lanes[1], products: [category.board.products[1]], continued: false },
+  ],
+};
 const canvases = [];
 const headers = [];
 let rejectImage = false;
@@ -38,23 +46,14 @@ const sandbox = {
   hoveredHeroVariant: { productId: "earlier", variantId: "hover" },
   ...originalRegions,
   CARD_WIDTH: 240,
-  UI_PALETTE: { charcoal800: "#222222" },
+  GUTTER: 24, SIDE_PADDING: 40, LANE_TOP: 34,
+  UI_PALETTE: { charcoal800: "#222222", silver: "#BBBBBB" },
   categoryDefinition: (id) => ({ id }),
   ensureBoardSchema(board) { board.normalizedForExport = true; return board; },
   async preloadCategoryImagesForPptx(products) {
     assert.notEqual(products, category.board.products, "normalization and image preloading use a copied board");
   },
-  getCanvasDimensions(options) {
-    assert.equal(options.includeViewer, false);
-    assert.equal(sandbox.inspectorOpen, false);
-    assert.equal(sandbox.viewerInfoProductId, null);
-    assert.equal(sandbox.dragState, null);
-    assert.equal(sandbox.hoveredHeroVariant, null);
-    return {
-      width: 4000, height: 1100, includeViewer: false,
-      laneRows: [{ lane: category.board.lanes[0], top: 34, contentHeight: 450 }, { lane: category.board.lanes[1], top: 584, contentHeight: 450 }],
-    };
-  },
+  getCanvasDimensions() { throw new Error("PowerPoint page dimensions must not depend on the workspace viewport or zoom."); },
   sortedLanes: () => sandbox.board.lanes,
   visibleProducts: () => sandbox.board.products,
   productCardLayout: () => ({ detailed: true, cardHeight: 450 }),
@@ -145,7 +144,7 @@ function assertRestored() {
   for (const [key, value] of Object.entries(originalRegions)) assert.equal(value.length, 1, `${key} must not gain export hotspots`);
 }
 
-const result = await sandbox.renderCategoryImageForPptx(category);
+const result = await sandbox.renderCategoryImageForPptx(category, exportPage);
 assertRestored();
 assert.equal(result.width, 2800);
 assert.equal(result.height, 770);
@@ -194,12 +193,20 @@ for (const [index, product] of result.products.entries()) {
   assert.equal(canvas.context.operations.filter((operation) => operation.type === "background").length, 0, "the card canvas must remain transparent outside the card");
   assert.deepEqual(canvas.context.operations.filter((operation) => operation.type === "product").map((operation) => operation.productId), [product.id]);
   const logicalX = product.id === "later" ? 288 : 24;
-  const logicalY = product.id === "other" ? 584 : 34;
+  const logicalY = product.id === "other" ? 602 : 52;
   assert.equal(product.x, (logicalX - 8) * scale);
   assert.equal(product.y, (logicalY - 8) * scale);
 }
 
 rejectImage = true;
-await assert.rejects(sandbox.renderCategoryImageForPptx(category), /image delivery failed/);
+await assert.rejects(sandbox.renderCategoryImageForPptx(category, exportPage), /image delivery failed/);
 assertRestored();
+rejectImage = false;
+const continuationPage = { ...exportPage, rows: [{ ...exportPage.rows[0], products: [category.board.products[0]], continued: true }] };
+const continuation = await sandbox.renderCategoryImageForPptx(category, continuationPage);
+assertRestored();
+assert.deepEqual(Array.from(continuation.products, (product) => product.id), ["later"], "each rendered page includes only its assigned products, even when its lane has products on other pages");
+assert.equal(continuation.width, result.width, "continuation backgrounds retain the category scale");
+assert.equal(continuation.height, result.height);
+assert.equal(continuation.products[0].width, result.products[1].width, "a partial final page keeps the same native product size");
 console.log("PowerPoint cards preserve layout, record editable name/price/spec/SKU and native shapes, isolate artwork, omit product content from the background, and restore workspace state.");

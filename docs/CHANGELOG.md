@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-07 — readable paginated product portfolio exports
+
+- Product Portfolio exports now wrap each lane at a maximum of 13 products across and continue onto more slides when the available height is full. Tall detailed cards use fewer rows per slide.
+- Preserve saved lane/product order and keep contiguous product families together when they fit a row. Repeat lane labels and family context, and use the same card scale on every page of a category.
+- Calculate export dimensions independently of browser viewport, zoom, selection, and open detail panels. The export chooser's slide estimate uses the same page plan as the downloaded file.
+- Retain one editable PowerPoint group per product and the repair-prevention compatibility pass. Automated coverage checks row limits, vertical fitting, complete product coverage, partial continuation pages, source immutability, and actual selection/summary/export behavior.
+
 ## 2026-10-07 — package update date and comments
 
 - New package builds include an automatic UTC build timestamp and optional updater comments of up to 2,000 characters. Viewers see the package's own update details after unlocking and importing it.
