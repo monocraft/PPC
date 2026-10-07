@@ -212,7 +212,7 @@ function validateCatalog(catalog) {
   return { productCount, assetReferences };
 }
 
-for (const sourceFile of ["app.js", "portfolio-model.js", "product-details.js", "workspace-ui.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js"].map((file) => publicPath(`js/${file}`)).concat(["scripts/serve.mjs", ...["project", "ascm-import", "pptx-pagination", "portfolio-model", "product-details"].map((file) => `scripts/checks/${file}.mjs`)])) {
+for (const sourceFile of ["app.js", "portfolio-model.js", "product-details.js", "workspace-ui.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js", "package-codec.js", "package-source.js", "package-client.js", "package-ui.js"].map((file) => publicPath(`js/${file}`)).concat(["scripts/serve.mjs", "scripts/configure-package-source.mjs", "server/package-relay.mjs", ...["project", "ascm-import", "pptx-pagination", "portfolio-model", "product-details", "package-codec", "package-client", "package-workspace", "package-relay"].map((file) => `scripts/checks/${file}.mjs`)])) {
   if (!await isFile(sourceFile)) fail(`Missing required JavaScript file: ${sourceFile}`);
   else syntaxCheck(sourceFile);
 }
@@ -239,12 +239,19 @@ if (duplicateIds.length > 0) fail(`Duplicate HTML id values: ${duplicateIds.join
 // before the first render even when every source file parses successfully.
 const applicationSource = await readFile(projectPath("public/js/app.js"), "utf8");
 const shellSource = await readFile(projectPath("public/js/workspace-ui.js"), "utf8");
+const packageUiSource = await readFile(projectPath("public/js/package-ui.js"), "utf8");
 const renderedIds = new Set([...ids, ...[...applicationSource.matchAll(/\bid\s*=\s*["']([A-Za-z][\w-]*)["']/g)].map((match) => match[1])]);
 for (const match of applicationSource.matchAll(/\$\(["']#([A-Za-z][\w-]*)["']\)/g)) {
   if (!renderedIds.has(match[1])) fail(`app.js binds a control that is never rendered: #${match[1]}`);
 }
 for (const match of shellSource.matchAll(/\bget\(["']([A-Za-z][\w-]*)["']\)/g)) {
   if (!renderedIds.has(match[1])) fail(`workspace-ui.js binds a control that is never rendered: #${match[1]}`);
+}
+for (const match of packageUiSource.matchAll(/\bget\(["']([A-Za-z][\w-]*)["']\)/g)) {
+  if (!renderedIds.has(match[1])) fail(`package-ui.js binds a control that is never rendered: #${match[1]}`);
+}
+for (const [first, second] of [["js/package-codec.js", "js/app.js"], ["js/package-source.js", "js/package-ui.js"], ["js/package-client.js", "js/package-ui.js"], ["js/app.js", "js/package-ui.js"]]) {
+  if (scriptReferences.indexOf(first) < 0 || scriptReferences.indexOf(first) >= scriptReferences.indexOf(second)) fail(`Runtime order must load ${first} before ${second}.`);
 }
 
 const workflowSource = await readFile(projectPath(".github/workflows/deploy.yml"), "utf8");
@@ -294,7 +301,7 @@ if (await isDirectory("public/assets")) {
 if (await isDirectory("public")) {
   const publicFiles = await walkFiles(publicRoot);
   for (const file of publicFiles) {
-    if (/\.(?:pkg|env|log)$/i.test(file) || /(?:^|\/)(?:project-data|docs|scripts|\.git(?:hub)?)(?:\/|$)/.test(file)) {
+    if (/\.(?:pkg|env|log)$/i.test(file) || /^\.env(?:\.|$)/i.test(path.basename(file)) || /(?:^|\/)(?:project-data|docs|scripts|server|\.git(?:hub)?)(?:\/|$)/.test(file)) {
       fail(`Non-site content must not be inside the public deployment folder: ${file}`);
     }
   }

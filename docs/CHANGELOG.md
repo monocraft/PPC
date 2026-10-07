@@ -1,5 +1,14 @@
 # Change Log
 
+## 2026-10-07 — unified encrypted packages and portable shared-data setup
+
+- Added one keyed encrypted master package for every category, Products, Roadmap, settings, variants, and saved local images. Export project package now opens a protected export dialog with key reuse/creation/copy and downloads `master_ppc.pkg`; an unprotected local backup is an explicit optional choice. Missing local binaries block a complete export.
+- Added Pull latest data and unified manual import/export/recovery dialogs. Shared pulls require an encrypted source; manual imports support legacy stored ZIPs and keyed packages. Keys are not persisted and are cleared when the dialog closes.
+- Changed package replacement to validate the manifest/image references and stage incoming images under new IDs before committing metadata. Preserve the original images for one previous-workspace recovery slot; Restore previous workspace swaps the two snapshots. Keep lightweight data import as its existing separate flow.
+- Added a portable Node fixed-file relay with authenticated envelope checking, exact CORS, bounded source/request sizes, concurrency/IP rate limits, explicit trusted-proxy handling, no cached plaintext/keys, and generic errors. It serves an approved local SharePoint mirror behind HTTPS and requires no Azure dependency; the owner sync process still signs into Microsoft.
+- Added endpoint-only source configuration with an empty checked-in default, GitHub repository variable `PPC_PACKAGE_ENDPOINT` for Pages, and a local `--package-endpoint` serving override. No private SharePoint URL, key, package, or host mirror path belongs in the static site. Shared live connectivity remains a separate deployment/setup verification.
+- Added codec, actual workspace replacement/recovery, and isolated relay checks; documented source freshness limits, publisher steps, OneDrive sync, and portable HTTPS hosting in Shared package setup. The concise public README remains unchanged.
+
 ## 2026-10-07 — consolidated product date editing
 
 - Kept GA/EM and the other exact key-date inputs in Details as their single editing home. Removed duplicate launch/end month inputs from Timeline; Edit dates in Details switches tabs and focuses general availability.

@@ -18,6 +18,7 @@ Use this order when deciding what is authoritative:
 | Current browser session | `localStorage` plus IndexedDB for the exact origin being tested |
 | UI palette | CSS/JavaScript tokens derived from the supplied charcoal/core palette references |
 | Deployment contents | `.github/workflows/deploy.yml`, checked against `public/index.html` runtime references |
+| Shared master and service | Owner-managed encrypted `master_ppc.pkg` mirrored from private SharePoint; separately hosted portable relay. Public endpoint configuration comes from `PPC_PACKAGE_ENDPOINT`; checked-in `public/js/package-source.js` stays empty. |
 
 Do not copy an older local folder over this workspace. A future GitHub ZIP or clone should be staged separately, inventoried, and diffed before any merge.
 
@@ -52,6 +53,10 @@ node scripts/checks/ascm-import.mjs
 node scripts/checks/pptx-pagination.mjs
 node scripts/checks/portfolio-model.mjs
 node scripts/checks/product-details.mjs
+node scripts/checks/package-codec.mjs
+node scripts/checks/package-client.mjs
+node scripts/checks/package-workspace.mjs
+node scripts/checks/package-relay.mjs
 node scripts/serve.mjs
 ```
 
@@ -80,7 +85,17 @@ Keep the same local URL and port during a test cycle. Browser storage is origin-
    - The packaged local PNG renders.
    - Remote images either render or fail with an understandable fallback.
 
-The current importer clears the origin's IndexedDB image store before it completes the new import. Until import is transactional, the pre-import export is the recovery path.
+Package import now validates the manifest and image references, stages local binaries under new IDs, and retains the original workspace/images before committing. Encrypted packages prompt for their package key; legacy stored-ZIP packages remain supported. Restore previous workspace uses one local recovery copy on the same origin and swaps the current workspace into that slot. Keep a downloaded backup as well; browser storage loss or quota failures can limit local recovery. Lightweight `.data` replacement remains a separate flow.
+
+### 4.1 Publish and pull the shared master
+
+Use **Settings → Data & export → Export project package**, keep package protection selected, and enter the existing key or choose **Create new key**. **Export package** downloads encrypted `master_ppc.pkg`; the key stays available to copy until **Done**. Upload that file to the same private SharePoint location, keeping the key separately. Unprotected export is an explicit private local backup, not a shared master.
+
+Follow [Shared package setup](SHARED-PACKAGE-SETUP.md) to maintain a complete local mirror through an approved owner OneDrive sync/job and run `server/package-relay.mjs` behind HTTPS. Azure is not required. The owner synchronization account signs into Microsoft; viewers only enter the package key. A pull serves the latest complete mirrored copy and can lag SharePoint while sync is delayed or offline.
+
+Configure the GitHub Actions repository variable `PPC_PACKAGE_ENDPOINT` with the approved full HTTPS relay endpoint. Pages generates `_site/js/package-source.js` through `scripts/configure-package-source.mjs`; do not put the package key or SharePoint viewing link there. An empty variable leaves shared setup pending while local import/export works. For a local synthetic relay, run `node scripts/serve.mjs --package-endpoint http://127.0.0.1:8787/api/package/latest` and explicitly allow the local site's origin in the relay.
+
+**Pull latest data** retrieves an encrypted master with the user's key and invokes the same validated replacement path as manual package import. Products and Roadmap update together. Do not describe this as connected live until the approved endpoint, HTTPS proxy, source mirror, and a successful pull have been verified.
 
 ## 5. Understand a new upstream source safely
 
@@ -103,6 +118,7 @@ Inspect in this order:
 2. `public/js/catalog-data.js`: schema version, category IDs, lanes, spec sets, products, and image references.
 3. `public/js/app.js`: storage keys, schema normalizers, startup, import/export, rendering entrypoints, and event wiring.
    Also inspect `public/js/portfolio-model.js` for global timeline/lane geometry/specification/SKU/shared-tone rules, `public/js/product-details.js` for Overview and secondary-list tabs/paging, `public/js/workspace-ui.js` for shell/settings interactions, `public/js/ascm-import.js` for workbook parsing/matching/additive merges, and `public/js/pptx-pagination.js` for ordered category selection and roadmap slide limits before changing those flows.
+   Package boundaries live in `public/js/package-codec.js`, `package-client.js`, `package-ui.js`, and the default `package-source.js`; the separately hosted relay is `server/package-relay.mjs`.
 4. `public/css/styles.css`: token definitions, layout breakpoints, focus styles, and literal colors.
 5. `.github/workflows/deploy.yml`: every runtime file and directory copied into the Pages artifact.
 6. `public/vendor/`: version and provenance of vendored libraries.
@@ -155,9 +171,11 @@ rg -n "<script|<link" public/index.html
 - Treat every imported filename and JSON field as untrusted.
 - Validate entry count, path shape, byte size, supported ZIP method, JSON version, IDs, URLs, colors, and image MIME types before mutation.
 - Prevent duplicate paths and traversal.
-- Stage package content before clearing existing data.
+- Keep package content validation and new-ID image staging before metadata commit; never clear the original image store to begin an import. Preserve the previous workspace's image IDs until its one recovery slot is replaced, and roll back failed commits/staging.
 - Add an export→import→export round-trip test with byte-independent semantic comparison.
 - Keep URL images as references only when that is an explicit privacy/offline decision.
+- Keep encrypted `master_ppc.pkg` as the default publisher flow and legacy stored-ZIP import as compatibility. Missing local image binaries must block a supposedly complete export; an unprotected export remains an explicit private-backup choice.
+- Keep package keys ephemeral. The fixed-file relay must authenticate the encrypted envelope before returning bytes, accept no client source path/URL, and cache no keys/plaintext. Preserve exact CORS, body/source size limits, rate limits, trusted-proxy restrictions, loopback binding, generic errors, and HTTPS for remote access.
 
 ### 6.4 UI and palette
 
@@ -201,12 +219,18 @@ public/js/ascm-import.js
 public/js/pptx-pagination.js
 public/js/portfolio-model.js
 public/js/product-details.js
+public/js/package-codec.js
+public/js/package-source.js
+public/js/package-client.js
+public/js/package-ui.js
 public/js/workspace-ui.js
 public/assets/
 public/vendor/pptxgen.bundle.js
 ```
 
 The deployed entrypoint remains `index.html`; runtime URLs are `css/styles.css`, `js/…`, `assets/…`, and `vendor/…`. Do not add an extra `public/` level to the deployed URL or publish the repository root.
+
+Pages injects only the approved public service endpoint from repository variable `PPC_PACKAGE_ENDPOINT`; `scripts/configure-package-source.mjs` validates it and writes `_site/js/package-source.js`. The repository's source default stays empty. Keep keys, private SharePoint URLs, source mirror paths, `server/`, and real `.env` settings outside the Pages artifact.
 
 It must exclude:
 
@@ -233,6 +257,7 @@ Use a fresh test origin/profile for the default-catalog pass, then import the pa
 | Persistence | Create one test product, reload, confirm it remains | Modify a product and local image, reload on the same origin |
 | Lightweight data | Export and re-import `.data`; understand that local binaries are excluded | References and metadata survive; local binary behavior is explicit |
 | Full package | Export then import into a clean origin | Product counts and local image survive round trip |
+| Unified shared package | An empty endpoint explains pending setup; encrypted export offers an entered/generated key and retains it for copying until Done | Test correct/wrong keys, encrypted/legacy import, failed staging/storage rollback, previous-workspace restore, and Products/Roadmap/image consistency. Verify a synthetic relay separately; a successful owner mirror sync and production pull are distinct checks |
 | ASCM import | Workbook preview works without changing data; new products enter mapped categories with lane/category specification placeholders | Preview/reimport updates retain manually curated specifications (including empty arrays), price, images, variants, stage, and absent PNs; ambiguous candidates are skipped |
 | Timeline consistency | Choose 3/5/10 years and custom From/To; inspect every category | Switching categories and exporting uses the same configured range; product GA/EM and lifecycle dates are unchanged by a viewport-only change |
 | Product date editing | Details is the only GA/EM input home; Timeline's Edit dates button switches to Details and focuses GA | Exact GA/EM edits update roadmap months; clearing retains planned months. Protected drag keeps known days or clamps month end, while unknown exact dates stay TBD. Reload/unrelated edits preserve saved mismatches. Verify leap-year February, a 31-day-to-shorter-month drag, and ASCM valid day dates taking priority over inconsistent group month hints |
@@ -296,7 +321,7 @@ Exit condition: a clean checkout serves and validates without private data.
 ### Phase 1 — Correctness, safety, and deployability
 
 - Guarantee all runtime dependencies are in the Pages artifact.
-- Make package import transactional with rollback.
+- Preserve package validation, isolated image staging, failed-commit recovery, and the previous-workspace slot; strengthen cross-store failure and browser-quota verification.
 - Report save/storage errors and current save status.
 - Harden imported strings, IDs, URLs, colors, paths, sizes, and MIME types.
 - Add schema/package unit tests and a Playwright smoke suite.
