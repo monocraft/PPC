@@ -1,10 +1,12 @@
 # Hosted encrypted master package
 
-The app now defaults to direct GitHub reads and conflict-checked product/date/specification/SKU saves. See [Shared master editing](SHARED-MASTER-EDITING.md) for individual GitHub access and the Save to master flow. The full-package publication flow below remains available for images, layout changes and other owner-managed package updates; read-only Pages behavior can be selected with `PPC_MASTER_MODE=static`.
+The private team flow below is prepared on `codex/private-master-backend` and awaits a reachable HTTPS backend before production rollout. Preserve the existing live deployment until that connection is verified. GitHub Pages can publish the browser application and encrypted package, but cannot run the private saving service.
+
+The app now uses a private team backend for conflict-checked product/date/specification/SKU saves. The connection is configured once by the owner; users never create or paste GitHub tokens. Names are optional. See [Shared master editing](SHARED-MASTER-EDITING.md) for the private backend and Save to master flow. Until a real backend URL is configured, public master pulls still work anonymously through GitHub and saving shows that setup is required. The full-package publication flow below remains available for images, layout changes and other owner-managed updates; `PPC_MASTER_MODE=static` selects read-only Pages behavior.
 
 The shared master is the encrypted `public/data/master_ppc.pkg` in the PPC repository. GitHub Pages publishes it at `https://monocraft.github.io/PPC/data/master_ppc.pkg`. Viewers choose **Pull latest data**, enter their package key, and load Products and Roadmap together. No Microsoft account, extension, app registration, or separate package server is required for this connection.
 
-The encrypted file is publicly downloadable. The package key remains separate from the repository and is used only to decrypt and validate the package in the viewer's browser. Static pulls never send the key to GitHub. The repository and site must contain neither an unencrypted master nor a key file.
+The encrypted file is publicly downloadable. The package key remains separate from the repository. Anonymous GitHub/static pulls use it only to decrypt and validate in the viewer's browser and never send it to GitHub. When team sharing is configured, the browser sends it only to the approved private backend to authorize and decrypt supported reads/saves. The backend's separate GitHub token never reaches the browser. The repository and site must contain neither an unencrypted master nor a key file.
 
 ## Build and publish an update
 
@@ -53,6 +55,8 @@ The key file is read locally for authenticated decryption and validation; it is 
 
 Build and publish with a new key only when deliberately changing access to future master packages. Distribute the replacement key separately to intended viewers. Earlier downloads and encrypted files retained in repository history still exist; a new key does not revoke data already obtained with an earlier key.
 
-## Optional service compatibility
+## Private team service and compatibility
 
-The older package relay remains available for deployments that explicitly configure `PPC_PACKAGE_ENDPOINT`. With no service override, the app reads and updates the encrypted master directly through GitHub. `PPC_MASTER_MODE=static` intentionally selects the hosted read-only master above. Neither GitHub mode nor static mode needs a separate server, SharePoint source link or browser companion.
+Set the public repository variable `PPC_MASTER_ENDPOINT` to the actual HTTPS private service master API URL. The build derives the package API from that same origin/base path; an explicit `PPC_PACKAGE_ENDPOINT` must match. GitHub credentials belong in the private backend environment only. Self-hosting on a company server/always-on computer is supported; a third-party hosting provider is optional. A real reachable HTTPS service is required for team saves, even though GitHub continues storing the master.
+
+The older package relay remains available when explicitly configuring `PPC_PACKAGE_ENDPOINT` alone. With no backend URL, the app still reads the encrypted master anonymously from GitHub; it does not enable browser GitHub writes or ask users for tokens. `PPC_MASTER_MODE=static` intentionally selects the hosted read-only master above. Anonymous/static pulls need no separate server, SharePoint source link or browser companion.

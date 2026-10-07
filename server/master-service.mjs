@@ -1,12 +1,14 @@
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { open, lstat, rename, unlink } from 'node:fs/promises';
+import { open, lstat, rename, unlink, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import '../public/js/package-codec.js';
 import '../public/js/portfolio-model.js';
 import '../public/js/master-model.js';
+import { createGitHubMasterStore } from './master-github-store.mjs';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -316,9 +318,13 @@ async function persistPackage(filename, source, manifest, key, maximum) {
 
 /** One fixed encrypted master. No package keys or plaintext are retained. */
 export function createMasterHandler(options = {}) {
-  if (typeof options.packageFile !== 'string' || !options.packageFile) throw new Error('Configure the encrypted master package file.');
-  const filename = resolve(options.packageFile);
+  const storage = options.storage || 'file';
+  if (!['file', 'github'].includes(storage)) throw new Error('Configure a supported master storage mode.');
+  if (storage === 'file' && (typeof options.packageFile !== 'string' || !options.packageFile)) throw new Error('Configure the encrypted master package file.');
+  const filename = storage === 'file' ? resolve(options.packageFile) : '';
   const origins = normalizeOrigins(options.allowedOrigins);
+  if (storage === 'github' && !origins) throw new Error('Configure exact origins for the private shared connection.');
+  const githubStore = storage === 'github' ? createGitHubMasterStore(options) : null;
   const allowLocalEdits = options.allowLocalEdits === true;
   const configuredToken = options.editorToken ?? options.writeToken ?? '';
   if (typeof configuredToken !== 'string' || (configuredToken && (configuredToken.length < 24 || configuredToken.length > 512))) {
@@ -345,6 +351,7 @@ export function createMasterHandler(options = {}) {
   let verifiedPresenceSource = null;
 
   function canWrite(request, origin, token) {
+    if (githubStore) return true; // A valid package key is checked before any write.
     if (allowLocalEdits && localRequest(request, origin)) return true;
     if (!tokenDigest || typeof token !== 'string' || token.length > 512) return false;
     return timingSafeEqual(tokenDigest, createHash('sha256').update(token).digest());
@@ -377,6 +384,10 @@ export function createMasterHandler(options = {}) {
   }
 
   async function presenceAuthorization(key, productId, current) {
+    if (githubStore) {
+      try { return await githubStore.authorizePresence(key, productId, current); }
+      catch (error) { throw problem(error?.status || 503, error?.code || 'MASTER_UNAVAILABLE', error?.message || unavailable().message); }
+    }
     const info = await lstat(filename);
     if (!info.isFile() || info.isSymbolicLink() || info.size < 58 || info.size > maxFileBytes) throw unavailable();
     const currentSignature = signature(info);
@@ -440,7 +451,7 @@ export function createMasterHandler(options = {}) {
   }
 
   return async function handleMaster(request, response) {
-    if (!endpoints.has(request.url) && request.url !== '/api/master/health') return false;
+    if (!endpoints.has(request.url) && request.url !== '/api/master/health' && request.url !== '/healthz') return false;
     const requestedOrigin = request.headers.origin;
     const local = typeof requestedOrigin === 'string' && localRequest(request, requestedOrigin);
     const allowedOrigin = typeof requestedOrigin === 'string' && (origins ? origins.has(requestedOrigin) : local) ? requestedOrigin : '';
@@ -449,7 +460,7 @@ export function createMasterHandler(options = {}) {
     let key = '';
     try {
       if (requestedOrigin !== undefined && !allowedOrigin) throw problem(403, 'ORIGIN_NOT_ALLOWED', 'This page is not allowed to use the shared master.');
-      if (request.url === '/api/master/health' && request.method === 'GET') { respond(response, 200, { status: 'ok' }); return true; }
+      if (['/api/master/health', '/healthz'].includes(request.url) && request.method === 'GET') { respond(response, 200, { status: 'ok' }); return true; }
       if (request.method === 'OPTIONS') {
         const headers = String(request.headers['access-control-request-headers'] || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
         if (!allowedOrigin || request.headers['access-control-request-method'] !== 'POST' || headers.some(value => value !== 'content-type')) {
@@ -469,7 +480,7 @@ export function createMasterHandler(options = {}) {
       body = await readBody(request, isPresence ? Math.min(maxBodyBytes, 4096) : maxBodyBytes);
       const save = request.url.endsWith('/save');
       const allowed = isPresence ? ['key', 'editorToken', 'sessionId', 'displayName', 'editing', 'productId', 'leave']
-        : save ? ['key', 'editorToken', 'requestId', 'changes', 'actor', 'team', 'reason'] : ['key', 'editorToken'];
+        : save ? ['key', 'editorToken', 'requestId', 'changes', 'actor', 'team', 'reason', 'sessionId', 'editorName'] : ['key', 'editorToken'];
       if (!isRecord(body) || Object.keys(body).some(name => !allowed.includes(name)) || typeof body.key !== 'string' ||
         (body.editorToken !== undefined && typeof body.editorToken !== 'string')) throw problem(400, 'INVALID_REQUEST', 'The master request is invalid.');
       try { key = codec.normalizeKey(body.key); }
@@ -481,7 +492,7 @@ export function createMasterHandler(options = {}) {
         return true;
       }
       const writable = canWrite(request, allowedOrigin, body.editorToken);
-      const requiresEditorToken = !(allowLocalEdits && local);
+      const requiresEditorToken = !githubStore && !(allowLocalEdits && local);
       body.editorToken = '';
       if (save) {
         if (!writable) throw tokenDigest ? problem(403, 'EDITOR_KEY_REQUIRED', 'Enter the team edit key to save updates to the master.')
@@ -493,6 +504,26 @@ export function createMasterHandler(options = {}) {
             throw problem(400, 'INVALID_REQUEST', 'The master update details are invalid.');
           }
         }
+        if (githubStore && (typeof body.sessionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(body.sessionId) ||
+          (body.editorName !== undefined && (typeof body.editorName !== 'string' || body.editorName.length > 60)))) {
+          throw problem(400, 'INVALID_REQUEST', 'The editor details are invalid.');
+        }
+      }
+      if (githubStore) {
+        try {
+          if (request.url === '/api/package/latest') {
+            const result = await githubStore.package(key);
+            response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': result.bytes.length, 'Content-Disposition': 'attachment; filename="master_ppc.pkg"' });
+            response.end(result.bytes);
+          } else {
+            const result = save ? await githubStore.save(key, body) : await githubStore.latest(key);
+            respond(response, result.code === 'MASTER_CONFLICT' ? 409 : 200, result);
+          }
+        } catch (error) {
+          if (Number.isFinite(error?.retryUntil)) response.setHeader('Retry-After', String(Math.max(1, Math.ceil((error.retryUntil - Date.now()) / 1000))));
+          throw problem(error?.status || (error?.code === 'INVALID_KEY' ? 401 : 503), error?.code || 'MASTER_UNAVAILABLE', error?.message || unavailable().message);
+        }
+        return true;
       }
       await serialized(filename, async () => {
         let release;
@@ -557,7 +588,9 @@ export function createMasterHandler(options = {}) {
 
 export function createMasterServer(options = {}) {
   const handle = createMasterHandler(options);
-  const server = createServer({ maxHeaderSize: 8192 }, async (request, response) => {
+  if (Boolean(options.tlsCert) !== Boolean(options.tlsKey)) throw new Error('Configure both TLS certificate and private key.');
+  const factory = options.tlsCert ? createHttpsServer : createServer;
+  const server = factory({ maxHeaderSize: 8192, ...(options.tlsCert ? { cert: options.tlsCert, key: options.tlsKey } : {}) }, async (request, response) => {
     if (!(await handle(request, response))) {
       securityHeaders(response, '');
       respond(response, 404, { error: 'Endpoint not found.', code: 'NOT_FOUND' });
@@ -575,6 +608,8 @@ export const createDateMasterServer = createMasterServer;
 
 export function masterConfigFromEnv(env = process.env) {
   return {
+    storage: env.PPC_MASTER_STORAGE || 'file',
+    githubToken: env.PPC_GITHUB_TOKEN || '',
     packageFile: env.PPC_MASTER_FILE || env.PPC_PACKAGE_FILE,
     allowedOrigins: env.PPC_ALLOWED_ORIGINS || undefined,
     editorToken: env.PPC_MASTER_WRITE_TOKEN || env.PPC_MASTER_EDITOR_TOKEN || '',
@@ -591,9 +626,16 @@ export function masterConfigFromEnv(env = process.env) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const host = process.env.PPC_BIND_HOST || '127.0.0.1';
-    if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw new Error('Bind the master service to loopback behind HTTPS.');
-    const port = integer(process.env.PPC_MASTER_PORT || process.env.PPC_PORT, 8788, 1, 65535);
-    const server = createMasterServer(masterConfigFromEnv());
+    const options = masterConfigFromEnv();
+    if (!['127.0.0.1', '::1', 'localhost'].includes(host)) {
+      if (!isIP(host) || !options.allowedOrigins) throw new Error('Network listening requires an explicit IP address and exact allowed origins behind HTTPS.');
+    }
+    const certFile = process.env.PPC_TLS_CERT_FILE;
+    const keyFile = process.env.PPC_TLS_KEY_FILE;
+    if (Boolean(certFile) !== Boolean(keyFile)) throw new Error('Configure both TLS certificate and private key files.');
+    if (certFile) { options.tlsCert = await readFile(resolve(certFile)); options.tlsKey = await readFile(resolve(keyFile)); }
+    const port = integer(process.env.PPC_MASTER_PORT || process.env.PPC_PORT || process.env.PORT, 8788, 1, 65535);
+    const server = createMasterServer(options);
     server.on('error', () => { process.stderr.write('The master service could not start. Check its configuration.\n'); process.exitCode = 1; });
     server.listen(port, host, () => process.stdout.write(`Master service listening on ${host}:${port}.\n`));
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));

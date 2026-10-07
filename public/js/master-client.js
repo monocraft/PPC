@@ -53,7 +53,7 @@
     finally { reader.releaseLock(); }
   }
 
-  async function performRequest({ endpoint, operation, key, editorToken, fetchImpl = root.fetch, signal, keepalive = false, ...payload }) {
+  async function performRequest({ endpoint, operation, key, editorToken, team = false, fetchImpl = root.fetch, signal, keepalive = false, ...payload }) {
     if (!["latest", "save", "presence"].includes(operation)) throw new Error("The master action is invalid.");
     const url = `${normalizeEndpoint(endpoint)}/${operation}`;
     let normalizedKey;
@@ -65,7 +65,7 @@
       response = await fetchImpl(url, {
         method: "POST", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal, keepalive: Boolean(keepalive && operation === "presence"),
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ key: normalizedKey, ...(editorToken ? { editorToken } : {}), ...payload }),
+        body: JSON.stringify({ key: normalizedKey, ...(!team && editorToken ? { editorToken } : {}), ...payload }),
       });
     } catch (error) {
       if (error?.name === "AbortError") throw error;
@@ -78,6 +78,7 @@
     try { data = await readJson(response); }
     catch { throw errorOf("The master response could not be read. Your local changes are safe.", "INVALID_RESPONSE", response.status); }
     if (response.status === 403) {
+      if (team) throw errorOf("Team saving needs to be connected by the portfolio owner. Your changes remain on this device.", "TEAM_SETUP_REQUIRED", 403);
       const disabled = data.code === "WRITES_DISABLED";
       throw errorOf(disabled ? "Saving to master is not enabled yet. Ask the portfolio owner to enable sharing. Your changes remain on this device." : "Enter the team editing key to save changes to the master.", disabled ? "WRITES_DISABLED" : "EDITOR_KEY_REQUIRED", 403);
     }
@@ -93,7 +94,7 @@
   async function request(options) {
     const controller = new AbortController();
     const abort = () => controller.abort();
-    const timer = root.setTimeout(abort, 25000);
+    const timer = root.setTimeout(abort, options.team && options.operation !== "presence" ? 120000 : 25000);
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) controller.abort();
     try { return await performRequest({ ...options, signal: controller.signal }); }
@@ -107,7 +108,10 @@
   function createSession({ endpoint, source, adapter, fetchImpl = root.fetch } = {}) {
     if (!model() || !adapter?.getProducts || !(adapter.applyProductValues || adapter.applyPatches)) throw new Error("A master model and portfolio adapter are required.");
     const mode = source?.mode === "github" ? "github" : "service";
+    const team = source?.team === true;
     const configured = mode === "github" || Boolean(String(endpoint || "").trim());
+    let editorName = "", editorSessionId = root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    try { editorName = String(root.localStorage?.getItem("portfolio.sharedDisplayName") || "").trim().slice(0, 60); } catch {}
     let baseline = new Map(), snapshot = null, key = "", editorToken = "", githubToken = "", githubTransport = null, identity = null, connected = false, busy = false, generation = 0, accessVersion = 0;
     function resetGitHubAccess() { githubTransport?.disconnect?.(); githubTransport = null; githubToken = ""; identity = null; }
     function clearAccess() {
@@ -129,7 +133,7 @@
       finally { root.clearTimeout(timer); }
     }
     async function send(operation, payload = {}) {
-      if (mode !== "github") return request({ endpoint, operation, key, editorToken, fetchImpl, ...payload });
+      if (mode !== "github") return request({ endpoint, operation, key, editorToken, team, fetchImpl, ...payload });
       const result = await githubCall((signal) => transport().request({ operation, key, signal, ...payload }));
       return { ...result, snapshot: normalizeSnapshot(result.snapshot || result) };
     }
@@ -210,7 +214,9 @@
 
     async function save({ reason = "", resolveConflicts, requestId } = {}) {
       if (busy) throw new Error("The master is already updating. Please wait.");
+      if (!configured) throw errorOf("Team saving has not been connected by the portfolio owner yet. Your changes remain on this device.", "TEAM_SETUP_REQUIRED");
       if (!key) throw errorOf("Connect to the master before saving.", "INVALID_KEY", 401);
+      const saveProfile = { sessionId: editorSessionId, ...(editorName ? { editorName } : {}) };
       const originals = new Map(track().map((item) => [item.productId, item]));
       if (!originals.size) return { saved: false, snapshot };
       let changes = [...originals.values()].map(({ productId, base, baseRevisions, patch }) => ({ productId, base, baseRevisions, patch }));
@@ -238,7 +244,7 @@
           }
           const result = await send("save", {
             requestId: attempt === 0 && requestId ? requestId : root.crypto?.randomUUID?.() || `master-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            reason: String(reason).trim(), changes,
+            reason: String(reason).trim(), changes, ...(mode === "service" ? team ? saveProfile : saveProfile.editorName ? { actor: saveProfile.editorName } : {} : {}),
           });
           if (generation !== operationGeneration) throw new Error("The workspace changed while the master was updating. Your current workspace was kept; reconnect to check the saved master.");
           if (result.code !== "MASTER_CONFLICT") { connected = true; applySnapshot(result.snapshot, originals); return { ...result, saved: true }; }
@@ -293,9 +299,15 @@
     return Object.freeze({ connect, refresh, save, applySnapshot, track, markImported,
       async presence({ sessionId, displayName, editing, productId, leave = false } = {}) {
         if (mode === "github" || !configured || !key) return null;
-        return request({ endpoint, operation: "presence", key, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, leave: Boolean(leave) });
+        return request({ endpoint, operation: "presence", key, team, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, leave: Boolean(leave) });
       },
-      setEditorToken(value) { editorToken = String(value || "").trim(); },
+      setEditorProfile({ sessionId, displayName, editorName: suppliedName } = {}) {
+        const id = String(sessionId || "");
+        if (id && !/^[-_a-z0-9]{8,128}$/i.test(id)) throw new Error("The browser editing session is invalid.");
+        if (id) editorSessionId = id;
+        if (displayName !== undefined || suppliedName !== undefined) editorName = String(displayName ?? suppliedName ?? "").trim().slice(0, 60);
+      },
+      setEditorToken(value) { if (!team) editorToken = String(value || "").trim(); },
       async setGitHubToken(value) {
         resetGitHubAccess(); githubToken = String(value || "").trim(); accessVersion += 1;
         const operationVersion = accessVersion, selectedTransport = transport();
@@ -309,7 +321,7 @@
         }
       },
       disconnect() { clearAccess(); },
-      getState() { return { mode, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, busy, accessVersion, snapshot, pending: track() }; },
+      getState() { return { mode, team, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, editorProfile: { sessionId: editorSessionId, displayName: editorName }, busy, accessVersion, snapshot, pending: track() }; },
     });
   }
   root.PortfolioMasterClient = Object.freeze({ conflictKey, normalizeEndpoint, normalizeSnapshot, request, createSession });

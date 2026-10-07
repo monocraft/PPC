@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+artifacts
+project-data
+*.pkg
+public/data
+public/assets
+public/vendor
+docs
+_site
+dist
+coverage
+*.log
+.codex

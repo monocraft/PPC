@@ -1,0 +1,14 @@
+FROM node:22-bookworm-slim
+
+ENV NODE_ENV=production \
+    PPC_MASTER_STORAGE=github \
+    PPC_BIND_HOST=0.0.0.0 \
+    PORT=8788
+
+WORKDIR /app
+COPY --chown=node:node server ./server
+COPY --chown=node:node public/js ./public/js
+
+USER node
+EXPOSE 8788
+CMD ["node", "server/master-service.mjs"]

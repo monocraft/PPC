@@ -110,6 +110,26 @@ assert.equal(Object.hasOwn(controller.getState(), "key"), false);
 }
 
 {
+  let access = true, profile = { sessionId: "team-profile-1234", displayName: "" }, held = [];
+  const teamSession = {
+    getState: () => ({ configured: true, hasKey: access, accessVersion: 1, pending: [], editorProfile: profile }),
+    setEditorProfile(value) { profile = { ...profile, ...value }; },
+    presence: (body) => new Promise((resolve) => held.push({ body, resolve })),
+  };
+  const team = presence.createController({ sessionProvider: () => teamSession });
+  const beforeRename = team.heartbeat();
+  const afterRename = team.setDisplayName("  Team name  ");
+  assert.equal(profile.displayName, "Team name", "the optional profile updates before its next request or save");
+  assert.equal(profile.sessionId, "team-profile-1234", "presence reuses the save session rather than inventing a different identity");
+  assert.equal(held.length, 2, "changing a name can send a fresh heartbeat while an earlier name is still pending");
+  held[1].resolve({ sessions: [{ sessionId: profile.sessionId, displayName: "Team name" }] }); await afterRename;
+  held[0].resolve({ sessions: [{ sessionId: profile.sessionId, displayName: "Old name" }] }); await beforeRename;
+  assert.equal(team.getState().users[0].label, "Team name", "a late heartbeat cannot restore an earlier display name");
+  access = false; await team.setDisplayName("");
+  assert.equal(profile.displayName, "", "a name can be cleared before unlocking or connecting the portfolio");
+  assert.equal(held.length, 2, "setting a disconnected display name never requires network access");
+}
+{
   const model = globalThis.PortfolioMasterModel, client = globalThis.PortfolioMasterClient;
   const product = { id: "static-sample", name: "Static portfolio", specs: [], partSkus: [], variantGroups: [], roadmap: {} };
   const snapshot = model.snapshot({ categories: [{ id: "cat", board: { products: [product] } }] });

@@ -1,13 +1,22 @@
 # Change Log
 
+## 2026-10-07 — one private team connection
+
+Prepared on `codex/private-master-backend`; production rollout awaits a reachable, verified private HTTPS backend. App code publication alone does not activate team saves.
+
+- Move team saves behind a private backend GitHub connection configured once by the owner. Remove per-user GitHub token setup from the default user flow; display names are optional and self-reported.
+- Authorize supported reads/saves with the existing package key. The service retains GitHub credentials privately, preserves encrypted packages, and applies the same field/SKU/specification/date conflict checks.
+- Generate a team service source by default. Until a real HTTPS backend is configured, public master pulls remain available anonymously and saving reports setup required. Derive the package API from the same master service address and reject mismatched endpoints.
+- Support self-hosting on a company server or always-on computer with a Node/Docker deployment template and native HTTPS certificate settings. Keep credentials, server files, and real environment files out of the static artifact.
+
 ## 2026-10-07 — shared product saves and conflict choices
 
 - Reuse Pull latest data as Save to master when shared product details, dates, specifications or SKU edits are waiting. Review changes and an optional reason before submission; restore Pull latest data after success.
-- Default to direct GitHub master updates with individual memory-only access tokens, immutable encrypted blob reads and file-SHA conflict checks. Keep detailed changes/reasons encrypted, preserve images and unrelated fields, and recognize interrupted accepted saves.
+- Originally introduced direct GitHub master updates with individual memory-only access tokens, immutable encrypted blob reads and file-SHA conflict checks. The private team connection above replaces that user flow; encrypted preservation, conflict checks, and interrupted-save recovery remain.
 - Add a fixed-file encrypted master service with narrow product updates, serialized/atomic saves, explicit mine/master conflict choices, field revisions and bounded change history. Different fields and different specification/SKU entries combine without replacing entire portfolios.
 - Preserve unsent drafts across shared refresh and reload, keep images/layout outside shared field updates, and provide a local trial with three example products and separate browser storage.
-- Show Recent editors in GitHub mode, using the accepted save's GitHub account and time. The optional service mode instead shows connected browser sessions, viewing/editing context and optional names.
-- Add Pages configuration and meaningful encrypted GitHub race/roundtrip, model, service and client checks. GitHub mode needs no separate service host; editors require repository write access. An optional HTTPS master service remains supported.
+- Originally showed Recent editors in GitHub mode, using accepted save accounts/times. The current team flow shows connected browser sessions, viewing/editing context, and optional names through its service.
+- Add Pages configuration and meaningful encrypted GitHub race/roundtrip, model, service and client checks. The current private team flow requires a reachable backend while users need no repository access.
 
 ## 2026-10-07 — consistent product widths and shared lane pages
 
