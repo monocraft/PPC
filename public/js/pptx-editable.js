@@ -34,7 +34,7 @@
         slide.addImage({ ...rect, data: element.data, altText: element.altText || product.name || "Product artwork" });
       } else if (element.kind === "text") {
         slide.addText(element.text, {
-          ...rect, fontFace: element.fontFace || "Arial", fontSize: element.fontSize * scale * 72,
+          ...rect, fontFace: element.fontFace || "Arial", fontSize: Math.max(1, Math.min(4000, element.fontSize * scale * 72)),
           color: colorOptions(element.color).color, bold: Boolean(element.bold), italic: Boolean(element.italic),
           align: element.align || "left", valign: "top", margin: 0,
           breakLine: false, wrap: false, fit: "shrink", paraSpaceAfter: 0,
@@ -107,7 +107,7 @@
     const values = radii.length === 1 ? [radii[0], radii[0], radii[0], radii[0]]
       : radii.length === 2 ? [radii[0], radii[1], radii[0], radii[1]]
         : radii.length === 3 ? [radii[0], radii[1], radii[2], radii[1]] : radii;
-    const [tl, tr, br, bl] = values.map((value) => Math.max(0, Math.min(width / 2, height / 2, value)));
+    const [tl, tr, br, bl] = values.map((value) => Math.round(Math.max(0, Math.min(width / 2, height / 2, value))));
     const point = (x, y) => `<a:pt x="${x}" y="${y}"/>`;
     const line = (x, y) => `<a:lnTo>${point(x, y)}</a:lnTo>`;
     const curve = (cx, cy, x, y) => `<a:quadBezTo>${point(cx, cy)}${point(x, y)}</a:quadBezTo>`;
@@ -121,21 +121,55 @@
   async function serialize(pptx) {
     const data = await pptx.write({ outputType: "arraybuffer" });
     const slides = deckSlides.get(pptx) || [];
-    if (!slides.some((groups) => groups.length)) return data;
     if (typeof globalObject.JSZip?.loadAsync !== "function") throw new Error("The editable PowerPoint library did not load. Refresh and try again.");
     const archive = await globalObject.JSZip.loadAsync(data);
-    for (let index = 0; index < slides.length; index += 1) {
-      if (!slides[index].length) continue;
-      const filename = `ppt/slides/slide${index + 1}.xml`;
-      const slide = archive.file(filename);
-      if (!slide) throw new Error("PowerPoint could not find a product slide.");
-      archive.file(filename, groupSlideXml(await slide.async("string"), slides[index]));
+    const presentation = archive.file("ppt/presentation.xml");
+    if (!presentation) throw new Error("PowerPoint could not find the presentation.");
+    // The bundled generator writes notes masters after slide IDs. OOXML requires
+    // notes masters first, even when PowerPoint tolerates the original order.
+    let presentationXml = await presentation.async("string");
+    const notesMasters = presentationXml.match(/<p:notesMasterIdLst\b[\s\S]*?<\/p:notesMasterIdLst>/)?.[0];
+    if (notesMasters) {
+      presentationXml = presentationXml.replace(notesMasters, "");
+      presentationXml = presentationXml.replace(/(?=<p:(?:handoutMasterIdLst|sldIdLst|sldSz|notesSz)\b)/, notesMasters);
+    }
+    archive.file("ppt/presentation.xml", presentationXml);
+    // PowerPoint requires notes masters to own their theme. The bundled
+    // generator shares the slide-master theme, which Office rejects once the
+    // notes-master list is in its valid position.
+    let nextTheme = Math.max(0, ...Object.keys(archive.files).map((name) => Number(name.match(/^ppt\/theme\/theme(\d+)\.xml$/)?.[1] || 0))) + 1;
+    let contentTypes = await archive.file("[Content_Types].xml").async("string");
+    for (const filename of Object.keys(archive.files).filter((name) => /^ppt\/notesMasters\/_rels\/notesMaster\d+\.xml\.rels$/.test(name))) {
+      let relationships = await archive.file(filename).async("string");
+      const themeRelationship = [...relationships.matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => match[0])
+        .find((relationship) => /\bType="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships\/theme"/.test(relationship));
+      if (!themeRelationship) continue;
+      const sourceTheme = themeRelationship.match(/\bTarget="\.\.\/theme\/([^"]+\.xml)"/)?.[1];
+      const theme = sourceTheme && archive.file(`ppt/theme/${sourceTheme}`);
+      if (!theme) throw new Error("PowerPoint could not find the notes theme.");
+      const themeName = `theme${nextTheme++}.xml`;
+      archive.file(`ppt/theme/${themeName}`, await theme.async("uint8array"));
+      relationships = relationships.replace(themeRelationship, themeRelationship.replace(/\bTarget="[^"]+"/, `Target="../theme/${themeName}"`));
+      archive.file(filename, relationships);
+      contentTypes = contentTypes.replace("</Types>", `<Override PartName="/ppt/theme/${themeName}" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>`);
+    }
+    archive.file("[Content_Types].xml", contentTypes);
+    for (const filename of Object.keys(archive.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))) {
+      const index = Number(filename.match(/slide(\d+)\.xml$/)[1]) - 1;
+      let xml = groupSlideXml(await archive.file(filename).async("string"), slides[index] || []);
+      // Dense boards can scale native text below 1pt. All three run-property
+      // elements use ST_TextFontSize (100..400000 hundredths of a point).
+      xml = xml.replace(/<a:(?:rPr|defRPr|endParaRPr)\b[^>]*>/g, (element) => element.replace(/\bsz="([^"]+)"/, (attribute, size) =>
+        `sz="${Math.max(100, Math.min(400000, Math.round(Number(size))))}"`));
+      archive.file(filename, xml);
+    }
+    if (slides.some((groups, index) => groups.length && !archive.file(`ppt/slides/slide${index + 1}.xml`))) {
+      throw new Error("PowerPoint could not find a product slide.");
     }
     return archive.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
   async function writeFile(pptx, options, download) {
-    if (!(deckSlides.get(pptx) || []).some((groups) => groups.length)) return pptx.writeFile(options);
     const data = await serialize(pptx);
     download(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }), options.fileName);
   }

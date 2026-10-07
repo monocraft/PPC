@@ -587,4 +587,50 @@ assert.equal(downloadedFile.fileName, "editable-products.pptx", "the export deli
 assert.ok(downloadedFile.blob instanceof Blob);
 const deliveredArchive = await librarySandbox.JSZip.loadAsync(Buffer.from(await downloadedFile.blob.arrayBuffer()), { checkCRC32: true });
 assert.equal(await deliveredArchive.file("ppt/slides/slide1.xml").async("string"), portfolioXml, "the actual downloaded file contains grouped editable products");
+
+// A very dense category used to emit 0.53pt text, which PowerPoint asks to
+// repair. Exercise both card creation and the final no-card delivery path.
+const denseDeck = new librarySandbox.PptxGenJS();
+denseDeck.layout = "LAYOUT_WIDE";
+const denseSlide = denseDeck.addSlide();
+const denseGroup = librarySandbox.PPTXEditable.addCard(denseDeck, denseSlide, {
+  id: "dense", name: "Dense category product", x: 0, y: 0, width: 240, height: 450,
+  elements: [{ kind: "text", text: "DIMENSION", x: 20, y: 30, width: 100, height: 12, fontSize: 9, color: "FFFFFF" }],
+}, { x: 0, y: 0, scale: .0008 }, 0);
+librarySandbox.PPTXEditable.registerSlide(denseDeck, [denseGroup]);
+const denseArchive = await librarySandbox.JSZip.loadAsync(await librarySandbox.PPTXEditable.serialize(denseDeck));
+const denseXml = await denseArchive.file("ppt/slides/slide1.xml").async("string");
+assert.match(denseXml, /<p:grpSp>/, "dense products retain their independently editable group");
+assert.deepEqual([...denseXml.matchAll(/\bsz="(\d+)"/g)].map((match) => Number(match[1])), [100, 100], "scaled card text stays at PowerPoint's valid 1pt minimum");
+const densePresentation = await denseArchive.file("ppt/presentation.xml").async("string");
+assert.ok(densePresentation.indexOf("<p:notesMasterIdLst>") < densePresentation.indexOf("<p:sldIdLst>"), "notes master IDs precede slide IDs as required by the presentation schema");
+
+const noCardsDeck = new librarySandbox.PptxGenJS();
+noCardsDeck.layout = "LAYOUT_WIDE";
+noCardsDeck.addSlide().addText("Small roadmap label", { x: 0, y: 0, w: 1, h: .2, fontSize: .53 });
+librarySandbox.PPTXEditable.registerSlide(noCardsDeck, []);
+let noCardsDownload;
+await librarySandbox.PPTXEditable.writeFile(noCardsDeck, { fileName: "roadmap.pptx" }, (blob, fileName) => { noCardsDownload = { blob, fileName }; });
+assert.equal(noCardsDownload.fileName, "roadmap.pptx", "roadmap-only downloads also use the compatibility pass");
+const noCardsArchive = await librarySandbox.JSZip.loadAsync(Buffer.from(await noCardsDownload.blob.arrayBuffer()));
+assert.deepEqual([...(await noCardsArchive.file("ppt/slides/slide1.xml").async("string")).matchAll(/\bsz="(\d+)"/g)].map((match) => Number(match[1])), [100, 100], "the final serializer validates all native text, even without product groups");
+const noCardsPresentation = await noCardsArchive.file("ppt/presentation.xml").async("string");
+assert.ok(noCardsPresentation.indexOf("<p:notesMasterIdLst>") < noCardsPresentation.indexOf("<p:sldIdLst>"), "the notes master order is corrected for roadmap-only exports too");
+for (const archive of [denseArchive, noCardsArchive]) {
+  const notesRelationships = await archive.file("ppt/notesMasters/_rels/notesMaster1.xml.rels").async("string");
+  const slideRelationships = await archive.file("ppt/slideMasters/_rels/slideMaster1.xml.rels").async("string");
+  const themeTarget = (xml) => [...xml.matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => match[0])
+    .find((relationship) => relationship.includes('/relationships/theme"'))?.match(/\bTarget="([^"]+)"/)?.[1];
+  const notesTheme = themeTarget(notesRelationships);
+  const slideTheme = themeTarget(slideRelationships);
+  assert.notEqual(notesTheme, slideTheme, "the notes master owns a separate theme, as required by desktop PowerPoint");
+  assert.deepEqual(Buffer.from(await archive.file(`ppt/${notesTheme.slice(3)}`).async("uint8array")), Buffer.from(await archive.file(`ppt/${slideTheme.slice(3)}`).async("uint8array")), "the separate notes theme preserves the original design");
+  assert.ok((await archive.file("[Content_Types].xml").async("string")).includes(`PartName="/ppt/${notesTheme.slice(3)}" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"`), "the separate theme has a declared package content type");
+}
+
+const tinyCornerXml = librarySandbox.PPTXEditable.groupSlideXml('<p:sp><p:nvSpPr><p:cNvPr id="2" name="tiny-part-0"/></p:nvSpPr><p:spPr><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom></p:spPr></p:sp>', [{
+  prefix: "tiny-part-", name: "Tiny product", x: 0, y: 0, width: .1, height: .1, partCount: 1,
+  roundedCorners: { "tiny-part-0": { width: 3, height: 3, radii: [2] } },
+}]);
+assert.ok([...tinyCornerXml.matchAll(/<a:pt x="([^"]+)" y="([^"]+)"/g)].every((match) => match.slice(1).every((coordinate) => /^\d+$/.test(coordinate))), "clamped corner coordinates remain schema-valid integers for odd dimensions");
 console.log(`PPTX checks passed: pagination, category selection, grouped native portfolio cards with editable name/price/spec/SKU and preserved artwork, editable roadmap shapes, clipped date geometry, product-free backgrounds, restored export state, numberless slide chrome, and real delivered-file OOXML (${groupedBytes.byteLength} bytes).`);
