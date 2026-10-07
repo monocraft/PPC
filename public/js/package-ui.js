@@ -35,7 +35,6 @@
   }
 
   function refresh() {
-    get("restorePreviousPackage").disabled = !globalThis.hasPreviousPackage();
     showPackageInfo(globalThis.getCurrentPackageInfo(), "sharedPackageUpdated", "sharedPackageComments");
     try {
       const source = pullSource();
@@ -62,7 +61,7 @@
     for (const control of form.querySelectorAll("input, textarea, button")) control.disabled = value;
     get("cancelPackage").disabled = value && applying;
     get("closePackage").disabled = value && applying;
-    submit.textContent = value ? (applying ? "Loading package…" : mode === "export" ? "Building package…" : "Downloading…") : mode === "pull" ? "Pull latest data" : mode === "export" ? "Build package" : mode === "restore" ? "Restore previous workspace" : "Import package";
+    submit.textContent = value ? (applying ? "Loading package…" : mode === "export" ? "Building package…" : "Downloading…") : mode === "pull" ? "Pull latest data" : mode === "export" ? "Build package" : "Import package";
   }
 
   function close() {
@@ -93,9 +92,9 @@
     keyInput.value = ""; get("packageShowKey").checked = false; get("packageEncrypt").checked = true;
     get("cancelPackage").classList.remove("hidden");
     error.textContent = ""; status.textContent = "";
-    const titles = { pull: "Pull latest data", export: "Build master package", import: "Import project package", restore: "Restore previous workspace" };
+    const titles = { pull: "Pull latest data", export: "Build master package", import: "Import project package" };
     get("packageTitle").textContent = titles[mode];
-    get("packageDescription").textContent = mode === "export" ? "One file contains every category, Products, Roadmap, settings, variants and available image files." : mode === "restore" ? "Return to the workspace saved before your last package import. Your current workspace becomes the new recovery copy." : "Replace Products and Roadmap with one complete package. Your current workspace is kept as a recovery copy on this device.";
+    get("packageDescription").textContent = mode === "export" ? "One file contains every category, Products, Roadmap, settings, variants and available image files." : "Replace Products, Roadmap, settings and images with one complete package.";
     get("packageExportOptions").classList.toggle("hidden", mode !== "export");
     get("packageFileName").textContent = file ? file.name : "";
     get("packageFileName").classList.toggle("hidden", !file);
@@ -107,7 +106,6 @@
       try { pullSource(); }
       catch (problem) { error.textContent = problem.message; submit.disabled = true; get("packageKeySection").classList.add("hidden"); keyInput.required = false; }
     }
-    if (mode === "restore" && !globalThis.hasPreviousPackage()) { error.textContent = "There is no previous package workspace to restore on this device."; submit.disabled = true; }
     if (!get("packageKeySection").classList.contains("hidden")) keyInput.focus(); else get("cancelPackage").focus();
   }
 
@@ -149,13 +147,12 @@
       } else if (mode === "import") {
         status.textContent = "Checking and loading the complete package…";
         result = await globalThis.importProjectPackage(selectedFile.file, { key });
-      } else if (mode === "restore") result = await globalThis.restorePreviousPackage();
-      else { status.textContent = "Collecting data and image files…"; result = await globalThis.exportProjectPackage(key, { comments: commentsInput.value }); }
+      } else { status.textContent = "Collecting data and image files…"; result = await globalThis.exportProjectPackage(key, { comments: commentsInput.value }); }
       completed = true;
       downloadedBytes = null;
       if (mode === "export") keyInput.value = key;
       status.textContent = mode === "export" ? (key ? "master_ppc.pkg is ready. Replace public/data/master_ppc.pkg in GitHub on the main branch, then wait for the site update to finish. Keep the same key for future updates." : "Private backup package created.") : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
-      get("packageTitle").textContent = mode === "export" ? "Package built" : mode === "restore" ? "Workspace restored" : "Data updated";
+      get("packageTitle").textContent = mode === "export" ? "Package built" : "Data updated";
       showPackageInfo(mode === "export" ? result : result.packageInfo, "packageResultUpdated", "packageResultComments");
       get("packageResultInfo").classList.remove("hidden");
       refresh(); updateKeyControls(); setBusy(false);
@@ -163,7 +160,7 @@
       get("cancelPackage").classList.add("hidden"); submit.textContent = "Done"; submit.focus();
     } catch (problem) {
       if (mode === "export" && key) keyInput.value = key;
-      error.textContent = problem.name === "AbortError" ? "Download cancelled or timed out. Your workspace was not changed." : problem.message || "The package could not be loaded. Your previous workspace is available.";
+      error.textContent = problem.name === "AbortError" ? "Download cancelled or timed out. Your workspace was not changed." : problem.message || (mode === "export" ? "The package could not be built. Try again." : "The package could not be loaded. Your workspace was not changed.");
       status.textContent = downloadedBytes && !cancelRequested ? "The package is downloaded. You can try again without downloading it again." : ""; setBusy(false);
       if (cancelRequested) close(); else keyInput.focus();
     } finally { key = ""; controller = null; }
@@ -193,7 +190,6 @@
   });
   for (const id of ["pullLatestData", "emptyPullLatestData", "settingsPullLatestData"]) get(id).onclick = () => { get("cancelPackage").classList.remove("hidden"); open("pull"); };
   get("exportPackage").onclick = () => { get("cancelPackage").classList.remove("hidden"); open("export"); };
-  get("restorePreviousPackage").onclick = () => { get("cancelPackage").classList.remove("hidden"); open("restore"); };
   window.addEventListener("portfolio:render", refresh);
   globalThis.PortfolioPackageUI = Object.freeze({ openImport, open, close, refresh });
   refresh();

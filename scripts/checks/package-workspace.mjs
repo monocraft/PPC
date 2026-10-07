@@ -57,20 +57,21 @@ const functionNames = [
   "dataUriToBlob", "extensionForImageAsset", "createImageAssetMetadata", "ensureImageAssetRegistry", "migrateLegacyProductImages",
   "loadLocalImageAsset", "normalizeAscmSnapshot", "createDefaultPortfolio", "ensurePortfolioSchema", "normalizeImportedPortfolio",
   "scheduleSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
-  "localPackageImageIds", "clearPackageImageCaches", "readPackageRecovery", "hasPreviousPackage", "commitPackageDraft",
-  "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage", "restorePreviousPackage",
+  "localPackageImageIds", "clearPackageImageCaches", "commitPackageDraft",
+  "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage",
 ];
 const actualFunctions = functionNames.map((name) => {
   const match = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, "m"));
   assert.ok(match, `the application must define ${name}`);
   return match[0];
 }).join("\n");
+assert.doesNotMatch(appSource, /^(?:async )?function (?:readPackageRecovery|hasPreviousPackage|restorePreviousPackage)\(/m, "the removed previous-workspace feature must not leave callable recovery actions");
 
 function harness(initial = portfolioFixture()) {
   const images = new Map(initial.imageAssets.filter((asset) => asset.sourceType === "local").map((asset) => [asset.id, imageBlob(`original:${asset.id}`)]));
   const stored = new Map([[storageKey, JSON.stringify(initial)]]);
-  const faults = { transaction: false, synchronousPut: 0, storageKey: "", activation: false };
-  const calls = { writes: 0, clears: 0, deletes: [], revokes: [], creates: 0, downloads: [] };
+  const faults = { transaction: false, deleteTransaction: false, synchronousPut: 0, storageKey: "", removeKey: "", activation: false };
+  const calls = { writes: 0, clears: 0, deletes: [], revokes: [], creates: 0, downloads: [], activations: [] };
   const timers = new Map();
   let timerId = 0;
   let nextId = 0;
@@ -100,8 +101,11 @@ function harness(initial = portfolioFixture()) {
         },
       };
       queueMicrotask(() => {
-        if (aborted || (mode === "readwrite" && faults.transaction && operations.some(([kind]) => kind === "put"))) {
+        const writeFailure = faults.transaction && operations.some(([kind]) => kind === "put");
+        const deleteFailure = faults.deleteTransaction && operations.some(([kind]) => kind === "delete");
+        if (aborted || (mode === "readwrite" && (writeFailure || deleteFailure))) {
           faults.transaction = false;
+          faults.deleteTransaction = false;
           transaction.error = new Error("Image transaction aborted");
           transaction.onabort?.();
           return;
@@ -135,6 +139,7 @@ function harness(initial = portfolioFixture()) {
       return target;
     },
     activateCategory: (categoryId) => {
+      calls.activations.push({ imageIds: [...images.keys()], recovery: stored.get(recoveryKey) });
       if (faults.activation) { faults.activation = false; throw new Error("Activation failed"); }
       sandbox.activeCategoryId = categoryId;
       sandbox.portfolio.activeCategoryId = categoryId;
@@ -146,8 +151,12 @@ function harness(initial = portfolioFixture()) {
     downloadBlob: (blob, name) => calls.downloads.push({ blob, name }),
     localStorage: {
       getItem: (key) => stored.get(key) ?? null,
-      removeItem: (key) => stored.delete(key),
+      removeItem(key) {
+        if (faults.removeKey === key) { faults.removeKey = ""; throw new Error("Browser storage cleanup failed"); }
+        stored.delete(key);
+      },
       setItem(key, value) {
+        assert.notEqual(key, recoveryKey, "package imports must never write a previous-workspace recovery snapshot");
         if (faults.storageKey === key) { faults.storageKey = ""; throw new Error("Browser storage is full"); }
         stored.set(key, value);
       },
@@ -175,28 +184,59 @@ const updated = first.sandbox.portfolio.categories[0].board.products[0];
 assert.notEqual(updated.imageAssetId, "shared-image", "imported image IDs must be isolated from the original library");
 assert.ok(first.images.has(updated.imageAssetId));
 assert.ok(first.images.has(updated.variantGroups[0].items[0].imageAssetId), "variant image references must follow staged image IDs");
-assert.ok(first.images.has("shared-image"), "the original image must remain for recovery");
+assert.ok(first.calls.activations[0].imageIds.includes("shared-image"), "the original image must remain until the new workspace activates successfully");
+assert.ok(first.calls.activations[0].imageIds.includes(updated.imageAssetId), "new images must be staged before the new workspace activates");
+assert.ok(!first.images.has("shared-image"), "a successful import must collect the superseded original image");
 assert.equal(updated.generalAvailabilityDate, newManifest.categories[0].board.products[0].generalAvailabilityDate);
 assert.equal(updated.roadmap.endMonth, "2029-04");
 assert.equal(updated.partSkus[0].code, "EXAMPLE-SKU");
 assert.equal(updated.specs[0].value, "Long values remain intact");
-assert.equal(first.sandbox.hasPreviousPackage(), true);
-assert.equal(JSON.parse(first.stored.get(recoveryKey)).portfolio.categories[0].board.products[0].name, "Original");
-await first.sandbox.restorePreviousPackage();
-assert.equal(first.sandbox.portfolio.categories[0].board.products[0].name, "Original");
-assert.equal(first.sandbox.portfolio.categories[0].board.products[0].imageAssetId, "shared-image");
-assert.equal(await first.images.get("shared-image").text(), "original:shared-image");
-assert.ok(first.images.has(updated.imageAssetId), "restoring retains the replaced package as the new recovery copy");
+assert.equal(first.stored.has(recoveryKey), false, "a successful import must not create a previous-workspace snapshot");
 
 const cleanup = harness();
+cleanup.images.set("unrelated-image", imageBlob("unrelated"));
 await cleanup.sandbox.importProjectPackage(new Blob([packageBytes(portfolioFixture("Second"))]));
 const secondImageId = cleanup.sandbox.portfolio.imageAssets[0].id;
 await cleanup.sandbox.importProjectPackage(new Blob([packageBytes(portfolioFixture("Third"))]));
-assert.ok(!cleanup.images.has("shared-image"), "only images from an obsolete recovery may be collected");
-assert.ok(cleanup.images.has(secondImageId), "the new recovery image must remain");
+assert.ok(!cleanup.images.has("shared-image"), "a superseded original image must be collected");
+assert.ok(!cleanup.images.has(secondImageId), "the preceding workspace image must be collected after a successful replacement");
 assert.ok(cleanup.images.has(cleanup.sandbox.portfolio.imageAssets[0].id), "the current image must remain");
-await cleanup.sandbox.restorePreviousPackage();
-assert.equal(cleanup.sandbox.portfolio.categories[0].board.products[0].name, "Second");
+assert.ok(cleanup.images.has("unrelated-image"), "replacement cleanup must not sweep unrelated image records");
+assert.equal(cleanup.images.size, 2, "repeated imports must retain only the active package and unrelated records");
+assert.equal(cleanup.stored.has(recoveryKey), false);
+
+const migratedRecovery = harness();
+const oldRecoveryPortfolio = portfolioFixture("Earlier", ["legacy-image", "shared-image", "pkg-fresh-1"]);
+migratedRecovery.stored.set(recoveryKey, JSON.stringify({ version: 1, portfolio: oldRecoveryPortfolio }));
+migratedRecovery.images.set("legacy-image", imageBlob("legacy"));
+migratedRecovery.images.set("pkg-fresh-1", imageBlob("old recovery overlap"));
+migratedRecovery.images.set("unrelated-image", imageBlob("unrelated"));
+await migratedRecovery.sandbox.importProjectPackage(new Blob([packageBytes(portfolioFixture("Migrated"))]));
+const migratedImageId = migratedRecovery.sandbox.portfolio.imageAssets[0].id;
+assert.equal(migratedImageId, "pkg-fresh-1");
+assert.equal(migratedRecovery.stored.has(recoveryKey), false, "successful import must remove a legacy recovery snapshot");
+assert.ok(!migratedRecovery.images.has("legacy-image"), "validated legacy recovery images may be collected");
+assert.ok(!migratedRecovery.images.has("shared-image"), "original and legacy recovery cleanup may overlap safely");
+assert.equal(await migratedRecovery.images.get(migratedImageId).text(), "bytes:shared-image", "legacy cleanup must preserve images referenced by the current workspace");
+assert.ok(migratedRecovery.images.has("unrelated-image"), "legacy cleanup must stay within the old snapshots");
+assert.deepEqual([...new Set(migratedRecovery.calls.deletes)].sort(), ["legacy-image", "shared-image"]);
+
+const cleanupFailure = harness();
+const cleanupFailureRecovery = JSON.stringify({ version: 1, portfolio: portfolioFixture("Earlier", []) });
+cleanupFailure.stored.set(recoveryKey, cleanupFailureRecovery);
+cleanupFailure.faults.removeKey = recoveryKey;
+await cleanupFailure.sandbox.importProjectPackage(new Blob([packageBytes(portfolioFixture("Committed"))]));
+assert.equal(cleanupFailure.sandbox.portfolio.categories[0].board.products[0].name, "Committed", "legacy metadata cleanup failure must not roll back a committed import");
+assert.equal(JSON.parse(cleanupFailure.stored.get(storageKey)).categories[0].board.products[0].name, "Committed");
+assert.equal(cleanupFailure.stored.get(recoveryKey), cleanupFailureRecovery, "legacy cleanup is best effort");
+assert.ok(cleanupFailure.images.has(cleanupFailure.sandbox.portfolio.imageAssets[0].id));
+
+const imageCleanupFailure = harness();
+imageCleanupFailure.faults.deleteTransaction = true;
+await imageCleanupFailure.sandbox.importProjectPackage(new Blob([packageBytes(portfolioFixture("Committed"))]));
+assert.equal(imageCleanupFailure.sandbox.portfolio.categories[0].board.products[0].name, "Committed", "obsolete image cleanup failure must not roll back a committed import");
+assert.ok(imageCleanupFailure.images.has(imageCleanupFailure.sandbox.portfolio.imageAssets[0].id));
+assert.ok(imageCleanupFailure.images.has("shared-image"), "an aborted cleanup transaction must leave the existing image record intact");
 
 const key = codec.generateKey();
 const encrypted = await codec.encrypt(packageBytes(newManifest), key);
@@ -288,8 +328,9 @@ for (const packageInfo of [
 
 for (const fault of ["transaction", "synchronousPut", "storageKey", "activation"]) {
   const subject = harness();
-  const oldRecovery = JSON.stringify({ version: 1, savedAt: "2026-01-01T00:00:00Z", portfolio: portfolioFixture("Earlier", []) });
+  const oldRecovery = JSON.stringify({ version: 1, savedAt: "2026-01-01T00:00:00Z", portfolio: portfolioFixture("Earlier", ["legacy-image"]) });
   subject.stored.set(recoveryKey, oldRecovery);
+  subject.images.set("legacy-image", imageBlob("legacy"));
   const original = JSON.stringify(subject.sandbox.portfolio);
   if (fault === "synchronousPut") subject.faults[fault] = 2;
   else if (fault === "storageKey") subject.faults[fault] = storageKey;
@@ -297,9 +338,11 @@ for (const fault of ["transaction", "synchronousPut", "storageKey", "activation"
   await assert.rejects(subject.sandbox.importProjectPackage(new Blob([packageBytes(newManifest)])), /failed|aborted|full/i);
   assert.equal(JSON.stringify(subject.sandbox.portfolio), original, `${fault} must preserve the active workspace`);
   assert.equal(subject.stored.get(storageKey), original, `${fault} must preserve saved data`);
-  assert.equal(subject.stored.get(recoveryKey), oldRecovery, `${fault} must preserve the previous recovery copy`);
-  assert.deepEqual([...subject.images.keys()], ["shared-image"], `${fault} must remove only its staged images`);
+  assert.equal(subject.stored.get(recoveryKey), oldRecovery, `${fault} must leave legacy recovery metadata untouched`);
+  assert.deepEqual([...subject.images.keys()], ["shared-image", "legacy-image"], `${fault} must remove only its staged images`);
   assert.equal(await subject.images.get("shared-image").text(), "original:shared-image");
+  assert.equal(await subject.images.get("legacy-image").text(), "legacy");
+  assert.ok(subject.calls.activations.every((call) => call.recovery === oldRecovery), `${fault} must preserve legacy recovery metadata through activation and rollback`);
   assert.equal(subject.calls.clears, 0);
 }
 
@@ -344,7 +387,7 @@ assert.ok(clearHandler, "the application must define its explicit clear-all acti
 new vm.Script(clearHandler).runInContext(cleared.sandbox);
 await clearAction.onclick();
 assert.equal(cleared.images.size, 0);
-assert.equal(cleared.sandbox.hasPreviousPackage(), false, "clear-all must not advertise recovery after deleting recovery images");
+assert.equal(cleared.stored.has(recoveryKey), false, "clear-all must remove legacy recovery metadata after deleting its images");
 assert.equal(cleared.sandbox.imageAssetGeneration, 1, "clear-all must invalidate image loads started before the deletion");
 
 const staleLoad = harness();
@@ -369,10 +412,21 @@ await assert.rejects(pendingImport, /workspace changed/i);
 assert.equal(concurrent.sandbox.portfolio.categories[0].board.products[0].name, "Edit made while loading");
 assert.deepEqual([...concurrent.images.keys()], ["shared-image"]);
 
-const invalidRecovery = harness();
-invalidRecovery.stored.set(recoveryKey, "broken");
-assert.equal(invalidRecovery.sandbox.hasPreviousPackage(), false);
-await assert.rejects(invalidRecovery.sandbox.restorePreviousPackage());
+const invalidRecoveryPortfolio = portfolioFixture("Invalid", ["legacy-image"]);
+invalidRecoveryPortfolio.categories[0].board.products[0].imageAssetId = "unregistered-image";
+for (const invalidRecovery of [
+  "broken",
+  JSON.stringify({ version: 999, portfolio: portfolioFixture("Earlier", ["legacy-image"]) }),
+  JSON.stringify({ version: 1, portfolio: invalidRecoveryPortfolio }),
+]) {
+  const subject = harness();
+  subject.stored.set(recoveryKey, invalidRecovery);
+  subject.images.set("legacy-image", imageBlob("untrusted legacy"));
+  await subject.sandbox.importProjectPackage(new Blob([packageBytes(portfolioFixture("Updated"))]));
+  assert.equal(subject.stored.has(recoveryKey), false, "successful import must discard invalid legacy recovery metadata");
+  assert.ok(subject.images.has("legacy-image"), "invalid legacy metadata must not authorize image deletion");
+  assert.ok(subject.images.has(subject.sandbox.portfolio.imageAssets[0].id), "invalid legacy metadata must not interfere with importing the active package");
+}
 
 // An optional local fixture is inspected without printing private product data.
 // The fixture is never copied into source or deployment output.
@@ -388,4 +442,4 @@ if (process.argv[2]) {
   console.log(`Local package fixture passed: ${actualResult.categoryCount} categories, ${actualResult.productCount} products.`);
 }
 
-console.log("Package workspace checks passed: automatically stamped update metadata, comments round trips and persistence, strict metadata preflight, complete export, encrypted and legacy import, isolated image staging, failure recovery, rollback, and bounded cleanup.");
+console.log("Package workspace checks passed: automatically stamped update metadata, comments round trips and persistence, strict metadata preflight, complete export, encrypted and legacy import, isolated image staging, rollback, legacy snapshot cleanup, and bounded image cleanup.");
