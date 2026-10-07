@@ -85,6 +85,10 @@
 
   function pullSource() {
     const source = globalThis.PPC_PACKAGE_SOURCE;
+    if (source.mode === "github") {
+      if (!globalThis.PortfolioMasterGitHub) throw new Error("GitHub sharing could not load. Refresh this page and try again.");
+      return { github: globalThis.PortfolioMasterGitHub.normalizeConfig(source) };
+    }
     if (usesRelay()) {
       return { endpoint: globalThis.PortfolioPackageClient.normalizeEndpoint(source.endpoint) };
     }
@@ -97,7 +101,7 @@
     showFooterPackageInfo(info);
     try {
       const source = pullSource();
-      get("sharedPackageStatus").textContent = source.packageUrl ? "Pull the latest master package. Your key unlocks Products and Roadmap on this device." : "Load the shared master into Products and Roadmap with your package key.";
+      get("sharedPackageStatus").textContent = source.github ? "Load the current GitHub master. Your package key unlocks it on this device." : source.packageUrl ? "Pull the latest master package. Your key unlocks Products and Roadmap on this device." : "Load the shared master into Products and Roadmap with your package key.";
     } catch {
       get("sharedPackageStatus").textContent = "The shared master location needs to be configured. Local package import and export are available.";
     }
@@ -125,6 +129,7 @@
 
   function close() {
     if (busy) { if (controller) { cancelRequested = true; keyInput.value = ""; controller.abort(); } return; }
+    const refreshMaster = completed && mode !== "export";
     dialog.classList.add("hidden");
     document.querySelector(".app-shell").inert = false;
     get("workspaceEmpty").inert = false;
@@ -137,6 +142,7 @@
     keyInput.type = "password";
     if (restoreFocus?.isConnected && !restoreFocus.disabled && !restoreFocus.closest(".hidden")) restoreFocus.focus();
     else get(get("workspaceEmpty").classList.contains("hidden") ? "pullLatestData" : "emptyPullLatestData").focus();
+    if (refreshMaster) globalThis.PortfolioMasterUI?.refresh?.();
   }
 
   function open(nextMode, file = null) {

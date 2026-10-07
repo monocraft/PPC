@@ -18,7 +18,7 @@ Use this order when deciding what is authoritative:
 | Current browser session | `localStorage` plus IndexedDB for the exact origin being tested |
 | UI palette | CSS/JavaScript tokens derived from the supplied charcoal/core palette references |
 | Deployment contents | `.github/workflows/deploy.yml`, checked against `public/index.html` runtime references |
-| Shared master and service | Owner-managed encrypted `master_ppc.pkg` mirrored from private SharePoint; separately hosted portable relay. Public endpoint configuration comes from `PPC_PACKAGE_ENDPOINT`; checked-in `public/js/package-source.js` stays empty. |
+| Shared master and service | Default direct GitHub reads/updates of `monocraft/PPC` `main` `public/data/master_ppc.pkg`. Individual tokens stay in memory. Optional static mode or fixed-file service overrides remain supported. See [Shared master editing](SHARED-MASTER-EDITING.md). |
 
 Do not copy an older local folder over this workspace. A future GitHub ZIP or clone should be staged separately, inventoried, and diffed before any merge.
 
@@ -93,11 +93,11 @@ Package import validates the manifest and image references, stages local binarie
 
 Use **Settings → Data & export → Export project package**, keep package protection selected, and enter the existing key or choose **Create new key**. **Export package** downloads encrypted `master_ppc.pkg`; the key stays available to copy until **Done**. Upload that file to the same private SharePoint location, keeping the key separately. Unprotected export is an explicit private local backup, not a shared master.
 
-Follow [Shared package setup](SHARED-PACKAGE-SETUP.md) to maintain a complete local mirror through an approved owner OneDrive sync/job and run `server/package-relay.mjs` behind HTTPS. Azure is not required. The owner synchronization account signs into Microsoft; viewers only enter the package key. A pull serves the latest complete mirrored copy and can lag SharePoint while sync is delayed or offline.
+Follow [Shared master editing](SHARED-MASTER-EDITING.md) for direct GitHub reads and product-fact saves. Each editor uses their own GitHub write access and memory-only token; the package key stays on the device. Full-package owner publishing remains available for images/layout in [Shared package setup](SHARED-PACKAGE-SETUP.md).
 
-Configure the GitHub Actions repository variable `PPC_PACKAGE_ENDPOINT` with the approved full HTTPS relay endpoint. Pages generates `_site/js/package-source.js` through `scripts/configure-package-source.mjs`; do not put the package key or SharePoint viewing link there. An empty variable leaves shared setup pending while local import/export works. For a local synthetic relay, run `node scripts/serve.mjs --package-endpoint http://127.0.0.1:8787/api/package/latest` and explicitly allow the local site's origin in the relay.
+Pages generates `_site/js/package-source.js` through `scripts/configure-package-source.mjs`. With no service override, it selects the fixed GitHub master. No credentials belong in this file or repository variables. `PPC_MASTER_MODE=static` restores read-only hosted pulls. Explicit package/master endpoint variables select the optional service; point both to the same master.
 
-**Pull latest data** retrieves an encrypted master with the user's key and invokes the same validated replacement path as manual package import. Products and Roadmap update together. Do not describe this as connected live until the approved endpoint, HTTPS proxy, source mirror, and a successful pull have been verified.
+**Pull latest data** retrieves the encrypted master and invokes the same validated replacement path as manual package import. Products and Roadmap update together. Supported edits then use **Save to master** with explicit conflicts. Simulated GitHub writes verify behavior without publishing; live repository access and a real save require the editor's credentials and permission.
 
 ## 5. Understand a new upstream source safely
 
@@ -120,7 +120,7 @@ Inspect in this order:
 2. `public/js/catalog-data.js`: schema version, category IDs, lanes, spec sets, products, and image references.
 3. `public/js/app.js`: storage keys, schema normalizers, startup, import/export, rendering entrypoints, and event wiring.
    Also inspect `public/js/portfolio-model.js` for global timeline/lane geometry/specification/SKU/shared-tone rules, `public/js/roadmap-interaction.js` for saved row order/drop geometry/date drafts, `public/js/product-details.js` for Overview and secondary-list tabs/paging, `public/js/workspace-ui.js` for shell/settings interactions, `public/js/ascm-import.js` for workbook parsing/matching/additive merges, and `public/js/pptx-pagination.js` for ordered category selection and roadmap slide limits before changing those flows.
-   Package boundaries live in `public/js/package-codec.js`, `package-client.js`, `package-ui.js`, and the default `package-source.js`; the separately hosted relay is `server/package-relay.mjs`.
+   Package boundaries live in `public/js/package-codec.js`, `package-client.js`, `package-ui.js`, and the default `package-source.js`. Shared product saves use `master-model.js`, `master-github.js`, `master-client.js`, `master-ui.js` and `master-presence.js`. Optional service alternatives are `server/package-relay.mjs` and `server/master-service.mjs`.
 4. `public/css/styles.css`: token definitions, layout breakpoints, focus styles, and literal colors.
 5. `.github/workflows/deploy.yml`: every runtime file and directory copied into the Pages artifact.
 6. `public/vendor/`: version and provenance of vendored libraries.
@@ -242,7 +242,7 @@ public/vendor/pptxgen.bundle.js
 
 The deployed entrypoint remains `index.html`; runtime URLs are `css/styles.css`, `js/…`, `assets/…`, and `vendor/…`. Do not add an extra `public/` level to the deployed URL or publish the repository root.
 
-Pages injects only the approved public service endpoint from repository variable `PPC_PACKAGE_ENDPOINT`; `scripts/configure-package-source.mjs` validates it and writes `_site/js/package-source.js`. The repository's source default stays empty. Keep keys, private SharePoint URLs, source mirror paths, `server/`, and real `.env` settings outside the Pages artifact.
+Pages generates only public GitHub/source configuration with `scripts/configure-package-source.mjs`. Optional `PPC_PACKAGE_ENDPOINT`/`PPC_MASTER_ENDPOINT` select a service, and `PPC_MASTER_MODE=static` selects read-only hosting. Keep keys, GitHub tokens, private source paths, `server/` and real `.env` settings outside the Pages artifact.
 
 It must exclude:
 

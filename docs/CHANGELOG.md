@@ -1,5 +1,14 @@
 # Change Log
 
+## 2026-10-07 — shared product saves and conflict choices
+
+- Reuse Pull latest data as Save to master when shared product details, dates, specifications or SKU edits are waiting. Review changes and an optional reason before submission; restore Pull latest data after success.
+- Default to direct GitHub master updates with individual memory-only access tokens, immutable encrypted blob reads and file-SHA conflict checks. Keep detailed changes/reasons encrypted, preserve images and unrelated fields, and recognize interrupted accepted saves.
+- Add a fixed-file encrypted master service with narrow product updates, serialized/atomic saves, explicit mine/master conflict choices, field revisions and bounded change history. Different fields and different specification/SKU entries combine without replacing entire portfolios.
+- Preserve unsent drafts across shared refresh and reload, keep images/layout outside shared field updates, and provide a local trial with three example products and separate browser storage.
+- Show Recent editors in GitHub mode, using the accepted save's GitHub account and time. The optional service mode instead shows connected browser sessions, viewing/editing context and optional names.
+- Add Pages configuration and meaningful encrypted GitHub race/roundtrip, model, service and client checks. GitHub mode needs no separate service host; editors require repository write access. An optional HTTPS master service remains supported.
+
 ## 2026-10-07 — consistent product widths and shared lane pages
 
 - Use one product-card width across every selected category and continuation slide, reserving a common 13-column canvas even for sparse categories. A shared canvas also handles unusually tall cards without changing scale between categories.
