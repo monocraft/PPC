@@ -1908,7 +1908,7 @@ function drawProductBoardExportBackground(context, dimensions) {
   context.fillRect(0, 0, dimensions.width, dimensions.height);
 }
 
-function drawBoardTo(context, dimensions, includeSelection = true, includeBackground = false) {
+function drawBoardTo(context, dimensions, includeSelection = true, includeBackground = false, includeProducts = true) {
   context.clearRect(0, 0, dimensions.width, dimensions.height);
   if (includeBackground) drawProductBoardExportBackground(context, dimensions);
 
@@ -1928,6 +1928,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
       .sort((a, b) => a.order - b.order);
     if (layout.detailed) drawDetailedFamilyHeaders(context, laneProducts, laneY);
 
+    if (!includeProducts) return;
     laneProducts
       .forEach((product, displayIndex) => {
         const automatic = { x: cardXForDisplayIndex(laneProducts, displayIndex, dimensions.includeViewer !== false), y: laneY };
@@ -2496,7 +2497,25 @@ function roadmapProductBarLabel(product) {
   return `${name}  ·  ${price}`;
 }
 
-function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeSelection = true, exportMode = false) {
+function roadmapProductBarRect(product, range, rowTop) {
+  const roadmap = effectiveRoadmap(product);
+  const startIndex = monthIndex(roadmap?.startMonth);
+  const endIndex = monthIndex(roadmap?.endMonth);
+  if (startIndex == null || endIndex == null || endIndex < startIndex
+    || endIndex < range.start || startIndex > range.end) return null;
+
+  const timelineRight = ROADMAP_LEFT_WIDTH + range.count * roadmapMonthWidth;
+  const x = Math.max(ROADMAP_LEFT_WIDTH + 1, ROADMAP_LEFT_WIDTH + (startIndex - range.start) * roadmapMonthWidth + 2);
+  const right = Math.min(timelineRight - 1, ROADMAP_LEFT_WIDTH + (endIndex - range.start + 1) * roadmapMonthWidth - 2);
+  return {
+    x,
+    y: rowTop + 5,
+    width: Math.min(timelineRight - 1 - x, Math.max(4, right - x)),
+    height: ROADMAP_ROW_HEIGHT - 10,
+  };
+}
+
+function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeSelection = true, exportMode = false, includeProducts = true) {
   const { width, height, range, groups } = dimensions;
   const stickyX = exportMode ? 0 : targetScroll.scrollLeft;
   const stickyY = exportMode ? 0 : targetScroll.scrollTop;
@@ -2590,16 +2609,9 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       // occlude it instead of having the line painted over product content.
       drawYearSeamSegment(rowTop, rowTop + ROADMAP_ROW_HEIGHT, .2);
 
-      const startIndex = monthIndex(roadmap.startMonth);
-      const endIndex = monthIndex(roadmap.endMonth);
-      if (startIndex != null && endIndex != null) {
-        const unclippedX = timelineX + (startIndex - range.start) * roadmapMonthWidth;
-        const unclippedRight = timelineX + (endIndex - range.start + 1) * roadmapMonthWidth;
-        const barX = Math.max(timelineX + 1, unclippedX + 2);
-        const barRight = Math.min(timelineX + timelineWidth - 1, unclippedRight - 2);
-        const barY = rowTop + 5;
-        const barHeight = ROADMAP_ROW_HEIGHT - 10;
-        const barWidth = Math.max(4, barRight - barX);
+      const bar = includeProducts ? roadmapProductBarRect(product, range, rowTop) : null;
+      if (bar) {
+        const { x: barX, y: barY, width: barWidth, height: barHeight } = bar;
         const selected = includeSelection && product.id === selectedId;
         const color = roadmapStatusColor(product);
 
@@ -5139,6 +5151,161 @@ async function preloadCategoryImagesForPptx(products) {
   await Promise.allSettled(products.map((product) => waitForImageSource(productImageSource(product))));
 }
 
+// Record existing cards as editable presentation parts.
+function recordCardElementsForPptx(cardCanvas, product, layout) {
+  const context = cardCanvas.getContext("2d");
+  const elements = [];
+  let path = [];
+  let nativePathIndex = -1;
+  const pathMethods = new Set(["rect", "roundRect", "moveTo", "lineTo", "arc", "quadraticCurveTo", "bezierCurveTo", "closePath"]);
+  const color = (value) => {
+    const text = String(value || "#000000").trim();
+    const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+    if (hex) return { color: `#${hex.length === 3 ? hex.split("").map((part) => part + part).join("") : hex}`, opacity: 1 };
+    const rgb = text.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i);
+    if (rgb) return {
+      color: `#${rgb.slice(1, 4).map((part) => Math.round(Math.max(0, Math.min(255, Number(part)))).toString(16).padStart(2, "0")).join("")}`,
+      opacity: rgb[4] == null ? 1 : Math.max(0, Math.min(1, Number(rgb[4]))),
+    };
+    return { color: text === "white" ? "#ffffff" : "#000000", opacity: text === "transparent" ? 0 : 1 };
+  };
+  const matrix = () => {
+    const transform = context.getTransform();
+    return { a: transform.a, b: transform.b, c: transform.c, d: transform.d, e: transform.e, f: transform.f };
+  };
+  const point = (transform, x, y) => ({ x: transform.a * x + transform.c * y + transform.e, y: transform.b * x + transform.d * y + transform.f });
+  const rectangle = (transform, x, y, width, height) => {
+    const corners = [point(transform, x, y), point(transform, x + width, y), point(transform, x, y + height), point(transform, x + width, y + height)];
+    const left = Math.min(...corners.map((corner) => corner.x));
+    const top = Math.min(...corners.map((corner) => corner.y));
+    return { x: left, y: top, width: Math.max(...corners.map((corner) => corner.x)) - left, height: Math.max(...corners.map((corner) => corner.y)) - top };
+  };
+  const paint = (element, operation) => {
+    const isFill = operation === "fill";
+    const style = color(isFill ? context.fillStyle : context.strokeStyle);
+    if (isFill) {
+      element.fill = style.color;
+      element.fillOpacity = style.opacity * context.globalAlpha;
+    } else {
+      element.lineColor = style.color;
+      element.lineOpacity = style.opacity * context.globalAlpha;
+      element.lineWidth = context.lineWidth * Math.abs(matrix().a);
+    }
+  };
+  const rasterize = (bounds, replay) => {
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(bounds.width));
+    canvas.height = Math.max(1, Math.ceil(bounds.height));
+    const target = canvas.getContext("2d");
+    target.imageSmoothingEnabled = true;
+    target.imageSmoothingQuality = "high";
+    replay(target, bounds.x, bounds.y);
+    elements.push({ kind: "image", ...bounds, data: canvas.toDataURL("image/png") });
+  };
+  const recordPath = (operation) => {
+    let shape = null;
+    if (path.length === 1 && ["rect", "roundRect"].includes(path[0].method)) {
+      const { method, args, transform } = path[0];
+      shape = { kind: "shape", shape: method === "roundRect" ? "roundRect" : "rect", ...rectangle(transform, ...args.slice(0, 4)) };
+      if (method === "roundRect") {
+        const radii = (Array.isArray(args[4]) ? args[4] : [args[4] || 0]).map((radius) => Number(radius) * Math.abs(transform.a));
+        shape.radius = radii[0];
+        shape.cornerRadii = radii;
+      }
+    } else if (operation === "stroke" && path.length === 2 && path[0].method === "moveTo" && path[1].method === "lineTo") {
+      const start = point(path[0].transform, ...path[0].args);
+      const end = point(path[1].transform, ...path[1].args);
+      shape = { kind: "shape", shape: "line", x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), flipH: end.x < start.x, flipV: end.y < start.y };
+    }
+    if (shape) {
+      if (nativePathIndex < 0) {
+        nativePathIndex = elements.length;
+        elements.push(shape);
+      }
+      paint(elements[nativePathIndex], operation);
+      return;
+    }
+    // Small specification icons and two-color swatches are separate pictures;
+    // their surrounding labels and values are still native PowerPoint text.
+    const points = [];
+    path.forEach(({ method, args, transform }) => {
+      const add = (x, y) => points.push(point(transform, x, y));
+      if (["moveTo", "lineTo"].includes(method)) add(args[0], args[1]);
+      else if (["rect", "roundRect"].includes(method)) { add(args[0], args[1]); add(args[0] + args[2], args[1] + args[3]); }
+      else if (method === "arc") { add(args[0] - args[2], args[1] - args[2]); add(args[0] + args[2], args[1] + args[2]); }
+      else if (["quadraticCurveTo", "bezierCurveTo"].includes(method)) for (let index = 0; index < args.length; index += 2) add(args[index], args[index + 1]);
+    });
+    if (!points.length) return;
+    const padding = Math.max(2, context.lineWidth * Math.abs(matrix().a));
+    const left = Math.min(...points.map((item) => item.x)) - padding;
+    const top = Math.min(...points.map((item) => item.y)) - padding;
+    const bounds = { x: left, y: top, width: Math.max(...points.map((item) => item.x)) - left + padding, height: Math.max(...points.map((item) => item.y)) - top + padding };
+    rasterize(bounds, (target, cropX, cropY) => {
+      target.fillStyle = context.fillStyle;
+      target.strokeStyle = context.strokeStyle;
+      target.lineWidth = context.lineWidth;
+      target.lineCap = context.lineCap;
+      target.lineJoin = context.lineJoin;
+      target.globalAlpha = context.globalAlpha;
+      target.beginPath();
+      path.forEach(({ method, args, transform }) => {
+        target.setTransform(transform.a, transform.b, transform.c, transform.d, transform.e - cropX, transform.f - cropY);
+        target[method](...args);
+      });
+      target[operation]();
+    });
+  };
+  const recorder = new Proxy(context, {
+    get(target, key) {
+      const member = target[key];
+      if (typeof member !== "function") return member;
+      return (...args) => {
+        if (key === "beginPath") { path = []; nativePathIndex = -1; }
+        if (pathMethods.has(key)) path.push({ method: key, args, transform: matrix() });
+        if (key === "fill" || key === "stroke") recordPath(key);
+        if (key === "fillRect" || key === "strokeRect") {
+          const element = { kind: "shape", shape: "rect", ...rectangle(matrix(), ...args) };
+          paint(element, key === "fillRect" ? "fill" : "stroke");
+          elements.push(element);
+        }
+        if (key === "fillText") {
+          const [text, x, y, maxWidth] = args;
+          const transform = matrix();
+          const fontSize = Number(target.font.match(/([\d.]+)px/)?.[1] || 10);
+          const measuredWidth = target.measureText(String(text)).width;
+          const drawnWidth = Math.min(measuredWidth, Number.isFinite(maxWidth) ? maxWidth : measuredWidth);
+          const boxWidth = Math.max(1, drawnWidth + Math.min(2, fontSize * .15));
+          const align = target.textAlign === "center" ? "center" : target.textAlign === "right" || target.textAlign === "end" ? "right" : "left";
+          const left = x - (align === "center" ? boxWidth / 2 : align === "right" ? boxWidth : 0);
+          const baselineOffset = target.textBaseline === "middle" ? fontSize * .5 : target.textBaseline === "top" || target.textBaseline === "hanging" ? 0 : fontSize;
+          const textColor = color(target.fillStyle);
+          elements.push({
+            kind: "text", text: String(text), ...rectangle(transform, left, y - baselineOffset, boxWidth, fontSize * 1.3),
+            fontSize: fontSize * Math.abs(transform.a), fontFace: target.font.slice(target.font.indexOf("px") + 2).trim() || "Arial",
+            color: textColor.color, opacity: textColor.opacity * target.globalAlpha,
+            align, bold: /\b(?:bold|[6-9]00)\b/.test(target.font), fit: "shrink", baseline: point(transform, x, y).y,
+          });
+        }
+        if (key === "drawImage") {
+          const transform = matrix();
+          const destination = args.length === 9 ? args.slice(5) : args.length === 5 ? args.slice(1) : [args[1], args[2], args[0].naturalWidth || args[0].width, args[0].naturalHeight || args[0].height];
+          const bounds = rectangle(transform, ...destination);
+          rasterize(bounds, (targetCanvas, cropX, cropY) => {
+            targetCanvas.setTransform(transform.a, transform.b, transform.c, transform.d, transform.e - cropX, transform.f - cropY);
+            targetCanvas.globalAlpha = target.globalAlpha;
+            targetCanvas.drawImage(...args);
+          });
+        }
+        return member.apply(target, args);
+      };
+    },
+    set(target, key, value) { target[key] = value; return true; },
+  });
+  drawCard(recorder, product, 0, 0, false, layout, false);
+  return elements;
+}
+
 async function renderCategoryImageForPptx(category) {
   const previous = {
     activeCategoryId,
@@ -5149,12 +5316,17 @@ async function renderCategoryImageForPptx(category) {
     inspectorOpen,
     viewerInfoOpen,
     viewerInfoProductId,
+    dragState,
+    hoveredHeroVariant,
+    renderedCards,
+    renderedVariantOverflow,
+    renderedHeroVariantRegions,
+    renderedInfoButtons,
   };
 
   try {
     activeCategoryId = category.id;
-    const categoryBoard = ensureBoardSchema(category.board, categoryDefinition(category.id));
-    category.board = categoryBoard;
+    const categoryBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), categoryDefinition(category.id));
     board = categoryBoard;
     selectedId = null;
     searchQuery = "";
@@ -5162,6 +5334,8 @@ async function renderCategoryImageForPptx(category) {
     inspectorOpen = false;
     viewerInfoOpen = false;
     viewerInfoProductId = null;
+    dragState = null;
+    hoveredHeroVariant = null;
 
     await preloadCategoryImagesForPptx(board.products);
     const dimensions = getCanvasDimensions({ includeViewer: false });
@@ -5174,11 +5348,42 @@ async function renderCategoryImageForPptx(category) {
     exportContext.setTransform(scale, 0, 0, scale, 0, 0);
     exportContext.imageSmoothingEnabled = true;
     exportContext.imageSmoothingQuality = "high";
-    drawBoardTo(exportContext, dimensions, false, true);
+    drawBoardTo(exportContext, dimensions, false, true, false);
+
+    const products = [];
+    const layout = productCardLayout();
+    const shadowPadding = 8;
+    dimensions.laneRows.forEach(({ lane, top }) => {
+      const laneProducts = board.products
+        .filter((product) => product.laneId === lane.id)
+        .sort((a, b) => a.order - b.order);
+      laneProducts.forEach((product, displayIndex) => {
+        const x = cardXForDisplayIndex(laneProducts, displayIndex, false);
+        const cardCanvas = document.createElement("canvas");
+        cardCanvas.width = Math.max(1, Math.ceil((CARD_WIDTH + shadowPadding * 2) * scale));
+        cardCanvas.height = Math.max(1, Math.ceil((layout.cardHeight + shadowPadding * 2) * scale));
+        const cardContext = cardCanvas.getContext("2d");
+        cardContext.setTransform(scale, 0, 0, scale, shadowPadding * scale, shadowPadding * scale);
+        cardContext.imageSmoothingEnabled = true;
+        cardContext.imageSmoothingQuality = "high";
+        const elements = recordCardElementsForPptx(cardCanvas, product, layout);
+        products.push({
+          kind: "card",
+          id: product.id,
+          name: product.name,
+          elements,
+          x: (x - shadowPadding) * scale,
+          y: (top - shadowPadding) * scale,
+          width: cardCanvas.width,
+          height: cardCanvas.height,
+        });
+      });
+    });
     return {
       data: exportCanvas.toDataURL("image/jpeg", .9),
       width: exportCanvas.width,
       height: exportCanvas.height,
+      products,
     };
   } finally {
     activeCategoryId = previous.activeCategoryId;
@@ -5189,6 +5394,12 @@ async function renderCategoryImageForPptx(category) {
     inspectorOpen = previous.inspectorOpen;
     viewerInfoOpen = previous.viewerInfoOpen;
     viewerInfoProductId = previous.viewerInfoProductId;
+    dragState = previous.dragState;
+    hoveredHeroVariant = previous.hoveredHeroVariant;
+    renderedCards = previous.renderedCards;
+    renderedVariantOverflow = previous.renderedVariantOverflow;
+    renderedHeroVariantRegions = previous.renderedHeroVariantRegions;
+    renderedInfoButtons = previous.renderedInfoButtons;
   }
 }
 
@@ -5208,8 +5419,7 @@ async function renderCategoryRoadmapImageForPptx(category, groups = null) {
 
   try {
     activeCategoryId = category.id;
-    const categoryBoard = ensureBoardSchema(category.board, categoryDefinition(category.id));
-    category.board = categoryBoard;
+    const categoryBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), categoryDefinition(category.id));
     const pageGroups = Array.isArray(groups) ? groups : null;
     board = {
       ...categoryBoard,
@@ -5247,12 +5457,38 @@ async function renderCategoryRoadmapImageForPptx(category, groups = null) {
       { scrollLeft: 0, scrollTop: 0 },
       false,
       true,
+      false,
     );
+
+    // Keep the calendar and family rails in the background. Each visible
+    // product becomes one native PowerPoint shape with its own editable text.
+    const products = [];
+    let rowTop = ROADMAP_HEADER_HEIGHT;
+    dimensions.groups.forEach((group) => {
+      rowTop += ROADMAP_GROUP_HEADER_HEIGHT;
+      group.products.forEach((product) => {
+        const rect = roadmapProductBarRect(product, range, rowTop);
+        if (rect) {
+          const fill = roadmapStatusColor(product);
+          const concept = effectiveRoadmap(product)?.status === "concept";
+          products.push({
+            kind: "roadmap", id: product.id, name: product.name,
+            label: roadmapProductBarLabel(product), ...rect,
+            fill, textColor: contrastTextColor(fill), concept,
+            lineColor: product.statusType === "embargo" ? UI_PALETTE.amaranth
+              : concept ? UI_PALETTE.midGrey : UI_PALETTE.gunmetal,
+            fontSize: portfolio?.settings?.showRoadmapMsrp ? 11 : 12,
+          });
+        }
+        rowTop += ROADMAP_ROW_HEIGHT;
+      });
+    });
 
     return {
       data: exportCanvas.toDataURL("image/jpeg", .92),
       width: exportCanvas.width,
       height: exportCanvas.height,
+      products,
     };
   } finally {
     activeCategoryId = previous.activeCategoryId;
@@ -5281,7 +5517,38 @@ function addPptxPortfolioSlide(pptx, title, image) {
     line: { color: "2B2E2B", width: .4, transparency: 25 },
   });
   const placement = containRect(image.width, image.height, .38, .74, 12.55, 6.33, "left");
-  slide.addImage({ data: image.data, ...placement });
+  slide.addImage({ data: image.data, ...placement, objectName: "Calendar and category background" });
+  const scale = placement.w / image.width;
+  const cardGroups = [];
+  (image.products || []).forEach((product, productIndex) => {
+    if (product.kind === "card") {
+      cardGroups.push(PPTXEditable.addCard(pptx, slide, product, { ...placement, scale }, productIndex));
+      return;
+    }
+    const rect = {
+      x: placement.x + product.x * scale,
+      y: placement.y + product.y * scale,
+      w: product.width * scale,
+      h: product.height * scale,
+    };
+    const objectName = `Product: ${product.id} — ${product.name || product.label || "Product"}`;
+    if (product.kind === "image") {
+      slide.addImage({ data: product.data, ...rect, objectName, altText: product.name || "Product" });
+      return;
+    }
+    slide.addText(product.label, {
+      ...rect, objectName, shape: pptx.ShapeType.roundRect,
+      fontFace: "Arial", fontSize: product.fontSize * scale * 72, bold: true,
+      color: product.textColor.replace(/^#/, ""),
+      fill: { color: product.fill.replace(/^#/, "") },
+      line: { color: product.lineColor.replace(/^#/, ""), width: scale * 72,
+        ...(product.concept ? { dashType: "dash" } : {}) },
+      align: "center", valign: "mid", margin: [0, 8 * scale * 72, 0, 8 * scale * 72],
+      breakLine: false, wrap: false, fit: "shrink",
+    });
+  });
+  PPTXEditable.registerSlide(pptx, cardGroups);
+  return slide;
 }
 
 function containRect(sourceWidth, sourceHeight, targetX, targetY, targetWidth, targetHeight, align = "center") {
@@ -5441,7 +5708,7 @@ async function exportPptx(scope = "both", selectedCategoryIds = null) {
     );
   }
 
-  await pptx.writeFile({ fileName: pptxExportFilename(scope) });
+  await PPTXEditable.writeFile(pptx, { fileName: pptxExportFilename(scope) }, downloadBlob);
   renderActiveView();
 }
 

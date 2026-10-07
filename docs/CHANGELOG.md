@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-07 — separate product objects in PowerPoint exports
+
+- Roadmap exports now place each visible product in one native rounded rectangle containing editable text. Product names, optional MSRP, stage/status colors, date placement, and concept dashed outlines remain attached to that product shape. Calendar and family context stay in a separate background image.
+- Product Portfolio exports now place each card in one named PowerPoint group containing native frames, banners, separator lines, and editable names, prices, specification values, and SKU labels. Product artwork and small specification icons remain separate pictures inside the group. Groups can be moved/resized independently and ungrouped to edit individual parts.
+- Shared roadmap geometry clips products to the configured timeline and omits bars entirely outside it. Category selection, family pagination, slide titles, and PNG behavior are retained. Export uses copied category data and restores temporary view and hit-region state on success or failure.
+- Added native-object OOXML, product-free background, date clipping, individual card placement, and failure-restoration checks. Grouped delivery checks verify editable text, image relationships, unique IDs, exact group coordinates, and rounded banner/frame paths. An isolated headless browser exported all 11 categories from the 85-product legacy fixture; separate cards and roadmaps rendered correctly without changing its saved portfolio.
+
 ## 2026-10-07 — unified encrypted packages and portable shared-data setup
 
 - Added one keyed encrypted master package for every category, Products, Roadmap, settings, variants, and saved local images. Export project package now opens a protected export dialog with key reuse/creation/copy and downloads `master_ppc.pkg`; an unprotected local backup is an explicit optional choice. Missing local binaries block a complete export.
