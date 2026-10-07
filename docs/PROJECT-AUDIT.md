@@ -114,7 +114,7 @@ public/index.html
        ├─ persist local image blobs to IndexedDB
        ├─ preview and apply local ASCM updates
        └─ import/export data, packages, PNG, and PPTX
-  ├─ public/js/package-ui.js         → shared pull/import/export/recovery dialog
+  ├─ public/js/package-ui.js         → shared pull/import/export dialog
   └─ public/js/workspace-ui.js       → toolbar navigation, centralized settings, focus
 
 server/package-relay.mjs             → separate fixed-file service; not a Pages artifact
@@ -206,7 +206,6 @@ Portfolio metadata is stored as JSON in `localStorage`:
 | Current workspace | `product-portfolio-canvas-v4` |
 | Previous workspace migration | `product-portfolio-canvas-v3` |
 | Legacy single-board migration | `product-portfolio-canvas-v1` |
-| Previous package recovery slot | `product-portfolio-canvas-v4-package-recovery` |
 
 Saves are debounced by 120 ms. Locally uploaded image binaries are stored separately in IndexedDB:
 
@@ -237,7 +236,7 @@ Browser state is scoped to the origin. Changing the host, port, protocol, browse
 - URL-backed images remain references; they are not downloaded into the package.
 - Export fails if a referenced saved local binary is unavailable, so a supposedly complete package cannot silently omit it.
 - **Import project package** accepts legacy stored ZIPs and encrypted envelopes. It authenticates encrypted bytes, validates bounded ZIP entries/CRC/path uniqueness, validates the manifest and image references, normalizes a draft, and stages local binaries under fresh IDs before committing metadata. It does not clear the previous image library to begin an import.
-- Commit keeps the original workspace and its local-image references as one recovery copy. Failed staging or metadata commits preserve/restore the prior workspace and clean staged IDs. **Restore previous workspace** swaps that recovery copy with the current workspace; the recovery slot belongs to the browser origin and is replaced by the next successful package import or restore. Independent downloaded backups remain necessary for longer-term recovery or browser storage loss.
+- Commit preserves original data/images until metadata and workspace activation succeed. Failed staging or commits preserve/restore the prior workspace and clean staged IDs. Successful replacement deletes superseded original and valid legacy recovery image IDs that the current workspace does not reference, then removes the legacy recovery metadata. Imports do not save a previous-workspace snapshot. Downloaded packages provide independent backups for replacement or browser storage loss.
 
 The custom reader rejects compressed ZIP entries. A generic ZIP renamed to `.pkg` is not necessarily compatible.
 
@@ -291,11 +290,11 @@ Priority expresses potential impact, not confirmed exploitability.
 | Priority | Risk | Evidence and effect | Recommended control |
 | --- | --- | --- | --- |
 | P0 | Deployment completeness can regress | At the archive baseline, the Pages workflow copied `index.html`, `styles.css`, `app.js`, and `assets/`, while `index.html` also required `catalog-data.js` and `vendor/pptxgen.bundle.js`. The current workflow publishes the complete `public/` site tree and runs `scripts/checks/project.mjs`; current runtime references are relative to that site root. | Keep the workflow/HTML closure check mandatory so a later runtime reference cannot be omitted from deployment. |
-| P1 | Cross-store package recovery has limits | The earlier importer cleared IndexedDB before completion; the current implementation validates/stages new IDs, retains prior images, rolls back failed commits, and keeps one recovery slot. Metadata and binaries still span localStorage and IndexedDB, and storage loss/quota failures can limit recovery. | Preserve the staged replacement/recovery contract, test browser quota/cross-store failures, and keep independent downloaded backups. |
+| P1 | Cross-store package replacement has limits | The earlier importer cleared IndexedDB before completion; the current implementation validates/stages new IDs, preserves original data/images through metadata and workspace activation, rolls back failed commits, and cleans superseded images after success. Metadata and binaries still span localStorage and IndexedDB; storage loss/quota failures can affect persistence. | Preserve staged replacement, failure rollback, and cleanup only after a successful commit; test browser quota/cross-store failures and keep independent downloaded backups. |
 | P1 | Private portfolio disclosure | The package contains 85 real working product records and image references. The fetched 2026-09-23 remote baseline tracked the private package despite its ignore rule; the 2026-10-07 update pushed as `548c936` removes it from the current repository tree, preserves the disk copy, and does not erase repository history. | Keep private packages and screenshots untracked and out of Pages artifacts. Address existing history separately if required. Publish only a reviewed, sanitized dataset with explicit approval. |
 | P1 | Persistence failure is silent | `scheduleSave()` catches and suppresses `localStorage` errors. Quota or browser-policy failures can leave the user believing changes were saved. | Surface save state and errors, add quota handling, and provide an explicit backup reminder. |
 | P1 | Imported content is a trust boundary | Data/package fields feed DOM, canvas, URLs, colors, IDs, and filenames. Future interpolation changes can introduce stored script/markup injection or invalid rendering. | Centralize escaping and validation; test malicious strings, malformed colors/URLs/IDs, oversized input, and duplicate IDs. |
-| P1 | Incomplete end-to-end coverage | Static validation plus ASCM, portfolio/detail, PPTX, package codec/client, actual package workspace staging/recovery, and isolated relay checks exist. PPTX tests verify real bundled-library serialization; browser-saved delivery and PowerPoint opening remain unverified. Package fixtures exercise encrypted/legacy round trips and failure recovery; complete browser, production relay/source, and assistive-technology coverage still require separate verification. | Keep existing regressions and distinguish isolated application/relay fixtures from live HTTPS, owner-sync freshness, browser-storage, and accessibility checks. |
+| P1 | Incomplete end-to-end coverage | Static validation plus ASCM, portfolio/detail, PPTX, package codec/client, actual package workspace staging/rollback/cleanup, and isolated relay checks exist. PPTX tests verify real bundled-library serialization; browser-saved delivery and PowerPoint opening remain unverified. Package fixtures exercise encrypted/legacy round trips and failure rollback; complete browser, production relay/source, and assistive-technology coverage still require separate verification. | Keep existing regressions and distinguish isolated application/relay fixtures from live HTTPS, owner-sync freshness, browser-storage, and accessibility checks. |
 | P1 | Shared-source hosting and sync are external dependencies | The portable relay is implemented but is not connected to a production source. It serves the latest complete local mirror rather than independently checking SharePoint freshness. A stopped owner sync process or unavailable HTTPS host can prevent updates. | Deploy on an approved persistent host, verify HTTPS/key authorization and complete owner sync, monitor synchronization/service health, and retain encrypted manual import as a fallback. |
 | P2 | Coupled application module | Rendering, state, migrations, storage, editors, and exports still share mutable application state. Standalone ASCM/model/pagination helpers and the shell controller establish partial subsystem boundaries. | Continue extracting storage, package I/O, rendering, and editor controllers behind stable interfaces in small verified steps. |
 | P2 | Empty default content can be mistaken for data loss | The source catalog has 0 products, so first load is intentionally empty despite 85 WebP assets being present. Clear all products also leaves empty boards while preserving settings. | Keep pull/package welcome actions visible, expose advanced ASCM import in Settings → Data & export, and keep manual Add reachable in Settings when the portfolio has products, and distinguish template-only data from replacement workspace imports. |
@@ -310,7 +309,7 @@ Priority expresses potential impact, not confirmed exploitability.
 - Current and legacy schemas are normalized at explicit boundaries.
 - Local binary images are separated from lightweight JSON metadata.
 - Full packages preserve local-image binaries without embedding large data URLs in the portfolio JSON.
-- Shared package exports protect one complete workspace with a random key, and package replacement preserves a local previous-workspace recovery slot rather than clearing existing images first.
+- Shared package exports protect one complete workspace with a random key, and package replacement validates and stages incoming images before committing metadata, with rollback on failure and superseded-image cleanup after success.
 - Products, Roadmap, and both read-only detail surfaces share a single normalized portfolio, which supports linked selection and export consistency.
 - Category definitions and spec templates are centralized in `public/js/catalog-data.js`.
 - Product/SKU business colors are intentionally separated from interface design tokens.

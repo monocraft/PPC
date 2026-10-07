@@ -1,7 +1,7 @@
 "use strict";
 
 const STORAGE_KEY = "product-portfolio-canvas-v4";
-const PACKAGE_RECOVERY_KEY = `${STORAGE_KEY}-package-recovery`;
+const PACKAGE_RECOVERY_KEY = `${STORAGE_KEY}-package-recovery`; // Legacy import snapshot; only read to clean up older saved data.
 const MAX_PACKAGE_MANIFEST_BYTES = 4 * 1024 * 1024;
 const PREVIOUS_STORAGE_KEY = "product-portfolio-canvas-v3";
 const LEGACY_STORAGE_KEY = "product-portfolio-canvas-v1";
@@ -4985,19 +4985,6 @@ function clearPackageImageCaches() {
   missingImageAssetIds.clear();
 }
 
-function readPackageRecovery(raw = localStorage.getItem(PACKAGE_RECOVERY_KEY)) {
-  if (!raw) return null;
-  const snapshot = JSON.parse(raw);
-  if (snapshot?.version !== 1 || !snapshot.portfolio) throw new Error("The previous package recovery copy is invalid.");
-  validatePackageManifest(snapshot.portfolio);
-  validatePackageImageReferences(snapshot.portfolio);
-  return snapshot;
-}
-
-function hasPreviousPackage() {
-  try { return Boolean(readPackageRecovery()); } catch (_) { return false; }
-}
-
 async function commitPackageDraft(draft, expectedCurrent) {
   if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was loading. Try again after your changes are saved.");
   const previousPortfolio = portfolio;
@@ -5005,31 +4992,34 @@ async function commitPackageDraft(draft, expectedCurrent) {
   const previousRecovery = localStorage.getItem(PACKAGE_RECOVERY_KEY);
   const serialized = JSON.stringify(draft);
   if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
-  const recovery = JSON.stringify({ version: 1, savedAt: new Date().toISOString(), portfolio: JSON.parse(expectedCurrent) });
-  const restoreStorage = (key, value) => { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); };
   try {
-    // Image staging has completed. Keep the original library until this recovery
-    // copy is replaced by a later successful package import or restore.
-    localStorage.setItem(PACKAGE_RECOVERY_KEY, recovery);
+    // Incoming images have new IDs. Preserve the original library until the
+    // replacement is saved and activated so a failed commit can roll back.
     localStorage.setItem(STORAGE_KEY, serialized);
     portfolio = draft;
     clearPackageImageCaches();
     activateCategory(portfolio.activeCategoryId, { fitVertical: true });
   } catch (error) {
     portfolio = previousPortfolio;
-    try { localStorage.removeItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
-    try { restoreStorage(STORAGE_KEY, previousStored); } catch (_) {}
-    try { restoreStorage(PACKAGE_RECOVERY_KEY, previousRecovery); } catch (_) {}
+    try { if (previousStored === null) localStorage.removeItem(STORAGE_KEY); else localStorage.setItem(STORAGE_KEY, previousStored); } catch (_) {}
     clearPackageImageCaches();
     try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
     throw error;
   }
-  // Cleanup is limited to the obsolete recovery snapshot. It cannot touch
-  // images referenced by the current workspace or its new recovery copy.
+  // A successful replacement no longer retains a previous workspace. Also
+  // collect valid legacy snapshot images, protecting every current image ID.
   let obsoleteRecovery = null;
-  try { obsoleteRecovery = readPackageRecovery(previousRecovery); } catch (_) {}
-  const protectedIds = new Set([...localPackageImageIds(draft), ...localPackageImageIds(previousPortfolio)]);
-  const obsoleteIds = localPackageImageIds(obsoleteRecovery?.portfolio).filter((assetId) => !protectedIds.has(assetId));
+  try {
+    const snapshot = JSON.parse(previousRecovery);
+    if (snapshot?.version === 1 && snapshot.portfolio) {
+      validatePackageManifest(snapshot.portfolio);
+      validatePackageImageReferences(snapshot.portfolio);
+      obsoleteRecovery = snapshot.portfolio;
+    }
+  } catch (_) {}
+  try { localStorage.removeItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
+  const protectedIds = new Set(localPackageImageIds(draft));
+  const obsoleteIds = [...new Set([...localPackageImageIds(previousPortfolio), ...localPackageImageIds(obsoleteRecovery)])].filter((assetId) => !protectedIds.has(assetId));
   try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {}
   return {
     categoryCount: draft.categories.length,
@@ -5142,26 +5132,6 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     pendingLegacyImageBlobs.splice(pendingStart);
     if (staged) { try { await imageStoreDeleteBatch(stagedImages.map((entry) => entry.id)); } catch (_) {} }
     throw error;
-  } finally {
-    packageOperationInProgress = false;
-    scheduleSave();
-  }
-}
-
-async function restorePreviousPackage() {
-  if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
-  const snapshot = readPackageRecovery();
-  if (!snapshot) throw new Error("There is no previous package to restore on this device.");
-  packageOperationInProgress = true;
-  clearTimeout(saveTimer);
-  const expectedCurrent = JSON.stringify(portfolio);
-  try {
-    const draft = JSON.parse(JSON.stringify(snapshot.portfolio));
-    for (const assetId of localPackageImageIds(draft)) {
-      if (!await imageStoreGet(assetId)) throw new Error("A recovery image is unavailable. Import your saved backup package instead.");
-    }
-    const result = await commitPackageDraft(draft, expectedCurrent);
-    return { ...result, encrypted: false };
   } finally {
     packageOperationInProgress = false;
     scheduleSave();

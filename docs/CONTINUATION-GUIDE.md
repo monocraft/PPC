@@ -86,7 +86,7 @@ Keep the same local URL and port during a test cycle. Browser storage is origin-
    - The packaged local PNG renders.
    - Remote images either render or fail with an understandable fallback.
 
-Package import now validates the manifest and image references, stages local binaries under new IDs, and retains the original workspace/images before committing. Encrypted packages prompt for their package key; legacy stored-ZIP packages remain supported. Restore previous workspace uses one local recovery copy on the same origin and swaps the current workspace into that slot. Keep a downloaded backup as well; browser storage loss or quota failures can limit local recovery. Lightweight `.data` replacement remains a separate flow.
+Package import validates the manifest and image references, stages local binaries under new IDs, and preserves the original data/images until metadata and workspace activation succeed. Failed staging or commits leave the original workspace intact and remove staged images. Successful replacement deletes superseded original images and valid legacy recovery images that the current workspace does not reference, then removes legacy recovery metadata. Imports do not save a previous-workspace snapshot. Encrypted packages prompt for their package key; legacy stored-ZIP packages remain supported. Export a downloaded package before replacement if you need a backup. Lightweight `.data` replacement remains a separate flow.
 
 ### 4.1 Publish and pull the shared master
 
@@ -172,7 +172,7 @@ rg -n "<script|<link" public/index.html
 - Treat every imported filename and JSON field as untrusted.
 - Validate entry count, path shape, byte size, supported ZIP method, JSON version, IDs, URLs, colors, and image MIME types before mutation.
 - Prevent duplicate paths and traversal.
-- Keep package content validation and new-ID image staging before metadata commit; never clear the original image store to begin an import. Preserve the previous workspace's image IDs until its one recovery slot is replaced, and roll back failed commits/staging.
+- Keep package content validation and new-ID image staging before metadata commit; never clear the original image store to begin an import. Preserve original data/images until metadata and workspace activation succeed, roll back failed commits/staging, and only then delete superseded image IDs that the current workspace does not reference. Retire valid legacy recovery images and metadata after successful replacement; do not create a new recovery slot.
 - Add an export→import→export round-trip test with byte-independent semantic comparison.
 - Keep URL images as references only when that is an explicit privacy/offline decision.
 - Keep encrypted `master_ppc.pkg` as the default publisher flow and legacy stored-ZIP import as compatibility. Missing local image binaries must block a supposedly complete export; an unprotected export remains an explicit private-backup choice.
@@ -262,7 +262,7 @@ Use a fresh test origin/profile for the default-catalog pass, then import the pa
 | Persistence | Create one test product, reload, confirm it remains | Modify a product and local image, reload on the same origin |
 | Lightweight data | Export and re-import `.data`; understand that local binaries are excluded | References and metadata survive; local binary behavior is explicit |
 | Full package | Export then import into a clean origin | Product counts and local image survive round trip |
-| Unified shared package | An empty endpoint explains pending setup; encrypted export offers an entered/generated key and retains it for copying until Done | Test correct/wrong keys, encrypted/legacy import, failed staging/storage rollback, previous-workspace restore, and Products/Roadmap/image consistency. Verify a synthetic relay separately; a successful owner mirror sync and production pull are distinct checks |
+| Unified shared package | An empty endpoint explains pending setup; encrypted export offers an entered/generated key and retains it for copying until Done | Test correct/wrong keys, encrypted/legacy import, failed staging/storage/activation rollback, successful superseded/legacy-image cleanup, and Products/Roadmap/image consistency. Verify a synthetic relay separately; a successful owner mirror sync and production pull are distinct checks |
 | ASCM import | Workbook preview works without changing data; new products enter mapped categories with lane/category specification placeholders | Preview/reimport updates retain manually curated specifications (including empty arrays), price, images, variants, stage, and absent PNs; ambiguous candidates are skipped |
 | Timeline consistency | Choose 3/5/10 years and custom From/To; inspect every category | Switching categories and exporting uses the same configured range; product GA/EM and lifecycle dates are unchanged by a viewport-only change |
 | Product date editing | Details is the only GA/EM input home; Timeline's Edit dates button switches to Details and focuses GA | Exact GA/EM edits update roadmap months; clearing retains planned months. Protected drag keeps known days or clamps month end, while unknown exact dates stay TBD. Reload/unrelated edits preserve saved mismatches. Verify leap-year February, a 31-day-to-shorter-month drag, and ASCM valid day dates taking priority over inconsistent group month hints |
@@ -330,7 +330,7 @@ Exit condition: a clean checkout serves and validates without private data.
 ### Phase 1 — Correctness, safety, and deployability
 
 - Guarantee all runtime dependencies are in the Pages artifact.
-- Preserve package validation, isolated image staging, failed-commit recovery, and the previous-workspace slot; strengthen cross-store failure and browser-quota verification.
+- Preserve package validation, isolated image staging, failed-commit rollback, and cleanup only after successful metadata and workspace activation; strengthen cross-store failure and browser-quota verification. Use downloaded packages for backups.
 - Report save/storage errors and current save status.
 - Harden imported strings, IDs, URLs, colors, paths, sizes, and MIME types.
 - Add schema/package unit tests and a Playwright smoke suite.
