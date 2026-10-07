@@ -3,6 +3,7 @@
   "use strict";
 
   const MAX_PACKAGE_BYTES = 64 * 1024 * 1024;
+  const MAX_PACKAGE_COMMENTS = 2000;
   const MAX_ENTRIES = 10000;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -12,6 +13,22 @@
   const TAG_BYTES = 16;
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
   let crcTable;
+
+  function normalizePackageInfo(value) {
+    if (value === undefined || value === null) return null;
+    const invalid = () => { throw new Error("The package update information is invalid."); };
+    if (typeof value !== "object" || Array.isArray(value) || value.version !== 1
+      || Object.keys(value).length !== 3 || Object.keys(value).some((key) => !["version", "updatedAt", "comments"].includes(key))
+      || typeof value.updatedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.updatedAt)
+      || typeof value.comments !== "string" || value.comments.length > MAX_PACKAGE_COMMENTS) invalid();
+    const updated = new Date(value.updatedAt);
+    if (!Number.isFinite(updated.getTime()) || updated.toISOString() !== value.updatedAt) invalid();
+    return Object.freeze({ version: 1, updatedAt: value.updatedAt, comments: value.comments });
+  }
+
+  function createPackageInfo({ comments = "" } = {}) {
+    return normalizePackageInfo({ version: 1, updatedAt: new Date().toISOString(), comments });
+  }
 
   function bytesOf(value) {
     if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -296,5 +313,5 @@
     return output;
   }
 
-  root.PortfolioPackage = Object.freeze({ MAX_PACKAGE_BYTES, generateKey, normalizeKey, isEncrypted, encrypt, decrypt, createZip, readZip });
+  root.PortfolioPackage = Object.freeze({ MAX_PACKAGE_BYTES, MAX_PACKAGE_COMMENTS, createPackageInfo, normalizePackageInfo, generateKey, normalizeKey, isEncrypted, encrypt, decrypt, createZip, readZip });
 })(globalThis);

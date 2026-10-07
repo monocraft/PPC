@@ -1289,6 +1289,7 @@ function createDefaultPortfolio() {
       showRoadmapMsrp: false,
     },
     ascmSnapshot: null,
+    packageInfo: null,
     imageAssets: catalogImageAssets(),
     categories: CATEGORY_DEFINITIONS.map((definition) => ({
       id: definition.id,
@@ -1312,6 +1313,7 @@ function ensurePortfolioSchema(target) {
   };
   normalized.settings.showRoadmapMsrp = normalized.settings.showRoadmapMsrp === true;
   normalized.ascmSnapshot = normalizeAscmSnapshot(normalized.ascmSnapshot);
+  normalized.packageInfo = packageCodec().normalizePackageInfo(normalized.packageInfo);
   normalized.categories = Array.isArray(normalized.categories) ? normalized.categories.filter((category) => CATEGORY_DEFINITIONS.some((definition) => definition.id === category.id)) : [];
   ensureImageAssetRegistry(normalized);
   const catalogAssets = catalogImageAssets();
@@ -4865,6 +4867,11 @@ function packageCodec() {
   return globalThis.PortfolioPackage;
 }
 
+function getCurrentPackageInfo() {
+  try { return packageCodec().normalizePackageInfo(portfolio?.packageInfo); }
+  catch (_) { return null; }
+}
+
 function validatePackageManifest(manifest) {
   const isRecord = (value) => value && typeof value === "object" && !Array.isArray(value);
   const productIds = new Set();
@@ -4893,6 +4900,7 @@ function validatePackageManifest(manifest) {
     }
   };
   if (!isRecord(manifest)) throw new Error("The package does not contain a portfolio.");
+  packageCodec().normalizePackageInfo(manifest.packageInfo);
   if ([2, 3, 4].includes(manifest.version) && Array.isArray(manifest.categories) && manifest.categories.length) {
     const categoryIds = new Set();
     const knownCategoryIds = new Set(CATEGORY_DEFINITIONS.map((definition) => definition.id));
@@ -4993,13 +5001,16 @@ async function commitPackageDraft(draft, expectedCurrent) {
   return {
     categoryCount: draft.categories.length,
     productCount: draft.categories.reduce((total, category) => total + category.board.products.length, 0),
+    packageInfo: packageCodec().normalizePackageInfo(draft.packageInfo),
   };
 }
 
-async function buildProjectPackageBytes() {
+async function buildProjectPackageBytes(packageInfo) {
   const codec = packageCodec();
   const expectedCurrent = JSON.stringify(portfolio);
   const manifest = JSON.parse(expectedCurrent);
+  manifest.packageInfo = packageInfo === undefined ? codec.createPackageInfo() : codec.normalizePackageInfo(packageInfo);
+  if (!manifest.packageInfo) throw new Error("The package update information is invalid.");
   validatePackageManifest(manifest);
   validatePackageImageReferences(manifest);
   const entries = [];
@@ -5018,19 +5029,21 @@ async function buildProjectPackageBytes() {
   return codec.createZip(entries);
 }
 
-async function exportProjectPackage(key = "") {
+async function exportProjectPackage(key = "", { comments = "" } = {}) {
   closePopupMenus();
   if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
   const codec = packageCodec();
   const normalizedKey = key ? codec.normalizeKey(key) : "";
+  const packageInfo = codec.createPackageInfo({ comments });
   packageOperationInProgress = true;
   clearTimeout(saveTimer);
   const expectedCurrent = JSON.stringify(portfolio);
   try {
-    const bytes = await buildProjectPackageBytes();
+    const bytes = await buildProjectPackageBytes(packageInfo);
     const output = normalizedKey ? await codec.encrypt(bytes, normalizedKey) : bytes;
     if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was being prepared. Try exporting again.");
     downloadBlob(new Blob([output], { type: "application/octet-stream" }), normalizedKey ? "master_ppc.pkg" : "product-portfolio-project.pkg");
+    return packageInfo;
   } finally {
     packageOperationInProgress = false;
     scheduleSave();
@@ -5889,17 +5902,21 @@ function portfolioFromCatalogImport(parsed) {
 }
 
 function normalizeImportedPortfolio(parsed) {
+  const packageInfo = packageCodec().normalizePackageInfo(parsed?.packageInfo);
   if ([4, 3, 2].includes(parsed?.version) && Array.isArray(parsed.categories)) {
     const hasWorkspaceBoards = parsed.categories.some((category) => category && category.board);
-    return hasWorkspaceBoards
-      ? ensurePortfolioSchema(parsed)
-      : ensurePortfolioSchema(portfolioFromCatalogImport(parsed));
+    const target = hasWorkspaceBoards ? parsed : portfolioFromCatalogImport(parsed);
+    target.packageInfo = packageInfo;
+    return ensurePortfolioSchema(target);
   }
   if (parsed?.version === 1 && Array.isArray(parsed.categories)) {
-    return ensurePortfolioSchema(portfolioFromCatalogImport(parsed));
+    const target = portfolioFromCatalogImport(parsed);
+    target.packageInfo = packageInfo;
+    return ensurePortfolioSchema(target);
   }
   if (parsed?.version === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.lanes)) {
     const migrated = createDefaultPortfolio();
+    migrated.packageInfo = packageInfo;
     const category = migrated.categories.find((item) => item.id === activeCategoryId) || migrated.categories[0];
     if (!category) throw new Error("No category is available for the legacy board import.");
     category.board = ensureBoardSchema(parsed, categoryDefinition(category.id));

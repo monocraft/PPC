@@ -97,6 +97,7 @@ export function validateDecryptedPackage(bytes) {
   catch { throw new Error("The package portfolio data is damaged."); }
   const isRecord = (value) => value && typeof value === "object" && !Array.isArray(value);
   if (!isRecord(manifest)) throw new Error("The package does not contain a portfolio.");
+  const packageInfo = codec.normalizePackageInfo(manifest.packageInfo);
   let boards;
   if ([2, 3, 4].includes(manifest.version) && Array.isArray(manifest.categories) && manifest.categories.length) {
     const seen = new Set();
@@ -148,7 +149,7 @@ export function validateDecryptedPackage(bytes) {
   if (manifest.version !== 1 || manifest.imageAssets !== undefined) {
     for (const imageId of referencedImages) if (!assets.has(imageId)) throw new Error("The package refers to an image missing from its image library.");
   }
-  return { categoryCount: boards.length, productCount: products.size, entryCount: entries.size };
+  return { categoryCount: boards.length, productCount: products.size, entryCount: entries.size, packageInfo };
 }
 
 export async function publishMasterPackage({ input, keyFile = "", projectRoot = PROJECT_ROOT } = {}) {

@@ -5,10 +5,21 @@
   const dialog = get("packageDialog");
   const form = get("packageForm");
   const keyInput = get("packageKey");
+  const commentsInput = get("packageUpdateComments");
   const submit = get("confirmPackage");
   const status = get("packageStatus");
   const error = get("packageError");
   let mode = "pull", selectedFile = null, busy = false, completed = false, restoreFocus = null, controller = null, cancelRequested = false, downloadedBytes = null;
+
+  function showPackageInfo(info, updatedId, commentsId) {
+    const date = info?.updatedAt ? new Date(info.updatedAt) : null;
+    const hasDate = date && Number.isFinite(date.getTime());
+    get(updatedId).textContent = hasDate ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date) : "Date not supplied";
+    get(updatedId).dateTime = hasDate ? info.updatedAt : "";
+    get(updatedId).title = hasDate ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" }).format(date) : "";
+    const comments = info?.comments || "";
+    get(commentsId).textContent = comments.trim() ? comments : "No comments supplied.";
+  }
 
   function usesRelay() {
     const source = globalThis.PPC_PACKAGE_SOURCE;
@@ -25,6 +36,7 @@
 
   function refresh() {
     get("restorePreviousPackage").disabled = !globalThis.hasPreviousPackage();
+    showPackageInfo(globalThis.getCurrentPackageInfo(), "sharedPackageUpdated", "sharedPackageComments");
     try {
       const source = pullSource();
       get("sharedPackageStatus").textContent = source.packageUrl ? "Pull the latest master package. Your key unlocks Products and Roadmap on this device." : "Load the shared master into Products and Roadmap with your package key.";
@@ -47,7 +59,7 @@
 
   function setBusy(value, applying = false) {
     busy = value;
-    for (const control of form.querySelectorAll("input, button")) control.disabled = value;
+    for (const control of form.querySelectorAll("input, textarea, button")) control.disabled = value;
     get("cancelPackage").disabled = value && applying;
     get("closePackage").disabled = value && applying;
     submit.textContent = value ? (applying ? "Loading package…" : mode === "export" ? "Building package…" : "Downloading…") : mode === "pull" ? "Pull latest data" : mode === "export" ? "Build package" : mode === "restore" ? "Restore previous workspace" : "Import package";
@@ -59,6 +71,7 @@
     document.querySelector(".app-shell").inert = false;
     get("workspaceEmpty").inert = false;
     keyInput.value = "";
+    commentsInput.value = "";
     selectedFile = null;
     downloadedBytes = null;
     completed = false;
@@ -74,6 +87,9 @@
     restoreFocus = document.activeElement;
     mode = nextMode; selectedFile = file; completed = false; downloadedBytes = null;
     cancelRequested = false;
+    commentsInput.value = "";
+    get("packageResultInfo").classList.add("hidden");
+    get("packageResultUpdated").textContent = ""; get("packageResultComments").textContent = "";
     keyInput.value = ""; get("packageShowKey").checked = false; get("packageEncrypt").checked = true;
     get("cancelPackage").classList.remove("hidden");
     error.textContent = ""; status.textContent = "";
@@ -134,12 +150,14 @@
         status.textContent = "Checking and loading the complete package…";
         result = await globalThis.importProjectPackage(selectedFile.file, { key });
       } else if (mode === "restore") result = await globalThis.restorePreviousPackage();
-      else { status.textContent = "Collecting data and image files…"; await globalThis.exportProjectPackage(key); }
+      else { status.textContent = "Collecting data and image files…"; result = await globalThis.exportProjectPackage(key, { comments: commentsInput.value }); }
       completed = true;
       downloadedBytes = null;
       if (mode === "export") keyInput.value = key;
       status.textContent = mode === "export" ? (key ? "master_ppc.pkg is ready. Replace public/data/master_ppc.pkg in GitHub on the main branch, then wait for the site update to finish. Keep the same key for future updates." : "Private backup package created.") : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
       get("packageTitle").textContent = mode === "export" ? "Package built" : mode === "restore" ? "Workspace restored" : "Data updated";
+      showPackageInfo(mode === "export" ? result : result.packageInfo, "packageResultUpdated", "packageResultComments");
+      get("packageResultInfo").classList.remove("hidden");
       refresh(); updateKeyControls(); setBusy(false);
       get("packageExportOptions").classList.add("hidden");
       get("cancelPackage").classList.add("hidden"); submit.textContent = "Done"; submit.focus();
@@ -166,7 +184,7 @@
     event.stopPropagation();
     if (event.key === "Escape") { event.preventDefault(); close(); }
     else if (event.key === "Tab") {
-      const controls = [...form.querySelectorAll("button:not([disabled]), input:not([disabled])")].filter((el) => el.getClientRects().length > 0 && !el.closest(".hidden"));
+      const controls = [...form.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled])")].filter((el) => el.getClientRects().length > 0 && !el.closest(".hidden"));
       const first = controls[0], last = controls.at(-1);
       if (!first) { event.preventDefault(); return; }
       if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { event.preventDefault(); last.focus(); }

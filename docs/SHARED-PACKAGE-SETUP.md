@@ -7,8 +7,8 @@ The encrypted file is publicly downloadable. The package key remains separate fr
 ## Build and publish an update
 
 1. Open PPC with the current complete master loaded. Make the required product, roadmap, specification, variant, or image changes.
-2. Choose **Settings → Data & export → Build master package**. Keep **Protect the package with a key** selected and enter the **existing package key**. Use **Create new key** only for the first publication or an intentional key change.
-3. Choose **Build package**. PPC downloads the encrypted `master_ppc.pkg`. The key remains available to copy until **Done** closes the dialog, then it is cleared. If the browser adds `(1)` to the downloaded name, rename it back to exactly `master_ppc.pkg`.
+2. Choose **Settings → Data & export → Build master package**. Add optional update comments describing the changes, up to 2,000 characters. Keep **Protect the package with a key** selected and enter the **existing package key**. Use **Create new key** only for the first publication or an intentional key change.
+3. Choose **Build package**. PPC records the build date automatically and downloads the encrypted `master_ppc.pkg`, including that date and your update comments. The key remains available to copy until **Done** closes the dialog, then it is cleared. If the browser adds `(1)` to the downloaded name, rename it back to exactly `master_ppc.pkg`.
 4. In [the repository's data folder](https://github.com/monocraft/PPC/tree/main/public/data), choose **Add file → Upload files**. Upload the newly built `master_ppc.pkg` into this same folder, replacing the existing file. Do not upload the key or an unprotected backup.
 5. Commit the replacement to `main`, using a message such as `Update master portfolio package`. The existing GitHub Pages workflow checks the encrypted envelope and publishes the updated site.
 6. Wait until the latest **Deploy to GitHub Pages** run succeeds in [GitHub Actions](https://github.com/monocraft/PPC/actions). The GitHub commit alone does not mean the updated package is available on the live site yet.
@@ -24,7 +24,16 @@ GitHub's browser uploader accepts files up to 25 MiB. Larger packages can be com
 - Decryption, package validation, and image staging happen before the current workspace is replaced. Download failures, a wrong key, or an invalid package leave the current workspace intact.
 - A wrong-key retry can reuse the already downloaded encrypted bytes while the dialog remains open. Closing the dialog clears that temporary copy and the key. Opening a new pull fetches the master again.
 - A successful import updates Products, Roadmap, settings, variants, and included images together. It replaces local edits rather than merging them. Build a separate private backup before pulling if those edits must be retained.
+- After unlocking and importing a package, viewers can see its update date and the updater's comments. Both are part of the encrypted package; fetching the public file alone does not reveal them.
 - **Import project package** remains available for a downloaded package or an older private backup.
+
+## Update date and comments
+
+Each new package build records the current UTC build timestamp automatically. Rebuilding creates a fresh update date, even when you retain the same package key. The optional comments describe that specific package update and allow up to 2,000 characters, including line breaks. Viewers see the date and comments after the package has been unlocked and imported; no separate public metadata file is published.
+
+The package's update date comes from its build, not its GitHub upload or deployment time. Uploading the same built file again preserves its original date and comments. To publish a new update date or change the comments, build a new package and replace `public/data/master_ppc.pkg` using the normal steps above.
+
+Older packages without this metadata remain supported. PPC does not invent a build date or updater comments for them. When an older master needs those details, load it, build a new package with comments, and publish that new file with the same key.
 
 ## Publishing checks and optional local helper
 
@@ -36,7 +45,7 @@ The optional local publishing helper can validate and copy an encrypted download
 node scripts/publish-master-package.mjs --input "C:/PrivateDownloads/master_ppc.pkg" --key-file "C:/PrivateKeys/PACKAGE-KEY.txt"
 ```
 
-The key file is read locally for authenticated decryption and validation; it is never copied to `public/`, printed, or uploaded. Keep it in a private, ignored location. The app's package builder remains the normal way to make updates.
+The key file is read locally for authenticated decryption and validation; it is never copied to `public/`, printed, or uploaded. With a key file supplied, the helper also validates the optional update date and comments and rejects malformed metadata before replacing the current master. Missing metadata in older packages remains valid. The helper does not print decrypted comments or create a public metadata file. Keep the key file in a private, ignored location. The app's package builder remains the normal way to make updates.
 
 ## Intentional key changes
 

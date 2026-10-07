@@ -3,6 +3,30 @@ import assert from "node:assert/strict";
 await import("../../public/js/package-codec.js");
 const codec = globalThis.PortfolioPackage;
 assert.equal(codec.MAX_PACKAGE_BYTES, 64 * 1024 * 1024);
+assert.equal(codec.MAX_PACKAGE_COMMENTS, 2000);
+const comments = "Added the new launch dates.\nReviewed the regional variants.";
+const beforeBuild = Date.now();
+const packageInfo = codec.createPackageInfo({ comments });
+assert.ok(Date.parse(packageInfo.updatedAt) >= beforeBuild && Date.parse(packageInfo.updatedAt) <= Date.now(), "build metadata must automatically use the current UTC time");
+assert.equal(new Date(packageInfo.updatedAt).toISOString(), packageInfo.updatedAt);
+assert.equal(packageInfo.version, 1);
+assert.equal(packageInfo.comments, comments, "updater comments and line breaks must be preserved");
+assert.equal(codec.createPackageInfo().comments, "");
+assert.equal(codec.normalizePackageInfo(undefined), null);
+assert.equal(codec.normalizePackageInfo(null), null);
+assert.notEqual(codec.normalizePackageInfo(packageInfo), packageInfo, "normalization must return a detached metadata copy");
+assert.deepEqual(codec.normalizePackageInfo(packageInfo), packageInfo);
+assert.ok(Object.isFrozen(packageInfo));
+assert.equal(codec.createPackageInfo({ comments: "x".repeat(2000) }).comments.length, 2000);
+for (const invalid of [
+  { ...packageInfo, version: 2 }, { ...packageInfo, version: "1" },
+  { ...packageInfo, comments: "x".repeat(2001) }, { ...packageInfo, comments: null },
+  { ...packageInfo, updatedAt: "2026-02-30T12:00:00.000Z" },
+  { ...packageInfo, updatedAt: "2026-10-07T12:00:00.000+00:00" },
+  { ...packageInfo, updatedAt: "2026-10-07" }, { ...packageInfo, updatedAt: "invalid" },
+  { version: 1, updatedAt: packageInfo.updatedAt }, { ...packageInfo, anotherField: true }, [], "metadata",
+]) assert.throws(() => codec.normalizePackageInfo(invalid), /package update information/i);
+assert.throws(() => codec.createPackageInfo({ comments: "x".repeat(2001) }), /package update information/i);
 const encode = (value) => new TextEncoder().encode(value);
 const decode = (value) => new TextDecoder().decode(value);
 const key = codec.generateKey();
@@ -40,6 +64,11 @@ assert.ok(!codec.isEncrypted(zip), "legacy stored ZIP packages must remain disti
 assert.equal(decode(encrypted.subarray(0, 8)), "PPCPKG01");
 assert.equal(encrypted.length, zip.length + 8 + 12 + 16, "the envelope contains a 12-byte IV and full 128-bit GCM tag");
 assert.deepEqual(await codec.decrypt(encrypted, key), zip);
+const metadataZip = codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify({ version: 4, packageInfo })) }]);
+const metadataEncrypted = await codec.encrypt(metadataZip, key);
+assert.equal(Buffer.from(metadataEncrypted).includes(Buffer.from(comments)), false, "update comments must remain inside the encrypted package");
+const recoveredInfo = JSON.parse(decode(codec.readZip(await codec.decrypt(metadataEncrypted, key)).get("portfolio.json"))).packageInfo;
+assert.deepEqual(codec.normalizePackageInfo(recoveredInfo), packageInfo, "encrypted package round trips must preserve the automatic date and updater comments");
 assert.deepEqual([...codec.readZip(await codec.decrypt(encrypted, key)).keys()], entries.map((entry) => entry.name));
 const secondEncryption = await codec.encrypt(zip, key);
 assert.notDeepEqual(secondEncryption.subarray(8, 20), encrypted.subarray(8, 20), "each encryption must use a fresh IV even for identical input and key");

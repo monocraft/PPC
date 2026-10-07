@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 await import("../../public/js/ascm-import.js");
+await import("../../public/js/package-codec.js");
 
 const importer = globalThis.ASCMImporter;
 assert.ok(importer, "ASCM importer should register on globalThis");
@@ -295,6 +296,7 @@ const sandbox = {
   window: {},
   ASCMImporter: importer,
   PortfolioModel: globalThis.PortfolioModel,
+  PortfolioPackage: globalThis.PortfolioPackage,
   PPTXPagination: { paginateRoadmapGroups: () => [] },
   crypto: globalThis.crypto,
   alert: () => {},
@@ -310,7 +312,7 @@ const testedFunctions = [
   "monthIndex", "monthString", "addMonths", "normalizeMonth", "categoryDefinition", "normalizeRoadmapStatus",
   "inferFamily", "defaultRoadmapForProduct", "normalizeProductInfoDate", "normalizeAscmRecord",
   "normalizeAscmProductMetadata", "normalizeAscmSnapshot", "normalizePartSku", "ensureBoardSchema", "standardizedStatus",
-  "catalogImageAssetId", "catalogImageAssets", "ensurePortfolioSchema", "parseHexColor", "normalizeHexColor", "clonePortfolioData",
+  "catalogImageAssetId", "catalogImageAssets", "packageCodec", "ensurePortfolioSchema", "parseHexColor", "normalizeHexColor", "clonePortfolioData",
   "ascmGroupBasePartNumbers", "ascmGroupDates", "ascmRecordSignature", "ascmProductNeedsUpdate", "buildAscmImportPlan",
   "ascmRoadmapStatus", "applyAscmGroupToProduct", "ascmProductId", "findPortfolioProductLocation", "applyAscmImportPlan",
   "normalizeOrdersForBoard", "makeProduct",

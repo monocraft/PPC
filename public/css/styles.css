@@ -69,6 +69,18 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .shared-package-settings h4 { margin: 0 0 4px; }
 .shared-package-settings p { margin: 0; }
 .shared-package-settings button { flex-shrink: 0; }
+.package-info { margin: 0 0 14px; padding: 12px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); }
+.package-info dl { display: grid; gap: 4px; margin: 0; }
+.package-info dt { color: var(--color-text-secondary); font-size: 12px; }
+.package-info dd { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.package-info dt:not(:first-child) { margin-top: 8px; }
+.package-info-comments { white-space: pre-wrap; }
+.package-dialog .package-info { margin: 0; }
+.package-comment-field { display: grid; gap: 8px; margin-top: 14px; }
+.package-comment-field label { color: var(--color-text-secondary); }
+.package-comment-field label span { font-size: 12px; }
+.package-comment-field textarea { width: 100%; min-height: 80px; resize: vertical; }
+.package-comment-field .settings-note { margin: 0; }
 .package-dialog { width: min(490px, 100%); gap: 12px; }
 .package-description { margin: 0; color: var(--color-text-secondary); line-height: 1.6; }
 .package-file-name { margin: 0; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 5px; overflow-wrap: anywhere; }
