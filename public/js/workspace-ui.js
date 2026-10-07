@@ -89,7 +89,6 @@
   get("workspaceSettingsDone").addEventListener("click", closeSettings);
   get("quickTimelineSettings").addEventListener("click", () => openSettings("timeline"));
   get("emptyImportPackage").addEventListener("click", () => clickAction("importPackage"));
-  get("emptyImportAscm").addEventListener("click", () => clickAction("importAscm"));
   get("quickEditSelected").addEventListener("click", () => clickAction("editSelected"));
   get("dataMenuButton").onclick = () => openSettings("data");
   get("productMenuButton").onclick = () => openSettings("display");

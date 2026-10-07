@@ -1,5 +1,10 @@
 # Change Log
 
+## 2026-10-07 — keep ASCM import in settings
+
+- Removed Import ASCM and its explanatory copy from the welcome screen. First launch and empty categories offer Pull latest data and Import package.
+- Keep the advanced Import ASCM report action in Settings → Data & export, with its existing reviewed additive import flow.
+
 ## 2026-10-07 — hide the header for an empty portfolio
 
 - Hide the bottom status bar for the same empty-portfolio state, so the welcome screen fills the full viewport. Restore status automatically when products are loaded; retain it for empty categories when other categories contain products and for zero-match searches.
