@@ -35,19 +35,25 @@ function readOption(name) {
 const listenHost = readOption("host") || process.env.PORTFOLIO_HOST || "127.0.0.1";
 const requestedPort = Number(readOption("port") || process.env.PORTFOLIO_PORT || 4173);
 const masterFile = readOption("master-file") || process.env.PPC_MASTER_FILE;
+const teamBackend = process.argv.includes("--team-backend") || process.env.PPC_MASTER_STORAGE === "github";
 const localEdits = process.argv.includes("--local-edits") || process.env.PPC_MASTER_LOCAL_EDITS === "1";
 const demoKey = process.env.PPC_MASTER_DEMO_KEY || "";
-if (masterFile && !["127.0.0.1", "localhost", "::1"].includes(listenHost)) throw new Error("Use the shared master service behind HTTPS for team access; the local preview must use loopback.");
+if ((masterFile || teamBackend) && !["127.0.0.1", "localhost", "::1"].includes(listenHost)) throw new Error("Use the shared master service behind HTTPS for team access; the local preview must use loopback.");
+if (teamBackend && masterFile) throw new Error("Choose the private GitHub backend or a local master file.");
+if (teamBackend && requestedPort === 0) throw new Error("Choose a fixed port for the private backend preview.");
 if (demoKey && (!masterFile || !localEdits)) throw new Error("A demo requires its own local editable master.");
-const masterHandler = masterFile ? createMasterHandler({ packageFile: masterFile, allowLocalEdits: localEdits, editorToken: process.env.PPC_MASTER_WRITE_TOKEN }) : null;
+const previewHost = listenHost === "::1" ? "[::1]" : listenHost;
+const masterHandler = teamBackend
+  ? createMasterHandler({ storage: "github", githubToken: process.env.PPC_GITHUB_TOKEN, allowedOrigins: [`http://${previewHost}:${requestedPort}`] })
+  : masterFile ? createMasterHandler({ packageFile: masterFile, allowLocalEdits: localEdits, editorToken: process.env.PPC_MASTER_WRITE_TOKEN }) : null;
 
 function currentPackageSource() {
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : requestedPort;
   const host = listenHost === "::1" ? "[::1]" : listenHost;
   const origin = `http://${host}:${port}`;
-  const packageEndpoint = masterFile ? `${origin}/api/package/latest` : readOption("package-endpoint") || process.env.PPC_PACKAGE_ENDPOINT;
-  const masterEndpoint = masterFile ? `${origin}/api/master` : readOption("master-endpoint") || process.env.PPC_MASTER_ENDPOINT;
+  const packageEndpoint = masterHandler ? `${origin}/api/package/latest` : readOption("package-endpoint") || process.env.PPC_PACKAGE_ENDPOINT;
+  const masterEndpoint = masterHandler ? `${origin}/api/master` : readOption("master-endpoint") || process.env.PPC_MASTER_ENDPOINT;
   let source = renderPackageSource(packageEndpoint, masterEndpoint);
   if (demoKey) source += `globalThis.PPC_MASTER_SOURCE = Object.freeze(${JSON.stringify({ endpoint: `${origin}/api/master`, label: "Demo master", demo: true, demoKey })});\n`;
   return source;

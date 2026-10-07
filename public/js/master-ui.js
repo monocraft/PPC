@@ -22,8 +22,10 @@
     const button = document.getElementById("pullLatestData");
     if (!button || !adapter || !root.PortfolioMasterClient || !root.PortfolioMasterModel) return null;
     const endpoint = source?.endpoint || (root.PPC_PACKAGE_SOURCE?.mode === "relay" ? root.PPC_PACKAGE_SOURCE.endpoint : "");
-    const session = root.PortfolioMasterClient.createSession({ endpoint, source, adapter, fetchImpl });
-    const githubMode = source?.mode === "github", configured = session.getState().configured;
+    const teamMode = source?.team === true || source?.mode === "github";
+    // Browser users never receive the private backend's repository credential.
+    const session = root.PortfolioMasterClient.createSession({ endpoint, source: { ...source, mode: "service", team: teamMode }, adapter, fetchImpl });
+    const configured = session.getState().configured;
     const status = element("span", "master-status");
     status.id = "masterSyncStatus"; status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
     button.insertAdjacentElement("afterend", status);
@@ -31,16 +33,16 @@
     dialog.id = "masterDialog";
     dialog.setAttribute("aria-labelledby", "masterDialogTitle"); dialog.setAttribute("aria-describedby", "masterDialogDescription");
     document.body.append(dialog);
-    let running = false, connectingGitHub = false, modalResolve = null, modalCancel = null, savedMessage = "", lastError = "";
+    let running = false, modalResolve = null, modalCancel = null, savedMessage = "", lastError = "";
 
     function updateStatus() {
       const state = session.getState(), count = state.pending.length;
-      button.textContent = running ? connectingGitHub ? "Connecting…" : "Saving…" : count ? "Save to master" : "Pull latest data";
+      button.textContent = running ? "Saving…" : count ? "Save to master" : "Pull latest data";
       button.disabled = running || Boolean(adapter.hasPendingPackageOperation?.());
       button.title = count ? `Review and save changes for ${count} ${count === 1 ? "product" : "products"} to the shared master` : "Load the shared portfolio with your package key";
       button.classList.toggle("master-has-changes", count > 0);
       status.className = `master-status${lastError ? " master-status-error" : count ? " master-status-pending" : savedMessage ? " master-status-saved" : ""}`;
-      status.textContent = running ? connectingGitHub ? "Connecting your GitHub account…" : "Updating the shared master…" : lastError || (count ? `${count} ${count === 1 ? "product has" : "products have"} changes on this device` : savedMessage || (state.connected ? "Master is up to date" : ""));
+      status.textContent = running ? "Updating the shared master…" : lastError || (count ? `${count} ${count === 1 ? "product has" : "products have"} changes on this device${configured ? "" : " · team saving is not connected yet"}` : savedMessage || (state.connected ? "Master is up to date" : ""));
       status.title = status.textContent;
       root.dispatchEvent(new CustomEvent("portfolio:master-status", { detail: { connected: state.connected, hasKey: state.hasKey } }));
     }
@@ -96,9 +98,9 @@
         body.append(list);
         const reasonLabel = element("label", "master-reason-label", "Reason for this update (optional)");
         const reason = element("textarea", "master-reason"); reason.rows = 2; reason.maxLength = 1000; reason.placeholder = "For example: revised factory schedule"; reasonLabel.append(reason); body.append(reasonLabel);
-        if (!configured) body.append(element("p", "master-notice", "Master sharing needs to be connected by the portfolio owner. Your changes remain saved on this device."));
+        if (!configured) body.append(element("p", "master-notice", "Team saving has not been connected by the portfolio owner yet. You can keep editing; your changes remain saved on this device."));
         else if (session.getState().hasKey) {
-          const connection = element("div", "master-connection"); connection.append(element("span", "", githubMode ? `Saving to ${source.owner}/${source.repo}. Your package key and GitHub token stay in memory until you reload or disconnect.` : "Your master key is remembered until you reload or disconnect."));
+          const connection = element("div", "master-connection"); connection.append(element("span", "", teamMode ? "Connected to your team's master. Saving is handled privately for your team." : "Your master key is remembered until you reload or disconnect."));
           const disconnect = element("button", "quiet-button", "Disconnect"); disconnect.type = "button"; disconnect.addEventListener("click", () => { root.PortfolioMasterPresence?.leave(); session.disconnect(); finish(null); updateStatus(); }); connection.append(disconnect); body.append(connection);
         }
         addCancel(footer, "Keep editing");
@@ -108,19 +110,12 @@
     }
 
     function getAccess(editor = false, message = "") {
-      const githubToken = editor === "github";
-      return show(githubToken ? "Connect your GitHub account" : editor ? "Team editing key" : "Connect to your master", githubToken ? `Use your own GitHub token with write access to ${source.owner}/${source.repo}. Your token stays in memory until you reload or disconnect.` : editor ? "Enter the editing key supplied by your portfolio owner. It is remembered only until you reload or disconnect." : "Use the same key you use to pull the master package. It is remembered only until you reload or disconnect.", ({ body, footer, form, finish }) => {
+      return show(editor ? "Team editing key" : "Connect to your master", editor ? "Enter the editing key supplied by your portfolio owner. It is remembered only until you reload or disconnect." : "Use the same key you use to pull the master package. It is remembered only until you reload or disconnect.", ({ body, footer, form, finish }) => {
         if (message) body.append(element("p", "master-notice master-error", message));
-        if (githubToken) {
-          const help = element("a", "", "GitHub token setup instructions"); help.href = "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens"; help.target = "_blank"; help.rel = "noopener noreferrer"; body.append(help);
-          const details = element("details"), summary = element("summary", "", "Which token should I use?");
-          details.append(summary, element("p", "", "The repository owner can use a fine-grained token for this repository with Contents read and write permission. Collaborators on a personal public repository may need a classic token with public_repo scope. Use your own account and token."));
-          const create = element("a", "", "Create a fine-grained token (repository owner)"); create.href = "https://github.com/settings/personal-access-tokens/new"; create.target = "_blank"; create.rel = "noopener noreferrer"; details.append(create); body.append(details);
-        }
-        const label = element("label", "master-key-label", githubToken ? "GitHub access token" : editor ? "Team editing key" : "Master package key"), input = element("input", "master-key");
+        const label = element("label", "master-key-label", editor ? "Team editing key" : "Master package key"), input = element("input", "master-key");
         input.type = "password"; input.autocomplete = "off"; input.spellcheck = false; input.required = true; input.maxLength = editor ? 512 : 128; input.setAttribute("autofocus", ""); label.append(input); body.append(label);
         const revealLabel = element("label", "master-show-key"), reveal = element("input"); reveal.type = "checkbox"; reveal.addEventListener("change", () => { input.type = reveal.checked ? "text" : "password"; }); revealLabel.append(reveal, document.createTextNode(" Show key")); body.append(revealLabel);
-        addCancel(footer); addSubmit(footer, githubToken ? "Connect GitHub" : editor ? "Continue" : "Connect");
+        addCancel(footer); addSubmit(footer, editor ? "Continue" : "Connect");
         form.addEventListener("submit", (event) => { event.preventDefault(); if (input.value.trim()) finish(input.value.trim()); });
       });
     }
@@ -144,20 +139,7 @@
     }
 
     function progress() {
-      show(connectingGitHub ? "Connecting to GitHub…" : "Saving to master…", connectingGitHub ? "Verifying your GitHub account and reading the latest master." : "Your teams will receive the accepted changes the next time their portfolio checks the master.", ({ body }) => { const message = element("p", "master-saving", connectingGitHub ? "Checking your account…" : "Saving your product updates…"); message.setAttribute("role", "status"); body.append(message); }, { cancellable: false });
-    }
-
-    async function connectGitHub() {
-      if (!githubMode || running || dialog.open || !session.getState().hasKey) return;
-      root.PortfolioMasterPresence?.close?.();
-      const token = await getAccess("github"); if (!token) return;
-      running = true; connectingGitHub = true; updateStatus(); progress();
-      try {
-        const account = await session.setGitHubToken(token);
-        lastError = ""; savedMessage = `GitHub connected as ${account.name || account.login} (${account.login})`;
-        await session.refresh(); close(null); retryUntil = 0; lastRefreshAt = Date.now();
-      } catch (error) { close(null); if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = error.message || "Could not connect your GitHub account. Your local changes are safe."; }
-      finally { running = false; connectingGitHub = false; updateStatus(); }
+      show("Saving to master…", "Your teams will receive the accepted changes the next time their portfolio checks the master.", ({ body }) => { const message = element("p", "master-saving", "Saving your product updates…"); message.setAttribute("role", "status"); body.append(message); }, { cancellable: false });
     }
 
     async function saveFlow() {
@@ -178,10 +160,6 @@
         for (;;) {
           progress();
           try {
-            if (githubMode && !session.getState().hasGitHubToken) {
-              close(null); const token = await getAccess("github"); if (!token) return;
-              progress(); await session.setGitHubToken(token);
-            }
             result = await session.save({ reason: reviewed.reason, resolveConflicts: async (conflicts) => { close(null); const selected = await resolveConflicts(conflicts); if (selected) progress(); return selected; } });
             close(null); break;
           } catch (error) {
@@ -192,11 +170,7 @@
               progress(); await session.connect({ key: newKey }); close(null);
               continue;
             }
-            if (githubMode && ["GITHUB_TOKEN_REQUIRED", "INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) {
-              const token = await getAccess("github", error.message); if (!token) return;
-              progress(); await session.setGitHubToken(token); close(null); continue;
-            }
-            if (error.code !== "EDITOR_KEY_REQUIRED") throw error;
+            if (error.code !== "EDITOR_KEY_REQUIRED" || teamMode) throw error;
             const token = await getAccess(true, session.getState().snapshot?.requiresEditorToken ? "" : error.message);
             if (!token) return;
             session.setEditorToken(token);
@@ -219,16 +193,15 @@
     async function refreshQuietly({ force = false } = {}) {
       if (!configured || running || dialog.open || refreshRunning || document.visibilityState === "hidden" || !session.getState().hasKey || adapter.canRefresh?.() === false) return;
       if (!force && Date.now() < retryUntil) return;
-      if (githubMode && !force && Date.now() - lastRefreshAt < (session.getState().hasGitHubToken ? 120000 : 300000)) return;
       lastRefreshAt = Date.now();
       refreshRunning = true;
       try { await session.refresh(); lastError = ""; retryUntil = 0; }
       catch (error) { if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = error.code === "INVALID_KEY" ? "Master key changed. Pull latest data to reconnect; local changes are safe." : error.code === "UNAVAILABLE" ? "Master is offline · changes stay on this device" : error.message || "Master could not refresh · local changes are safe"; }
       finally { refreshRunning = false; updateStatus(); }
     }
-    const timer = root.setInterval(refreshQuietly, githubMode ? 60000 : 45000);
+    const timer = root.setInterval(refreshQuietly, 45000);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "hidden") refreshQuietly(); });
-    active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow,
+    active = Object.freeze({ session, updateStatus, refresh: () => refreshQuietly({ force: true }), save: saveFlow,
       markImported(products, key) { session.markImported(products, key); savedMessage = ""; lastError = ""; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
       disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); savedMessage = ""; lastError = ""; updateStatus(); },
       destroy() { root.clearInterval(timer); session.disconnect(); status.remove(); dialog.remove(); },
@@ -255,6 +228,6 @@
     }
     return active;
   }
-  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
+  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
   if (root.PortfolioMasterAdapter) initialize({ adapter: root.PortfolioMasterAdapter });
 })(globalThis);

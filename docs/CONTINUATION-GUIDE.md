@@ -6,6 +6,8 @@ Read [Feature Index](FEATURE-INDEX.md) before modifying a feature. It documents 
 
 Current layout: `public/` contains the complete static site, with JavaScript modules in `public/js/`, CSS in `public/css/`, and unchanged asset/vendor subdirectories. `scripts/checks/` contains development validation; `scripts/serve.mjs` serves `public/` at the local site root. Keep the root README as the short public introduction and detailed local setup in the ignored internal README.
 
+Private team release status: the changes on `codex/private-master-backend` await a reachable HTTPS backend before production rollout. Keep the existing production deployment until that connection is verified. GitHub Pages cannot run the private service; the branch's missing-endpoint fallback permits anonymous master pulls and leaves saves setup-required.
+
 ## 1. Sources of truth
 
 Use this order when deciding what is authoritative:
@@ -18,7 +20,7 @@ Use this order when deciding what is authoritative:
 | Current browser session | `localStorage` plus IndexedDB for the exact origin being tested |
 | UI palette | CSS/JavaScript tokens derived from the supplied charcoal/core palette references |
 | Deployment contents | `.github/workflows/deploy.yml`, checked against `public/index.html` runtime references |
-| Shared master and service | Default direct GitHub reads/updates of `monocraft/PPC` `main` `public/data/master_ppc.pkg`. Individual tokens stay in memory. Optional static mode or fixed-file service overrides remain supported. See [Shared master editing](SHARED-MASTER-EDITING.md). |
+| Shared master and service | Private team backend updates `monocraft/PPC` `main` `public/data/master_ppc.pkg` using one server-only GitHub token. Users need the package key and may set an optional display name. With no backend configured, anonymous GitHub pulls work but saves require setup. See [Shared master editing](SHARED-MASTER-EDITING.md). |
 
 Do not copy an older local folder over this workspace. A future GitHub ZIP or clone should be staged separately, inventoried, and diffed before any merge.
 
@@ -91,13 +93,13 @@ Package import validates the manifest and image references, stages local binarie
 
 ### 4.1 Publish and pull the shared master
 
-Use **Settings → Data & export → Export project package**, keep package protection selected, and enter the existing key or choose **Create new key**. **Export package** downloads encrypted `master_ppc.pkg`; the key stays available to copy until **Done**. Upload that file to the same private SharePoint location, keeping the key separately. Unprotected export is an explicit private local backup, not a shared master.
+Use **Settings → Data & export → Export project package**, keep package protection selected, and enter the existing key or choose **Create new key**. **Export package** downloads encrypted `master_ppc.pkg`; the key stays available to copy until **Done**. Publish a full owner-managed package to the fixed `public/data/master_ppc.pkg` path, keeping the key separately. Unprotected export is an explicit private local backup, not a shared master.
 
-Follow [Shared master editing](SHARED-MASTER-EDITING.md) for direct GitHub reads and product-fact saves. Each editor uses their own GitHub write access and memory-only token; the package key stays on the device. Full-package owner publishing remains available for images/layout in [Shared package setup](SHARED-PACKAGE-SETUP.md).
+Follow [Shared master editing](SHARED-MASTER-EDITING.md) for private team product-fact saves. Users do not need GitHub accounts/tokens or repository write access. One GitHub credential stays on the backend; the package key authorizes team edits and is sent only to the approved service. Optional display names are self-reported. Full-package owner publishing remains available for images/layout in [Shared package setup](SHARED-PACKAGE-SETUP.md).
 
-Pages generates `_site/js/package-source.js` through `scripts/configure-package-source.mjs`. With no service override, it selects the fixed GitHub master. No credentials belong in this file or repository variables. `PPC_MASTER_MODE=static` restores read-only hosted pulls. Explicit package/master endpoint variables select the optional service; point both to the same master.
+Pages generates `_site/js/package-source.js` through `scripts/configure-package-source.mjs`. The default writer is the team service. With no backend URL, public package reads fall back to fixed anonymous GitHub reads and saving stays setup-required. Set public `PPC_MASTER_ENDPOINT` only after the private service is running; the package API is derived from the same address. No credentials belong in this file or Pages variables. `PPC_MASTER_MODE=static` selects read-only hosted pulls. Self-hosting is supported; third-party hosting is optional.
 
-**Pull latest data** retrieves the encrypted master and invokes the same validated replacement path as manual package import. Products and Roadmap update together. Supported edits then use **Save to master** with explicit conflicts. Simulated GitHub writes verify behavior without publishing; live repository access and a real save require the editor's credentials and permission.
+**Pull latest data** retrieves the encrypted master and invokes the same validated replacement path as manual package import. Products and Roadmap update together. Supported edits then use **Save to master** with explicit conflicts. Simulated GitHub writes verify behavior without publishing; a real team save needs a reachable backend with its private credential and direct master-file write permission. Code publication does not deploy that backend by itself.
 
 ## 5. Understand a new upstream source safely
 
@@ -120,7 +122,7 @@ Inspect in this order:
 2. `public/js/catalog-data.js`: schema version, category IDs, lanes, spec sets, products, and image references.
 3. `public/js/app.js`: storage keys, schema normalizers, startup, import/export, rendering entrypoints, and event wiring.
    Also inspect `public/js/portfolio-model.js` for global timeline/lane geometry/specification/SKU/shared-tone rules, `public/js/roadmap-interaction.js` for saved row order/drop geometry/date drafts, `public/js/product-details.js` for Overview and secondary-list tabs/paging, `public/js/workspace-ui.js` for shell/settings interactions, `public/js/ascm-import.js` for workbook parsing/matching/additive merges, and `public/js/pptx-pagination.js` for ordered category selection and roadmap slide limits before changing those flows.
-   Package boundaries live in `public/js/package-codec.js`, `package-client.js`, `package-ui.js`, and the default `package-source.js`. Shared product saves use `master-model.js`, `master-github.js`, `master-client.js`, `master-ui.js` and `master-presence.js`. Optional service alternatives are `server/package-relay.mjs` and `server/master-service.mjs`.
+   Package boundaries live in `public/js/package-codec.js`, `package-client.js`, `package-ui.js`, and the default `package-source.js`. Shared product saves use `master-model.js`, `master-client.js`, `master-ui.js`, `master-presence.js` and the private `server/master-service.mjs`. `master-github.js` supports the private transport and anonymous public reads. The legacy package relay remains `server/package-relay.mjs`.
 4. `public/css/styles.css`: token definitions, layout breakpoints, focus styles, and literal colors.
 5. `.github/workflows/deploy.yml`: every runtime file and directory copied into the Pages artifact.
 6. `public/vendor/`: version and provenance of vendored libraries.
@@ -242,7 +244,7 @@ public/vendor/pptxgen.bundle.js
 
 The deployed entrypoint remains `index.html`; runtime URLs are `css/styles.css`, `js/…`, `assets/…`, and `vendor/…`. Do not add an extra `public/` level to the deployed URL or publish the repository root.
 
-Pages generates only public GitHub/source configuration with `scripts/configure-package-source.mjs`. Optional `PPC_PACKAGE_ENDPOINT`/`PPC_MASTER_ENDPOINT` select a service, and `PPC_MASTER_MODE=static` selects read-only hosting. Keep keys, GitHub tokens, private source paths, `server/` and real `.env` settings outside the Pages artifact.
+Pages generates public source addresses with `scripts/configure-package-source.mjs`. `PPC_MASTER_ENDPOINT` selects the actual private team service and derives its coherent package endpoint; missing setup falls back to anonymous package reads without enabling writes. `PPC_MASTER_MODE=static` selects read-only hosting. Keep package keys, `PPC_GITHUB_TOKEN`, private paths, `server/`, backend deployment templates, and real `.env` settings outside the Pages artifact. Set the GitHub token privately on the backend only.
 
 It must exclude:
 
@@ -269,7 +271,8 @@ Use a fresh test origin/profile for the default-catalog pass, then import the pa
 | Persistence | Create one test product, reload, confirm it remains | Modify a product and local image, reload on the same origin |
 | Lightweight data | Export and re-import `.data`; understand that local binaries are excluded | References and metadata survive; local binary behavior is explicit |
 | Full package | Export then import into a clean origin | Product counts and local image survive round trip |
-| Unified shared package | An empty endpoint explains pending setup; encrypted export offers an entered/generated key and retains it for copying until Done | Test correct/wrong keys, encrypted/legacy import, failed staging/storage/activation rollback, successful superseded/legacy-image cleanup, and Products/Roadmap/image consistency. Verify a synthetic relay separately; a successful owner mirror sync and production pull are distinct checks |
+| Unified shared package | Missing backend still permits anonymous encrypted GitHub pulls; supported saves explain pending setup. Encrypted export offers an entered/generated key and retains it for copying until Done | Test correct/wrong keys, encrypted/legacy import, failed staging/storage/activation rollback, successful superseded/legacy-image cleanup, and Products/Roadmap/image consistency. Verify synthetic backend behavior separately from a real deployed service |
+| Private team edits | Users need no GitHub connection or editing-token prompt; optional names are editable | Test anonymous/named sessions, distinct-field merge, same-field explicit choices, repeated SHA races, interrupted accepted save recovery and draft retention. Inspect site/build files for credentials. A local simulated backend does not establish production connectivity |
 | ASCM import | Workbook preview works without changing data; new products enter mapped categories with lane/category specification placeholders | Preview/reimport updates retain manually curated specifications (including empty arrays), price, images, variants, stage, and absent PNs; ambiguous candidates are skipped |
 | Timeline consistency | Choose 3/5/10 years and custom From/To; inspect every category | Switching categories and exporting uses the same configured range; product GA/EM and lifecycle dates are unchanged by a viewport-only change |
 | Product date editing | Details is the exact GA/EM input home; Timeline's Edit dates button switches to Details and focuses GA; Roadmap toolbar Start/End inputs edit planning months | Exact GA/EM edits update roadmap months; clearing retains planned months. Direct drag/input edits keep known days or clamp month end, while unknown exact dates stay TBD. Live exact-date feedback matches committed values; cancellation leaves data unchanged. Reload/unrelated edits preserve saved mismatches. Verify leap-year February, a 31-day-to-shorter-month drag, and ASCM valid day dates taking priority over inconsistent group month hints |
@@ -282,7 +285,7 @@ Use a fresh test origin/profile for the default-catalog pass, then import the pa
 | PPTX | Toolbar action reachable from both views; check one/multiple/all, Current category only, Select all/Clear selection, empty-selection guard/Cancel, and scope-aware estimates | Only selected categories render in portfolio order; saved UI state returns; Product/Roadmap/Both counts are correct; continuation is readable; dedicated slide numbers/numeric page counters are absent; divider is subtle and status/platform presentation matches cards |
 | Accessibility | Keyboard reaches menus/tabs/dialogs; visible focus; Escape closes overlays | Selected/product details are understandable without pointer-only discovery |
 | Responsive/touch | Narrow viewport has no inaccessible controls | Roadmap/product navigation works without unintended page scrolling |
-| Deployment | Pages artifact loads without 404s | Package remains absent from the deployed artifact |
+| Deployment | Pages artifact loads without 404s; anonymous master pulls remain available | Only encrypted `data/master_ppc.pkg` is published; private source packages, keys, backend files and real environment settings remain absent. Verify a configured team API is reachable over HTTPS before claiming saves are live |
 
 Test browser console and network failures, not only appearance.
 
