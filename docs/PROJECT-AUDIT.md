@@ -120,7 +120,7 @@ public/index.html
 server/package-relay.mjs             → separate fixed-file service; not a Pages artifact
 ```
 
-The script order in `public/index.html` is a hard runtime contract: PptxGenJS, catalog, ASCM importer, PPTX pagination, portfolio model, product details, package codec/source/client, application, package UI, then workspace UI. The core reads the catalog and helper globals; both UI controllers use initialized application controls/functions. The shell refreshes through `portfolio:render` events. The PowerPoint bundle must also be available when PPTX export is used.
+The script order in `public/index.html` is a hard runtime contract: PptxGenJS, catalog, ASCM importer, PPTX pagination/editable composition, portfolio model, product details, package codec/source/client, application, package UI, then workspace UI. The core reads the catalog and helper globals; both UI controllers use initialized application controls/functions. The shell refreshes through `portfolio:render` events. The PowerPoint bundle must also be available when PPTX export is used.
 
 ### 3.1 Startup path
 
@@ -247,7 +247,7 @@ The custom reader rejects compressed ZIP entries. A generic ZIP renamed to `.pkg
 - **PPTX** opens from the prominent toolbar action in both main views, uses the vendored PptxGenJS 4.0.0 bundle, and can export Product slides, Roadmap slides, or both for one, multiple, or all selected categories.
 - The chooser starts with all categories checked, offers Current category only and Select all/Clear selection shortcuts, and remembers choices in page-session state. Checkboxes show category product counts. `PPTXPagination.selectExportCategories()` preserves portfolio order; `exportPptx(scope, selectedCategoryIds)` receives explicit checked IDs. The summary estimates selected categories and content-aware slide counts, and an empty selection disables/rejects Export while Cancel remains available.
 - Product slides are one per selected category; roadmap slides contain at most 22 products in family/date/name visual order, with continued family labels repeated. Number/total folios and numeric page-title counters are removed; later roadmap page titles use `(continued)`. The header divider is a subtle `#2B2E2B` rule, 0.4 pt with 25% transparency.
-- Product/roadmap content is rasterized into the deck; the cards and bars are not individual editable PowerPoint objects.
+- Each roadmap product exports as a native rounded rectangle with editable text, fill, outline, and independently adjustable position/size. Each portfolio card exports as one named group containing native text/frames/banners/separators, with separate artwork/icons. Groups move/resize as one product and can be ungrouped for detailed edits. Calendar/family/lane context stays in a separate background image.
 - PPTX rendering temporarily activates each selected category, preloads referenced images, renders off-screen canvases, and then restores the prior UI state.
 
 ### 5.4 ASCM updates

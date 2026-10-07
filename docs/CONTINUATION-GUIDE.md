@@ -51,6 +51,7 @@ No package installation is required.
 node scripts/checks/project.mjs
 node scripts/checks/ascm-import.mjs
 node scripts/checks/pptx-pagination.mjs
+node scripts/checks/pptx-products.mjs
 node scripts/checks/portfolio-model.mjs
 node scripts/checks/product-details.mjs
 node scripts/checks/package-codec.mjs
@@ -204,6 +205,7 @@ rg -n "<script|<link" public/index.html
 - Test long names, long SKU lists, large prices, missing images, plus-variant overflow, and single-lane full specifications.
 - Keep export rendering independent from current scroll position and restore prior UI state after export.
 - Render product PNG/PPTX with `includeViewer: false` and noninteractive cards, excluding Details controls and transient horizontal pane space. Live and exported lane heights must match; opening Details must not add an empty exported gap.
+- PPTX backgrounds omit product content. Keep each roadmap bar as one native rounded rectangle containing editable text and each portfolio card as one named group of editable shapes/text with separate artwork/icons. `recordCardElementsForPptx` records the existing card drawing; `PPTXEditable` composes and groups those parts during file delivery. Use the same source geometry/background transform for their placement, keep date clipping consistent with the live roadmap, and restore temporary export state on failure as well as success. Include `public/js/pptx-editable.js` in both the runtime script order and deployment allowlist.
 - PPTX must honor explicit selected category IDs in portfolio order. Keep one/multiple/all checkbox choices, Current category only, Select all/Clear selection, selection-aware counts, and an empty-selection Export guard with usable Cancel. Do not restore number/total folios or numeric page-title counters; later pages use `(continued)` and the header divider stays subtle.
 
 ### 6.6 Deployment
