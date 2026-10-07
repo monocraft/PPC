@@ -174,9 +174,12 @@ for (const years of [3, 5, 10]) {
 
 // Exercise the real canvas geometry: compact empty cards, stable category heights,
 // bounded overflow, and fully expanded detailed specifications.
+let layoutLaneCount = 2;
+let supportedFullSpecCategory = false;
 const layoutSandbox = {
   board: { products: [], settings: { showSkus: true, fullSingleLaneSpecs: false } },
-  sortedLanes: () => [{ id: "lane" }], categoryDefinition: () => ({}),
+  sortedLanes: () => Array.from({ length: layoutLaneCount }, (_, index) => ({ id: `lane-${index}` })),
+  categoryDefinition: () => ({ fullSpecCards: supportedFullSpecCategory }),
   variantFooterLayout: (item) => ({ height: item.footerHeight || 0 }),
   visibleProducts: () => { throw new Error("Search results must not control category geometry"); },
 };
@@ -194,10 +197,26 @@ assert.equal(layoutSandbox.productCardLayout().cardHeight, 415, "all products de
 layoutSandbox.board.products.push({ specs: Array.from({ length: 20 }, () => ({ label: "Connection", value: "USB" })), footerHeight: 104 });
 assert.equal(layoutSandbox.productCardLayout().cardHeight, 552, "compact overflow remains bounded");
 assert.equal(layoutSandbox.productCardLayout().laneHeight, 622);
+const compactLayout = layoutSandbox.productCardLayout();
 layoutSandbox.board.settings.fullSingleLaneSpecs = true;
-assert.ok(layoutSandbox.productCardLayout().cardHeight > 552, "full specifications expand without clipping");
+assert.deepEqual(layoutSandbox.productCardLayout(), compactLayout, "a legacy true preference must not expand unsupported multi-lane cards");
+layoutLaneCount = 1;
+const singleLaneLayout = layoutSandbox.productCardLayout();
+assert.ok(singleLaneLayout.detailed && singleLaneLayout.cardHeight > 552, "single-lane cards automatically expand full specifications without clipping");
+layoutSandbox.board.settings.fullSingleLaneSpecs = false;
+assert.deepEqual(layoutSandbox.productCardLayout(), singleLaneLayout, "a legacy false preference must not suppress automatic full specifications");
+assert.equal(layoutSandbox.board.settings.fullSingleLaneSpecs, false, "layout rendering must preserve inert legacy preferences");
+layoutLaneCount = 2;
+supportedFullSpecCategory = true;
+assert.deepEqual(layoutSandbox.productCardLayout(), singleLaneLayout, "supported multi-lane categories such as Gaming Accessories automatically show full specifications");
+layoutSandbox.board.settings.fullSingleLaneSpecs = true;
+assert.deepEqual(layoutSandbox.productCardLayout(), singleLaneLayout, "legacy true and false preferences must produce the same supported-card geometry");
+delete layoutSandbox.board.settings.fullSingleLaneSpecs;
+assert.deepEqual(layoutSandbox.productCardLayout(), singleLaneLayout, "new workspaces need no full-spec preference to expand supported cards");
 layoutSandbox.board.products = [{ specs: [], footerHeight: 50 }];
 assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty full-spec categories use compact geometry");
+layoutLaneCount = 1;
+assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty single-lane categories use compact geometry");
 
 const presentationSandbox = { PortfolioModel: model, UI_PALETTE: { charcoal600: "#2c2c2c" },
   normalizeRoadmapStatus: (stage) => stage || "in-planning", standardizedStatus: (type) => ({ label: { new: "NEW PRODUCT", embargo: "UPCOMING UNDER EMBARGO" }[type] || "", color: "#ff0000" }) };
@@ -480,4 +499,178 @@ drawnLaneCards.length = 0;
 laneSandbox.drawBoardTo(laneContext, exportDimensions, false);
 assert.equal(drawnLaneCards.find((item) => item.id === "p-following").x, 18 + 256, "exports contain no temporary horizontal details gap");
 assert.ok(liveFollowingX > 18 + 256, "the live board still makes horizontal room beside the viewed product");
-console.log("Portfolio model checks passed: explicit lifecycle date/month synchronization without initial migration, leap and endpoint clamping, global timeline actions, preserved specs/SKU colors, shared prices/stage tones, and non-overlapping inline details across lane consumers.");
+// View actions operate on independent product and timeline scales. Execute
+// their real bindings with small scroll/DOM adapters so moving a control
+// cannot hide a broken Fit, zoom, or saved-layout action.
+const viewSource = appSource.replace(/\r\n/g, "\n");
+const viewHtml = await readFile(new URL("../../public/index.html", import.meta.url), "utf8");
+function viewHtmlSection(id) {
+  const section = viewHtml.match(new RegExp(`<section id="${id}"[\\s\\S]*?</section>`))?.[0];
+  assert.ok(section, `view section is rendered: ${id}`);
+  return section;
+}
+const productViewToolbar = viewHtmlSection("productControls");
+const roadmapViewToolbar = viewHtmlSection("roadmapControls");
+const viewSettingsSections = viewHtmlSection("settingsDisplayPanel") + viewHtmlSection("settingsTimelinePanel");
+for (const [toolbar, actions] of [
+  [productViewToolbar, ["zoomOut", "zoomReset", "zoomIn", "fitProducts", "resetLayout"]],
+  [roadmapViewToolbar, ["roadmapZoomOut", "roadmapZoomReset", "roadmapZoomIn", "roadmapFit", "roadmapToday", "roadmapShowSelected"]],
+]) {
+  for (const id of actions) {
+    assert.ok(toolbar.includes(`id="${id}"`), `${id} stays available in its view toolbar`);
+    assert.ok(!viewSettingsSections.includes(`id="${id}"`), `${id} is a view action outside workspace settings`);
+  }
+}
+function viewSection(start, end) {
+  const startIndex = viewSource.indexOf(start);
+  const endIndex = viewSource.indexOf(end, startIndex);
+  assert.ok(startIndex >= 0 && endIndex > startIndex, `view action is present: ${start}`);
+  return viewSource.slice(startIndex, endIndex);
+}
+function applicationFunction(name) {
+  return viewSection(`function ${name}(`, "\n}\n") + "\n}\n";
+}
+function applicationClickBinding(id) {
+  const start = `$("#${id}").onclick = `;
+  const offset = viewSource.indexOf(start);
+  assert.ok(offset >= 0, `view action has a binding: ${id}`);
+  const line = viewSource.slice(offset).split("\n", 1)[0];
+  return line.endsWith(";") ? line : viewSection(start, "\n};\n") + "\n};\n";
+}
+const viewElements = new Map();
+function viewElement(selector) {
+  if (!viewElements.has(selector)) viewElements.set(selector, { textContent: "", disabled: false });
+  return viewElements.get(selector);
+}
+let productFitWidth = 1810;
+let timelineFitMonths = 60;
+let viewSelectedProduct = null;
+const viewRenderCalls = [];
+const normalizedViewLanes = [];
+const viewBoard = { settings: { freeMove: true }, lanes: [{ id: "audio" }, { id: "accessories" }], products: [
+  { id: "a", laneId: "audio", manualPosition: { x: 200, y: 100 }, order: 0 },
+  { id: "b", laneId: "accessories", manualPosition: { x: 460, y: 100 }, order: 0 },
+] };
+const viewSandbox = {
+  $: viewElement, zoom: 1, roadmapMonthWidth: 82, activeView: "products", board: viewBoard,
+  ROADMAP_DEFAULT_MONTH_WIDTH: 82, ROADMAP_MIN_MONTH_WIDTH: 8, ROADMAP_MAX_MONTH_WIDTH: 112, ROADMAP_LEFT_WIDTH: 190,
+  PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 1.5,
+  selectedProduct: () => viewSelectedProduct,
+  canvasScroll: { clientWidth: 900, scrollLeft: 120, scrollTop: 80,
+    scrollTo(options) { if (options.left != null) this.scrollLeft = options.left; if (options.top != null) this.scrollTop = options.top; } },
+  getCanvasDimensions: () => ({ width: productFitWidth, height: 700 }),
+  roadmapRange: () => ({ start: 2026 * 12, count: timelineFitMonths }),
+  requestAnimationFrame: (callback) => callback(), closePopupMenus() {}, syncBoardNavigator() {},
+  updateBoard: (callback) => callback(viewBoard),
+  normalizeLaneOrders: (laneId) => normalizedViewLanes.push(laneId),
+  renderBoard() { viewRenderCalls.push("products"); viewSandbox.syncViewZoomControls(); },
+  renderRoadmaps() { viewRenderCalls.push(viewSandbox.activeView); viewSandbox.syncViewZoomControls(); },
+};
+function timelineScrollAdapter(clientWidth, scrollLeft) {
+  return { clientWidth, scrollLeft, scrollTop: 65,
+    get scrollWidth() { return 190 + timelineFitMonths * viewSandbox.roadmapMonthWidth + 24; },
+    scrollTo(options) { if (options.left != null) this.scrollLeft = options.left; if (options.top != null) this.scrollTop = options.top; },
+  };
+}
+viewSandbox.roadmapScroll = timelineScrollAdapter(900, 500);
+viewSandbox.splitRoadmapScroll = timelineScrollAdapter(700, 320);
+vm.createContext(viewSandbox);
+vm.runInContext(
+  ["syncViewZoomControls", "setRoadmapZoom", "fitRoadmapTimeline", "fitProductBoard"].map(applicationFunction).join("\n") +
+  ["zoomOut", "zoomReset", "zoomIn", "resetLayout", "fitProducts", "roadmapZoomOut", "roadmapZoomReset", "roadmapZoomIn", "roadmapFit"].map(applicationClickBinding).join("\n"),
+  viewSandbox,
+);
+const timelineCenterMonth = (scroll) => (scroll.scrollLeft + (scroll.clientWidth - 190) / 2) / viewSandbox.roadmapMonthWidth;
+viewSandbox.syncViewZoomControls();
+assert.equal(viewElement("#zoomReset").textContent, "100%");
+assert.equal(viewElement("#roadmapZoomReset").textContent, "100%");
+assert.equal(viewElement("#roadmapShowSelected").disabled, true, "Show selected requires a selected product");
+viewSelectedProduct = viewBoard.products[0];
+viewSandbox.syncViewZoomControls();
+assert.equal(viewElement("#roadmapShowSelected").disabled, false, "selecting a product enables the visible timeline shortcut");
+for (const activeView of ["roadmap", "split"]) {
+  viewSandbox.activeView = activeView;
+  viewSandbox.roadmapMonthWidth = 82;
+  const targetScroll = activeView === "split" ? viewSandbox.splitRoadmapScroll : viewSandbox.roadmapScroll;
+  const otherScroll = activeView === "split" ? viewSandbox.roadmapScroll : viewSandbox.splitRoadmapScroll;
+  targetScroll.scrollLeft = 500;
+  const originalOtherLeft = otherScroll.scrollLeft;
+  const originalMonth = timelineCenterMonth(targetScroll);
+  const originalTop = targetScroll.scrollTop;
+  viewElement("#roadmapZoomIn").onclick();
+  closeTo(viewSandbox.roadmapMonthWidth, 90.2, "timeline plus increments ten percent of the default month width");
+  closeTo(timelineCenterMonth(targetScroll), originalMonth, "timeline zoom anchors the visible month center outside the frozen labels");
+  assert.equal(targetScroll.scrollTop, originalTop, "horizontal zoom preserves vertical timeline position");
+  assert.equal(otherScroll.scrollLeft, originalOtherLeft, "zoom adjusts only the visible roadmap viewport");
+  assert.equal(viewSandbox.zoom, 1, "timeline zoom cannot change the product scale");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "110%");
+  viewElement("#roadmapZoomOut").onclick();
+  closeTo(viewSandbox.roadmapMonthWidth, 82, "timeline minus uses the same default-based step");
+  closeTo(timelineCenterMonth(targetScroll), originalMonth, "inverse timeline zoom retains the anchored month");
+  viewSandbox.setRoadmapZoom(200);
+  assert.equal(viewSandbox.roadmapMonthWidth, 112, "timeline zoom has a safe maximum month width");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "137%");
+  assert.equal(viewElement("#roadmapZoomIn").disabled, true);
+  viewElement("#roadmapZoomIn").onclick();
+  assert.equal(viewSandbox.roadmapMonthWidth, 112, "plus cannot exceed the timeline maximum");
+  viewSandbox.setRoadmapZoom(1);
+  assert.equal(viewSandbox.roadmapMonthWidth, 8, "timeline zoom has a readable minimum month width");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "10%");
+  assert.equal(viewElement("#roadmapZoomOut").disabled, true);
+  viewElement("#roadmapZoomOut").onclick();
+  assert.equal(viewSandbox.roadmapMonthWidth, 8, "minus cannot go below the timeline minimum");
+  viewElement("#roadmapZoomReset").onclick();
+  assert.equal(viewSandbox.roadmapMonthWidth, 82, "the timeline percentage restores the shared default scale");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "100%");
+  assert.equal(viewElement("#roadmapZoomOut").disabled, false);
+  assert.equal(viewElement("#roadmapZoomIn").disabled, false);
+  viewElement("#roadmapFit").onclick();
+  closeTo(viewSandbox.roadmapMonthWidth, (targetScroll.clientWidth - 190 - 24) / 60, "Fit uses the viewport of the active roadmap or details view");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, `${Math.round(viewSandbox.roadmapMonthWidth / 82 * 100)}%`, "Fit updates the visible timeline percentage");
+  assert.equal(viewSandbox.zoom, 1, "timeline Fit leaves the product scale unchanged");
+}
+timelineFitMonths = 3;
+viewElement("#roadmapFit").onclick();
+assert.equal(viewSandbox.roadmapMonthWidth, 112, "fitting a short timeline respects the maximum month width");
+timelineFitMonths = 120;
+viewElement("#roadmapFit").onclick();
+assert.equal(viewSandbox.roadmapMonthWidth, 8, "fitting a long timeline retains readable month widths");
+viewSandbox.splitRoadmapScroll.scrollLeft = 0;
+viewSandbox.setRoadmapZoom(8);
+assert.ok(viewSandbox.splitRoadmapScroll.scrollLeft >= 0, "zoom at the timeline origin never requests negative scrolling");
+timelineFitMonths = 60;
+viewSandbox.activeView = "products";
+const retainedTimelineWidth = viewSandbox.roadmapMonthWidth;
+viewElement("#zoomOut").onclick();
+assert.equal(viewSandbox.zoom, .9);
+assert.equal(viewElement("#zoomReset").textContent, "90%");
+viewElement("#zoomIn").onclick();
+assert.equal(viewSandbox.zoom, 1);
+viewSandbox.zoom = 1.5;
+viewElement("#zoomIn").onclick();
+assert.equal(viewSandbox.zoom, 1.5, "product plus cannot exceed its maximum scale");
+assert.equal(viewElement("#zoomIn").disabled, true);
+viewElement("#fitProducts").onclick();
+assert.equal(viewSandbox.zoom, .48, "Fit products scales the longest visible lane to the available canvas width");
+assert.equal(viewElement("#zoomReset").textContent, "48%");
+productFitWidth = 100000;
+viewElement("#fitProducts").onclick();
+assert.equal(viewSandbox.zoom, .2, "fitting a long lane respects the minimum product scale");
+assert.equal(viewElement("#zoomOut").disabled, true);
+productFitWidth = 100;
+viewElement("#fitProducts").onclick();
+assert.equal(viewSandbox.zoom, 1, "fitting a short lane does not enlarge its cards above normal size");
+viewSandbox.zoom = .5;
+viewElement("#zoomReset").onclick();
+assert.equal(viewSandbox.zoom, 1, "clicking the product percentage resets zoom only");
+assert.ok(viewBoard.products.every((product) => product.manualPosition), "resetting zoom preserves the saved product layout");
+viewSandbox.zoom = .65;
+viewElement("#resetLayout").onclick();
+assert.equal(viewSandbox.zoom, 1, "Reset layout restores normal product scale");
+assert.ok(viewBoard.products.every((product) => !Object.hasOwn(product, "manualPosition")), "Reset layout restores automatic card positions");
+assert.equal(viewBoard.settings.freeMove, false);
+assert.deepEqual(normalizedViewLanes, ["audio", "accessories"], "Reset layout normalizes each saved product lane");
+assert.equal(viewSandbox.roadmapMonthWidth, retainedTimelineWidth, "all product view actions preserve the shared timeline scale");
+assert.ok(viewRenderCalls.includes("roadmap") && viewRenderCalls.includes("split") && viewRenderCalls.includes("products"), "view controls render the active Products, Roadmap, and details surfaces");
+
+console.log("Portfolio model checks passed: explicit lifecycle date/month synchronization without initial migration, global timeline actions, preserved specs/SKU colors, shared prices/stage tones, non-overlapping inline details, and independent view zoom/Fit/reset actions.");

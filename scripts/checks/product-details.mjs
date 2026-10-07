@@ -4,8 +4,22 @@ import vm from "node:vm";
 
 await import("../../public/js/portfolio-model.js");
 const modelRules = globalThis.PortfolioModel;
-const timers = [];
-const sandbox = { setTimeout: (callback) => timers.push(callback) };
+const timers = new Map();
+const canceledTimers = [];
+let nextTimerId = 0;
+let prefersReducedMotion = false;
+const sandbox = {
+  setTimeout(callback, delay) { const id = ++nextTimerId; timers.set(id, { callback, delay }); return id; },
+  clearTimeout(id) { if (timers.delete(id)) canceledTimers.push(id); },
+  matchMedia: () => ({ matches: prefersReducedMotion }),
+};
+function runTimer(id) {
+  const timer = timers.get(id);
+  assert.ok(timer, "feedback reset must retain a scheduled timer");
+  timers.delete(id);
+  timer.callback();
+}
+function runAllTimers() { for (const id of [...timers.keys()]) runTimer(id); }
 vm.createContext(sandbox);
 new vm.Script(await readFile(new URL("../../public/js/product-details.js", import.meta.url), "utf8")).runInContext(sandbox);
 const details = sandbox.PortfolioDetails;
@@ -44,7 +58,10 @@ assert.ok(!initialHtml.includes('aria-label="Previous specs"') && !initialHtml.i
 assert.ok(!overviewPanel[1].includes("data-detail-page-index") && ![...overviewPanel[1].matchAll(/\bclass="([^"]*)"/g)].some((match) => match[1].split(/\s+/).includes("hidden")), "complete Overview specifications must not be hidden behind pages");
 
 const occurrences = (text, token) => text.split(token).length - 1;
-for (const item of longModel.skus) assert.equal(occurrences(initialHtml, `<td class="hp-sku-code">${item.code}</td>`), 1, "every HP SKU must appear exactly once across pages");
+for (const item of longModel.skus) assert.equal(occurrences(initialHtml, `<strong class="hp-sku-code">${item.code}</strong>`), 1, "every HP SKU must appear exactly once across pages");
+assert.match(initialHtml, /<ul\b[^>]*class="hp-sku-grid"[^>]*aria-label="HP SKUs"/);
+assert.equal(occurrences(initialHtml, '<li class="hp-sku-entry"'), longModel.skus.length, "compact SKU entries must retain all seventeen part numbers");
+assert.ok(!initialHtml.includes('data-detail-more="variants"') && !initialHtml.includes('data-detail-more-panel="variants"'), "More must not repeat colors in a separate Variants tab");
 for (const item of longModel.specs) {
   assert.equal(occurrences(initialHtml, `<dt>${item.label}</dt>`), 1);
   assert.equal(occurrences(initialHtml, `<dd>${item.value}</dd>`), 1);
@@ -72,7 +89,8 @@ function elementFromTag(tag) {
     tabIndex: Number(attributes.get("tabindex") || 0),
     textContent: "",
     isConnected: true,
-    classList: { contains: (name) => classes.has(name), toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } },
+    classList: { contains: (name) => classes.has(name), add(...names) { names.forEach((name) => classes.add(name)); }, remove(...names) { names.forEach((name) => classes.delete(name)); }, toggle(name, enabled) { if (enabled ?? !classes.has(name)) classes.add(name); else classes.delete(name); } },
+    getAttribute(name) { return attributes.get(name) ?? null; },
     setAttribute(name, value) { attributes.set(name, value); },
     addEventListener(type, callback) { const handlers = listeners.get(type) || []; handlers.push(callback); listeners.set(type, handlers); },
     async fire(type, event = {}) { const emitted = { preventDefault() { this.defaultPrevented = true; }, ...event }; await Promise.all((listeners.get(type) || []).map((handler) => handler(emitted))); return emitted; },
@@ -90,7 +108,22 @@ function fixtureFor(html) {
   const panels = tagElements("section", "data-detail-panel");
   const morePanels = tagElements("div", "data-detail-more-panel");
   const copies = tagElements("button", "data-detail-copy");
-  for (const button of copies) { button.label = elementFromTag("<small>"); button.label.textContent = "Copy"; button.querySelector = () => button.label; }
+  const rows = [...html.matchAll(/<li\b[^>]*\bclass="hp-sku-entry[^\"]*"[^>]*>/g)].map((match) => elementFromTag(match[0]));
+  for (const [index, button] of copies.entries()) {
+    button.label = elementFromTag("<small>");
+    button.label.textContent = "Copy";
+    button.querySelector = (selector) => selector === "small" ? button.label : null;
+    button.row = rows[index];
+    button.closest = (selector) => selector === ".hp-sku-entry" ? button.row : null;
+    button.row.animations = [];
+    button.row.animate = (keyframes, options) => {
+      const animation = { keyframes, options, canceled: false, cancel() { this.canceled = true; } };
+      button.row.animations.push(animation);
+      return animation;
+    };
+  }
+  const copyStatusTag = html.match(/<[^>]+\bdata-detail-copy-status(?:="[^"]*")?[^>]*>/)?.[0];
+  const copyStatus = copyStatusTag ? elementFromTag(copyStatusTag) : null;
   const groupStarts = [...html.matchAll(/<div\b[^>]*data-detail-page-group="[^"]*"[^>]*>/g)];
   const groups = groupStarts.map((match, index) => {
     const group = elementFromTag(match[0]);
@@ -104,9 +137,10 @@ function fixtureFor(html) {
     return group;
   });
   workspace.querySelectorAll = (selector) => ({ "[data-detail-tab]": tabs, "[data-detail-more]": moreTabs, "[data-detail-panel]": panels, "[data-detail-more-panel]": morePanels, "[data-detail-page-group]": groups, "[data-detail-copy]": copies })[selector] || [];
+  workspace.querySelector = (selector) => selector === "[data-detail-copy-status]" ? copyStatus : null;
   const close = elementFromTag("<button>");
   const container = { querySelector: (selector) => selector === "[data-detail-surface]" ? workspace : selector === "[data-detail-close]" ? close : null };
-  return { container, workspace, tabs, moreTabs, panels, morePanels, copies, groups, close };
+  return { container, workspace, tabs, moreTabs, panels, morePanels, copies, rows, copyStatus, groups, close };
 }
 const fixture = fixtureFor(initialHtml);
 function assertKeyboardScrollAccess(html, surface) {
@@ -141,9 +175,10 @@ assertKeyboardScrollAccess(initialHtml, "split");
 let copiedSku = "";
 let closed = false;
 details.bind(fixture.container, { onCopy: async (value) => { copiedSku = value; return true; }, onClose: () => { closed = true; } });
-const expectedPageCounts = { SKUs: 4, variants: 3, "source records": 4 };
+const expectedPageCounts = { SKUs: 3, options: 3, "source records": 4 };
 assert.deepEqual(fixture.tabs.map((button) => button.dataset.detailTab), ["overview", "skus", "more"], "only Overview, HP SKUs and More should remain as primary tabs");
-assert.deepEqual(fixture.groups.map((group) => group.dataset.detailPageGroup), ["SKUs", "variants", "source records"], "paging must apply only to SKUs, variants and source records");
+assert.deepEqual(fixture.moreTabs.map((button) => button.dataset.detailMore), ["identity", "source"], "More must retain identity and source without a redundant Variants tab");
+assert.deepEqual(fixture.groups.map((group) => group.dataset.detailPageGroup), ["SKUs", "options", "source records"], "paging must retain SKUs, additional options and source records");
 for (const group of fixture.groups) {
   const count = expectedPageCounts[group.dataset.detailPageGroup];
   assert.equal(group.entries.length, count, "long lists must retain the full number of pages");
@@ -164,10 +199,103 @@ for (const group of fixture.groups) {
 await fixture.copies[16].fire("click");
 assert.equal(copiedSku, "HP-SKU-16", "copy controls on later pages must retain the exact SKU value");
 assert.equal(fixture.copies[16].label.textContent, "Copied");
-timers.shift()();
+assert.ok(fixture.copies[16].row.classList.contains("is-copied"), "successful copying must highlight the entire SKU entry");
+assert.ok(fixture.copies[16].classList.contains("is-copied"), "successful copying must also give the button its confirmation state");
+assert.equal(fixture.copies[16].row.animations.length, 1, "successful copying must pulse the entry");
+assert.equal(fixture.copies[16].row.animations[0].options.duration, 700);
+assert.ok(fixture.copyStatus, "copy feedback must expose a shared live status outside the hidden detail panels");
+assert.equal(fixture.copyStatus.attributes.get("aria-live"), "polite");
+assert.equal(fixture.copyStatus.attributes.get("role"), "status");
+assert.ok(initialHtml.indexOf("data-detail-copy-status") > initialHtml.lastIndexOf("</section>"), "copy status must remain outside panels whose visibility changes with tab selection");
+assert.match(fixture.copyStatus.textContent, /HP-SKU-16/);
+assert.match(fixture.copies[16].attributes.get("aria-label"), /Copied.*HP-SKU-16/);
+assert.equal([...timers.values()][0].delay, 1100);
+runAllTimers();
 assert.equal(fixture.copies[16].label.textContent, "Copy");
+assert.ok(!fixture.copies[16].row.classList.contains("is-copied") && !fixture.copies[16].classList.contains("is-copied"), "copy reset must remove both entry and button confirmation states");
+assert.equal(fixture.copies[16].attributes.get("aria-label"), "Copy HP SKU HP-SKU-16");
 await fixture.close.fire("click");
 assert.ok(closed);
+
+function copyFixture(productId, onCopy) {
+  const html = details.render({ id: productId, skus: ["FIRST", "SECOND"].map((code) => ({ code, colors: [] })) }, { surface: "viewer" });
+  const result = fixtureFor(html);
+  details.bind(result.container, { onCopy });
+  return result;
+}
+const failedCopy = copyFixture("failed-copy", async () => false);
+await failedCopy.copies[0].fire("click");
+assert.equal(failedCopy.copies[0].label.textContent, "Failed", "a denied clipboard operation must report failure");
+assert.ok(!failedCopy.copies[0].row.classList.contains("is-copied"), "a failed copy must not imply that the SKU was copied");
+assert.equal(failedCopy.copies[0].row.animations.length, 0, "failed copying must not pulse a success state");
+assert.match(failedCopy.copyStatus.textContent, /FIRST/);
+assert.match(failedCopy.copies[0].attributes.get("aria-label"), /FIRST/);
+runAllTimers();
+assert.equal(failedCopy.copies[0].label.textContent, "Copy");
+
+const thrownCopy = copyFixture("thrown-copy", async () => { throw new Error("Clipboard unavailable"); });
+await thrownCopy.copies[0].fire("click");
+assert.equal(thrownCopy.copies[0].label.textContent, "Failed", "an exception from the clipboard callback must recover as visible failure");
+assert.ok(!thrownCopy.copies[0].row.classList.contains("is-copied"));
+assert.equal(thrownCopy.copies[0].row.animations.length, 0);
+runAllTimers();
+
+const repeatCopy = copyFixture("repeat-copy", async () => true);
+await repeatCopy.copies[0].fire("click");
+const firstResetId = [...timers.keys()][0];
+await repeatCopy.copies[0].fire("click");
+assert.ok(!timers.has(firstResetId) && canceledTimers.includes(firstResetId), "a repeat click must cancel the entry's older reset timer");
+assert.equal(timers.size, 1, "repeat copying must retain a single current reset timer for the entry");
+assert.equal(repeatCopy.copies[0].row.animations.length, 2, "a repeat click must pulse the entry again");
+assert.ok(repeatCopy.copies[0].row.animations[0].canceled, "a repeat click must cancel the entry's older pulse before starting fresh feedback");
+assert.equal(repeatCopy.copies[0].label.textContent, "Copied");
+runAllTimers();
+
+let successThenFailure = true;
+const retryCopy = copyFixture("retry-copy", async () => successThenFailure);
+await retryCopy.copies[0].fire("click");
+successThenFailure = false;
+await retryCopy.copies[0].fire("click");
+assert.equal(retryCopy.copies[0].label.textContent, "Failed", "a new failed request must replace its earlier success feedback");
+assert.ok(!retryCopy.copies[0].row.classList.contains("is-copied") && !retryCopy.copies[0].classList.contains("is-copied"));
+assert.ok(retryCopy.copies[0].row.animations[0].canceled, "a failed retry must cancel the previous successful pulse");
+runAllTimers();
+
+const isolatedCopy = copyFixture("isolated-copy", async () => true);
+await isolatedCopy.copies[0].fire("click");
+const firstEntryReset = [...timers.keys()][0];
+await isolatedCopy.copies[1].fire("click");
+assert.equal(timers.size, 2, "separate entries must keep independent confirmation timers");
+runTimer(firstEntryReset);
+assert.equal(isolatedCopy.copies[0].label.textContent, "Copy");
+assert.equal(isolatedCopy.copies[1].label.textContent, "Copied", "resetting one entry must not clear another entry's confirmation");
+assert.ok(isolatedCopy.copies[1].row.classList.contains("is-copied"));
+runAllTimers();
+
+const pendingCopies = [];
+const concurrentCopy = copyFixture("concurrent-copy", (value) => new Promise((resolve) => pendingCopies.push({ value, resolve })));
+const olderCopy = concurrentCopy.copies[0].fire("click");
+const latestCopy = concurrentCopy.copies[0].fire("click");
+assert.deepEqual(pendingCopies.map((copy) => copy.value), ["FIRST", "FIRST"], "repeat asynchronous copying must preserve the exact requested SKU");
+pendingCopies[1].resolve(true);
+await latestCopy;
+const currentResetId = [...timers.keys()][0];
+pendingCopies[0].resolve(false);
+await olderCopy;
+assert.equal(concurrentCopy.copies[0].label.textContent, "Copied", "an older failed request must not overwrite the latest successful confirmation");
+assert.ok(concurrentCopy.copies[0].row.classList.contains("is-copied"));
+assert.equal(concurrentCopy.copies[0].row.animations.length, 1, "stale request results must not trigger extra feedback");
+assert.deepEqual([...timers.keys()], [currentResetId], "stale completion must leave the current confirmation timer intact");
+runAllTimers();
+
+prefersReducedMotion = true;
+const reducedMotionCopy = copyFixture("reduced-motion-copy", async () => true);
+await reducedMotionCopy.copies[0].fire("click");
+assert.equal(reducedMotionCopy.copies[0].row.animations.length, 0, "reduced-motion users must receive confirmation without an animated pulse");
+assert.ok(reducedMotionCopy.copies[0].row.classList.contains("is-copied"), "reduced-motion preference must preserve static success feedback");
+assert.equal(reducedMotionCopy.copies[0].label.textContent, "Copied");
+runAllTimers();
+prefersReducedMotion = false;
 
 const skuTab = fixture.tabs.find((button) => button.dataset.detailTab === "skus");
 await skuTab.fire("click");
@@ -244,6 +372,68 @@ const dualProduct = {
 // Verify the actual application adapter supplies all six dates and the manual
 // mapping before handing its model to the shared renderer.
 const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
+const appHtml = await readFile(new URL("../../public/index.html", import.meta.url), "utf8");
+assert.ok(!appHtml.includes('id="fullSingleLaneSpecs"'), "display settings must not offer the obsolete full-specification checkbox");
+assert.ok(!appSource.includes('$("#fullSingleLaneSpecs")'), "removed full-specification controls must have no synchronization or event bindings");
+const clipboardSource = appSource.match(/^async function copyTextToClipboard\([^]*?^\}/m)?.[0];
+assert.ok(clipboardSource, "copy checks must exercise the actual application clipboard helper");
+function clipboardFixture({ nativeFailure = false, nativeAvailable = true, fallbackResult = true, fallbackThrows = false } = {}) {
+  const events = [];
+  const nativeValues = [];
+  const textareas = [];
+  const previousFocus = { focus: (options) => events.push(["restore focus", options.preventScroll]) };
+  const document = {
+    activeElement: previousFocus,
+    body: { appendChild(textarea) { textarea.isConnected = true; events.push(["append"]); } },
+    createElement(tag) {
+      assert.equal(tag, "textarea", "clipboard fallback must use a temporary selection field");
+      const textarea = {
+        style: {}, attributes: new Map(), isConnected: false,
+        setAttribute(name, value) { this.attributes.set(name, value); },
+        focus: (options) => events.push(["temporary focus", options.preventScroll]),
+        select: () => events.push(["select"]),
+        remove() { this.isConnected = false; events.push(["remove"]); },
+      };
+      textareas.push(textarea);
+      return textarea;
+    },
+    execCommand(command) {
+      assert.equal(command, "copy");
+      events.push(["copy"]);
+      if (fallbackThrows) throw new Error("Legacy copy unavailable");
+      return fallbackResult;
+    },
+  };
+  const navigator = nativeAvailable ? { clipboard: { async writeText(value) { nativeValues.push(value); if (nativeFailure) throw new Error("Clipboard denied"); } } } : {};
+  const clipboardSandbox = { document, navigator };
+  vm.createContext(clipboardSandbox);
+  new vm.Script(clipboardSource).runInContext(clipboardSandbox);
+  return { copy: clipboardSandbox.copyTextToClipboard, events, nativeValues, textareas };
+}
+const nativeClipboard = clipboardFixture();
+assert.equal(await nativeClipboard.copy("  HP-SKU-EXACT  "), true);
+assert.deepEqual(nativeClipboard.nativeValues, ["HP-SKU-EXACT"], "clipboard writes must retain the exact trimmed SKU");
+assert.equal(nativeClipboard.textareas.length, 0, "successful native copying must not insert a fallback field that can affect scrolling");
+assert.equal(await nativeClipboard.copy("  "), false);
+assert.equal(nativeClipboard.nativeValues.length, 1, "blank values must not write or trigger a fallback");
+
+for (const configuration of [
+  { nativeFailure: true, fallbackResult: true },
+  { nativeFailure: true, fallbackResult: false },
+  { nativeFailure: true, fallbackThrows: true },
+  { nativeAvailable: false, fallbackResult: true },
+]) {
+  const clipboard = clipboardFixture(configuration);
+  assert.equal(await clipboard.copy("  FALLBACK-SKU  "), !configuration.fallbackThrows && configuration.fallbackResult !== false, "fallback success or failure must return a usable boolean");
+  assert.equal(clipboard.textareas.length, 1);
+  const textarea = clipboard.textareas[0];
+  assert.equal(textarea.value, "FALLBACK-SKU");
+  assert.deepEqual(textarea.style, { position: "fixed", top: "0", left: "0", width: "1px", height: "1px", minHeight: "0", padding: "0", border: "0", opacity: "0" }, "the selection field must remain within a one-pixel anchored area, preventing inherited full-width textarea overflow");
+  assert.equal(textarea.tabIndex, -1);
+  assert.ok(textarea.attributes.has("readonly"));
+  assert.ok(!textarea.isConnected, "temporary selection fields must be removed after both successful and failed copying");
+  assert.deepEqual(clipboard.events, [["append"], ["temporary focus", true], ["select"], ["copy"], ["remove"], ["restore focus", true]], "fallback copying must prevent focus scrolling and restore the previous control even after failure");
+}
 const inspectorSource = appSource.match(/^function renderInspector\([^]*?^\}/m)?.[0];
 assert.ok(inspectorSource, "date-entry coverage requires the actual inspector renderer");
 for (const id of ["fieldGeneralAvailabilityDate", "fieldEndManufacturingDate"]) {
@@ -354,6 +544,47 @@ assert.ok(!layoutOnlyHtml.includes("Not assigned"), "layout-only variants must n
 const missingColorHtml = details.render({ id: "unassigned", skus: [{ code: "UNKNOWN", colors: [] }] });
 assert.ok(missingColorHtml.includes("Not assigned"), "HP SKUs without established color links must remain explicitly unassigned");
 
+const mappedBlack = { id: "black-color", code: "BK", label: "Black", colorHex: "#111111" };
+const mappedGray = { code: "GRY", label: "Gray", colorHex: "#777777", colorHex2: "" };
+const unmatchedGreen = { id: "green-color", code: "GRN", label: "Green", colorHex: "#00aa55" };
+const mappedColorsModel = {
+  id: "consolidated-options",
+  skus: [{ code: "HP-BLACK", colors: [mappedBlack] }, { code: "HP-GRAY", colors: [mappedGray] }],
+  variants: [
+    { group: "Colors", code: "BK", colors: [{ ...mappedBlack }] },
+    { group: "Colors", code: "GRY", colors: [{ ...mappedGray }] },
+    { group: "Colors", code: "GRN", colors: [unmatchedGreen] },
+    { group: "Layouts", code: "US", label: "United States", colors: [] },
+  ],
+};
+const mappedOptionsOriginal = structuredClone(mappedColorsModel);
+const mappedOptionsHtml = details.render(mappedColorsModel, { surface: "viewer" });
+const consolidatedSkuPanel = mappedOptionsHtml.match(/<section\b[^>]*data-detail-panel="skus"[^>]*>([\s\S]*?)<\/section>/)?.[1];
+assert.ok(consolidatedSkuPanel, "consolidated information must remain in the HP SKUs panel");
+assert.ok(!mappedOptionsHtml.includes('<strong>BK</strong>') && !mappedOptionsHtml.includes('<strong>GRY</strong>'), "mapped colors must not repeat as supplementary variants after matching by id or color identity");
+assert.equal(occurrences(consolidatedSkuPanel, '<span>Black</span>'), 1);
+assert.equal(occurrences(consolidatedSkuPanel, '<span>Gray</span>'), 1);
+assert.ok(consolidatedSkuPanel.includes('<strong>GRN</strong>') && consolidatedSkuPanel.includes('<span>Green</span>'), "an unmapped color must remain accessible as an additional option");
+assert.ok(consolidatedSkuPanel.includes('<strong>US</strong>') && consolidatedSkuPanel.includes('United States'), "layout codes and names must remain accessible under HP SKUs");
+assert.match(consolidatedSkuPanel, /class="product-detail-options"/);
+assert.ok(!mappedOptionsHtml.includes('data-detail-more="variants"'), "consolidation must remove the duplicate More subtab");
+assert.deepEqual(mappedColorsModel, mappedOptionsOriginal, "color consolidation must not rewrite product or SKU relationships");
+
+const allMappedHtml = details.render({ ...mappedColorsModel, id: "all-colors-mapped", variants: mappedColorsModel.variants.slice(0, 2) });
+assert.ok(!allMappedHtml.includes('data-detail-page-group="options"'), "fully mapped colors must not leave a redundant empty additional-options section");
+const sameNameDifferentSwatchHtml = details.render({
+  id: "distinct-color-options",
+  skus: [{ code: "HP-MAPPED", colors: [mappedGray] }],
+  variants: [{ group: "Colors", code: "GRY", colors: [{ ...mappedGray, colorHex: "#444444" }] }],
+});
+assert.ok(sameNameDifferentSwatchHtml.includes('<strong>GRY</strong>'), "matching names and codes alone must not hide a distinct unmapped colorway");
+const idMappedHtml = details.render({
+  id: "id-mapped-color-options",
+  skus: [{ code: "HP-MAPPED", colors: [mappedBlack] }],
+  variants: [{ group: "Colors", code: "BK", colors: [{ ...mappedBlack, label: "Custom black label" }] }],
+});
+assert.ok(!idMappedHtml.includes('<strong>BK</strong>'), "an established variant id must deduplicate the color even when its displayed label changes");
+
 const clearable = {
   version: 4,
   activeCategoryId: "audio",
@@ -408,7 +639,7 @@ const paneSandbox = {
   PortfolioDetails: { render: details.render, bind: (container, callbacks) => bindCalls.push({ container, callbacks }) },
   board: { products: [], settings: { showSkus: false, fullSingleLaneSpecs: false } },
   sortedLanes: () => paneLanes,
-  categoryDefinition: () => ({ fullSpecCards: true }),
+  categoryDefinition: () => ({ fullSpecCards: false }),
   variantFooterLayout: () => ({ height: 0 }),
   activeView: "products", zoom: 1, PRODUCT_MIN_ZOOM: .2,
   viewerInfoProductId: null, viewerInfoProgress: 0, viewerInfoOpen: false,
@@ -450,12 +681,13 @@ const paneScenarios = [
   { name: "full specifications", specs: Array.from({ length: 24 }, (_, index) => ({ label: `Compatibility ${index}`, value: "Detailed specification content ".repeat(9) })), full: true },
 ];
 for (const scenario of paneScenarios) {
-  paneSandbox.board.settings.fullSingleLaneSpecs = scenario.full;
+  paneSandbox.categoryDefinition = () => ({ fullSpecCards: scenario.full });
   paneSandbox.board.products = paneLanes.map((lane) => ({ id: `pane-${lane.id}`, name: "Product details", laneId: lane.id, specs: scenario.specs }));
   // A populated first lane makes the horizontal reserve observable beyond the
   // board's minimum canvas width, even at the smallest supported zoom.
   paneSandbox.board.products.push(...Array.from({ length: 6 }, (_, index) => ({ id: `following-${index}`, laneId: "first", specs: scenario.specs })));
   const layout = paneSandbox.productCardLayout();
+  assert.equal(layout.detailed, scenario.full, "pane scenarios must retain automatic supported-category and compact multi-lane parent geometry");
   if (scenario.full) assert.ok(layout.detailed && layout.cardHeight > 552, "full-spec parent geometry must be exercised above the compact maximum");
   for (const drawZoom of [.2, .5, .65, 1, 1.5]) {
     paneSandbox.zoom = drawZoom;
@@ -542,4 +774,4 @@ paneSandbox.viewerInfoProgress = 0;
 paneSandbox.renderViewerInfo();
 assert.equal(viewerPane.innerHTML, "", "closing must clear the pane's obsolete content");
 
-console.log("Product detail checks passed: complete information and tab/copy controls, escaped markup, exact parent-height panes across compact/full-spec zoom and animation, stable lanes, horizontal reserves, and preserved clearing structure.");
+console.log("Product detail checks passed: compact SKU grids and consolidated options, copy feedback and asynchronous retries, clipboard fallback cleanup, complete information and accessible controls, escaped markup, exact parent-height panes, stable lanes, horizontal reserves, and preserved clearing structure.");
