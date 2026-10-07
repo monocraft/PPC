@@ -1,2 +1,2 @@
-/* Deployment supplies the approved package service URL. Keys stay private. */
-globalThis.PPC_PACKAGE_SOURCE = Object.freeze({ endpoint: "", label: "Shared portfolio" });
+/* The encrypted master is public; its key is entered and used only in PPC. */
+globalThis.PPC_PACKAGE_SOURCE = Object.freeze({ mode: "static", packageUrl: "./data/master_ppc.pkg", endpoint: "", label: "Master portfolio" });

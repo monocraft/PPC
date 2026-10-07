@@ -8,6 +8,7 @@ pwsh.log
 # Private project packages and local portfolio data
 project-data/private/
 *.pkg
+!public/data/master_ppc.pkg
 
 # Dependency/build output
 node_modules/
