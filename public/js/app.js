@@ -1,11 +1,11 @@
 "use strict";
 
-const STORAGE_KEY = "product-portfolio-canvas-v4";
+const STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v4-shared-demo" : "product-portfolio-canvas-v4";
 const PACKAGE_RECOVERY_KEY = `${STORAGE_KEY}-package-recovery`; // Legacy import snapshot; only read to clean up older saved data.
 const MAX_PACKAGE_MANIFEST_BYTES = 4 * 1024 * 1024;
-const PREVIOUS_STORAGE_KEY = "product-portfolio-canvas-v3";
-const LEGACY_STORAGE_KEY = "product-portfolio-canvas-v1";
-const IMAGE_DB_NAME = "product-portfolio-image-assets-v1";
+const PREVIOUS_STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v3-shared-demo" : "product-portfolio-canvas-v3";
+const LEGACY_STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v1-shared-demo" : "product-portfolio-canvas-v1";
+const IMAGE_DB_NAME = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-image-assets-v1-shared-demo" : "product-portfolio-image-assets-v1";
 const IMAGE_DB_VERSION = 1;
 const IMAGE_STORE_NAME = "images";
 const CARD_WIDTH = 246;
@@ -5187,6 +5187,7 @@ async function buildProjectPackageBytes(packageInfo) {
   const codec = packageCodec();
   const expectedCurrent = JSON.stringify(portfolio);
   const manifest = JSON.parse(expectedCurrent);
+  delete manifest.masterLocalBaseline;
   manifest.packageInfo = packageInfo === undefined ? codec.createPackageInfo() : codec.normalizePackageInfo(packageInfo);
   if (!manifest.packageInfo) throw new Error("The package update information is invalid.");
   validatePackageManifest(manifest);
@@ -5210,6 +5211,7 @@ async function buildProjectPackageBytes(packageInfo) {
 async function exportProjectPackage(key = "", { comments = "" } = {}) {
   closePopupMenus();
   if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
+  if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before building a package.");
   const codec = packageCodec();
   const normalizedKey = key ? codec.normalizeKey(key) : "";
   const packageInfo = codec.createPackageInfo({ comments });
@@ -5225,11 +5227,13 @@ async function exportProjectPackage(key = "", { comments = "" } = {}) {
   } finally {
     packageOperationInProgress = false;
     scheduleSave();
+    globalThis.PortfolioMasterUI?.updateStatus?.();
   }
 }
 
 async function importProjectPackage(file, { key = "", requireEncrypted = false } = {}) {
   if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
+  if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading a package.");
   const codec = packageCodec();
   if (Number(file?.size || 0) > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
   packageOperationInProgress = true;
@@ -5253,6 +5257,7 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     catch (_) { throw new Error("The package portfolio data is damaged."); }
     validatePackageManifest(parsed);
     const draft = normalizeImportedPortfolio(JSON.parse(JSON.stringify(parsed)));
+    if (globalThis.PortfolioMasterModel) draft.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(draft).products;
     const legacyImages = new Map(pendingLegacyImageBlobs.splice(pendingStart).map((entry) => [entry.id, entry.blob]));
     validatePackageImageReferences(draft);
     const replacements = new Map();
@@ -5282,6 +5287,7 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     await imageStoreWriteBatch(stagedImages);
     staged = true;
     const result = await commitPackageDraft(draft, expectedCurrent);
+    globalThis.PortfolioMasterUI?.markImported(draft.masterLocalBaseline || [], key);
     return { ...result, encrypted };
   } catch (error) {
     pendingLegacyImageBlobs.splice(pendingStart);
@@ -5290,6 +5296,8 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
   } finally {
     packageOperationInProgress = false;
     scheduleSave();
+    globalThis.PortfolioMasterUI?.updateStatus?.();
+    globalThis.PortfolioMasterUI?.refresh?.();
   }
 }
 
@@ -6125,7 +6133,11 @@ function importJson(file) {
   reader.onload = () => {
     try {
       const parsed = parsePortfolioImportText(reader.result);
+      if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading new data.");
       portfolio = normalizeImportedPortfolio(parsed);
+      if (globalThis.PortfolioMasterModel) portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products;
+      globalThis.PortfolioMasterUI?.disconnect();
+      globalThis.PortfolioMasterUI?.markImported(portfolio.masterLocalBaseline || []);
       selectedId = null;
       activateCategory(portfolio.activeCategoryId, { fitVertical: true });
       flushPendingLegacyImages();
@@ -6758,7 +6770,50 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("resize", () => { closeVariantPopover({ force: true }); renderActiveView(); });
 window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
+// The shared master updates product facts without replacing local images or layouts.
+globalThis.PortfolioMasterAdapter = Object.freeze({
+  getProducts: () => portfolio.categories.flatMap((category) => category.board.products),
+  getBaselineProducts: () => portfolio.masterLocalBaseline || [],
+  setBaselineProducts: (products) => {
+    portfolio.masterLocalBaseline = JSON.parse(JSON.stringify(products));
+    scheduleSave();
+  },
+  getPackageInfo: () => getCurrentPackageInfo(),
+  getSelectedProductId: () => selectedId || "",
+  hasPendingPackageOperation: () => packageOperationInProgress,
+  setPackageInfo: (info) => {
+    portfolio.packageInfo = packageCodec().normalizePackageInfo(info);
+    scheduleSave();
+  },
+  setMasterSnapshot: (snapshot) => {
+    if (Object.prototype.hasOwnProperty.call(snapshot, "masterSync")) {
+      if (snapshot.masterSync) portfolio.masterSync = JSON.parse(JSON.stringify(snapshot.masterSync));
+      else delete portfolio.masterSync;
+    }
+    scheduleSave();
+  },
+  canRefresh: () => !packageOperationInProgress && !roadmapDragState && !document.querySelector('.modal-backdrop:not(.hidden), dialog[open]') && !document.activeElement?.closest('#inspector'),
+  applyPatches: (changes) => {
+    if (packageOperationInProgress) throw new Error("Finish loading the package before saving shared changes.");
+    for (const change of changes) {
+      for (const category of portfolio.categories) {
+        const index = category.board.products.findIndex((product) => product.id === change.productId);
+        if (index < 0) continue;
+        const current = category.board.products[index];
+        const values = change.values || change.patch;
+        category.board.products[index] = globalThis.PortfolioMasterModel.applyProductValues(current, values);
+        break;
+      }
+    }
+    scheduleSave();
+    syncControls();
+    renderInspector();
+    renderActiveView();
+  },
+});
+
 portfolio = loadPortfolio();
+if (globalThis.PortfolioMasterModel && !portfolio.masterLocalBaseline) portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products;
 activateCategory(portfolio.activeCategoryId, { render: false, fitVertical: true });
 syncControls();
 renderInspector();

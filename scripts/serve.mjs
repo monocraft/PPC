@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderPackageSource } from "./configure-package-source.mjs";
+import { createMasterHandler } from "../server/master-service.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const documentRoot = path.resolve(scriptDirectory, "../public");
@@ -33,7 +34,24 @@ function readOption(name) {
 
 const listenHost = readOption("host") || process.env.PORTFOLIO_HOST || "127.0.0.1";
 const requestedPort = Number(readOption("port") || process.env.PORTFOLIO_PORT || 4173);
-const packageSource = renderPackageSource(readOption("package-endpoint") || process.env.PPC_PACKAGE_ENDPOINT);
+const masterFile = readOption("master-file") || process.env.PPC_MASTER_FILE;
+const localEdits = process.argv.includes("--local-edits") || process.env.PPC_MASTER_LOCAL_EDITS === "1";
+const demoKey = process.env.PPC_MASTER_DEMO_KEY || "";
+if (masterFile && !["127.0.0.1", "localhost", "::1"].includes(listenHost)) throw new Error("Use the shared master service behind HTTPS for team access; the local preview must use loopback.");
+if (demoKey && (!masterFile || !localEdits)) throw new Error("A demo requires its own local editable master.");
+const masterHandler = masterFile ? createMasterHandler({ packageFile: masterFile, allowLocalEdits: localEdits, editorToken: process.env.PPC_MASTER_WRITE_TOKEN }) : null;
+
+function currentPackageSource() {
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : requestedPort;
+  const host = listenHost === "::1" ? "[::1]" : listenHost;
+  const origin = `http://${host}:${port}`;
+  const packageEndpoint = masterFile ? `${origin}/api/package/latest` : readOption("package-endpoint") || process.env.PPC_PACKAGE_ENDPOINT;
+  const masterEndpoint = masterFile ? `${origin}/api/master` : readOption("master-endpoint") || process.env.PPC_MASTER_ENDPOINT;
+  let source = renderPackageSource(packageEndpoint, masterEndpoint);
+  if (demoKey) source += `globalThis.PPC_MASTER_SOURCE = Object.freeze(${JSON.stringify({ endpoint: `${origin}/api/master`, label: "Demo master", demo: true, demoKey })});\n`;
+  return source;
+}
 
 if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
   throw new Error("Port must be an integer between 0 and 65535.");
@@ -48,6 +66,7 @@ function sendText(response, statusCode, message) {
 }
 
 const server = createServer(async (request, response) => {
+  if (masterHandler && await masterHandler(request, response)) return;
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.setHeader("Allow", "GET, HEAD");
     sendText(response, 405, "Method not allowed\n");
@@ -63,6 +82,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (pathname === "/js/package-source.js") {
+    const packageSource = currentPackageSource();
     response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "text/javascript; charset=utf-8", "Content-Length": Buffer.byteLength(packageSource) });
     response.end(request.method === "HEAD" ? undefined : packageSource);
     return;

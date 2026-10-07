@@ -95,8 +95,14 @@
     return bytes;
   }
 
-  async function downloadLatest({ packageUrl, endpoint, key, baseUrl, fetchImpl = root.fetch, signal, onProgress } = {}) {
+  async function downloadLatest({ github, packageUrl, endpoint, key, baseUrl, fetchImpl = root.fetch, signal, onProgress } = {}) {
     checkAborted(signal);
+    if (github) {
+      if (!root.PortfolioMasterGitHub) throw new Error("GitHub sharing could not load. Refresh this page and try again.");
+      // The encrypted file is read directly from GitHub; the package key stays on this device.
+      return root.PortfolioMasterGitHub.downloadLatest({ config: github, fetchImpl, signal,
+        onProgress: onProgress ? (progress) => onProgress(progress.loaded, progress.total) : undefined });
+    }
     const staticSource = !!String(packageUrl || "").trim() || !String(endpoint || "").trim();
     let url;
     const options = { credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal };

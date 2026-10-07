@@ -1,5 +1,7 @@
 # Hosted encrypted master package
 
+The app now defaults to direct GitHub reads and conflict-checked product/date/specification/SKU saves. See [Shared master editing](SHARED-MASTER-EDITING.md) for individual GitHub access and the Save to master flow. The full-package publication flow below remains available for images, layout changes and other owner-managed package updates; read-only Pages behavior can be selected with `PPC_MASTER_MODE=static`.
+
 The shared master is the encrypted `public/data/master_ppc.pkg` in the PPC repository. GitHub Pages publishes it at `https://monocraft.github.io/PPC/data/master_ppc.pkg`. Viewers choose **Pull latest data**, enter their package key, and load Products and Roadmap together. No Microsoft account, extension, app registration, or separate package server is required for this connection.
 
 The encrypted file is publicly downloadable. The package key remains separate from the repository and is used only to decrypt and validate the package in the viewer's browser. Static pulls never send the key to GitHub. The repository and site must contain neither an unencrypted master nor a key file.
@@ -53,4 +55,4 @@ Build and publish with a new key only when deliberately changing access to futur
 
 ## Optional service compatibility
 
-The older package relay remains available for deployments that explicitly configure `PPC_PACKAGE_ENDPOINT`. Leaving that setting empty selects the hosted encrypted master above. This PPC deployment uses the static master and does not require the relay, SharePoint source links, or browser companion.
+The older package relay remains available for deployments that explicitly configure `PPC_PACKAGE_ENDPOINT`. With no service override, the app reads and updates the encrypted master directly through GitHub. `PPC_MASTER_MODE=static` intentionally selects the hosted read-only master above. Neither GitHub mode nor static mode needs a separate server, SharePoint source link or browser companion.

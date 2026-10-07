@@ -7,8 +7,10 @@
   "scripts": {
     "serve": "node scripts/serve.mjs",
     "serve:package": "node server/package-relay.mjs",
+    "serve:master": "node server/master-service.mjs",
+    "try:master": "node scripts/try-shared-master.mjs",
     "validate": "node scripts/checks/project.mjs",
-    "check": "node scripts/checks/project.mjs && node scripts/checks/ascm-import.mjs && node scripts/checks/pptx-pagination.mjs && node scripts/checks/pptx-products.mjs && node scripts/checks/pptx-product-pages.mjs && node scripts/checks/portfolio-model.mjs && node scripts/checks/roadmap-interaction.mjs && node scripts/checks/product-details.mjs && node scripts/checks/package-codec.mjs && node scripts/checks/package-client.mjs && node scripts/checks/package-workspace.mjs && node scripts/checks/package-relay.mjs && node scripts/checks/package-ui.mjs && node scripts/checks/hosted-package.mjs && node scripts/checks/site-version.mjs",
+    "check": "node scripts/checks/project.mjs && node scripts/checks/ascm-import.mjs && node scripts/checks/pptx-pagination.mjs && node scripts/checks/pptx-products.mjs && node scripts/checks/pptx-product-pages.mjs && node scripts/checks/portfolio-model.mjs && node scripts/checks/roadmap-interaction.mjs && node scripts/checks/product-details.mjs && node scripts/checks/package-codec.mjs && node scripts/checks/package-client.mjs && node scripts/checks/package-workspace.mjs && node scripts/checks/package-relay.mjs && node scripts/checks/package-ui.mjs && node scripts/checks/hosted-package.mjs && node scripts/checks/site-version.mjs && node scripts/checks/master-model.mjs && node scripts/checks/master-client.mjs && node scripts/checks/master-service.mjs && node scripts/checks/master-roundtrip.mjs && node scripts/checks/master-presence.mjs && node scripts/checks/master-github.mjs",
     "test": "npm run check"
   },
   "engines": {
