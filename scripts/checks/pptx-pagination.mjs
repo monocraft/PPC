@@ -236,7 +236,7 @@ class RecordingPptx {
 function recordImage(kind, category, page = null) {
   const pageProducts = kind === "products" ? page.rows.flatMap((row) => row.products) : page.flatMap((group) => group.products);
   const productIds = Array.from(pageProducts, (product) => product.id);
-  const image = kind === "products" ? { data: `${kind}:${category.id}`, width: 1200, height: 600 } : { data: `${kind}:${category.id}`, width: 800, height: 1600 };
+  const image = kind === "products" ? { data: `${kind}:${category.id}`, width: page.width, height: page.height } : { data: `${kind}:${category.id}`, width: 800, height: 1600 };
   image.products = productIds.map((id, index) => kind === "products" ? {
     kind: "card", id, name: `Product ${id}`,
     x: 20 + index % 10 * 115, y: 15 + Math.floor(index / 10) * 115, width: 100, height: 100,
@@ -268,7 +268,10 @@ const sandbox = {
   $: (selector) => exportControls.get(selector),
   escapeHtml: (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]),
   categoryDefinition: (id) => ({ id }), ensureBoardSchema: (board) => board,
-  productCardLayout: () => ({ cardHeight: 552, laneHeight: 622, detailed: false }),
+  productCardLayout: (targetBoard) => {
+    const cardHeight = targetBoard?.exportCardHeight || 552;
+    return { cardHeight, laneHeight: cardHeight + 70, detailed: false };
+  },
   inferFamily: (name) => name || "Other",
   roadmapGroupsForProducts: (products) => [...new Set(products.map((product) => product.family))].map((family) => ({ family, products: products.filter((product) => product.family === family) })),
   closePopupMenus() {}, renderActiveView() {}, PptxGenJS: RecordingPptx,
@@ -295,13 +298,43 @@ for (const [productCount, expectedRows] of [[13, [13]], [14, [13, 1]]]) {
   assert.ok(planned.every((slide) => slide.page.layout.cardHeight === 552), "each product page carries the category's real card layout to its renderer");
   assert.equal(JSON.stringify(category), before, "boundary planning leaves the saved category unchanged");
 }
-const tallCategory = productBoundaryCategory(5, 5);
-const tallPlan = sandbox.buildPptxExportPlan("products", [tallCategory]);
-assert.equal(tallPlan.length, 5, "many short lanes paginate vertically instead of shrinking every lane into one slide");
-assert.equal(sandbox.pptxSlideCountForScope("products", [tallCategory]), tallPlan.length, "height pagination is included in the preview");
-assert.deepEqual(Array.from(tallPlan, (slide) => slide.pageIndex), [0, 1, 2, 3, 4]);
-assert.ok(tallPlan.every((slide) => slide.pageCount === 5 && slide.page.rows.length === 1));
-assert.equal(new Set(tallPlan.map((slide) => `${slide.page.width}:${slide.page.height}`)).size, 1, "continuation pages retain a consistent product scale");
+const manyLaneCategory = productBoundaryCategory(5, 5);
+const manyLanePlan = sandbox.buildPptxExportPlan("products", [manyLaneCategory]);
+assert.equal(manyLanePlan.length, 3, "multiple short lanes share rows on a slide before continuing vertically");
+assert.equal(sandbox.pptxSlideCountForScope("products", [manyLaneCategory]), manyLanePlan.length, "height pagination is included in the preview");
+assert.deepEqual(Array.from(manyLanePlan, (slide) => slide.pageIndex), [0, 1, 2]);
+assert.ok(manyLanePlan.every((slide) => slide.pageCount === 3));
+assert.deepEqual(Array.from(manyLanePlan, (slide) => slide.page.rows.length), [2, 2, 1]);
+assert.equal(new Set(manyLanePlan.map((slide) => `${slide.page.width}:${slide.page.height}`)).size, 1, "continuation pages retain a consistent product scale");
+
+const consistentCategories = [productBoundaryCategory(1), productBoundaryCategory(13), productBoundaryCategory(27), manyLaneCategory];
+const consistentPlan = sandbox.buildPptxExportPlan("products", consistentCategories);
+assert.ok(consistentPlan.every((slide) => slide.page.width === 3386 && slide.page.height === 3386 * 6.33 / 12.55), "the actual export plan uses the same 13-column canvas across sparse, full, continued, and multi-lane categories");
+const sharedPlanBefore = JSON.stringify(consistentCategories);
+const tallCategory = productBoundaryCategory(1);
+tallCategory.id = "tall-card-category";
+tallCategory.board.exportCardHeight = 3000;
+const mixedHeightPlan = sandbox.buildPptxExportPlan("products", [...consistentCategories, tallCategory]);
+const commonWidth = mixedHeightPlan.find((slide) => slide.category.id === tallCategory.id).page.width;
+assert.ok(commonWidth > 3386, "an unusually tall card can require a larger content canvas");
+assert.ok(mixedHeightPlan.every((slide) => slide.page.width === commonWidth && slide.page.height === commonWidth * 6.33 / 12.55), "all selected categories adopt the same width when one tall card needs more height");
+assert.equal(JSON.stringify(consistentCategories), sharedPlanBefore, "sharing category scale leaves all saved boards unchanged");
+assert.equal(sandbox.buildPptxExportPlan("products", consistentCategories)[0].page.width, 3386, "an unselected tall category never changes another export's scale");
+
+const unequalCategory = productBoundaryCategory(0, 2);
+unequalCategory.board.products = [
+  ...Array.from({ length: 14 }, (_, index) => ({ id: `wired-${index}`, laneId: "lane-0", order: index, name: "Headset" })),
+  ...Array.from({ length: 27 }, (_, index) => ({ id: `wireless-${index}`, laneId: "lane-1", order: index, name: "Headset" })),
+];
+const unequalPlan = sandbox.buildPptxExportPlan("products", [unequalCategory]);
+assert.deepEqual(Array.from(unequalPlan, (slide) => Array.from(slide.page.rows, (row) => [row.lane.id, row.slot, row.products.length])), [
+  [["lane-0", 0, 13], ["lane-1", 1, 13]],
+  [["lane-0", 0, 1], ["lane-1", 1, 13]],
+  [["lane-1", 1, 1]],
+], "the actual plan keeps wired and wireless lanes together and preserves their slots through unequal overflow");
+for (const laneId of ["lane-0", "lane-1"]) {
+  assert.deepEqual(Array.from(unequalPlan).flatMap((slide) => Array.from(slide.page.rows).filter((row) => row.lane.id === laneId).flatMap((row) => Array.from(row.products, (product) => product.id))), unequalCategory.board.products.filter((product) => product.laneId === laneId).map((product) => product.id), "parallel lane continuation retains all products in each lane's saved order");
+}
 sandbox.renderPptxExportCategories();
 assert.ok(exportControls.get("#pptxExportCategories").innerHTML.includes("Console &lt;limited&gt;"), "category picker safely displays saved names");
 assert.ok(!exportControls.get("#pptxExportCategories").innerHTML.includes('value="unavailable"'));
@@ -401,7 +434,7 @@ for (const [scope, expectedKinds, expectedFilename] of [
     const image = slide.images[0];
     assert.equal(image.data, `${call.kind}:${call.categoryId}`);
     assert.ok(image.x >= .38 && image.y >= .74 && image.x + image.w <= 12.93 + 1e-8 && image.y + image.h <= 7.07 + 1e-8, "wide/tall exported images fit within the slide content area");
-    assert.ok(Math.abs(image.w / image.h - (call.kind === "products" ? 2 : .5)) < 1e-8, "slide composition preserves image proportions");
+    assert.ok(Math.abs(image.w / image.h - call.image.width / call.image.height) < 1e-8, "slide composition preserves image proportions");
     const scale = image.w / call.image.width;
     if (call.kind === "products") {
       assert.ok(call.page.rows.every((row) => row.products.length <= 13), "the renderer receives no portfolio row wider than 13 products");
@@ -448,6 +481,8 @@ for (const [scope, expectedKinds, expectedFilename] of [
       assert.equal(options.line.dashType || "solid", expectedProduct.concept ? "dash" : "solid", "concept products retain their dashed border");
     });
   });
+  const productSlides = deck.slides.filter((_, index) => renderCalls[index].kind === "products");
+  assert.equal(new Set(productSlides.map((slide) => Number(slide.shapes[1].options.w.toFixed(9)))).size, productSlides.length ? 1 : 0, "native product card widths remain identical across different categories and continuation slides");
 }
 const deckCountBeforeEmpty = decks.length;
 renderCalls.length = 0;

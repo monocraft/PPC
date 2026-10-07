@@ -66,6 +66,7 @@
     const top = metric("top", 34);
     const bottom = metric("bottom", 20);
     const minWidth = metric("minWidth", 1480, Number.EPSILON);
+    const canvasWidth = metric("canvasWidth", 0);
     const slideWidth = metric("slideWidth", 12.55, Number.EPSILON);
     const slideHeight = metric("slideHeight", 6.33, Number.EPSILON);
     const getFamily = typeof options.getFamily === "function" ? options.getFamily
@@ -96,11 +97,10 @@
       byLane.set(fallbackId, unassigned);
     }
 
-    const rows = [];
-    let maxLaneCount = 0;
+    const laneRows = [];
     orderedLanes.forEach((lane) => {
       const laneProducts = ordered(byLane.get(lane.id));
-      maxLaneCount = Math.max(maxLaneCount, laneProducts.length);
+      const rows = [];
       let rowProducts = [];
       let continued = Boolean(lane.continued);
       const finishRow = () => {
@@ -125,24 +125,42 @@
         }
       }
       finishRow();
+      if (rows.length) laneRows.push(rows);
     });
 
-    const columns = Math.min(maxColumns, maxLaneCount);
-    // A category keeps one horizontal scale for every page. If a detail card
-    // is unusually tall, reserve enough width for even one row to fit.
-    const width = Math.max(minWidth, gutter + columns * (cardWidth + cardGap) + sidePadding,
+    // Reserve the same column capacity even for sparsely populated slides.
+    // The caller can share a larger canvas across categories with tall cards.
+    const columns = maxColumns;
+    const width = Math.max(minWidth, canvasWidth, gutter + columns * (cardWidth + cardGap) + sidePadding,
       (top + cardHeight + bottom) * slideWidth / slideHeight);
     const availableHeight = width * slideHeight / slideWidth;
     const rowsPerSlide = Math.max(1, Math.floor((availableHeight - top - bottom + laneGap) / (cardHeight + laneGap)));
     const pages = [];
-    for (let offset = 0; offset < rows.length; offset += rowsPerSlide) {
-      pages.push({ rows: rows.slice(offset, offset + rowsPerSlide), width, height: 0, columns, rowsPerSlide });
+    const addPage = (rows) => {
+      pages.push({ rows, width, height: availableHeight, columns, rowsPerSlide });
+    };
+    for (let offset = 0; offset < laneRows.length; offset += rowsPerSlide) {
+      const band = laneRows.slice(offset, offset + rowsPerSlide);
+      if (band.length === 1) {
+        // With only one lane in a band, its continuation can use every row.
+        const rows = band[0];
+        for (let rowOffset = 0; rowOffset < rows.length; rowOffset += rowsPerSlide) {
+          addPage(rows.slice(rowOffset, rowOffset + rowsPerSlide)
+            .map((row, slot) => ({ ...row, slot })));
+        }
+      } else {
+        // Turn all lanes in a band together so each lane stays in its row.
+        const pageCount = Math.max(...band.map((rows) => rows.length));
+        for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+          const rows = [];
+          band.forEach((lane, slot) => {
+            if (lane[pageIndex]) rows.push({ ...lane[pageIndex], slot });
+          });
+          addPage(rows);
+        }
+      }
     }
-    if (!pages.length) pages.push({ rows: [], width, height: top + bottom, columns, rowsPerSlide });
-    pages.forEach((page) => {
-      const rowCount = pages.length > 1 ? rowsPerSlide : page.rows.length;
-      page.height = top + rowCount * cardHeight + Math.max(0, rowCount - 1) * laneGap + bottom;
-    });
+    if (!pages.length) addPage([]);
     return pages;
   }
 

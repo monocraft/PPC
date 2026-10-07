@@ -32,8 +32,8 @@ const exportPage = {
   width: 4000, height: 1100,
   layout: { detailed: true, cardHeight: 450, laneHeight: 550 },
   rows: [
-    { lane: category.board.lanes[0], products: [category.board.products[2], category.board.products[0]], continued: false },
-    { lane: category.board.lanes[1], products: [category.board.products[1]], continued: false },
+    { lane: category.board.lanes[0], products: [category.board.products[2], category.board.products[0]], continued: false, slot: 0 },
+    { lane: category.board.lanes[1], products: [category.board.products[1]], continued: false, slot: 1 },
   ],
 };
 const canvases = [];
@@ -209,4 +209,18 @@ assert.deepEqual(Array.from(continuation.products, (product) => product.id), ["l
 assert.equal(continuation.width, result.width, "continuation backgrounds retain the category scale");
 assert.equal(continuation.height, result.height);
 assert.equal(continuation.products[0].width, result.products[1].width, "a partial final page keeps the same native product size");
-console.log("PowerPoint cards preserve layout, record editable name/price/spec/SKU and native shapes, isolate artwork, omit product content from the background, and restore workspace state.");
+const secondLaneContinuationPage = { ...exportPage, rows: [{ ...exportPage.rows[1], continued: true }] };
+const secondLaneContinuation = await sandbox.renderCategoryImageForPptx(category, secondLaneContinuationPage);
+assertRestored();
+assert.deepEqual(Array.from(secondLaneContinuation.products, (product) => product.id), ["other"], "a later continuation retains only its remaining lane's products");
+assert.equal(secondLaneContinuation.products[0].y, result.products[2].y, "a remaining second lane stays in its original row instead of jumping upward after the first lane ends");
+assert.equal(secondLaneContinuation.products[0].x, result.products[2].x);
+assert.equal(secondLaneContinuation.products[0].width, result.products[2].width);
+assert.equal(secondLaneContinuation.height, result.height);
+assert.equal(headers.at(-1).y, headers[1].y, "background family labels stay aligned with the lane's fixed row slot");
+
+const legacyPage = { ...exportPage, rows: exportPage.rows.map(({ slot, ...row }) => row) };
+const legacyResult = await sandbox.renderCategoryImageForPptx(category, legacyPage);
+assertRestored();
+assert.deepEqual(Array.from(legacyResult.products, (product) => [product.id, product.x, product.y, product.width]), Array.from(result.products, (product) => [product.id, product.x, product.y, product.width]), "rendering still supports explicitly supplied older pages whose row positions come from their array order");
+console.log("PowerPoint cards preserve constant size and stable lane slots, record editable name/price/spec/SKU and native shapes, isolate artwork, omit product content from the background, and restore workspace state.");

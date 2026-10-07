@@ -5478,11 +5478,12 @@ function recordCardElementsForPptx(cardCanvas, product, layout) {
   return elements;
 }
 
-function productPagesForPptx(category, targetBoard = null) {
+function productPagesForPptx(category, targetBoard = null, canvasWidth = 0) {
   const definition = categoryDefinition(category.id);
   const categoryBoard = targetBoard || ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
   const layout = productCardLayout(categoryBoard, definition);
   return PPTXPagination.paginateProductLanes(categoryBoard.lanes, categoryBoard.products, {
+    canvasWidth,
     cardWidth: CARD_WIDTH, cardGap: CARD_GAP, cardHeight: layout.cardHeight,
     laneGap: layout.laneHeight - layout.cardHeight, gutter: GUTTER, sidePadding: SIDE_PADDING,
     top: LANE_TOP + 18, bottom: 20,
@@ -5526,7 +5527,7 @@ async function renderCategoryImageForPptx(category, page = null) {
     const byId = new Map(board.products.map((product) => [product.id, product]));
     const laneRows = exportPage.rows.map((row, index) => ({
       lane: row.lane,
-      top: LANE_TOP + 18 + index * layout.laneHeight,
+      top: LANE_TOP + 18 + (row.slot ?? index) * layout.laneHeight,
       contentHeight: layout.cardHeight,
       continued: row.continued,
       products: row.products.map((product) => {
@@ -5762,12 +5763,21 @@ function buildPptxExportPlan(scope, categories) {
   const includeRoadmap = scope === "roadmap" || scope === "both";
   const slides = [];
 
-  categories.forEach((category, categoryIndex) => {
+  const preparedCategories = categories.map((category, categoryIndex) => {
     const definition = categoryDefinition(category.id);
     const targetBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
+    return { category, categoryIndex, definition, targetBoard,
+      productPages: includeProducts ? productPagesForPptx(category, targetBoard) : [] };
+  });
+  // Every selected category shares the same card scale. Reserve a wider
+  // canvas for the whole deck only when an unusually tall detail card needs it.
+  const productCanvasWidth = preparedCategories.reduce((width, item) => Math.max(width, item.productPages[0]?.width || 0), 0);
+
+  preparedCategories.forEach(({ category, categoryIndex, definition, targetBoard, productPages }) => {
 
     if (includeProducts) {
-      const pages = productPagesForPptx(category, targetBoard);
+      const pages = productPages[0].width === productCanvasWidth ? productPages
+        : productPagesForPptx(category, targetBoard, productCanvasWidth);
       pages.forEach((page, pageIndex) => {
         slides.push({ category, categoryIndex, kind: "products", page, pageIndex, pageCount: pages.length });
       });

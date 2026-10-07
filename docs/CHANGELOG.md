@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-07 — consistent product widths and shared lane pages
+
+- Use one product-card width across every selected category and continuation slide, reserving a common 13-column canvas even for sparse categories. A shared canvas also handles unusually tall cards without changing scale between categories.
+- Show multiple distinct lanes together whenever their card heights fit. Continue overflowing lanes in parallel, retaining each lane's row position when another lane has finished. A lone lane can use the remaining rows for its own continuation products.
+- Keep the same full slide content frame on every product page, including sparse final pages. Preserve family-aware wrapping, saved order within each lane, all editable product groups, source data, and PowerPoint repair prevention.
+- Check consistent card widths across categories, paired headset lanes, unequal lane continuations, complete product coverage, and actual exported deck layout.
+
 ## 2026-10-07 — direct Roadmap placement and package footer
 
 - Move products directly with visible row grips or a vertical bar-body drag. Keep the original row outlined and show an insertion guide and destination feedback; a drop into another family changes that product's roadmap family. Save independent `roadmap.order` while preserving portfolio lane/card order, filtered products, and nonmoving relative order.
