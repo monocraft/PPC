@@ -41,6 +41,7 @@ jobs:
           cp public/css/styles.css _site/css/
           cp public/js/app.js public/js/workspace-ui.js public/js/portfolio-model.js public/js/product-details.js public/js/ascm-import.js public/js/catalog-data.js public/js/pptx-pagination.js public/js/pptx-editable.js public/js/package-codec.js public/js/package-source.js public/js/package-client.js public/js/package-ui.js _site/js/
           node scripts/configure-package-source.mjs
+          node scripts/configure-site-version.mjs
           cp public/data/master_ppc.pkg _site/data/
           cp -R public/assets public/vendor _site/
 
