@@ -51,7 +51,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 /* A compact toolbar keeps the full width available to the portfolio. */
 .app-shell { display: block; height: 100dvh; width: 100%; min-width: 0; overflow: hidden; }
 .brand-mark { flex: 0 0 auto; display: grid; place-items: center; width: 27px; height: 29px; border: 1px solid #596660; border-radius: 7px; background: #2a3330; color: #acbcb5; font-size: 18px; font-weight: 750; }
-.workspace-main { height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.workspace-main { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .app-shell.is-empty-portfolio .workspace-main { grid-template-rows: minmax(0, 1fr); }
 .topbar { display: flex; align-items: center; gap: 18px; min-width: 0; min-height: 64px; padding: 9px 16px; border-bottom: 1px solid var(--color-border); background: #191919; }
 .brand-block { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 150px; }
@@ -122,13 +122,24 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .selection-actions { display: flex; align-items: center; gap: 7px; min-width: 0; }
 #workspaceSelection { max-width: 230px; margin-right: 3px; overflow: hidden; color: #7f8781; text-overflow: ellipsis; white-space: nowrap; }
 .selection-actions button { color: #a9b5ac; background: transparent; }
-.statusbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-height: 28px; padding: 5px 15px; border-top: 1px solid #303030; background: #191919; color: #79837b; font-size: 9px; }
-.statusbar span + span::before { content: "·"; margin-right: 14px; color: #535d55; }
+.statusbar { position: relative; z-index: 8; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-height: 28px; padding: 5px 15px; border-top: 1px solid #303030; background: #191919; color: #79837b; font-size: 9px; }
+.statusbar > span + span::before, .statusbar > .statusbar-package::before { content: "·"; margin-right: 14px; color: #535d55; }
+.statusbar-package { display: inline-flex; align-items: center; flex: 1 1 300px; gap: 10px; min-width: 0; max-width: 100%; color: var(--color-text-secondary); }
+.statusbar-package-date { flex: 0 0 auto; white-space: nowrap; }
+.statusbar-package-empty { overflow: hidden; color: var(--color-text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.statusbar-package-comment { position: relative; flex: 1 1 auto; min-width: 0; }
+.statusbar-package-comment summary { display: flex; align-items: center; gap: 5px; cursor: pointer; list-style: none; }
+.statusbar-package-comment summary::-webkit-details-marker { display: none; }
+.statusbar-package-comment summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusbar-package-comment summary::after { content: "⌃"; flex-shrink: 0; color: var(--color-text-muted); }
+.statusbar-package-comment[open] summary::after { content: "⌄"; }
+.statusbar-comment-full { position: absolute; right: 0; bottom: calc(100% + 11px); z-index: 1; width: min(440px, calc(100vw - 30px)); max-height: min(240px, 40dvh); margin: 0; padding: 12px 14px; overflow: auto; border: 1px solid #465451; border-radius: 6px; background: var(--color-surface-raised); color: var(--color-text); box-shadow: 0 8px 28px #0006; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.statusbar-comment-full:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 
 /* Canvas surfaces and frozen lane labels share the same theme. */
-.workspace { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--workspace-surface); }
+.workspace { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; overflow: clip; background: var(--workspace-surface); }
 .view-pane { min-width: 0; min-height: 0; width: 100%; height: 100%; }
-.product-view, .roadmap-view { display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.product-view, .roadmap-view { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
 .product-view { background: var(--workspace-surface); }
 .product-board-shell { display: grid; grid-template-columns: 48px minmax(0, 1fr); min-width: 0; min-height: 0; }
 .canvas-scroll { position: relative; min-width: 0; min-height: 0; height: auto; overflow: auto; background: transparent; scrollbar-width: none; overscroll-behavior: contain; }
@@ -137,6 +148,12 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .canvas-scroll.is-panning, .canvas-scroll.is-panning canvas { cursor: grabbing !important; }
 #boardCanvas.is-layout-editing { cursor: move; }
 .roadmap-scroll { background: #171717; }
+.roadmap-edit-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; width: 100%; padding-top: 4px; border-top: 1px solid #303630; font-size: 10px; }
+.roadmap-interaction-hint { margin-right: auto; color: #89978d; }
+.roadmap-edit-selection { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b7c9be; }
+.roadmap-edit-controls label { display: flex; align-items: center; gap: 5px; color: #a6b4aa; }
+.roadmap-edit-controls input { width: 130px; min-height: 26px; padding: 3px 5px; font-size: 10px; }
+.roadmap-drag-feedback { position: fixed; z-index: 60; max-width: min(360px, calc(100vw - 24px)); padding: 8px 12px; border: 1px solid #839f8e; border-radius: 7px; background: #202a24; color: #d5e4db; box-shadow: 0 6px 20px #0006; font-size: 11px; line-height: 1.4; pointer-events: none; }
 .lane-rail { position: relative; z-index: 6; min-width: 0; overflow: hidden; border-right: 1px solid #2d2d2d; background: #1b1b1b; }
 .lane-rail-inner { position: relative; width: 100%; will-change: transform; }
 .lane-rail-item { position: absolute; left: 0; right: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-bottom: 1px solid #2d2d2d; background: #1b1b1b; }
@@ -159,6 +176,14 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 /* One settings dialog with explicit scopes and keyboard navigation. */
 .modal-backdrop { position: fixed; z-index: 70; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(8,8,8,.76); backdrop-filter: blur(3px); }
 .workspace-settings-backdrop { z-index: 60; }
+.app-message-backdrop { z-index: 100; }
+.app-message-panel { width: min(440px, 100%); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid #424a43; border-radius: 10px; background: var(--color-surface); box-shadow: 0 24px 80px #000a; }
+.app-message-panel h2 { margin: 0 0 12px; font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
+.app-message-text { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.app-message-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.app-message-actions button { min-width: 76px; }
+.app-message-actions .app-message-danger { border-color: #80605d; background: #5a3b37; color: #f0d9d4; }
+.app-message-actions .app-message-danger:hover { border-color: #a77e78; background: #704942; color: #fff1eb; }
 .workspace-settings { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(780px, 100%); height: min(680px, calc(100dvh - 50px)); overflow: hidden; border: 1px solid #444944; border-radius: 10px; background: #1b1b1b; box-shadow: 0 24px 80px #000a; }
 .workspace-settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 18px; border-bottom: 1px solid #303030; }
 .workspace-settings-heading h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; letter-spacing: -.025em; }
@@ -354,7 +379,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 /* Synchronized split details and explicit color-to-HP-part mapping. */
 .split-view { display: grid; grid-template-columns: minmax(310px, 360px) minmax(0, 1fr); }
 .split-product { display: grid; min-width: 0; min-height: 0; overflow: hidden; padding: 8px; border-right: 1px solid #303030; background: #171717; }
-.split-roadmap-shell { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.split-roadmap-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .split-product-card { overflow: hidden; border: 1px solid #353c36; border-radius: 7px; background: #202020; }
 .split-product-card--detail { display: flex; flex-direction: column; align-self: start; height: fit-content; max-height: 100%; min-height: 0; }
 .split-product-card--detail > .split-status, .split-product-card--detail > .split-product-hero { flex: 0 0 auto; }
@@ -707,8 +732,10 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
   .split-product-image { width: 70px; height: 68px; }
   .split-product-title h2 { font-size: 15px; }
   .product-detail-dates { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .statusbar { max-height: 42px; overflow: hidden; padding: 5px 10px; font-size: 8px; }
-  .statusbar span + span::before { margin-right: 5px; }
+  .statusbar { padding: 5px 10px; font-size: 8px; }
+  .statusbar > span + span::before { margin-right: 5px; }
+  .statusbar-package { flex-basis: 100%; gap: 7px; }
+  .statusbar > .statusbar-package::before { display: none; }
   .board-navigator { grid-template-columns: 27px minmax(80px, 1fr) 27px; }
   .nav-selected, .nav-position { display: none; }
   .product-board-shell { grid-template-columns: 38px minmax(0, 1fr); }

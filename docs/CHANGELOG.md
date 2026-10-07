@@ -1,5 +1,13 @@
 # Change Log
 
+## 2026-10-07 — direct Roadmap placement and package footer
+
+- Move products directly with visible row grips or a vertical bar-body drag. Keep the original row outlined and show an insertion guide and destination feedback; a drop into another family changes that product's roadmap family. Save independent `roadmap.order` while preserving portfolio lane/card order, filtered products, and nonmoving relative order.
+- Resize hovered/selected start and end edges without opening Settings, or drag horizontally to move the duration. Show live start/end feedback including known exact GA/EM dates, account for timeline scrolling and edge auto-scroll, clamp endpoints, and discard drafts on Escape or pointer cancellation.
+- Place Move up/down and Start/End month controls beside the timeline, with Alt+Up/Down and live announcements for keyboard access. Both Roadmap surfaces share the same interactions; remove the obsolete Edit selected roadmap slot gate.
+- Replace the footer's card-interaction sentence with the loaded package update date and an expandable comment, including keyboard access and explicit missing-metadata fallbacks.
+- Add pure interaction checks for saved/legacy row order, family boundaries, filtered source-gap no-ops, retained hidden products/portfolio positions, cross-family moves, and snapped endpoint drafting.
+
 ## 2026-10-07 — readable paginated product portfolio exports
 
 - Product Portfolio exports now wrap each lane at a maximum of 13 products across and continue onto more slides when the available height is full. Tall detailed cards use fewer rows per slide.
@@ -33,6 +41,13 @@
 - Kept the complete specification list in Overview and the shared card layout used by Products, PNG, and PPTX. Product/specification data is unchanged.
 - Retained existing saved `fullSingleLaneSpecs` values as inert compatibility data; new defaults no longer create the setting.
 - All thirteen project checks passed. Browser verification confirmed the checkbox is absent, existing MSRP/SKU-footer/layout controls remain available, and no browser errors occurred.
+
+## 2026-10-07 — replace browser popups with app dialogs
+
+- Replaced the native ASCM import-complete popup and all remaining application alert/confirm calls with a shared charcoal app dialog. Import/export/image errors and specification notices use titled app messages; package import keeps its existing inline completion/error feedback.
+- Delete product and Clear all products now await custom Cancel/confirm controls. Cancel is initially focused; cancellation preserves products/images, and delayed confirmations cannot target a replacement workspace or a different category's selected product.
+- Added keyboard trapping, Escape/backdrop dismissal, literal message rendering, queued requests, preserved background modal state, and visible focus restoration. Clear-all returns focus to the welcome action after its asynchronous image cleanup finishes.
+- Included the dialog module in startup and the deployment allowlist. All twelve project checks passed, including clear-all cancellation and stale-confirmation checks. Isolated desktop/mobile browser verification exercised a generated ASCM workbook, completion and error flows, nested settings, literal markup, queues, keyboard controls, deletion, package import, and clear-all; it recorded zero native browser dialogs and zero browser errors.
 
 ## 2026-10-07 — hide the header for an empty portfolio
 

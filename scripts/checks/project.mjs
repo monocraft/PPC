@@ -213,7 +213,7 @@ function validateCatalog(catalog) {
   return { productCount, assetReferences };
 }
 
-for (const sourceFile of ["app.js", "portfolio-model.js", "product-details.js", "workspace-ui.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js", "package-codec.js", "package-source.js", "package-client.js", "package-ui.js"].map((file) => publicPath(`js/${file}`)).concat(["scripts/serve.mjs", "scripts/configure-package-source.mjs", "scripts/configure-site-version.mjs", "server/package-relay.mjs", ...["project", "ascm-import", "pptx-pagination", "portfolio-model", "product-details", "package-codec", "package-client", "package-workspace", "package-relay"].map((file) => `scripts/checks/${file}.mjs`)])) {
+for (const sourceFile of ["app.js", "app-dialogs.js", "portfolio-model.js", "roadmap-interaction.js", "product-details.js", "workspace-ui.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js", "package-codec.js", "package-source.js", "package-client.js", "package-ui.js"].map((file) => publicPath(`js/${file}`)).concat(["scripts/serve.mjs", "scripts/configure-package-source.mjs", "scripts/configure-site-version.mjs", "server/package-relay.mjs", ...["project", "ascm-import", "pptx-pagination", "portfolio-model", "roadmap-interaction", "product-details", "package-codec", "package-client", "package-workspace", "package-relay"].map((file) => `scripts/checks/${file}.mjs`)])) {
   if (!await isFile(sourceFile)) fail(`Missing required JavaScript file: ${sourceFile}`);
   else syntaxCheck(sourceFile);
 }
@@ -251,7 +251,7 @@ for (const match of shellSource.matchAll(/\bget\(["']([A-Za-z][\w-]*)["']\)/g)) 
 for (const match of packageUiSource.matchAll(/\bget\(["']([A-Za-z][\w-]*)["']\)/g)) {
   if (!renderedIds.has(match[1])) fail(`package-ui.js binds a control that is never rendered: #${match[1]}`);
 }
-for (const [first, second] of [["js/package-codec.js", "js/app.js"], ["js/package-source.js", "js/package-ui.js"], ["js/package-client.js", "js/package-ui.js"], ["js/app.js", "js/package-ui.js"]]) {
+for (const [first, second] of [["js/roadmap-interaction.js", "js/app.js"], ["js/package-codec.js", "js/app.js"], ["js/package-source.js", "js/package-ui.js"], ["js/package-client.js", "js/package-ui.js"], ["js/app.js", "js/package-ui.js"]]) {
   if (scriptReferences.indexOf(first) < 0 || scriptReferences.indexOf(first) >= scriptReferences.indexOf(second)) fail(`Runtime order must load ${first} before ${second}.`);
 }
 

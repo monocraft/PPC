@@ -10,15 +10,72 @@
   const status = get("packageStatus");
   const error = get("packageError");
   let mode = "pull", selectedFile = null, busy = false, completed = false, restoreFocus = null, controller = null, cancelRequested = false, downloadedBytes = null;
+  let footerInfoKey = "", footerCommentsOpen = false;
 
-  function showPackageInfo(info, updatedId, commentsId) {
+  function packageInfoText(info) {
     const date = info?.updatedAt ? new Date(info.updatedAt) : null;
     const hasDate = date && Number.isFinite(date.getTime());
-    get(updatedId).textContent = hasDate ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date) : "Date not supplied";
-    get(updatedId).dateTime = hasDate ? info.updatedAt : "";
-    get(updatedId).title = hasDate ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" }).format(date) : "";
     const comments = info?.comments || "";
-    get(commentsId).textContent = comments.trim() ? comments : "No comments supplied.";
+    return {
+      updated: hasDate ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date) : "Date not supplied",
+      dateTime: hasDate ? info.updatedAt : "",
+      dateTitle: hasDate ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" }).format(date) : "",
+      comments: comments.trim() ? comments : "No comments supplied.",
+      hasComments: Boolean(comments.trim()),
+    };
+  }
+
+  function setPackageDate(element, text) {
+    element.textContent = text.updated;
+    element.dateTime = text.dateTime;
+    element.title = text.dateTitle;
+  }
+
+  function showPackageInfo(info, updatedId, commentsId) {
+    const text = packageInfoText(info);
+    setPackageDate(get(updatedId), text);
+    get(commentsId).textContent = text.comments;
+  }
+
+  function showFooterPackageInfo(info) {
+    const footer = get("statusbarPackage");
+    if (!footer) return;
+    const text = packageInfoText(info);
+    const infoKey = `${text.dateTime}\n${text.comments}`;
+    if (infoKey !== footerInfoKey) { footerInfoKey = infoKey; footerCommentsOpen = false; }
+    const updated = document.createElement("span");
+    updated.className = "statusbar-package-date";
+    updated.textContent = text.dateTime ? "Package updated " : "Package date ";
+    const date = document.createElement("time");
+    setPackageDate(date, text);
+    updated.append(date);
+    if (!text.hasComments) {
+      const comments = document.createElement("span");
+      comments.className = "statusbar-package-empty";
+      comments.textContent = text.comments;
+      footer.replaceChildren(updated, comments);
+      return;
+    }
+    const comments = document.createElement("details");
+    comments.className = "statusbar-package-comment";
+    comments.open = footerCommentsOpen;
+    const summary = document.createElement("summary");
+    summary.title = "Show full package comment";
+    const preview = document.createElement("span");
+    preview.textContent = `Comment: ${text.comments.replace(/\s+/g, " ").trim()}`;
+    summary.append(preview);
+    const fullComment = document.createElement("p");
+    fullComment.className = "statusbar-comment-full";
+    fullComment.textContent = text.comments;
+    fullComment.tabIndex = 0;
+    comments.append(summary, fullComment);
+    comments.addEventListener("toggle", () => { if (comments.isConnected) footerCommentsOpen = comments.open; });
+    comments.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && comments.open) {
+        event.preventDefault(); event.stopPropagation(); comments.open = false; footerCommentsOpen = false; summary.focus();
+      }
+    });
+    footer.replaceChildren(updated, comments);
   }
 
   function usesRelay() {
@@ -35,7 +92,9 @@
   }
 
   function refresh() {
-    showPackageInfo(globalThis.getCurrentPackageInfo(), "sharedPackageUpdated", "sharedPackageComments");
+    const info = globalThis.getCurrentPackageInfo();
+    showPackageInfo(info, "sharedPackageUpdated", "sharedPackageComments");
+    showFooterPackageInfo(info);
     try {
       const source = pullSource();
       get("sharedPackageStatus").textContent = source.packageUrl ? "Pull the latest master package. Your key unlocks Products and Roadmap on this device." : "Load the shared master into Products and Roadmap with your package key.";
