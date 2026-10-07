@@ -210,7 +210,7 @@ function validateCatalog(catalog) {
   return { productCount, assetReferences };
 }
 
-for (const sourceFile of ["app.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js", "scripts/serve.mjs"]) {
+for (const sourceFile of ["app.js", "portfolio-model.js", "product-details.js", "workspace-ui.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js", "scripts/serve.mjs"]) {
   if (!await isFile(sourceFile)) fail(`Missing required JavaScript file: ${sourceFile}`);
   else syntaxCheck(sourceFile);
 }
@@ -230,6 +230,18 @@ for (const reference of [...scriptReferences, ...stylesheetReferences]) {
 const ids = [...htmlSource.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)].map((match) => match[1]);
 const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
 if (duplicateIds.length > 0) fail(`Duplicate HTML id values: ${duplicateIds.join(", ")}`);
+
+// A removed control must also lose its binding; otherwise startup can fail
+// before the first render even when every source file parses successfully.
+const applicationSource = await readFile(projectPath("app.js"), "utf8");
+const shellSource = await readFile(projectPath("workspace-ui.js"), "utf8");
+const renderedIds = new Set([...ids, ...[...applicationSource.matchAll(/\bid\s*=\s*["']([A-Za-z][\w-]*)["']/g)].map((match) => match[1])]);
+for (const match of applicationSource.matchAll(/\$\(["']#([A-Za-z][\w-]*)["']\)/g)) {
+  if (!renderedIds.has(match[1])) fail(`app.js binds a control that is never rendered: #${match[1]}`);
+}
+for (const match of shellSource.matchAll(/\bget\(["']([A-Za-z][\w-]*)["']\)/g)) {
+  if (!renderedIds.has(match[1])) fail(`workspace-ui.js binds a control that is never rendered: #${match[1]}`);
+}
 
 const workflowSource = await readFile(projectPath(".github/workflows/deploy.yml"), "utf8");
 const { staged, unsafe } = parseCopySteps(workflowSource);

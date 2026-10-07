@@ -7,7 +7,7 @@
   "scripts": {
     "serve": "node scripts/serve.mjs",
     "validate": "node scripts/validate-project.mjs",
-    "test": "node scripts/validate-project.mjs && node scripts/test-ascm-import.mjs && node scripts/test-pptx-pagination.mjs"
+    "test": "node scripts/validate-project.mjs && node scripts/test-ascm-import.mjs && node scripts/test-pptx-pagination.mjs && node scripts/test-portfolio-model.mjs && node scripts/test-product-details.mjs"
   },
   "engines": {
     "node": ">=20"
