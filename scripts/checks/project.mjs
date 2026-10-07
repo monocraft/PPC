@@ -5,12 +5,14 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(scriptDirectory, "..");
+const projectRoot = path.resolve(scriptDirectory, "../..");
+const publicRoot = path.join(projectRoot, "public");
 const errors = [];
 const warnings = [];
 
 const toPosix = (value) => value.split(path.sep).join("/");
 const projectPath = (relativePath) => path.resolve(projectRoot, relativePath);
+const publicPath = (relativePath) => `public/${relativePath}`;
 
 function fail(message) {
   errors.push(message);
@@ -69,9 +71,9 @@ function parseCopySteps(workflowSource) {
 
     const sources = tokens.slice(1, -1).filter((token) => !token.startsWith("-"));
     for (const source of sources) {
-      const normalized = source.replace(/^\.\//, "").replace(/[\\/]+$/, "").replace(/\\/g, "/");
+      const normalized = source.replace(/^\.\//, "").replace(/\\/g, "/").replace(/\/\.$/, "").replace(/[\\/]+$/, "");
       staged.add(normalized);
-      if (normalized === "." || normalized === "" || normalized === "project-data" || normalized.startsWith("project-data/private")) {
+      if (normalized !== "public" && !normalized.startsWith("public/")) {
         unsafe.push(normalized || ".");
       }
     }
@@ -91,7 +93,7 @@ function isStaged(relativePath, staged) {
 function collectAssetReferences(value, references) {
   if (typeof value === "string") {
     const normalized = value.replace(/\\/g, "/").replace(/^\.\//, "").split(/[?#]/, 1)[0];
-    if (normalized.startsWith("assets/")) references.add(normalized);
+    if (normalized.startsWith("assets/")) references.add(publicPath(normalized));
     return;
   }
   if (Array.isArray(value)) {
@@ -210,12 +212,12 @@ function validateCatalog(catalog) {
   return { productCount, assetReferences };
 }
 
-for (const sourceFile of ["app.js", "portfolio-model.js", "product-details.js", "workspace-ui.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js", "scripts/serve.mjs"]) {
+for (const sourceFile of ["app.js", "portfolio-model.js", "product-details.js", "workspace-ui.js", "ascm-import.js", "catalog-data.js", "pptx-pagination.js"].map((file) => publicPath(`js/${file}`)).concat(["scripts/serve.mjs", ...["project", "ascm-import", "pptx-pagination", "portfolio-model", "product-details"].map((file) => `scripts/checks/${file}.mjs`)])) {
   if (!await isFile(sourceFile)) fail(`Missing required JavaScript file: ${sourceFile}`);
   else syntaxCheck(sourceFile);
 }
 
-const htmlSource = await readFile(projectPath("index.html"), "utf8");
+const htmlSource = await readFile(projectPath("public/index.html"), "utf8");
 const scriptReferences = [...htmlSource.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)]
   .map((match) => localReference(match[1]))
   .filter(Boolean);
@@ -224,7 +226,9 @@ const stylesheetReferences = [...htmlSource.matchAll(/<link\b[^>]*\brel\s*=\s*["
   .filter(Boolean);
 
 for (const reference of [...scriptReferences, ...stylesheetReferences]) {
-  if (!await isFile(reference)) fail(`index.html references a missing local runtime file: ${reference}`);
+  const resolved = path.resolve(publicRoot, reference);
+  if (!resolved.startsWith(`${publicRoot}${path.sep}`)) fail(`public/index.html references a path outside the public folder: ${reference}`);
+  else if (!await isFile(publicPath(reference))) fail(`public/index.html references a missing local runtime file: ${reference}`);
 }
 
 const ids = [...htmlSource.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)].map((match) => match[1]);
@@ -233,8 +237,8 @@ if (duplicateIds.length > 0) fail(`Duplicate HTML id values: ${duplicateIds.join
 
 // A removed control must also lose its binding; otherwise startup can fail
 // before the first render even when every source file parses successfully.
-const applicationSource = await readFile(projectPath("app.js"), "utf8");
-const shellSource = await readFile(projectPath("workspace-ui.js"), "utf8");
+const applicationSource = await readFile(projectPath("public/js/app.js"), "utf8");
+const shellSource = await readFile(projectPath("public/js/workspace-ui.js"), "utf8");
 const renderedIds = new Set([...ids, ...[...applicationSource.matchAll(/\bid\s*=\s*["']([A-Za-z][\w-]*)["']/g)].map((match) => match[1])]);
 for (const match of applicationSource.matchAll(/\$\(["']#([A-Za-z][\w-]*)["']\)/g)) {
   if (!renderedIds.has(match[1])) fail(`app.js binds a control that is never rendered: #${match[1]}`);
@@ -246,14 +250,14 @@ for (const match of shellSource.matchAll(/\bget\(["']([A-Za-z][\w-]*)["']\)/g)) 
 const workflowSource = await readFile(projectPath(".github/workflows/deploy.yml"), "utf8");
 const { staged, unsafe } = parseCopySteps(workflowSource);
 const requiredDeploymentEntries = new Set([
-  "index.html",
-  "styles.css",
-  "app.js",
-  "catalog-data.js",
-  "assets",
-  "vendor",
-  ...scriptReferences,
-  ...stylesheetReferences,
+  "public/index.html",
+  "public/css/styles.css",
+  "public/js/app.js",
+  "public/js/catalog-data.js",
+  "public/assets",
+  "public/vendor",
+  ...scriptReferences.map(publicPath),
+  ...stylesheetReferences.map(publicPath),
 ]);
 for (const entry of requiredDeploymentEntries) {
   if (!isStaged(entry, staged)) fail(`The Pages workflow does not stage required runtime path: ${entry}`);
@@ -263,7 +267,7 @@ if (/project-data[\\/]private/.test(workflowSource) && !/test\s+!\s+-e\s+_site[\
   fail("The Pages workflow mentions project-data/private without an explicit exclusion check.");
 }
 
-const catalogSource = await readFile(projectPath("catalog-data.js"), "utf8");
+const catalogSource = await readFile(projectPath("public/js/catalog-data.js"), "utf8");
 const sandbox = { window: Object.create(null) };
 vm.createContext(sandbox);
 try {
@@ -273,8 +277,8 @@ try {
 }
 
 const { productCount, assetReferences } = validateCatalog(sandbox.window.PORTFOLIO_CATALOG);
-if (await isDirectory("assets")) {
-  const assetFiles = await walkFiles(projectPath("assets"));
+if (await isDirectory("public/assets")) {
+  const assetFiles = await walkFiles(projectPath("public/assets"));
   const unreferencedAssets = assetFiles.filter((asset) => !assetReferences.has(asset));
   if (unreferencedAssets.length > 0) {
     const sample = unreferencedAssets.slice(0, 8).join(", ");
@@ -283,6 +287,23 @@ if (await isDirectory("assets")) {
   }
 } else {
   fail("Missing required assets directory.");
+}
+
+// Only the deployable site belongs in public. Private working packages,
+// repository configuration, documentation and checks stay outside its root.
+if (await isDirectory("public")) {
+  const publicFiles = await walkFiles(publicRoot);
+  for (const file of publicFiles) {
+    if (/\.(?:pkg|env|log)$/i.test(file) || /(?:^|\/)(?:project-data|docs|scripts|\.git(?:hub)?)(?:\/|$)/.test(file)) {
+      fail(`Non-site content must not be inside the public deployment folder: ${file}`);
+    }
+  }
+}
+for (const entry of await readdir(projectRoot, { withFileTypes: true })) {
+  if (entry.isFile() && /\.js$/i.test(entry.name)) fail(`Application JavaScript must be inside public/js: ${entry.name}`);
+}
+for (const file of await walkFiles(projectPath("scripts"))) {
+  if (path.basename(file).startsWith("test-")) fail(`Verification scripts must use their descriptive names in scripts/checks: ${file}`);
 }
 
 for (const message of warnings) console.warn(`WARNING: ${message}`);

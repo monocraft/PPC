@@ -33,7 +33,7 @@ The fetched connection baseline nevertheless already tracked `project-data/priva
 
 ### 2.1 Default catalog
 
-`catalog-data.js` defines a version 1 catalog with:
+`public/js/catalog-data.js` defines a version 1 catalog with:
 
 - 11 categories
 - 16 lanes
@@ -54,7 +54,7 @@ Category IDs, in source order:
 10. `controllers`
 11. `backpacks`
 
-The `assets/` directory contains 85 WebP files and two SVG files. Because the source catalog has no products, those WebP files are not referenced by default product records. Restoring the sample/default workspace therefore creates the category structure but no cards.
+The `public/assets/` directory contains 85 WebP files and two SVG files. Because the source catalog has no products, those WebP files are not referenced by default product records. Restoring the sample/default workspace therefore creates the category structure but no cards.
 
 ### 2.2 Private working package
 
@@ -91,18 +91,18 @@ The current importer initializes **future new ASCM products only** with editable
 
 ## 3. Runtime architecture
 
-The application is a static, client-only system. There is no server API, database service, framework, bundler, or compilation step.
+The application is a static, client-only system. There is no server API, database service, framework, bundler, or compilation step. The current site tree is `public/`; the local server and Pages workflow serve its contents at the site root. Development checks live under `scripts/checks/`, separate from public runtime files. The root README remains a short public introduction.
 
 ```text
-index.html
-  ├─ styles.css
-  ├─ vendor/pptxgen.bundle.js  → global PptxGenJS export support
-  ├─ catalog-data.js           → window.PORTFOLIO_CATALOG
-  ├─ ascm-import.js            → global ASCMImporter XLSX/matching helpers
-  ├─ pptx-pagination.js        → global PPTXPagination pure page calculation
-  ├─ portfolio-model.js        → global PortfolioModel timeline/lane/spec/SKU/tone rules
-  ├─ product-details.js        → global PortfolioDetails Overview/secondary lists
-  ├─ app.js
+public/index.html
+  ├─ public/css/styles.css
+  ├─ public/vendor/pptxgen.bundle.js  → global PptxGenJS export support
+  ├─ public/js/catalog-data.js       → window.PORTFOLIO_CATALOG
+  ├─ public/js/ascm-import.js        → global ASCMImporter XLSX/matching helpers
+  ├─ public/js/pptx-pagination.js    → global PPTXPagination pure page calculation
+  ├─ public/js/portfolio-model.js    → global PortfolioModel timeline/lane/spec/SKU/tone rules
+  ├─ public/js/product-details.js    → global PortfolioDetails Overview/secondary lists
+  ├─ public/js/app.js
        ├─ normalize/migrate portfolio state
        ├─ render Product and Roadmap canvases
        ├─ render optional Roadmap DOM details + roadmap canvas
@@ -111,14 +111,14 @@ index.html
        ├─ persist local image blobs to IndexedDB
        ├─ preview and apply local ASCM updates
        └─ import/export data, packages, PNG, and PPTX
-  └─ workspace-ui.js           → toolbar navigation, centralized settings, focus
+  └─ public/js/workspace-ui.js       → toolbar navigation, centralized settings, focus
 ```
 
-The script order in `index.html` is a hard runtime contract: PptxGenJS, catalog, ASCM importer, PPTX pagination, portfolio model, product details, application, then workspace UI. `app.js` reads the catalog at startup and uses pagination/model/detail helpers, so those globals must be available before it executes. The shell reads initialized controls and receives `portfolio:render` events. The PowerPoint bundle must also be available when PPTX export is used.
+The script order in `public/index.html` is a hard runtime contract: PptxGenJS, catalog, ASCM importer, PPTX pagination, portfolio model, product details, application, then workspace UI. `public/js/app.js` reads the catalog at startup and uses pagination/model/detail helpers, so those globals must be available before it executes. The shell reads initialized controls and receives `portfolio:render` events. The PowerPoint bundle must also be available when PPTX export is used.
 
 ### 3.1 Startup path
 
-1. `app.js` reads `window.PORTFOLIO_CATALOG` and derives category definitions and spec-set maps.
+1. `public/js/app.js` reads `window.PORTFOLIO_CATALOG` and derives category definitions and spec-set maps.
 2. `loadPortfolio()` tries the current `localStorage` v4 key.
 3. If needed, it attempts migration from v3 and then the legacy v1 single-board key.
 4. With no saved state, `createDefaultPortfolio()` builds one empty board per catalog category.
@@ -132,15 +132,15 @@ The application provides two synchronized main views:
 - **Product cards** — a canvas-rendered, lane-based product board with search, sort, SKU/variant previews, zoom, and protected reordering.
 - **Roadmap** — a canvas-rendered, time-scaled roadmap with family groups, timeline configuration, search, panning, protected slot editing, and an optional selected-product details pane.
 
-The compact shell uses a toolbar category dropdown, Products/Roadmap tabs, a prominent Export PPTX action in both views, and one Workspace settings dialog with Display, Timeline, Category, and Data & export sections. Edit product stays beside the selection; manual Add product is an always-available Category admin action. Empty categories offer Import package and Import ASCM. There is no category sidebar or separate Split tab. The product editor has Details, Images, Specs, Variants, and Timeline tabs. `workspace-ui.js` isolates shell navigation and keyboard/focus behavior. `portfolio-model.js` isolates timeline synchronization, specification normalization, explicit HP SKU/color resolution, shared product/status/stage tones, and settings-preserving clearing. `ascm-import.js` isolates XLSX parsing, matching, and additive merge rules; `pptx-pagination.js` isolates ordered category selection and roadmap slide calculations.
+The compact shell uses a toolbar category dropdown, Products/Roadmap tabs, a prominent Export PPTX action in both views, and one Workspace settings dialog with Display, Timeline, Category, and Data & export sections. Edit product stays beside the selection; manual Add product is an always-available Category admin action. Empty categories offer Import package and Import ASCM. There is no category sidebar or separate Split tab. The product editor has Details, Images, Specs, Variants, and Timeline tabs. `public/js/workspace-ui.js` isolates shell navigation and keyboard/focus behavior. `public/js/portfolio-model.js` isolates timeline synchronization, specification normalization, explicit HP SKU/color resolution, shared product/status/stage tones, and settings-preserving clearing. `public/js/ascm-import.js` isolates XLSX parsing, matching, and additive merge rules; `public/js/pptx-pagination.js` isolates ordered category selection and roadmap slide calculations.
 
 Each card's compact Details/Close action opens the one shared inline Overview. Enter on the focused Products canvas toggles it for the selected card. This replaces the circular information icon and separate View more specifications popup; spec-popup code, DOM, and styles are removed. A compact card's muted `+N specifications` note is informational, and Details exposes the entire list. Selection uses neutral borders and a thin `#6e7973` line with a small Selected marker on cards; Roadmap bars use a fine outline and leading mark. Neither canvas uses a white selection glow.
 
-Most rendering/editor/persistence behavior still lives in `app.js`, including layout calculations, hit regions, popover state, image loading, and export rendering. Core state remains held in module-level variables rather than a framework store; this is a staged refactor of the existing application.
+Most rendering/editor/persistence behavior still lives in `public/js/app.js`, including layout calculations, hit regions, popover state, image loading, and export rendering. Core state remains held in module-level variables rather than a framework store; this is a staged refactor of the existing application.
 
-Read-only product information is isolated in `product-details.js`: Overview opens first with all six dates/lifecycle beside every specification, using independent keyboard-focusable overflow regions. Specifications have no separate tab or pager. HP SKUs and More are the secondary tabs; More contains Identity/Variants/Source. Both card pane and optional Roadmap pane use the same model/render/controller, with the shared Overview adapted to the narrow Roadmap panel. Secondary lists page at five SKUs, eight variants, or two source records. The inline pane has its own complete border and 10 px card gap, and a compact toolbar for the name, tabs, and close action. Its outer height always matches the parent card's rendered height; content scrolls inside that frame. Legacy `splitView`, `renderSplitProduct`, and `activeView === "split"` names remain internal details of the optional Roadmap pane.
+Read-only product information is isolated in `public/js/product-details.js`: Overview opens first with all six key dates, stage/confidence, and necessary planned context beside every specification, using independent keyboard-focusable overflow regions. Known GA/EM dates are not repeated as matching launch/end month rows. Planned launch/Planned end remain visible when the exact date is missing or the saved month differs. Specifications have no separate tab or pager. HP SKUs and More are the secondary tabs; More contains Identity/Variants/Source. Both card pane and optional Roadmap pane use the same model/render/controller, with the shared Overview adapted to the narrow Roadmap panel. Secondary lists page at five SKUs, eight variants, or two source records. The inline pane has its own complete border and 10 px card gap, and a compact toolbar for the name, tabs, and close action. Its outer height always matches the parent card's rendered height; content scrolls inside that frame. Legacy `splitView`, `renderSplitProduct`, and `activeView === "split"` names remain internal details of the optional Roadmap pane.
 
-The 2026-10-07 user-directed redesign replaces content-measured height and lane expansion. `viewerInfoVisualHeight()` uses `productCardLayout().cardHeight * zoom`; `positionViewerInfo()` uses the actual `card.height * zoom`, aligning the pane's top and bottom with the parent at every zoom, including full-spec cards. Width is 620 px normally, 760 px when the rendered parent is at most 280 px tall, and 840 px when it is at most 180 px tall or has more than 14 specs; short/dense layouts use two specification columns. The canvas may scroll horizontally. `productLaneGeometry()` passes only base layout to `PortfolioModel.layoutProductLanes()`: opening never changes lane height, lower-row positions, or board height. Horizontal animation shifts only later cards in the same lane; closing/filtering removes that reserve. Canvas bounds, backgrounds, rails, hit regions, and drag destinations retain their shared base row positions. Saved lanes, product dimensions, and schema version are unchanged.
+The 2026-10-07 user-directed redesign replaces content-measured height and lane expansion. `viewerInfoVisualHeight()` uses `productCardLayout().cardHeight * zoom`; `positionViewerInfo()` uses the actual `card.height * zoom`, aligning the pane's top and bottom with the parent at every zoom, including full-spec cards. The later compact refinement uses 540 px normally, 680 px when the rendered parent is at most 280 px tall, and 720 px when it is at most 180 px tall. Two specification columns are limited to short parents with every normalized value at most 80 characters; longer values remain in one column and wrap. Date labels reserve two lines so paired values align. General availability, FFS, and launch share teal `#5fd6c1`; end of manufacturing and lifecycle end share embargo red `#ef5b5b`. Whitelisted semantic keys connect the model to styling. The canvas may scroll horizontally. `productLaneGeometry()` passes only base layout to `PortfolioModel.layoutProductLanes()`: opening never changes lane height, lower-row positions, or board height. Horizontal animation shifts only later cards in the same lane; closing/filtering removes that reserve. Canvas bounds, backgrounds, rails, hit regions, and drag destinations retain their shared base row positions. Saved lanes, product dimensions, and schema version are unchanged.
 
 ## 4. Data model and persistence
 
@@ -174,6 +174,8 @@ portfolio
 ```
 
 Product records include identity, name/price metadata, lane and order, status/variant presentation, specifications, image references, color/SKU variant groups, part SKUs, product-information dates, tier/codename, and roadmap fields. `ensureBoardSchema()` is the primary compatibility boundary for product and board defaults.
+
+Exact GA/EM fields in the editor's Details tab are the single manual date input home. Timeline keeps family/stage/confidence/relationships and date synchronization guidance, with Edit dates in Details focusing the GA field. `PortfolioModel.mergeProductUpdate()` synchronizes explicit edits: a populated valid GA/EM derives its roadmap month; a cleared exact date retains its planned month. Protected roadmap dragging shifts any known exact date into the new month while preserving its day or clamping to month end, and it retains unknown day precision for blank/TBD dates. Other milestone fields do not move with the roadmap. Existing saved exact-date/month differences are not reconciled during load or unrelated edits; this is an edit-time synchronization change rather than a normalization migration.
 
 Root `settings.timeline` is authoritative for range and snap across every category. Board roadmap settings retain synchronized copies for rendering/export plus category-specific label/family order. Stage-color fields remain compatibility data, while display uses fixed product/status/stage tones. A legacy workspace migrates its active category settings once; switching categories does not reset the global range. Roadmap MSRP visibility is also global. Card MSRP visibility/SKU footer/full specifications and lane structure remain category-specific.
 
@@ -209,7 +211,7 @@ Browser state is scoped to the origin. Changing the host, port, protocol, browse
 ### 5.1 Lightweight data
 
 - **Export data** downloads `product-portfolio-data.data`, a formatted JSON clone of the portfolio. It includes image metadata/references but not local image binary data.
-- **Import data** accepts `.data`, `.json`, and a narrowly recognized `catalog-data.js` assignment.
+- **Import data** accepts `.data`, `.json`, and a narrowly recognized `public/js/catalog-data.js` assignment.
 - Version 4/3/2 category workspaces are normalized. Version 1 catalogs create empty boards; a legacy version 1 single board is migrated into the PC gaming audio category.
 - A categories-only catalog import intentionally discards any catalog `products` content and creates empty boards through `emptyBoardFromCatalogCategory()`.
 
@@ -240,7 +242,7 @@ The ASCM flow is separate from replacement workspace/package imports. It parses 
 
 Matching uses a saved ASCM key first, exact Base PN second, then cautious unique normalized names within the mapped category. Console headset names can additionally use confirmed platform identity. Conflicting identifiers, duplicate candidates, unmapped categories, and several source groups targeting one product are skipped for review.
 
-Source records retain exact descriptions and per-PN GA/EM dates. Product-level dates roll up the earliest GA and latest EM; populated roadmap dates use corresponding months while omitted dates retain existing placement. The preview offers independent controls for updating matched products and adding new products. Pure `ASCMImporter.mergeProductGroup()` retains curated names, specifications, prices, images, statuses, other manual fields, and all previous PNs/variants/source records. Empty or invalid source dates do not clear saved dates. Existing color presentation/image choices survive; new explicit colors are appended. Missing products are not automatically deleted. `app.js` integrates the merge with roadmap synchronization and saved provenance. The [Feature Index](FEATURE-INDEX.md#ascm-update-workflow) describes exact field ownership, parser limits, and the user flow.
+Source records retain exact descriptions and per-PN GA/EM dates. Product-level dates roll up the earliest GA and latest EM; normalized valid day-level dates supply corresponding roadmap months before group month hints, while omitted dates retain existing placement. The preview offers independent controls for updating matched products and adding new products. Pure `ASCMImporter.mergeProductGroup()` retains curated names, specifications, prices, images, statuses, other manual fields, and all previous PNs/variants/source records. Empty or invalid source dates do not clear saved dates. Existing color presentation/image choices survive; new explicit colors are appended. Missing products are not automatically deleted. `public/js/app.js` integrates the merge with roadmap synchronization and saved provenance. The [Feature Index](FEATURE-INDEX.md#ascm-update-workflow) describes exact field ownership, parser limits, and the user flow.
 
 ## 6. Design system intent
 
@@ -268,7 +270,7 @@ Priority expresses potential impact, not confirmed exploitability.
 
 | Priority | Risk | Evidence and effect | Recommended control |
 | --- | --- | --- | --- |
-| P0 | Deployment completeness can regress | At the archive baseline, the Pages workflow copied `index.html`, `styles.css`, `app.js`, and `assets/`, while `index.html` also required `catalog-data.js` and `vendor/pptxgen.bundle.js`. The current workflow now includes both missing paths and runs the validator. | Keep the workflow/HTML closure check mandatory so a later runtime reference cannot be omitted from deployment. |
+| P0 | Deployment completeness can regress | At the archive baseline, the Pages workflow copied `index.html`, `styles.css`, `app.js`, and `assets/`, while `index.html` also required `catalog-data.js` and `vendor/pptxgen.bundle.js`. The current workflow publishes the complete `public/` site tree and runs `scripts/checks/project.mjs`; current runtime references are relative to that site root. | Keep the workflow/HTML closure check mandatory so a later runtime reference cannot be omitted from deployment. |
 | P0 | Package import is not transactional | `importProjectPackage()` normalizes the manifest, then clears IndexedDB before importing all local blobs and assigning the new portfolio. A mid-import storage failure can destroy the previous local-image library. | Stage/validate every entry first; commit state in one versioned transaction or retain a rollback snapshot. Require a backup before import until fixed. |
 | P1 | Private portfolio disclosure | The package contains 85 real working product records and image references. The fetched 2026-09-23 remote baseline tracked the private package despite its ignore rule; the 2026-10-07 update pushed as `548c936` removes it from the current repository tree, preserves the disk copy, and does not erase repository history. | Keep private packages and screenshots untracked and out of Pages artifacts. Address existing history separately if required. Publish only a reviewed, sanitized dataset with explicit approval. |
 | P1 | Persistence failure is silent | `scheduleSave()` catches and suppresses `localStorage` errors. Quota or browser-policy failures can leave the user believing changes were saved. | Surface save state and errors, add quota handling, and provide an explicit backup reminder. |
@@ -288,7 +290,7 @@ Priority expresses potential impact, not confirmed exploitability.
 - Local binary images are separated from lightweight JSON metadata.
 - Full packages preserve local-image binaries without embedding large data URLs in the portfolio JSON.
 - Products, Roadmap, and both read-only detail surfaces share a single normalized portfolio, which supports linked selection and export consistency.
-- Category definitions and spec templates are centralized in `catalog-data.js`.
+- Category definitions and spec templates are centralized in `public/js/catalog-data.js`.
 - Product/SKU business colors are intentionally separated from interface design tokens.
 - Shared timeline/specification/SKU rules and additive ASCM merges can be verified without booting the complete page.
 - Settings disclose portfolio-wide versus active-category scope in one dialog; product editing uses focused tabs.

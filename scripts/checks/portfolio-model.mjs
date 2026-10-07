@@ -1,8 +1,111 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-await import("../portfolio-model.js");
+await import("../../public/js/portfolio-model.js");
 const model = globalThis.PortfolioModel;
+
+// Lifecycle synchronization follows the edited endpoint. Merely opening a
+// package or changing unrelated metadata must preserve its saved planning.
+const datedProduct = Object.freeze({
+  id: "dated", name: "Dated product", generalAvailabilityDate: "2026-01-31", endManufacturingDate: "2029-03-10",
+  ffsDate: "2025-12-20", specs: Object.freeze([{ label: "Connection", value: "Wireless" }]),
+  roadmap: Object.freeze({ startMonth: "2026-01", launchMonth: "2026-01", endMonth: "2029-03", family: "Saved family", status: "embargo", confidence: "medium", predecessorId: "prior", successorId: "next", notes: "Keep notes" }),
+});
+const datedBefore = structuredClone(datedProduct);
+const gaPatch = Object.freeze({ generalAvailabilityDate: "2026-06-22" });
+const changedGa = model.mergeProductUpdate(datedProduct, gaPatch);
+assert.equal(changedGa.generalAvailabilityDate, "2026-06-22");
+assert.equal(changedGa.roadmap.startMonth, "2026-06", "an explicit GA date edit must derive the roadmap start");
+assert.equal(changedGa.roadmap.launchMonth, "2026-06", "the compatibility launch alias must follow canonical GA");
+assert.equal(changedGa.endManufacturingDate, datedProduct.endManufacturingDate);
+assert.equal(changedGa.roadmap.endMonth, datedProduct.roadmap.endMonth, "editing GA must retain a later planned EOM");
+const changedEm = model.mergeProductUpdate(datedProduct, { endManufacturingDate: "2030-11-05" });
+assert.equal(changedEm.roadmap.endMonth, "2030-11", "an explicit EOM date edit must derive the roadmap end");
+assert.equal(changedEm.generalAvailabilityDate, datedProduct.generalAvailabilityDate);
+assert.equal(changedEm.roadmap.startMonth, datedProduct.roadmap.startMonth);
+for (const result of [changedGa, changedEm]) {
+  for (const field of ["family", "status", "confidence", "predecessorId", "successorId", "notes"]) assert.equal(result.roadmap[field], datedProduct.roadmap[field], "date updates must retain curated roadmap metadata");
+  assert.equal(result.ffsDate, datedProduct.ffsDate, "lifecycle synchronization must not alter another milestone");
+  assert.equal(result.specs, datedProduct.specs, "lifecycle synchronization must preserve specifications");
+}
+assert.deepEqual(datedProduct, datedBefore, "the helper must not mutate its existing product or roadmap");
+assert.deepEqual(gaPatch, { generalAvailabilityDate: "2026-06-22" }, "the helper must not mutate a supplied patch");
+assert.notEqual(changedGa, datedProduct);
+assert.notEqual(changedGa.roadmap, datedProduct.roadmap);
+
+for (const empty of ["", null, "TBD", " tbd "]) {
+  const cleared = model.mergeProductUpdate(datedProduct, { generalAvailabilityDate: empty, endManufacturingDate: empty, roadmap: { startMonth: "2035-01", launchMonth: "2035-01", endMonth: "2036-01" } });
+  assert.equal(cleared.generalAvailabilityDate, "");
+  assert.equal(cleared.endManufacturingDate, "");
+  assert.deepEqual(cleared.roadmap, datedProduct.roadmap, "blank/TBD explicitly clears exact days while retaining the saved planning months");
+}
+for (const invalid of ["2026-02-30", "2026-13-01", "2026-02", "garbage"]) {
+  assert.throws(() => model.mergeProductUpdate(datedProduct, { generalAvailabilityDate: invalid }), RangeError, "invalid date edits must fail rather than erase a saved date");
+  assert.throws(() => model.mergeProductUpdate(datedProduct, { endManufacturingDate: invalid }), RangeError);
+}
+const conflictHints = model.mergeProductUpdate(datedProduct, { generalAvailabilityDate: "2027-02-12", endManufacturingDate: "2028-08-09", roadmap: { startMonth: "2020-01", launchMonth: "2021-01", endMonth: "2035-12" } });
+assert.equal(conflictHints.roadmap.startMonth, "2027-02", "explicit canonical GA must take precedence over an accompanying month hint");
+assert.equal(conflictHints.roadmap.launchMonth, "2027-02");
+assert.equal(conflictHints.roadmap.endMonth, "2028-08", "explicit canonical EOM must take precedence over an accompanying month hint");
+
+const independentlySaved = { ...datedProduct, generalAvailabilityDate: "2024-07-19", endManufacturingDate: "2025-08-02" };
+assert.deepEqual(model.mergeProductUpdate(independentlySaved, {}), independentlySaved, "initial/no-op merging must not migrate saved dates or roadmap positions");
+const metadataOnly = model.mergeProductUpdate(independentlySaved, { name: "Renamed", roadmap: { family: "Updated family", status: "launched" } });
+assert.equal(metadataOnly.generalAvailabilityDate, independentlySaved.generalAvailabilityDate);
+assert.equal(metadataOnly.endManufacturingDate, independentlySaved.endManufacturingDate);
+assert.equal(metadataOnly.roadmap.startMonth, independentlySaved.roadmap.startMonth);
+assert.equal(metadataOnly.roadmap.endMonth, independentlySaved.roadmap.endMonth);
+assert.equal(metadataOnly.roadmap.family, "Updated family");
+assert.equal(metadataOnly.roadmap.status, "launched");
+const unchangedEndpoints = model.mergeProductUpdate(independentlySaved, { roadmap: { startMonth: independentlySaved.roadmap.startMonth, endMonth: independentlySaved.roadmap.endMonth } });
+assert.equal(unchangedEndpoints.generalAvailabilityDate, independentlySaved.generalAvailabilityDate, "unchanged month endpoints must not reconcile legacy date mismatches");
+assert.equal(unchangedEndpoints.endManufacturingDate, independentlySaved.endManufacturingDate);
+
+const monthOnly = { id: "month-only", generalAvailabilityDate: "", roadmap: { startMonth: "2026-02", launchMonth: "2026-02", endMonth: "2028-12", family: "Legacy" } };
+const movedMonthOnly = model.mergeProductUpdate(monthOnly, { roadmap: { startMonth: "2027-06", endMonth: "2029-04" } });
+assert.equal(movedMonthOnly.generalAvailabilityDate, "", "month-only planning must not fabricate a GA day");
+assert.ok(!Object.hasOwn(movedMonthOnly, "endManufacturingDate"), "a missing EOM day must remain absent");
+assert.equal(movedMonthOnly.roadmap.startMonth, "2027-06");
+assert.equal(movedMonthOnly.roadmap.launchMonth, "2027-06");
+assert.equal(movedMonthOnly.roadmap.endMonth, "2029-04");
+assert.deepEqual(monthOnly.roadmap, { startMonth: "2026-02", launchMonth: "2026-02", endMonth: "2028-12", family: "Legacy" });
+
+for (const [month, expectedDate] of [["2028-02", "2028-02-29"], ["2027-02", "2027-02-28"], ["2026-04", "2026-04-30"], ["2026-05", "2026-05-31"]]) {
+  const shifted = model.mergeProductUpdate(datedProduct, { roadmap: { startMonth: month } });
+  assert.equal(shifted.generalAvailabilityDate, expectedDate, "month editing must retain the original day or clamp to the destination month's final day");
+  assert.equal(shifted.roadmap.startMonth, month);
+  assert.equal(shifted.roadmap.launchMonth, month);
+}
+const movedBoth = model.mergeProductUpdate(datedProduct, { roadmap: { startMonth: "2027-08", endMonth: "2030-10" } });
+assert.equal(movedBoth.generalAvailabilityDate, "2027-08-31", "a bar move must shift GA with its launch month");
+assert.equal(movedBoth.endManufacturingDate, "2030-10-10", "a bar move must preserve the EOM day in its destination month");
+for (const [month, expectedDate] of [["2028-02", "2028-02-29"], ["2027-02", "2027-02-28"]]) {
+  const shiftedEm = model.mergeProductUpdate({ ...datedProduct, endManufacturingDate: "2029-03-31" }, { roadmap: { endMonth: month } });
+  assert.equal(shiftedEm.endManufacturingDate, expectedDate, "end-month edits must also clamp exact EOM days for leap and ordinary February");
+}
+const launchAlias = model.mergeProductUpdate(datedProduct, { roadmap: { launchMonth: "2027-07" } });
+assert.equal(launchAlias.roadmap.startMonth, "2027-07", "legacy launchMonth updates must keep the start alias consistent");
+assert.equal(launchAlias.generalAvailabilityDate, "2027-07-31");
+const crossedStart = model.mergeProductUpdate(datedProduct, { roadmap: { startMonth: "2030-05" } });
+assert.equal(crossedStart.roadmap.endMonth, "2030-05", "moving launch past the end must clamp the roadmap end");
+assert.equal(crossedStart.generalAvailabilityDate, "2030-05-31");
+assert.equal(crossedStart.endManufacturingDate, "2030-05-31", "a crossed-start clamp must keep EOM no earlier than the exact GA day");
+for (const endMonth of ["2025-12", "2026-01"]) {
+  const shortened = model.mergeProductUpdate(datedProduct, { roadmap: { endMonth } });
+  assert.equal(shortened.roadmap.endMonth, "2026-01", "an end-month edit must not precede the launch month");
+  assert.equal(shortened.endManufacturingDate, "2026-01-31", "same-month EOM must clamp to GA when its preserved day would precede launch");
+  assert.equal(shortened.generalAvailabilityDate, datedProduct.generalAvailabilityDate);
+}
+const sameMonthValid = model.mergeProductUpdate({ ...datedProduct, generalAvailabilityDate: "2026-01-05" }, { roadmap: { endMonth: "2026-01" } });
+assert.equal(sameMonthValid.endManufacturingDate, "2026-01-10", "valid same-month exact timing must retain the EOM day");
+const unknownDaysClamp = model.mergeProductUpdate(monthOnly, { roadmap: { endMonth: "2025-01" } });
+assert.equal(unknownDaysClamp.roadmap.endMonth, monthOnly.roadmap.startMonth);
+assert.equal(unknownDaysClamp.generalAvailabilityDate, "");
+assert.ok(!Object.hasOwn(unknownDaysClamp, "endManufacturingDate"), "monthly range clamping must not invent an EOM day");
+for (const invalid of ["2026-13", "2026-00", "2026-1", "2026-01-01", "invalid"]) {
+  assert.throws(() => model.mergeProductUpdate(datedProduct, { roadmap: { startMonth: invalid } }), RangeError);
+  assert.throws(() => model.mergeProductUpdate(datedProduct, { roadmap: { endMonth: invalid } }), RangeError);
+}
 
 const portfolio = {
   activeCategoryId: "b", settings: {},
@@ -57,7 +160,7 @@ assert.equal(model.resolveSkuColors({ code: "A3" }, namedVariant)[0].colorHex, "
 assert.equal(model.canonicalColorCode("White-Pink"), "WHT/PNK");
 
 // Run the real application year-span action with a minimal view adapter.
-const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const action = appSource.slice(appSource.indexOf("function setRoadmapYearSpan("), appSource.indexOf("function fitProductLanesVertically("));
 const sandbox = { board: portfolio.categories[0].board, activeView: "roadmap", monthIndex: (value) => Number(value.slice(0, 4)) * 12 + Number(value.slice(5)) - 1,
   monthStringFromDate: () => "2026-10", updateTimelineSettings: (patch) => model.syncTimelineSettings(portfolio, patch),
@@ -293,7 +396,7 @@ const laneSandbox = {
   PortfolioModel: model, board: { products: laneProducts }, activeView: "products", zoom: 1,
   viewerInfoProductId: "p-middle", viewerInfoProgress: 1,
   sortedLanes: () => geometryLanes, visibleProducts: () => visibleLaneProducts, productCardLayout: () => geometryLayout,
-  viewerInfoVisualWidth: () => 620,
+  viewerInfoVisualWidth: () => 540,
   PRODUCT_MIN_ZOOM: .2, LANE_TOP: 34, GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, SIDE_PADDING: 40,
   inspectorOpen: false, inspector: { offsetWidth: 0 }, canvasScroll: { clientWidth: 800, scrollTop: 0 },
   laneRailInner: { style: {}, innerHTML: "" }, UI_PALETTE: { charcoal800: "#171717" },
@@ -377,4 +480,4 @@ drawnLaneCards.length = 0;
 laneSandbox.drawBoardTo(laneContext, exportDimensions, false);
 assert.equal(drawnLaneCards.find((item) => item.id === "p-following").x, 18 + 256, "exports contain no temporary horizontal details gap");
 assert.ok(liveFollowingX > 18 + 256, "the live board still makes horizontal room beside the viewed product");
-console.log("Portfolio model tests passed: global timeline actions, preserved specs/SKU colors, shared prices/stage tones, and non-overlapping inline details across lane consumers.");
+console.log("Portfolio model checks passed: explicit lifecycle date/month synchronization without initial migration, leap and endpoint clamping, global timeline actions, preserved specs/SKU colors, shared prices/stage tones, and non-overlapping inline details across lane consumers.");

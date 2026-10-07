@@ -55,6 +55,95 @@
   };
   const monthString = (value) => `${Math.floor(value / 12)}-${String(value % 12 + 1).padStart(2, "0")}`;
 
+  function exactProductDate(value) {
+    const text = String(value ?? "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return "";
+    const date = new Date(`${text}T00:00:00Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : "";
+  }
+
+  function dateInMonth(value, month) {
+    const date = exactProductDate(value);
+    if (!date) return value;
+    const finalDay = new Date(`${month}-01T00:00:00Z`);
+    finalDay.setUTCMonth(finalDay.getUTCMonth() + 1, 0);
+    return `${month}-${String(Math.min(Number(date.slice(8)), finalDay.getUTCDate())).padStart(2, "0")}`;
+  }
+
+  // Synchronization follows an explicit edit or drag. Opening an old package
+  // must not reconcile independent saved dates/months or invent an exact day.
+  function mergeProductUpdate(product, patch = {}) {
+    const hasGa = Object.hasOwn(patch, "generalAvailabilityDate");
+    const hasEm = Object.hasOwn(patch, "endManufacturingDate");
+    const monthPatch = patch.roadmap || {};
+    const hasStart = Object.hasOwn(monthPatch, "startMonth") || Object.hasOwn(monthPatch, "launchMonth");
+    const hasEnd = Object.hasOwn(monthPatch, "endMonth");
+    let startChanged = false;
+    let endChanged = false;
+    const next = { ...product, ...patch };
+    if (product.roadmap || patch.roadmap) next.roadmap = { ...product.roadmap, ...patch.roadmap };
+    if (!hasGa && !hasEm && !hasStart && !hasEnd) return next;
+    next.roadmap ||= {};
+
+    for (const [field, supplied] of [["generalAvailabilityDate", hasGa], ["endManufacturingDate", hasEm]]) {
+      if (!supplied) continue;
+      const text = String(patch[field] ?? "").trim();
+      const normalized = exactProductDate(text);
+      if (text && text.toUpperCase() !== "TBD" && !normalized) throw new RangeError(`Invalid ${field}: expected an exact calendar date or TBD.`);
+      next[field] = normalized;
+    }
+
+    if (hasStart && !hasGa) {
+      const month = Object.hasOwn(monthPatch, "startMonth") ? monthPatch.startMonth : monthPatch.launchMonth;
+      if (monthNumber(month) === null) throw new RangeError("Invalid launch month: expected YYYY-MM.");
+      startChanged = month !== product.roadmap?.startMonth;
+      next.roadmap.startMonth = month;
+      next.roadmap.launchMonth = month;
+      if (startChanged && exactProductDate(product.generalAvailabilityDate)) next.generalAvailabilityDate = dateInMonth(product.generalAvailabilityDate, month);
+    }
+    if (hasEnd && !hasEm) {
+      if (monthNumber(monthPatch.endMonth) === null) throw new RangeError("Invalid lifecycle end month: expected YYYY-MM.");
+      endChanged = monthPatch.endMonth !== product.roadmap?.endMonth;
+      next.roadmap.endMonth = monthPatch.endMonth;
+      if (endChanged && exactProductDate(product.endManufacturingDate)) next.endManufacturingDate = dateInMonth(product.endManufacturingDate, monthPatch.endMonth);
+    }
+    if (hasGa) {
+      // Clearing the exact date preserves the last planned month, including
+      // when a caller includes a contradictory month hint in the same patch.
+      if (next.generalAvailabilityDate) next.roadmap.startMonth = next.roadmap.launchMonth = next.generalAvailabilityDate.slice(0, 7);
+      else {
+        if (Object.hasOwn(product.roadmap || {}, "startMonth")) next.roadmap.startMonth = product.roadmap.startMonth;
+        else delete next.roadmap.startMonth;
+        if (Object.hasOwn(product.roadmap || {}, "launchMonth")) next.roadmap.launchMonth = product.roadmap.launchMonth;
+        else delete next.roadmap.launchMonth;
+      }
+    }
+    if (hasEm) {
+      if (next.endManufacturingDate) next.roadmap.endMonth = next.endManufacturingDate.slice(0, 7);
+      else if (Object.hasOwn(product.roadmap || {}, "endMonth")) next.roadmap.endMonth = product.roadmap.endMonth;
+      else delete next.roadmap.endMonth;
+    }
+
+    const start = monthNumber(next.roadmap.startMonth);
+    const end = monthNumber(next.roadmap.endMonth);
+    const monthOriginChanged = startChanged || endChanged;
+    const changedTiming = monthOriginChanged || (hasGa && next.generalAvailabilityDate) || (hasEm && next.endManufacturingDate);
+    if (changedTiming && start !== null && end !== null && end < start) {
+      next.roadmap.endMonth = next.roadmap.startMonth;
+      // A month-origin edit moves the exact end together with the clamped bar.
+      // A date-origin edit retains the supplied exact date for UI validation.
+      if (monthOriginChanged && !hasEm && exactProductDate(product.endManufacturingDate)) {
+        next.endManufacturingDate = dateInMonth(product.endManufacturingDate, next.roadmap.endMonth);
+      }
+    }
+    if (monthOriginChanged && !hasEm && exactProductDate(next.generalAvailabilityDate) && exactProductDate(next.endManufacturingDate)
+      && next.endManufacturingDate < next.generalAvailabilityDate) {
+      next.endManufacturingDate = next.generalAvailabilityDate;
+      next.roadmap.endMonth = next.endManufacturingDate.slice(0, 7);
+    }
+    return next;
+  }
+
   function normalizeTimelineSettings(value = {}, fallback = {}) {
     const startMonth = monthNumber(value.startMonth) !== null ? value.startMonth
       : monthNumber(fallback.startMonth) !== null ? fallback.startMonth : "2026-01";
@@ -124,5 +213,5 @@
     });
   }
 
-  root.PortfolioModel = Object.freeze({ DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, msrpText, layoutProductLanes, clearAllProducts, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
+  root.PortfolioModel = Object.freeze({ DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
 })(globalThis);

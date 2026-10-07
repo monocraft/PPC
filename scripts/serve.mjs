@@ -5,8 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(scriptDirectory, "..");
-const rootPrefix = `${projectRoot}${path.sep}`;
+const documentRoot = path.resolve(scriptDirectory, "../public");
+const rootPrefix = `${documentRoot}${path.sep}`;
 
 const mimeTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -61,8 +61,8 @@ const server = createServer(async (request, response) => {
   }
 
   const relativePath = pathname.replace(/^\/+/, "") || "index.html";
-  let filePath = path.resolve(projectRoot, relativePath);
-  if (filePath !== projectRoot && !filePath.startsWith(rootPrefix)) {
+  let filePath = path.resolve(documentRoot, relativePath);
+  if (filePath !== documentRoot && !filePath.startsWith(rootPrefix)) {
     sendText(response, 403, "Forbidden\n");
     return;
   }

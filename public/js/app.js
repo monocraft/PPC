@@ -1238,7 +1238,7 @@ function createCategoryBoard(definition) {
 function createDefaultPortfolio() {
   const firstDefinition = CATEGORY_DEFINITIONS[0];
   if (!firstDefinition) {
-    throw new Error("catalog-data.js did not provide any category definitions. Keep catalog-data.js beside index.html and load it before app.js.");
+    throw new Error("catalog-data.js did not provide any category definitions. Load js/catalog-data.js before js/app.js.");
   }
   return {
     version: 4,
@@ -1517,10 +1517,8 @@ function productCardLayout() {
 }
 
 function viewerInfoVisualWidth(height = viewerInfoVisualHeight()) {
-  const product = infoProduct();
-  const specificationCount = Array.isArray(product?.specs) ? product.specs.length : 0;
-  if (height <= 180 || specificationCount > 14) return 840;
-  return height <= 280 ? 760 : 620;
+  if (height <= 180) return 720;
+  return height <= 280 ? 680 : 540;
 }
 
 function viewerInfoVisualHeight() {
@@ -1529,11 +1527,12 @@ function viewerInfoVisualHeight() {
 
 function setViewerInfoSize(width, height) {
   const product = infoProduct();
-  const specificationCount = Array.isArray(product?.specs) ? product.specs.length : 0;
+  const specifications = Array.isArray(product?.specs) ? product.specs : [];
+  const hasLongValues = specifications.some((item) => String(item.value ?? "").replace(/\s+/g, " ").trim().length > 80);
   viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
   viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
   viewerInfo.dataset.compactHeight = String(height <= 180);
-  viewerInfo.dataset.detailColumns = String(height <= 280 || specificationCount > 14 ? 2 : 1);
+  viewerInfo.dataset.detailColumns = String(height <= 280 && !hasLongValues ? 2 : 1);
 }
 
 function viewerInfoReserveLogical() {
@@ -3110,18 +3109,28 @@ function productDetailsModel(product) {
   const source = normalizeAscmProductMetadata(product.ascm);
   const roadmap = product.roadmap || {};
   const lane = board.lanes.find((item) => item.id === product.laneId);
+  const launchMonth = roadmap.startMonth || roadmap.launchMonth;
+  const gaMonth = normalizeProductInfoDate(product.generalAvailabilityDate).slice(0, 7);
+  const emMonth = normalizeProductInfoDate(product.endManufacturingDate).slice(0, 7);
+  const plannedDates = [];
+  const plannedMonthDiffers = (value, exactMonth) => typeof value === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(value) && value !== exactMonth;
+  if (plannedMonthDiffers(launchMonth, gaMonth)) {
+    plannedDates.push({ key: "launch", label: "Planned launch", value: roadmapLabel(launchMonth) });
+  }
+  if (plannedMonthDiffers(roadmap.endMonth, emMonth)) {
+    plannedDates.push({ key: "lifecycle-end", label: "Planned end", value: roadmapLabel(roadmap.endMonth) });
+  }
   return {
     id: product.id,
     dates: [
-      ["General availability", product.generalAvailabilityDate], ["End of manufacturing", product.endManufacturingDate],
-      ["FFS", product.ffsDate], ["Global announcement", product.globalAnnouncementDate],
-      ["Web readiness", product.webReadinessDate], ["Final assets", product.finalAssetsDate],
-    ].map(([label, value]) => ({ label, value: formatProductInfoDate(value), empty: !value })),
+      ["general-availability", "General availability", product.generalAvailabilityDate], ["end-manufacturing", "End of manufacturing", product.endManufacturingDate],
+      ["ffs", "FFS", product.ffsDate], ["global-announcement", "Global announcement", product.globalAnnouncementDate],
+      ["web-readiness", "Web readiness", product.webReadinessDate], ["final-assets", "Final assets", product.finalAssetsDate],
+    ].map(([key, label, value]) => ({ key, label, value: formatProductInfoDate(value), empty: !value })),
     lifecycle: [
-      { label: "Launch", value: roadmapLabel(roadmap.startMonth) },
-      { label: "Lifecycle end", value: roadmapLabel(roadmap.endMonth) },
-      { label: "Stage", value: splitRoadmapStatusLabel(roadmap.status) },
-      { label: "Confidence", value: roadmap.confidence || "Not set" },
+      ...plannedDates,
+      { key: "stage", label: "Stage", value: splitRoadmapStatusLabel(roadmap.status) },
+      { key: "confidence", label: "Confidence", value: roadmap.confidence || "Not set" },
     ],
     skus: productPartSkus(product).map((sku) => ({ code: sku.code, colors: PortfolioModel.resolveSkuColors(sku, product) })),
     specs: product.specs,
@@ -4016,7 +4025,8 @@ function renderInspector() {
             </span>
           </label>
         </div>
-        <p class="field-help date-field-help">Leave a date blank or select <strong>TBD</strong> when the milestone date is not determined.</p>
+        <p class="field-help date-field-help">GA sets the roadmap launch month; EM sets its end month. Leave a date blank or select <strong>TBD</strong> when the exact day is not determined.</p>
+        <p id="productDateFeedback" class="field-help date-feedback" role="status" aria-live="polite"></p>
       </div>
       <div class="part-sku-editor">
         <div class="section-heading-row part-sku-heading">
@@ -4057,8 +4067,6 @@ function renderInspector() {
       <div class="section-heading-row"><h3>Roadmap slotting</h3><span class="eyebrow">Shared across views</span></div>
       <div class="roadmap-section-grid">
         <label class="full">Product family<input id="fieldRoadmapFamily" value="${escapeHtml(product.roadmap.family)}" placeholder="Cloud, Stinger, Jet…"></label>
-        <label>Launch month<input id="fieldRoadmapStart" type="month" value="${escapeHtml(product.roadmap.startMonth)}"></label>
-        <label>Lifecycle end<input id="fieldRoadmapEnd" type="month" value="${escapeHtml(product.roadmap.endMonth)}"></label>
         <label>Status<select id="fieldRoadmapStatus">
           <option value="launched" ${product.roadmap.status === "launched" ? "selected" : ""}>Launched</option>
           <option value="in-development" ${product.roadmap.status === "in-development" ? "selected" : ""}>In development</option>
@@ -4080,11 +4088,12 @@ function renderInspector() {
           ${board.products.filter((item) => item.id !== product.id).map((item) => `<option value="${escapeHtml(item.id)}" ${product.roadmap.successorId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
         </select></label>
       </div>
+      <button id="editProductDates" type="button" class="secondary-button">Edit dates in Details</button>
       <div class="roadmap-link-actions">
         <button id="inspectRoadmapView">View on roadmap</button>
         <button id="inspectSplitView">Show product details</button>
       </div>
-      <p class="roadmap-inline-note">The first roadmap date is always the product launch month. Stage color communicates whether that launch is already launched, in development, or still in planning. Lifecycle end closes the active portfolio window.</p>
+      <p class="roadmap-inline-note">Manage launch and manufacturing end dates in Details. Date edits also update the roadmap; dragging its bar updates any known exact dates. Products with TBD dates keep their planned months.</p>
     </section>
     <section id="specificationsSection" class="panel-section">
       <div class="section-heading-row"><h3>Specifications</h3><button id="addSpec" class="small-button">+ Add</button></div>
@@ -4126,12 +4135,26 @@ function renderInspector() {
     };
 
     input.addEventListener("change", () => {
-      updateProduct(product.id, { [fieldName]: normalizeProductInfoDate(input.value) }, false);
+      const current = selectedProduct();
+      if (!current || current.id !== product.id) return;
+      const value = normalizeProductInfoDate(input.value);
+      const ga = fieldName === "generalAvailabilityDate" ? value : current.generalAvailabilityDate;
+      const em = fieldName === "endManufacturingDate" ? value : current.endManufacturingDate;
+      const invalidRange = ["generalAvailabilityDate", "endManufacturingDate"].includes(fieldName) && ga && em && em < ga;
+      if (!input.validity.valid || invalidRange) {
+        $("#productDateFeedback").textContent = invalidRange ? "End of manufacturing must be on or after general availability. The previous date was kept." : "Enter a complete, valid date. The previous date was kept.";
+        input.value = current[fieldName] || "";
+        syncTbdState();
+        return;
+      }
+      $("#productDateFeedback").textContent = "";
+      updateProduct(product.id, { [fieldName]: value }, false);
       syncTbdState();
     });
 
     tbdButton.addEventListener("click", () => {
       input.value = "";
+      $("#productDateFeedback").textContent = "";
       updateProduct(product.id, { [fieldName]: "" }, false);
       syncTbdState();
     });
@@ -4197,18 +4220,12 @@ function renderInspector() {
   }, true);
   bindValue("#fieldVariantLabel", "input", (value) => updateProduct(product.id, { variantLabel: value }, false));
   bindValue("#fieldRoadmapFamily", "input", (value) => updateRoadmap(product.id, { family: value || "Other" }));
-  bindValue("#fieldRoadmapStart", "change", (value) => updateRoadmap(product.id, (roadmap) => {
-    const startMonth = normalizeMonth(value, roadmap.startMonth);
-    return {
-      startMonth,
-      launchMonth: startMonth,
-      endMonth: monthIndex(roadmap.endMonth) < monthIndex(startMonth) ? startMonth : roadmap.endMonth,
-    };
-  }, true));
-  bindValue("#fieldRoadmapEnd", "change", (value) => updateRoadmap(product.id, (roadmap) => {
-    const endMonth = normalizeMonth(value, roadmap.endMonth);
-    return { endMonth: monthIndex(endMonth) < monthIndex(roadmap.startMonth) ? roadmap.startMonth : endMonth };
-  }, true));
+  $("#editProductDates").onclick = () => {
+    inspector.querySelector('[data-editor-tab="details"]').click();
+    const field = $("#fieldGeneralAvailabilityDate");
+    field.scrollIntoView({ block: "center", behavior: "smooth" });
+    field.focus({ preventScroll: true });
+  };
   bindValue("#fieldRoadmapStatus", "change", (value) => updateRoadmap(product.id, { status: value }));
   bindValue("#fieldRoadmapConfidence", "change", (value) => updateRoadmap(product.id, { confidence: value }));
   bindValue("#fieldRoadmapPredecessor", "change", (value) => updateRoadmap(product.id, { predecessorId: value }));
@@ -4414,11 +4431,7 @@ function updateProduct(productId, patch, updateInspectorAfter) {
     const index = current.products.findIndex((product) => product.id === productId);
     if (index < 0) return;
     const existing = current.products[index];
-    current.products[index] = {
-      ...existing,
-      ...patch,
-      ...(patch.roadmap ? { roadmap: { ...existing.roadmap, ...patch.roadmap } } : {}),
-    };
+    current.products[index] = PortfolioModel.mergeProductUpdate(existing, patch);
   }, { inspector: updateInspectorAfter });
 }
 
@@ -4474,9 +4487,7 @@ function updateRoadmap(productId, updater, updateInspectorAfter = false) {
     const product = current.products.find((item) => item.id === productId);
     if (!product) return;
     const patch = typeof updater === "function" ? updater({ ...product.roadmap }) : updater;
-    product.roadmap = { ...product.roadmap, ...patch };
-    if (monthIndex(product.roadmap.endMonth) < monthIndex(product.roadmap.startMonth)) product.roadmap.endMonth = product.roadmap.startMonth;
-    product.roadmap.launchMonth = product.roadmap.startMonth;
+    Object.assign(product, PortfolioModel.mergeProductUpdate(product, { roadmap: patch }));
   }, { inspector: updateInspectorAfter });
 }
 
@@ -5711,8 +5722,8 @@ function applyAscmGroupToProduct(product, group, dataset, importedAt, isNewProdu
   }));
   if (isNewProduct && group.codename) product.codename = String(group.codename);
   const existingRoadmap = product.roadmap || {};
-  const startMonth = group.launchMonth || dates.gaDate.slice(0, 7) || existingRoadmap.startMonth || monthStringFromDate();
-  const proposedEnd = group.endMonth || dates.emDate.slice(0, 7) || existingRoadmap.endMonth || addMonths(startMonth, 24);
+  const startMonth = dates.gaDate.slice(0, 7) || normalizeMonth(group.launchMonth, "") || existingRoadmap.startMonth || monthStringFromDate();
+  const proposedEnd = dates.emDate.slice(0, 7) || normalizeMonth(group.endMonth, "") || existingRoadmap.endMonth || addMonths(startMonth, 24);
   const endMonth = monthIndex(proposedEnd) < monthIndex(startMonth) ? startMonth : proposedEnd;
   product.roadmap = {
     ...makeRoadmap(inferFamily(product.name), startMonth, startMonth, endMonth, ascmRoadmapStatus(dates.gaDate, dates.emDate), "medium"),
