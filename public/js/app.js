@@ -194,7 +194,6 @@ const splitRoadmapNavRight = $("#splitRoadmapNavRight");
 const splitRoadmapNavSelected = $("#splitRoadmapNavSelected");
 const splitRoadmapNavPosition = $("#splitRoadmapNavPosition");
 const splitProduct = $("#splitProduct");
-const roadmapEditSelectedButton = $("#roadmapEditSelected");
 const roadmapMenuButton = $("#roadmapMenuButton");
 const roadmapMenu = $("#roadmapMenu");
 const productMenuButton = $("#productMenuButton");
@@ -249,10 +248,11 @@ let roadmapSearchQuery = "";
 let roadmapFilterScrollResetPending = false;
 let roadmapMonthWidth = ROADMAP_DEFAULT_MONTH_WIDTH;
 let roadmapHitRegions = new Map();
+let roadmapRowRegions = new Map();
+let roadmapHoveredProductId = null;
 let roadmapDragState = null;
 let roadmapPanState = null;
 let roadmapDraft = null;
-let roadmapEditProductId = null;
 let initialVerticalFitPending = true;
 let productLayoutEditing = false;
 
@@ -2381,7 +2381,7 @@ function roadmapGroupsForProducts(products, targetBoard = board, definition = ca
     .sort((a, b) => roadmapFamilyOrder(a[0], targetBoard, definition) - roadmapFamilyOrder(b[0], targetBoard, definition) || a[0].localeCompare(b[0]))
     .map(([family, products]) => ({
       family,
-      products: products.slice().sort((a, b) => monthIndex(a.roadmap.startMonth) - monthIndex(b.roadmap.startMonth) || a.name.localeCompare(b.name)),
+      products: RoadmapInteraction.sortProducts(products),
     }));
 }
 
@@ -2502,8 +2502,10 @@ function effectiveRoadmap(product) {
 
 function setupRoadmapCanvas(targetCanvas, dimensions) {
   const dpr = window.devicePixelRatio || 1;
-  targetCanvas.width = Math.round(dimensions.width * dpr);
-  targetCanvas.height = Math.round(dimensions.height * dpr);
+  const pixelWidth = Math.round(dimensions.width * dpr);
+  const pixelHeight = Math.round(dimensions.height * dpr);
+  if (targetCanvas.width !== pixelWidth) targetCanvas.width = pixelWidth;
+  if (targetCanvas.height !== pixelHeight) targetCanvas.height = pixelHeight;
   targetCanvas.style.width = `${dimensions.width}px`;
   targetCanvas.style.height = `${dimensions.height}px`;
   const context = targetCanvas.getContext("2d");
@@ -2543,6 +2545,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   const stickyX = exportMode ? 0 : targetScroll.scrollLeft;
   const stickyY = exportMode ? 0 : targetScroll.scrollTop;
   const regions = [];
+  const rows = [];
 
   context.clearRect(0, 0, width, height);
   context.fillStyle = UI_PALETTE.charcoal800;
@@ -2620,6 +2623,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     group.products.forEach((product, productIndex) => {
       const roadmap = effectiveRoadmap(product);
       const rowTop = rowY;
+      if (includeSelection && !exportMode) rows.push({ productId: product.id, family: group.family, y: rowTop, height: ROADMAP_ROW_HEIGHT });
       context.fillStyle = productIndex % 2 ? "rgba(255,255,255,.012)" : "rgba(0,0,0,.08)";
       context.fillRect(timelineX, rowTop, timelineWidth, ROADMAP_ROW_HEIGHT);
       context.strokeStyle = "rgba(190,197,194,.045)";
@@ -2669,23 +2673,16 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
           context.restore();
         }
 
-        const handleWidth = Math.min(14, Math.max(7, barWidth / 4));
-        const moveHandleWidth = Math.min(38, Math.max(18, barWidth - handleWidth * 2 - 4));
-        const moveHandleX = barX + (barWidth - moveHandleWidth) / 2;
-        const editingThisSlot = includeSelection && roadmapSlotEditingActive(product.id);
+        const handleWidth = Math.min(14, barWidth / 2);
+        const editingThisSlot = includeSelection && !exportMode && (selected || roadmapHoveredProductId === product.id);
+        const startVisible = monthIndex(roadmap.startMonth) >= range.start;
+        const endVisible = monthIndex(roadmap.endMonth) <= range.end;
 
         if (editingThisSlot && barWidth > 28) {
           context.save();
           context.fillStyle = "rgba(239,239,237,.94)";
-          roundRect(context, barX + 3, barY + 5, Math.max(5, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
-          roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(5, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
-          roundRect(context, moveHandleX, barY + 5, moveHandleWidth, barHeight - 10, 4, "rgba(23,23,23,.86)", "rgba(239,239,237,.7)", 1);
-          context.fillStyle = "rgba(255,255,255,.82)";
-          for (let dot = -1; dot <= 1; dot += 1) {
-            context.beginPath();
-            context.arc(barX + barWidth / 2 + dot * 6, barY + barHeight / 2, 1.4, 0, Math.PI * 2);
-            context.fill();
-          }
+          if (startVisible) roundRect(context, barX + 3, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
+          if (endVisible) roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
           context.restore();
         }
 
@@ -2695,9 +2692,8 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
           y: barY,
           width: barWidth,
           height: barHeight,
-          leftHandle: { x: barX, width: handleWidth },
-          rightHandle: { x: barX + barWidth - handleWidth, width: handleWidth },
-          moveHandle: { x: moveHandleX, width: moveHandleWidth },
+          leftHandle: startVisible ? { x: barX, width: handleWidth } : null,
+          rightHandle: endVisible ? { x: barX + barWidth - handleWidth, width: handleWidth } : null,
         });
       }
       rowY += ROADMAP_ROW_HEIGHT;
@@ -2762,8 +2758,83 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       context.font = "700 8px Arial";
       context.fillText("CONTINUED", stickyX + 61, familyHeadingY + 14);
     }
+    if (includeSelection && !exportMode && includeProducts) {
+      group.products.forEach((product, index) => {
+        const y = rowY + ROADMAP_GROUP_HEADER_HEIGHT + index * ROADMAP_ROW_HEIGHT;
+        if (product.id === selectedId) {
+          context.fillStyle = "rgba(174,198,181,.09)";
+          context.fillRect(stickyX + 48, y, ROADMAP_LEFT_WIDTH - 48, ROADMAP_ROW_HEIGHT);
+        }
+        context.fillStyle = product.id === selectedId ? UI_PALETTE.silver : UI_PALETTE.midGrey;
+        for (let column = 0; column < 2; column += 1) {
+          for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 59 + column * 4, y + 13 + dot * 5, 2, 2);
+        }
+        context.font = "10px Arial";
+        context.textAlign = "left";
+        context.textBaseline = "middle";
+        context.fillText(truncate(product.name, 18), stickyX + 74, y + ROADMAP_ROW_HEIGHT / 2, ROADMAP_LEFT_WIDTH - 82);
+      });
+    }
     rowY += groupHeight;
   });
+
+  if (includeSelection && !exportMode && roadmapDragState?.targetCanvas === targetCanvas && roadmapDragState.moved) {
+    const drag = roadmapDragState;
+    const viewportLeft = stickyX + 48;
+    const viewportRight = Math.min(width - 8, stickyX + targetScroll.clientWidth - 8);
+    context.save();
+    context.beginPath();
+    context.rect(viewportLeft, stickyY + ROADMAP_HEADER_HEIGHT, viewportRight - viewportLeft, targetScroll.clientHeight - ROADMAP_HEADER_HEIGHT);
+    context.clip();
+    context.strokeStyle = "rgba(174,198,181,.6)";
+    context.setLineDash([5, 4]);
+    context.strokeRect(viewportLeft + 2, drag.sourceY + 2, viewportRight - viewportLeft - 4, ROADMAP_ROW_HEIGHT - 4);
+    context.setLineDash([]);
+    if (drag.mode === "reorder" && drag.dropTarget) {
+      context.strokeStyle = "#aecaB7";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(viewportLeft, drag.dropTarget.lineY);
+      context.lineTo(viewportRight, drag.dropTarget.lineY);
+      context.stroke();
+      context.fillStyle = "#aecab7";
+      context.beginPath();
+      context.arc(viewportLeft + 3, drag.dropTarget.lineY, 4, 0, Math.PI * 2);
+      context.fill();
+      const floatingY = drag.pointY - drag.offsetY;
+      const floatingX = Math.max(stickyX + ROADMAP_LEFT_WIDTH + 8, drag.sourceBar?.x || stickyX + ROADMAP_LEFT_WIDTH + 8);
+      const floatingWidth = Math.min(Math.max(180, drag.sourceBar?.width || 180), viewportRight - floatingX);
+      context.shadowColor = "rgba(0,0,0,.45)";
+      context.shadowBlur = 12;
+      context.shadowOffsetY = 5;
+      roundRect(context, floatingX, floatingY + 4, Math.max(140, floatingWidth), ROADMAP_ROW_HEIGHT - 8, 4, roadmapStatusColor(selectedProduct()), "#c3d8cb", 1.5);
+      context.shadowBlur = 0;
+      context.shadowOffsetY = 0;
+      context.fillStyle = contrastTextColor(roadmapStatusColor(selectedProduct()));
+      context.font = "700 11px Arial";
+      context.textBaseline = "middle";
+      context.fillText(truncate(selectedProduct()?.name || "Product", 34), floatingX + 12, floatingY + ROADMAP_ROW_HEIGHT / 2);
+    } else if (roadmapDraft) {
+      if (drag.sourceBar) {
+        context.setLineDash([5, 4]);
+        context.strokeStyle = "rgba(195,216,203,.65)";
+        context.strokeRect(drag.sourceBar.x, drag.sourceBar.y, drag.sourceBar.width, drag.sourceBar.height);
+      }
+      const draft = roadmapDraft.roadmap;
+      const edges = [monthIndex(draft.startMonth), monthIndex(draft.endMonth) + 1];
+      context.strokeStyle = "rgba(174,202,183,.7)";
+      context.setLineDash([3, 4]);
+      edges.forEach((month) => {
+        const x = ROADMAP_LEFT_WIDTH + (month - range.start) * roadmapMonthWidth;
+        if (x < stickyX + ROADMAP_LEFT_WIDTH) return;
+        context.beginPath();
+        context.moveTo(x, stickyY + ROADMAP_HEADER_HEIGHT);
+        context.lineTo(x, Math.max(drag.sourceY + ROADMAP_ROW_HEIGHT, drag.pointY));
+        context.stroke();
+      });
+    }
+    context.restore();
+  }
 
   // One neutral calendar surface: typography, sparse ticks, and year seams.
   context.fillStyle = UI_PALETTE.inkBlack;
@@ -2861,6 +2932,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.stroke();
 
   roadmapHitRegions.set(targetCanvas, regions);
+  if (includeSelection && !exportMode) roadmapRowRegions.set(targetCanvas, rows);
 }
 
 function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
@@ -2995,8 +3067,36 @@ function roadmapPoint(event, targetCanvas) {
 }
 
 function hitRoadmapBar(targetCanvas, point) {
+  const scroll = targetCanvas.parentElement;
+  if (point.x < scroll.scrollLeft + ROADMAP_LEFT_WIDTH || point.y < scroll.scrollTop + ROADMAP_HEADER_HEIGHT) return null;
   const regions = roadmapHitRegions.get(targetCanvas) || [];
   return [...regions].reverse().find((region) => point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height);
+}
+
+function hitRoadmapRow(targetCanvas, point) {
+  const scroll = targetCanvas.parentElement;
+  if (point.y < scroll.scrollTop + ROADMAP_HEADER_HEIGHT) return null;
+  return (roadmapRowRegions.get(targetCanvas) || []).find((region) => point.y >= region.y && point.y < region.y + region.height);
+}
+
+function announceRoadmapEdit(message) {
+  const output = $("#roadmapEditAnnouncement");
+  if (output) output.textContent = message;
+}
+
+function moveSelectedRoadmapRow(direction) {
+  const group = roadmapGroups().find((item) => item.products.some((product) => product.id === selectedId));
+  if (!group) return;
+  const index = group.products.findIndex((product) => product.id === selectedId);
+  const neighbor = group.products[index + direction];
+  if (!neighbor) return;
+  updateBoard((current) => {
+    RoadmapInteraction.reorderProducts(current.products, selectedId, {
+      family: group.family, beforeId: direction < 0 ? neighbor.id : null,
+      afterId: direction > 0 ? neighbor.id : null, index: index + direction,
+    });
+  });
+  announceRoadmapEdit(`${selectedProduct()?.name} moved ${direction < 0 ? "up" : "down"}.`);
 }
 
 function roadmapSnapIncrement() {
@@ -3004,16 +3104,84 @@ function roadmapSnapIncrement() {
 }
 
 function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
-  function beginRoadmapPan(event, hit = null) {
+  const feedback = document.createElement("div");
+  feedback.className = "roadmap-drag-feedback hidden";
+  document.body.append(feedback);
+  let frame = null;
+
+  function paintInteraction() {
+    const dimensions = roadmapDimensions();
+    const context = targetCanvas.getContext("2d");
+    drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
+    syncRoadmapNavigator(targetScroll, navigatorRefsFactory());
+  }
+
+  function showFeedback(drag) {
+    const product = selectedProduct();
+    if (!product || !drag.moved) { feedback.classList.add("hidden"); return; }
+    if (drag.mode === "reorder") {
+      const target = drag.dropTarget;
+      const before = board.products.find((item) => item.id === target?.beforeId);
+      feedback.textContent = target
+        ? `${target.family} · ${before ? `Before ${before.name}` : "Last position"}`
+        : "Move over a product row to place it";
+    } else {
+      const preview = PortfolioModel.mergeProductUpdate(product, { roadmap: roadmapDraft.roadmap });
+      const start = preview.generalAvailabilityDate ? formatProductInfoDate(preview.generalAvailabilityDate) : roadmapLabel(preview.roadmap.startMonth);
+      const end = preview.endManufacturingDate ? formatProductInfoDate(preview.endManufacturingDate) : roadmapLabel(preview.roadmap.endMonth);
+      feedback.textContent = `Start · ${start}   →   End · ${end}`;
+    }
+    feedback.classList.remove("hidden");
+    const viewport = targetScroll.getBoundingClientRect();
+    const left = Math.max(viewport.left + 8, Math.min(drag.clientX + 16, viewport.right - feedback.offsetWidth - 8));
+    const top = drag.clientY + 26 + feedback.offsetHeight > viewport.bottom
+      ? drag.clientY - feedback.offsetHeight - 18 : drag.clientY + 26;
+    feedback.style.left = `${left}px`;
+    feedback.style.top = `${Math.max(viewport.top + ROADMAP_HEADER_HEIGHT + 4, top)}px`;
+  }
+
+  function tickInteraction() {
+    frame = null;
+    const drag = roadmapDragState;
+    if (drag?.targetCanvas !== targetCanvas || !drag.moved) return;
+    const viewport = targetScroll.getBoundingClientRect();
+    const left = targetScroll.scrollLeft;
+    const top = targetScroll.scrollTop;
+    const edge = 48;
+    const speed = (distance) => Math.min(18, Math.max(0, distance / 4));
+    if (drag.mode === "reorder") {
+      if (drag.clientY < viewport.top + ROADMAP_HEADER_HEIGHT + edge) targetScroll.scrollTop -= speed(viewport.top + ROADMAP_HEADER_HEIGHT + edge - drag.clientY);
+      if (drag.clientY > viewport.bottom - edge) targetScroll.scrollTop += speed(drag.clientY - viewport.bottom + edge);
+    } else {
+      if (drag.clientX < viewport.left + ROADMAP_LEFT_WIDTH + edge) targetScroll.scrollLeft -= speed(viewport.left + ROADMAP_LEFT_WIDTH + edge - drag.clientX);
+      if (drag.clientX > viewport.right - edge) targetScroll.scrollLeft += speed(drag.clientX - viewport.right + edge);
+    }
+    const point = roadmapPoint({ clientX: drag.clientX, clientY: drag.clientY }, targetCanvas);
+    drag.pointY = point.y;
+    if (drag.mode === "reorder") {
+      drag.dropTarget = drag.clientX < viewport.left - 50 || drag.clientX > viewport.right + 50 || drag.clientY < viewport.top || drag.clientY > viewport.bottom + 50
+        ? null : RoadmapInteraction.dropTarget(roadmapGroups(), drag.productId, point.y, {
+          headerHeight: ROADMAP_HEADER_HEIGHT, groupHeaderHeight: ROADMAP_GROUP_HEADER_HEIGHT, rowHeight: ROADMAP_ROW_HEIGHT,
+        });
+    } else {
+      const delta = drag.clientX - drag.startClientX + targetScroll.scrollLeft - drag.scrollLeft;
+      const { start, end } = RoadmapInteraction.draftDates(drag, delta, roadmapMonthWidth, roadmapSnapIncrement());
+      roadmapDraft = { productId: drag.productId, roadmap: { startMonth: monthString(start), launchMonth: monthString(start), endMonth: monthString(end) } };
+    }
+    paintInteraction();
+    showFeedback(drag);
+    if (left !== targetScroll.scrollLeft || top !== targetScroll.scrollTop) frame = requestAnimationFrame(tickInteraction);
+  }
+
+  function queueInteraction() {
+    if (frame == null) frame = requestAnimationFrame(tickInteraction);
+  }
+
+  function beginRoadmapPan(event) {
     roadmapPanState = {
-      targetCanvas,
-      targetScroll,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      scrollLeft: targetScroll.scrollLeft,
-      hitProductId: hit?.productId || null,
-      moved: false,
+      targetCanvas, targetScroll, pointerId: event.pointerId,
+      startX: event.clientX, startY: event.clientY,
+      scrollLeft: targetScroll.scrollLeft, scrollTop: targetScroll.scrollTop, moved: false,
     };
     targetCanvas.setPointerCapture(event.pointerId);
     targetScroll.classList.add("is-panning");
@@ -3021,144 +3189,134 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   }
 
   targetCanvas.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
     const point = roadmapPoint(event, targetCanvas);
+    const row = hitRoadmapRow(targetCanvas, point);
     const hit = hitRoadmapBar(targetCanvas, point);
-    if (!hit) {
-      beginRoadmapPan(event);
-      return;
-    }
-
-    if (selectedId !== hit.productId) {
-      selectedId = hit.productId;
-      stopRoadmapSlotEditing();
-    } else {
-      selectedId = hit.productId;
-    }
+    const rail = row && point.x >= targetScroll.scrollLeft + 48 && point.x < targetScroll.scrollLeft + ROADMAP_LEFT_WIDTH;
+    if (!hit && !rail) { beginRoadmapPan(event); return; }
+    event.preventDefault();
+    stopRoadmapSlotEditing();
+    selectedId = hit?.productId || row.productId;
+    targetCanvas.focus({ preventScroll: true });
     renderInspector();
     renderSplitProduct();
     updateRoadmapEditControls();
-
-    const canEdit = roadmapSlotEditingActive(hit.productId);
-    if (!canEdit) {
-      beginRoadmapPan(event, hit);
-      renderRoadmaps();
-      return;
-    }
-
-    const withinLeft = point.x >= hit.leftHandle.x && point.x <= hit.leftHandle.x + hit.leftHandle.width;
-    const withinRight = point.x >= hit.rightHandle.x && point.x <= hit.rightHandle.x + hit.rightHandle.width;
-    const withinMove = point.x >= hit.moveHandle.x && point.x <= hit.moveHandle.x + hit.moveHandle.width;
-    const mode = withinLeft ? "start" : withinRight ? "end" : withinMove ? "move" : null;
-
-    // Even while editing, the bar body remains safe for selection and canvas panning.
-    // Only the visible grip and edge handles can alter roadmap dates.
-    if (!mode) {
-      beginRoadmapPan(event, hit);
-      renderRoadmaps();
-      return;
-    }
-
+    const within = (handle) => handle && point.x >= handle.x && point.x < handle.x + handle.width;
+    const mode = rail ? "reorder" : within(hit.leftHandle) ? "start" : within(hit.rightHandle) ? "end" : "pending";
     const product = selectedProduct();
-    const roadmap = product.roadmap;
+    const sourceRow = row || (roadmapRowRegions.get(targetCanvas) || []).find((item) => item.productId === product.id);
     roadmapDragState = {
-      targetCanvas,
-      targetScroll,
-      pointerId: event.pointerId,
-      productId: product.id,
-      mode,
-      startClientX: event.clientX,
-      originalStart: monthIndex(roadmap.startMonth),
-      originalLaunch: monthIndex(roadmap.launchMonth),
-      originalEnd: monthIndex(roadmap.endMonth),
-      moved: false,
+      targetCanvas, targetScroll, pointerId: event.pointerId, productId: product.id, mode,
+      startClientX: event.clientX, startClientY: event.clientY, clientX: event.clientX, clientY: event.clientY,
+      scrollLeft: targetScroll.scrollLeft, sourceY: sourceRow.y, pointY: point.y, offsetY: point.y - sourceRow.y,
+      sourceBar: hit, originalStart: monthIndex(product.roadmap.startMonth), originalEnd: monthIndex(product.roadmap.endMonth),
+      moved: false, cancel: () => finishRoadmapPointer(null, true),
     };
-    roadmapDraft = { productId: product.id, roadmap: { ...roadmap } };
     targetCanvas.setPointerCapture(event.pointerId);
-    targetCanvas.style.cursor = mode === "move" ? "grabbing" : "ew-resize";
+    targetCanvas.style.cursor = mode === "start" || mode === "end" ? "ew-resize" : "grabbing";
     renderRoadmaps();
+    renderStatus();
   });
 
   targetCanvas.addEventListener("pointermove", (event) => {
-    if (roadmapPanState?.targetCanvas === targetCanvas) {
-      const deltaX = event.clientX - roadmapPanState.startX;
-      const deltaY = event.clientY - roadmapPanState.startY;
-      if (!roadmapPanState.moved && Math.hypot(deltaX, deltaY) >= 5) roadmapPanState.moved = true;
-      targetScroll.scrollLeft = roadmapPanState.scrollLeft - deltaX;
+    if (roadmapPanState?.targetCanvas === targetCanvas && roadmapPanState.pointerId === event.pointerId) {
+      const dx = event.clientX - roadmapPanState.startX;
+      const dy = event.clientY - roadmapPanState.startY;
+      if (Math.hypot(dx, dy) >= 5) roadmapPanState.moved = true;
+      targetScroll.scrollLeft = roadmapPanState.scrollLeft - dx;
+      targetScroll.scrollTop = roadmapPanState.scrollTop - dy;
       return;
     }
-
-    if (roadmapDragState?.targetCanvas !== targetCanvas) {
-      const point = roadmapPoint(event, targetCanvas);
-      const hit = hitRoadmapBar(targetCanvas, point);
-      if (!hit) {
-        targetCanvas.style.cursor = "grab";
-        return;
-      }
-      if (!roadmapSlotEditingActive(hit.productId)) {
-        targetCanvas.style.cursor = "grab";
-        return;
-      }
-      const withinLeft = point.x >= hit.leftHandle.x && point.x <= hit.leftHandle.x + hit.leftHandle.width;
-      const withinRight = point.x >= hit.rightHandle.x && point.x <= hit.rightHandle.x + hit.rightHandle.width;
-      const withinMove = point.x >= hit.moveHandle.x && point.x <= hit.moveHandle.x + hit.moveHandle.width;
-      targetCanvas.style.cursor = withinLeft || withinRight ? "ew-resize" : withinMove ? "grab" : "grab";
+    const drag = roadmapDragState;
+    if (drag?.targetCanvas === targetCanvas && drag.pointerId === event.pointerId) {
+      drag.clientX = event.clientX;
+      drag.clientY = event.clientY;
+      const dx = event.clientX - drag.startClientX;
+      const dy = event.clientY - drag.startClientY;
+      if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+      if (drag.mode === "pending") drag.mode = Math.abs(dy) > Math.abs(dx) ? "reorder" : "move";
+      drag.moved = true;
+      targetCanvas.style.cursor = drag.mode === "start" || drag.mode === "end" ? "ew-resize" : "grabbing";
+      queueInteraction();
       return;
     }
-
-    const pixelDelta = event.clientX - roadmapDragState.startClientX;
-    if (!roadmapDragState.moved && Math.abs(pixelDelta) < 6) return;
-    roadmapDragState.moved = true;
-
-    const viewport = targetScroll.getBoundingClientRect();
-    const edge = 72;
-    if (event.clientX < viewport.left + edge) targetScroll.scrollLeft -= Math.ceil((viewport.left + edge - event.clientX) / 5);
-    if (event.clientX > viewport.right - edge) targetScroll.scrollLeft += Math.ceil((event.clientX - (viewport.right - edge)) / 5);
-
-    const increment = roadmapSnapIncrement();
-    const rawDelta = pixelDelta / roadmapMonthWidth;
-    const delta = Math.round(rawDelta / increment) * increment;
-    let start = roadmapDragState.originalStart;
-    let end = roadmapDragState.originalEnd;
-    if (roadmapDragState.mode === "move") {
-      start += delta;
-      end += delta;
-    } else if (roadmapDragState.mode === "start") {
-      start = Math.min(end, start + delta);
-    } else {
-      end = Math.max(start, end + delta);
+    const point = roadmapPoint(event, targetCanvas);
+    const hit = hitRoadmapBar(targetCanvas, point);
+    const row = hitRoadmapRow(targetCanvas, point);
+    const hoveredId = hit?.productId || row?.productId || null;
+    const within = (handle) => handle && point.x >= handle.x && point.x < handle.x + handle.width;
+    targetCanvas.style.cursor = hit && (within(hit.leftHandle) || within(hit.rightHandle)) ? "ew-resize" : "grab";
+    if (roadmapHoveredProductId !== hoveredId) {
+      roadmapHoveredProductId = hoveredId;
+      paintInteraction();
     }
-    roadmapDraft = {
-      productId: roadmapDragState.productId,
-      roadmap: { startMonth: monthString(start), launchMonth: monthString(start), endMonth: monthString(end) },
-    };
-    renderRoadmaps();
   });
 
-  function finishRoadmapPointer(event) {
+  function finishRoadmapPointer(event, cancelled = false) {
     if (roadmapPanState?.targetCanvas === targetCanvas) {
-      const wasEmptyClick = !roadmapPanState.moved && !roadmapPanState.hitProductId;
+      if (event && roadmapPanState.pointerId !== event.pointerId) return;
+      const pan = roadmapPanState;
       roadmapPanState = null;
       targetScroll.classList.remove("is-panning");
+      if (targetCanvas.hasPointerCapture(pan.pointerId)) targetCanvas.releasePointerCapture(pan.pointerId);
+      if (!cancelled && !pan.moved) clearSelection();
       targetCanvas.style.cursor = "grab";
-      if (targetCanvas.hasPointerCapture(event.pointerId)) targetCanvas.releasePointerCapture(event.pointerId);
-      syncRoadmapNavigator(targetScroll, navigatorRefsFactory());
-      if (wasEmptyClick) clearSelection();
-      else renderRoadmaps();
       return;
     }
-    if (roadmapDragState?.targetCanvas !== targetCanvas) return;
+    const drag = roadmapDragState;
+    if (drag?.targetCanvas !== targetCanvas || (event && drag.pointerId !== event.pointerId)) return;
+    if (!cancelled && drag.moved) tickInteraction();
+    if (frame != null) cancelAnimationFrame(frame);
+    frame = null;
     const draft = roadmapDraft;
-    const moved = roadmapDragState.moved;
     roadmapDragState = null;
     roadmapDraft = null;
+    feedback.classList.add("hidden");
     targetCanvas.style.cursor = "grab";
-    if (targetCanvas.hasPointerCapture(event.pointerId)) targetCanvas.releasePointerCapture(event.pointerId);
-    if (draft && moved) updateRoadmap(draft.productId, draft.roadmap, true);
-    else renderRoadmaps();
+    if (targetCanvas.hasPointerCapture(drag.pointerId)) targetCanvas.releasePointerCapture(drag.pointerId);
+    if (!cancelled && drag.moved && (drag.mode === "reorder" ? drag.dropTarget : draft)) {
+      updateBoard((current) => {
+        // Freeze legacy date-sorted rows before any explicit timeline edit.
+        roadmapGroupsForProducts(current.products).forEach((group) => group.products.forEach((product, order) => { product.roadmap.order = order; }));
+        if (drag.mode === "reorder") RoadmapInteraction.reorderProducts(current.products, drag.productId, drag.dropTarget);
+        else {
+          const product = current.products.find((item) => item.id === draft.productId);
+          if (product) Object.assign(product, PortfolioModel.mergeProductUpdate(product, { roadmap: draft.roadmap }));
+        }
+      }, { inspector: true });
+      announceRoadmapEdit(drag.mode === "reorder" ? `${selectedProduct()?.name} moved to ${drag.dropTarget.family}.` : "Roadmap dates updated.");
+    } else renderRoadmaps();
   }
 
-  targetCanvas.addEventListener("pointerup", finishRoadmapPointer);
-  targetCanvas.addEventListener("pointercancel", finishRoadmapPointer);
+  targetCanvas.addEventListener("pointerup", (event) => finishRoadmapPointer(event));
+  targetCanvas.addEventListener("pointercancel", (event) => finishRoadmapPointer(event, true));
+  targetCanvas.addEventListener("lostpointercapture", (event) => finishRoadmapPointer(event, true));
+  targetCanvas.addEventListener("pointerleave", () => {
+    if (roadmapDragState || roadmapPanState) return;
+    roadmapHoveredProductId = null;
+    paintInteraction();
+  });
+  targetCanvas.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && roadmapDragState?.targetCanvas === targetCanvas) {
+      event.preventDefault();
+      event.stopPropagation();
+      finishRoadmapPointer(null, true);
+      return;
+    }
+    if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const direction = event.key === "ArrowUp" ? -1 : 1;
+    if (event.altKey) { moveSelectedRoadmapRow(direction); return; }
+    const products = roadmapGroups().flatMap((group) => group.products);
+    const index = products.findIndex((product) => product.id === selectedId);
+    const next = products[Math.max(0, Math.min(products.length - 1, index < 0 ? 0 : index + direction))];
+    if (!next) return;
+    selectedId = next.id;
+    renderInspector();
+    renderRoadmaps();
+    renderStatus();
+  });
   targetCanvas.addEventListener("dblclick", (event) => {
     const point = roadmapPoint(event, targetCanvas);
     const hit = hitRoadmapBar(targetCanvas, point);
@@ -3168,8 +3326,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     renderInspector();
     renderSplitProduct();
 
-    // Double-click is an exploration shortcut, not an editing shortcut.
-    // Product and slot edits remain behind explicit controls.
+    // Double-click keeps the existing shortcut to the product details pane.
     if (targetCanvas === roadmapCanvas) {
       setView("split", { focusSelected: true });
       return;
@@ -3276,12 +3433,8 @@ function updateLinkedViewButton() {
   else linkedViewButton.textContent = "View product card";
 }
 
-function roadmapSlotEditingActive(productId = selectedId) {
-  return Boolean(productId && roadmapEditProductId === productId);
-}
-
 function updateDataEditIndicator() {
-  const editing = Boolean(inspectorOpen || roadmapEditProductId || productLayoutEditing);
+  const editing = Boolean(inspectorOpen || roadmapDragState || productLayoutEditing);
   if (!dataMenuButton) return;
   dataMenuButton.classList.toggle("is-active", editing);
   dataMenuButton.innerHTML = editing
@@ -3302,14 +3455,17 @@ function updateProductLayoutEditControls() {
 
 function updateRoadmapEditControls() {
   const product = selectedProduct();
-  const editing = Boolean(product && roadmapSlotEditingActive(product.id));
-  if (roadmapEditSelectedButton) {
-    roadmapEditSelectedButton.disabled = !product;
-    roadmapEditSelectedButton.innerHTML = editing
-      ? '<span>Done editing selected roadmap slot</span><small>Lock the timeline handles again</small>'
-      : '<span>Edit selected roadmap slot</span><small>Enable protected timeline handles for the selected product</small>';
-    roadmapEditSelectedButton.classList.toggle("is-active", editing);
-    roadmapEditSelectedButton.setAttribute("aria-pressed", String(editing));
+  const group = roadmapGroups().find((item) => item.products.some((item) => item.id === product?.id));
+  const index = group?.products.findIndex((item) => item.id === product?.id) ?? -1;
+  $("#roadmapMoveUp").disabled = index <= 0;
+  $("#roadmapMoveDown").disabled = index < 0 || index >= group.products.length - 1;
+  $("#roadmapEditSelection").textContent = product?.name || "Select a product";
+  for (const [selector, field] of [["#roadmapSelectedStart", "startMonth"], ["#roadmapSelectedEnd", "endMonth"]]) {
+    const input = $(selector);
+    input.disabled = !product;
+    input.value = product?.roadmap?.[field] || "";
+    if (field === "endMonth") input.min = product?.roadmap?.startMonth || "";
+    else input.max = product?.roadmap?.endMonth || "";
   }
   if (roadmapMenuButton) {
     roadmapMenuButton.classList.remove("is-active");
@@ -3319,7 +3475,7 @@ function updateRoadmapEditControls() {
 }
 
 function stopRoadmapSlotEditing() {
-  roadmapEditProductId = null;
+  roadmapDragState?.cancel?.();
   roadmapDragState = null;
   roadmapDraft = null;
   updateRoadmapEditControls();
@@ -3450,22 +3606,13 @@ function renderStatus() {
   const ascmStatus = portfolio?.ascmSnapshot?.importedAt
     ? `ASCM updated ${formatProductInfoDate(portfolio.ascmSnapshot.importedAt.slice(0, 10))}`
     : "ASCM not imported";
-  const interaction = activeView === "products"
-    ? productLayoutEditing
-      ? "Reordering enabled · drag cards between lanes"
-      : "Select a card · Details or Enter for information · double-click for Roadmap"
-    : roadmapSlotEditingActive()
-      ? "Timeline editing enabled · use the slot handles"
-      : activeView === "roadmap"
-        ? "Double-click a product for details · drag to navigate"
-        : "Select a product bar for details · drag to navigate";
   $("#statusbar").innerHTML = `
     <span>${board.products.length} products</span>
     <span>${board.lanes.length} product lanes</span>
     <span>${viewText}</span>
     <span>${ascmStatus}</span>
     <span>Data autosaved · images stored separately</span>
-    <span>${interaction}</span>`;
+    <div id="statusbarPackage" class="statusbar-package" aria-label="Package information"></div>`;
   publishWorkspaceState();
 }
 
@@ -3665,7 +3812,7 @@ function closeViewerInfo({ render = true } = {}) {
 }
 
 function clearSelection({ render = true } = {}) {
-  const changed = Boolean(selectedId || inspectorOpen || roadmapEditProductId || viewerInfoProductId);
+  const changed = Boolean(selectedId || inspectorOpen || roadmapDragState || viewerInfoProductId);
   selectedId = null;
   inspectorOpen = false;
   closeViewerInfo({ render: false });
@@ -4338,7 +4485,7 @@ function renderInspector() {
       const imageAssetId = await createLocalImageAsset(file, product.name);
       await setProductImageAsset(product.id, imageAssetId);
     } catch (error) {
-      alert(error.message || "Unable to save the image.");
+      void PortfolioDialogs.alert(error.message || "Unable to save the image.", { title: "Image upload failed" });
       event.target.disabled = false;
     }
   };
@@ -4368,7 +4515,7 @@ function renderInspector() {
         const imageAssetId = await createLocalImageAsset(file, `${product.name} colorway`);
         await setVariantImageAsset(product.id, variantId, imageAssetId);
       } catch (error) {
-        alert(error.message || "Unable to store the colorway image.");
+        void PortfolioDialogs.alert(error.message || "Unable to store the colorway image.", { title: "Image upload failed" });
       }
     });
     if (clearButton) clearButton.onclick = () => setVariantImageAsset(product.id, variantId, "");
@@ -4401,7 +4548,7 @@ function renderInspector() {
       .filter(([label]) => !existingLabels.has(String(label).trim().toLowerCase()))
       .map(([label, value]) => spec(label, value));
     if (!additions.length) {
-      alert("This product already contains every field in the selected common set.");
+      void PortfolioDialogs.alert("This product already contains every field in the selected common set.", { title: "Specifications already added" });
       return;
     }
     updateProduct(product.id, { specs: [...current.specs, ...additions] }, true);
@@ -4641,12 +4788,14 @@ function addProduct() {
 }
 
 async function deleteSelected() {
-  if (!selectedId || !confirm("Delete this product card?")) return;
-  const deleting = board.products.find((item) => item.id === selectedId);
+  const deleting = selectedProduct();
+  const deletingBoard = board;
+  if (!deleting || !await PortfolioDialogs.confirm(`Delete "${deleting.name}" from this category?`, { title: "Delete product?", confirmLabel: "Delete product", danger: true })) return;
+  if (board !== deletingBoard || !board.products.some((item) => item.id === deleting.id)) return;
   const imageAssetIds = new Set([deleting?.imageAssetId, ...productColorVariants(deleting).map((item) => item.imageAssetId)].filter(Boolean));
   updateBoard((current) => {
-    const product = current.products.find((item) => item.id === selectedId);
-    current.products = current.products.filter((item) => item.id !== selectedId);
+    const product = current.products.find((item) => item.id === deleting.id);
+    current.products = current.products.filter((item) => item.id !== deleting.id);
     if (product) normalizeLaneOrders(product.laneId);
   });
   selectedId = board.products[0]?.id ?? null;
@@ -5173,7 +5322,8 @@ async function preloadCategoryImagesForPptx(products) {
   await Promise.allSettled(products.map((product) => waitForImageSource(productImageSource(product))));
 }
 
-// Record existing cards as editable presentation parts.
+// Record the same drawing operations used by the board so exported cards keep
+// their exact layout while text, frames, and separators remain editable.
 function recordCardElementsForPptx(cardCanvas, product, layout) {
   const context = cardCanvas.getContext("2d");
   const elements = [];
@@ -5971,10 +6121,10 @@ function importJson(file) {
       flushPendingLegacyImages();
     } catch (error) {
       console.error("Portfolio import failed:", error);
-      alert(error.message || "Unable to import portfolio file.");
+      void PortfolioDialogs.alert(error.message || "Unable to import portfolio file.", { title: "Data import failed" });
     }
   };
-  reader.onerror = () => alert("Unable to read the selected portfolio file.");
+  reader.onerror = () => { void PortfolioDialogs.alert("Unable to read the selected portfolio file.", { title: "Data import failed" }); };
   reader.readAsText(file);
 }
 
@@ -6350,7 +6500,7 @@ $("#importAscmFile").onchange = async (event) => {
     await openAscmImport(file);
   } catch (error) {
     console.error("ASCM import preview failed:", error);
-    alert(error.message || "Unable to read the ASCM report.");
+    void PortfolioDialogs.alert(error.message || "Unable to read the ASCM report.", { title: "ASCM import failed" });
   }
 };
 ascmImportForm.addEventListener("submit", (event) => {
@@ -6364,12 +6514,12 @@ ascmImportForm.addEventListener("submit", (event) => {
       addNew: $("#ascmAddProducts").checked,
     });
     closeAscmImportDialog();
-    alert(`ASCM update complete: ${result.added} product(s) added, ${result.updated} updated, ${result.unchanged} already current, and ${result.skipped} skipped.`);
+    void PortfolioDialogs.alert(`${result.added} product(s) added, ${result.updated} updated, ${result.unchanged} already current, and ${result.skipped} skipped.`, { title: "ASCM update complete", buttonLabel: "Done" });
   } catch (error) {
     console.error("ASCM update failed:", error);
     confirmAscmImportButton.disabled = false;
     confirmAscmImportButton.textContent = "Apply ASCM update";
-    alert(error.message || "Unable to apply the ASCM update.");
+    void PortfolioDialogs.alert(error.message || "Unable to apply the ASCM update.", { title: "ASCM update failed" });
   }
 });
 $("#closeAscmImport").onclick = closeAscmImportDialog;
@@ -6382,11 +6532,11 @@ $("#importPackageFile").onchange = async (event) => {
   event.target.value = "";
   if (!file) return;
   try { await globalThis.PortfolioPackageUI.openImport(file); }
-  catch (error) { alert(error.message || "Unable to import the project package."); }
+  catch (error) { void PortfolioDialogs.alert(error.message || "Unable to import the project package.", { title: "Package import failed" }); }
 };
 $("#exportPackage").onclick = async () => {
   try { await exportProjectPackage(); }
-  catch (error) { alert(error.message || "Unable to export the project package."); }
+  catch (error) { void PortfolioDialogs.alert(error.message || "Unable to export the project package.", { title: "Package export failed" }); }
 };
 $("#importJson").onclick = () => { closePopupMenus(); $("#importFile").click(); };
 $("#importFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) importJson(file); event.target.value = ""; };
@@ -6416,7 +6566,7 @@ pptxExportForm.addEventListener("submit", async (event) => {
     closePptxExportDialog();
   } catch (error) {
     console.error(error);
-    alert(error.message || "Could not export PPTX.");
+    void PortfolioDialogs.alert(error.message || "Could not export PPTX.", { title: "PowerPoint export failed" });
   } finally {
     pptxExportInProgress = false;
     exportControls.forEach((control) => { control.disabled = false; });
@@ -6456,12 +6606,15 @@ $("#zoomReset").onclick = () => { zoom = 1; renderBoard(); };
 $("#zoomIn").onclick = () => { zoom = Math.min(PRODUCT_MAX_ZOOM, Number((zoom + .1).toFixed(2))); renderBoard(); };
 $("#restoreSample").onclick = async () => {
   closePopupMenus();
-  if (!confirm("Clear every product in all categories and remove their saved images? Your categories, lanes, settings, and templates will stay. Export a project package first if you need a backup.")) return;
+  const clearingPortfolio = portfolio;
+  if (!await PortfolioDialogs.confirm("Clear every product in all categories and remove their saved images? Your categories, lanes, settings, and templates will stay. Export a project package first if you need a backup.", { title: "Clear all products?", confirmLabel: "Clear all products", danger: true })) return;
+  if (portfolio !== clearingPortfolio) return;
   try { await imageStoreClear(); } catch (_) {}
   localStorage.removeItem(PACKAGE_RECOVERY_KEY);
   clearPackageImageCaches();
   PortfolioModel.clearAllProducts(portfolio);
   activateCategory(activeCategoryId, { fitVertical: true });
+  $("#emptyPullLatestData").focus({ preventScroll: true });
 };
 
 document.querySelectorAll(".view-tab").forEach((button) => {
@@ -6513,18 +6666,18 @@ $("#roadmapZoomOut").onclick = () => setRoadmapZoom(roadmapMonthWidth - ROADMAP_
 $("#roadmapZoomReset").onclick = () => setRoadmapZoom(ROADMAP_DEFAULT_MONTH_WIDTH);
 $("#roadmapZoomIn").onclick = () => setRoadmapZoom(roadmapMonthWidth + ROADMAP_DEFAULT_MONTH_WIDTH * .1);
 $("#roadmapShowSelected").onclick = () => { closePopupMenus(); scrollRoadmapSelected(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
-roadmapEditSelectedButton.onclick = () => {
-  const product = selectedProduct();
-  if (!product) return;
-  const enabling = !roadmapSlotEditingActive(product.id);
-  roadmapEditProductId = enabling ? product.id : null;
-  closePopupMenus();
-  if (enabling && activeView === "products") setView("roadmap", { focusSelected: true });
-  else {
-    updateRoadmapEditControls();
-    renderRoadmaps();
-  }
-};
+$("#roadmapMoveUp").onclick = () => moveSelectedRoadmapRow(-1);
+$("#roadmapMoveDown").onclick = () => moveSelectedRoadmapRow(1);
+for (const [selector, field] of [["#roadmapSelectedStart", "startMonth"], ["#roadmapSelectedEnd", "endMonth"]]) {
+  $(selector).onchange = (event) => {
+    const product = selectedProduct();
+    const value = normalizeMonth(event.target.value, "");
+    if (!product || !value) { updateRoadmapEditControls(); return; }
+    roadmapGroupsForProducts(board.products).forEach((group) => group.products.forEach((item, order) => { item.roadmap.order = order; }));
+    updateRoadmap(product.id, { [field]: value }, true);
+    announceRoadmapEdit("Roadmap dates updated.");
+  };
+}
 
 function bindRoadmapNavigatorControls(targetScroll, refs) {
   refs.range.addEventListener("input", () => { targetScroll.scrollLeft = Number(refs.range.value); });
@@ -6581,7 +6734,7 @@ window.addEventListener("keydown", (event) => {
     renderBoard();
     return;
   }
-  if (roadmapEditProductId) {
+  if (roadmapDragState) {
     stopRoadmapSlotEditing();
     renderRoadmaps();
     return;

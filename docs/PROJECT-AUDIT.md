@@ -100,11 +100,14 @@ public/index.html
   ├─ public/js/catalog-data.js       → window.PORTFOLIO_CATALOG
   ├─ public/js/ascm-import.js        → global ASCMImporter XLSX/matching helpers
   ├─ public/js/pptx-pagination.js    → global PPTXPagination pure page calculation
+  ├─ public/js/pptx-editable.js      → global PPTXEditable native card composition
   ├─ public/js/portfolio-model.js    → global PortfolioModel timeline/lane/spec/SKU/tone rules
+  ├─ public/js/roadmap-interaction.js → global RoadmapInteraction row/drop/date draft rules
   ├─ public/js/product-details.js    → global PortfolioDetails Overview/secondary lists
   ├─ public/js/package-codec.js      → global PortfolioPackage encrypted envelope + stored ZIP
   ├─ public/js/package-source.js     → empty default; approved endpoint supplied at deployment
   ├─ public/js/package-client.js     → keyed bounded encrypted-package download
+  ├─ public/js/app-dialogs.js        → global PortfolioDialogs queued app notices/confirmations
   ├─ public/js/app.js
        ├─ normalize/migrate portfolio state
        ├─ render Product and Roadmap canvases
@@ -120,7 +123,7 @@ public/index.html
 server/package-relay.mjs             → separate fixed-file service; not a Pages artifact
 ```
 
-The script order in `public/index.html` is a hard runtime contract: PptxGenJS, catalog, ASCM importer, PPTX pagination/editable composition, portfolio model, product details, package codec/source/client, application, package UI, then workspace UI. The core reads the catalog and helper globals; both UI controllers use initialized application controls/functions. The shell refreshes through `portfolio:render` events. The PowerPoint bundle must also be available when PPTX export is used.
+The script order in `public/index.html` is a hard runtime contract: PptxGenJS, catalog, ASCM importer, PPTX pagination/editable composition, portfolio model, roadmap interaction, product details, package codec/source/client, app dialogs, application, package UI, then workspace UI. The core reads the catalog and helper globals; both UI controllers use initialized application controls/functions. The shell refreshes through `portfolio:render` events. The PowerPoint bundle must also be available when PPTX export is used.
 
 ### 3.1 Startup path
 
@@ -136,7 +139,7 @@ The script order in `public/index.html` is a hard runtime contract: PptxGenJS, c
 The application provides two synchronized main views:
 
 - **Product cards** — a canvas-rendered, lane-based product board with search, sort, SKU/variant previews, zoom, and protected reordering.
-- **Roadmap** — a canvas-rendered, time-scaled roadmap with family groups, timeline configuration, search, panning, protected slot editing, and an optional selected-product details pane.
+- **Roadmap** — a canvas-rendered, time-scaled roadmap with family groups, timeline configuration, search, whitespace panning, direct row reorder/date resize gestures with source/target guides and live endpoint previews, keyboard placement controls, and an optional selected-product details pane.
 
 The compact shell uses a toolbar category dropdown, Products/Roadmap tabs, a prominent Export PPTX action in both views, and one Workspace settings dialog with Display, Timeline, Category, and Data & export sections. Edit product stays beside the selection; manual Add product is an always-available Category admin action. The welcome screen offers Pull latest data and Import package; advanced Import ASCM report is available in Settings → Data & export. There is no category sidebar or separate Split tab. The product editor has Details, Images, Specs, Variants, and Timeline tabs. `public/js/workspace-ui.js` isolates shell navigation and keyboard/focus behavior. `public/js/portfolio-model.js` isolates timeline synchronization, specification normalization, explicit HP SKU/color resolution, shared product/status/stage tones, and settings-preserving clearing. `public/js/ascm-import.js` isolates XLSX parsing, matching, and additive merge rules; `public/js/pptx-pagination.js` isolates ordered category selection and roadmap slide calculations.
 

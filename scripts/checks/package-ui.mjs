@@ -17,11 +17,23 @@ function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg"
   const elements = new Map();
   const calls = { downloads: [], imports: [], exports: [], generated: 0 };
   const document = { activeElement: null, getElementById: (id) => elements.get(id), querySelector: () => elements.get("app-shell") };
-  const ids = ["app-shell", "packageDialog", "packageForm", "packageKey", "confirmPackage", "packageStatus", "packageError", "sharedPackageStatus", "packageKeySection", "packageShowKey", "packageEncrypt", "packageGenerateKey", "packageCopyKey", "packagePublisherHelp", "packageKeyHelp", "cancelPackage", "closePackage", "workspaceEmpty", "packageTitle", "packageDescription", "packageExportOptions", "packageFileName", "pullLatestData", "emptyPullLatestData", "settingsPullLatestData", "exportPackage", "restorePreviousPackage", "packageUpdateComments", "sharedPackageUpdated", "sharedPackageComments", "packageResultInfo", "packageResultUpdated", "packageResultComments"];
+  document.createElement = (tag) => {
+    const eventHandlers = new Map();
+    const element = { tagName: tag.toUpperCase(), textContent: "", children: [], isConnected: true, open: false,
+      append(...children) { this.children.push(...children); },
+      addEventListener: (name, handler) => eventHandlers.set(name, handler),
+      dispatchEvent: (event) => eventHandlers.get(event.type)?.(event),
+      focus() { document.activeElement = this; },
+    };
+    Object.defineProperty(element, "innerHTML", { set() { throw new Error("Footer package metadata must remain plain text."); } });
+    return element;
+  };
+  const ids = ["app-shell", "packageDialog", "packageForm", "packageKey", "confirmPackage", "packageStatus", "packageError", "sharedPackageStatus", "packageKeySection", "packageShowKey", "packageEncrypt", "packageGenerateKey", "packageCopyKey", "packagePublisherHelp", "packageKeyHelp", "cancelPackage", "closePackage", "workspaceEmpty", "packageTitle", "packageDescription", "packageExportOptions", "packageFileName", "pullLatestData", "emptyPullLatestData", "settingsPullLatestData", "exportPackage", "restorePreviousPackage", "packageUpdateComments", "sharedPackageUpdated", "sharedPackageComments", "packageResultInfo", "packageResultUpdated", "packageResultComments", "statusbarPackage"];
   for (const id of ids) {
     const classes = new Set();
     elements.set(id, {
       id, value: "", textContent: "", disabled: false, checked: false, required: false, readOnly: false, isConnected: true, inert: false,
+      children: [], replaceChildren(...children) { this.children = children; },
       classList: {
         add: (...names) => names.forEach((name) => classes.add(name)),
         remove: (...names) => names.forEach((name) => classes.delete(name)),
@@ -87,6 +99,22 @@ assert.match(staticUi.elements.get("sharedPackageStatus").textContent, /latest m
 assert.equal(staticUi.elements.get("sharedPackageUpdated").textContent, formatDate(loadedInfo));
 assert.equal(staticUi.elements.get("sharedPackageUpdated").title, new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" }).format(new Date(loadedInfo.updatedAt)));
 assert.equal(staticUi.elements.get("sharedPackageComments").textContent, loadedInfo.comments);
+const footerDate = (ui) => ui.elements.get("statusbarPackage").children[0].children[0];
+const footerComment = (ui) => ui.elements.get("statusbarPackage").children[1];
+assert.equal(footerDate(staticUi).textContent, formatDate(loadedInfo));
+assert.equal(footerDate(staticUi).dateTime, loadedInfo.updatedAt);
+assert.equal(footerComment(staticUi).children[1].textContent, loadedInfo.comments);
+assert.equal(footerComment(staticUi).children[1].tabIndex, 0, "long comment content must support keyboard scrolling");
+const openedComment = footerComment(staticUi);
+openedComment.open = true;
+openedComment.dispatchEvent({ type: "toggle" });
+staticUi.ui.refresh();
+assert.equal(footerComment(staticUi).open, true, "refreshing the same package must preserve an expanded comment");
+let commentEscapePrevented = false;
+footerComment(staticUi).dispatchEvent({ type: "keydown", key: "Escape", preventDefault() { commentEscapePrevented = true; }, stopPropagation() {} });
+assert.equal(commentEscapePrevented, true);
+assert.equal(footerComment(staticUi).open, false);
+assert.equal(staticUi.document.activeElement, footerComment(staticUi).children[0], "Escape must return focus to the comment disclosure");
 staticUi.elements.get("packageKey").value = "incomplete-key";
 await staticUi.submit();
 assert.equal(staticUi.calls.downloads.length, 0, "invalid keys must fail before a download");
@@ -113,6 +141,10 @@ assert.equal(staticUi.elements.get("sharedPackageComments").textContent, incomin
 assert.equal(staticUi.elements.get("packageResultComments").textContent, incomingInfo.comments);
 assert.equal(staticUi.elements.get("packageResultUpdated").dateTime, incomingInfo.updatedAt);
 assert.equal(staticUi.elements.get("packageResultInfo").classList.contains("hidden"), false);
+assert.equal(footerDate(staticUi).dateTime, incomingInfo.updatedAt, "pulling a package must refresh its visible footer date");
+assert.equal(footerComment(staticUi).children[1].textContent, incomingInfo.comments, "the full footer comment must preserve literal markup and line breaks");
+assert.equal(footerComment(staticUi).children[0].children[0].textContent, `Comment: ${incomingInfo.comments.replace(/\s+/g, " ")}`);
+assert.equal(footerComment(staticUi).open, false, "loading a different package must close the previous comment");
 await staticUi.submit();
 assert.equal(staticUi.elements.get("packageDialog").classList.contains("hidden"), true);
 assert.equal(staticUi.elements.get("app-shell").inert, false);
@@ -169,6 +201,7 @@ assert.match(publisherUi.elements.get("packageStatus").textContent, /GitHub on t
 assert.equal(publisherUi.elements.get("packageResultComments").textContent, publisherUi.calls.exports[0].comments);
 assert.equal(publisherUi.elements.get("packageResultUpdated").dateTime, "2026-10-09T08:00:00.000Z");
 assert.equal(publisherUi.elements.get("sharedPackageComments").textContent, loadedInfo.comments, "a new export must not replace the metadata of the loaded workspace");
+assert.equal(footerComment(publisherUi).children[1].textContent, loadedInfo.comments, "the footer must keep the loaded package's comment after a new export");
 await publisherUi.submit();
 assert.equal(publisherUi.elements.get("packageKey").value, "");
 publisherUi.ui.open("export");
@@ -187,12 +220,21 @@ await legacyUi.submit();
 assert.equal(legacyUi.elements.get("sharedPackageUpdated").textContent, "Date not supplied", "legacy imports must not invent an update or download time");
 assert.equal(legacyUi.elements.get("packageResultUpdated").dateTime, "");
 assert.equal(legacyUi.elements.get("packageResultComments").textContent, "No comments supplied.");
+assert.equal(footerDate(legacyUi).dateTime, "", "legacy package dates must not invent a timestamp in the footer");
+assert.equal(footerComment(legacyUi).textContent, "No comments supplied.");
 legacyUi.ui.close();
 legacyUi.setImportInfo({ ...incomingInfo, comments: " \n \t " });
 legacyUi.ui.open("pull");
 legacyUi.elements.get("packageKey").value = key;
 await legacyUi.submit();
 assert.equal(legacyUi.elements.get("packageResultComments").textContent, "No comments supplied.", "whitespace-only notes must use the empty-notes label");
+assert.equal(footerComment(legacyUi).tagName, "SPAN", "empty comments must not show a disclosure control");
+legacyUi.setImportInfo({ ...incomingInfo, comments: "Long package comment " + "detail ".repeat(300) });
+legacyUi.ui.close();
+legacyUi.ui.open("pull");
+legacyUi.elements.get("packageKey").value = key;
+await legacyUi.submit();
+assert.equal(footerComment(legacyUi).children[1].textContent, "Long package comment " + "detail ".repeat(300), "long footer comments must remain fully available in the disclosure");
 
 const failedBuildUi = createUi();
 failedBuildUi.ui.open("export");
@@ -219,4 +261,4 @@ assert.match(html, /<textarea[^>]*id="packageUpdateComments"[^>]*maxlength="2000
 assert.match(html, /<label for="packageUpdateComments">/);
 assert.match(html, /update date is set automatically/);
 
-console.log("Package UI checks passed: local-only static keys, wrong-key retry, fresh/cancelled pulls, publisher key reuse, automatic package dates and updater comments, safe text rendering, legacy metadata, failed-build preservation, and textarea focus and busy controls.");
+console.log("Package UI checks passed: local-only static keys, wrong-key retry, fresh/cancelled pulls, publisher key reuse, automatic package dates and updater comments, safe footer disclosures with keyboard support, legacy metadata, failed-build preservation, and textarea focus and busy controls.");
