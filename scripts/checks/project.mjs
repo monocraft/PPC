@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { inspectHostedData } from "../publish-master-package.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, "../..");
@@ -263,6 +264,7 @@ const requiredDeploymentEntries = new Set([
   "public/js/catalog-data.js",
   "public/assets",
   "public/vendor",
+  "public/data/master_ppc.pkg",
   ...scriptReferences.map(publicPath),
   ...stylesheetReferences.map(publicPath),
 ]);
@@ -301,10 +303,13 @@ if (await isDirectory("public/assets")) {
 if (await isDirectory("public")) {
   const publicFiles = await walkFiles(publicRoot);
   for (const file of publicFiles) {
+    if (file === "public/data/master_ppc.pkg") continue;
     if (/\.(?:pkg|env|log)$/i.test(file) || /^\.env(?:\.|$)/i.test(path.basename(file)) || /(?:^|\/)(?:project-data|docs|scripts|server|\.git(?:hub)?)(?:\/|$)/.test(file)) {
       fail(`Non-site content must not be inside the public deployment folder: ${file}`);
     }
   }
+  try { await inspectHostedData(path.join(publicRoot, "data"), { required: true }); }
+  catch (error) { fail(error.message); }
 }
 for (const entry of await readdir(projectRoot, { withFileTypes: true })) {
   if (entry.isFile() && /\.js$/i.test(entry.name)) fail(`Application JavaScript must be inside public/js: ${entry.name}`);

@@ -8,11 +8,29 @@
   const submit = get("confirmPackage");
   const status = get("packageStatus");
   const error = get("packageError");
-  let mode = "pull", selectedFile = null, busy = false, completed = false, restoreFocus = null, controller = null, cancelRequested = false;
+  let mode = "pull", selectedFile = null, busy = false, completed = false, restoreFocus = null, controller = null, cancelRequested = false, downloadedBytes = null;
+
+  function usesRelay() {
+    const source = globalThis.PPC_PACKAGE_SOURCE;
+    return source.mode === "relay" || (!source.packageUrl && Boolean(source.endpoint));
+  }
+
+  function pullSource() {
+    const source = globalThis.PPC_PACKAGE_SOURCE;
+    if (usesRelay()) {
+      return { endpoint: globalThis.PortfolioPackageClient.normalizeEndpoint(source.endpoint) };
+    }
+    return { packageUrl: globalThis.PortfolioPackageClient.normalizePackageUrl(source.packageUrl) };
+  }
 
   function refresh() {
     get("restorePreviousPackage").disabled = !globalThis.hasPreviousPackage();
-    get("sharedPackageStatus").textContent = globalThis.PPC_PACKAGE_SOURCE.endpoint ? "Load the shared master into Products and Roadmap with your package key." : "Shared data setup is pending. Local package import and export are available.";
+    try {
+      const source = pullSource();
+      get("sharedPackageStatus").textContent = source.packageUrl ? "Pull the latest master package. Your key unlocks Products and Roadmap on this device." : "Load the shared master into Products and Roadmap with your package key.";
+    } catch {
+      get("sharedPackageStatus").textContent = "The shared master location needs to be configured. Local package import and export are available.";
+    }
   }
 
   function updateKeyControls() {
@@ -22,6 +40,8 @@
     keyInput.readOnly = completed && mode === "export";
     get("packageGenerateKey").classList.toggle("hidden", mode !== "export" || completed);
     get("packagePublisherHelp").classList.toggle("hidden", mode !== "export" || !needsKey);
+    get("packageKeyHelp").textContent = mode === "pull" && !usesRelay() ? "Your key unlocks the downloaded package on this device. It is never sent to GitHub or saved." : "The key is used for this request and is not saved on this device.";
+    get("packagePublisherHelp").textContent = "Reuse the current package key, build master_ppc.pkg, then replace public/data/master_ppc.pkg in GitHub on the main branch. Wait for the site update to finish. Keep the key separate from the package.";
     keyInput.type = get("packageShowKey").checked ? "text" : "password";
   }
 
@@ -40,6 +60,7 @@
     get("workspaceEmpty").inert = false;
     keyInput.value = "";
     selectedFile = null;
+    downloadedBytes = null;
     completed = false;
     get("packageShowKey").checked = false;
     keyInput.type = "password";
@@ -51,7 +72,7 @@
     if (busy) return;
     globalThis.closePopupMenus();
     restoreFocus = document.activeElement;
-    mode = nextMode; selectedFile = file; completed = false;
+    mode = nextMode; selectedFile = file; completed = false; downloadedBytes = null;
     cancelRequested = false;
     keyInput.value = ""; get("packageShowKey").checked = false; get("packageEncrypt").checked = true;
     get("cancelPackage").classList.remove("hidden");
@@ -67,7 +88,7 @@
     document.querySelector(".app-shell").inert = true;
     get("workspaceEmpty").inert = true;
     if (mode === "pull") {
-      try { globalThis.PortfolioPackageClient.normalizeEndpoint(globalThis.PPC_PACKAGE_SOURCE.endpoint); }
+      try { pullSource(); }
       catch (problem) { error.textContent = problem.message; submit.disabled = true; get("packageKeySection").classList.add("hidden"); keyInput.required = false; }
     }
     if (mode === "restore" && !globalThis.hasPreviousPackage()) { error.textContent = "There is no previous package workspace to restore on this device."; submit.disabled = true; }
@@ -93,14 +114,19 @@
       setBusy(true, mode !== "pull");
       let result;
       if (mode === "pull") {
-        controller = new AbortController();
-        const timeout = setTimeout(() => controller?.abort(), 60000);
-        let bytes;
-        try {
-          bytes = await globalThis.PortfolioPackageClient.downloadLatest({ endpoint: globalThis.PPC_PACKAGE_SOURCE.endpoint, key, signal: controller.signal,
-            onProgress: (size, total) => { status.textContent = `Downloading ${Math.round(size / 1048576)}${total ? ` of ${Math.ceil(total / 1048576)}` : ""} MB…`; },
-          });
-        } finally { clearTimeout(timeout); controller = null; }
+        const source = pullSource();
+        let bytes = source.packageUrl ? downloadedBytes : null;
+        if (!bytes) {
+          controller = new AbortController();
+          const timeout = setTimeout(() => controller?.abort(), 60000);
+          status.textContent = "Fetching the latest master package…";
+          try {
+            bytes = await globalThis.PortfolioPackageClient.downloadLatest({ ...source, ...(source.endpoint ? { key } : {}), signal: controller.signal,
+              onProgress: (size, total) => { status.textContent = `Downloading ${Math.round(size / 1048576)}${total ? ` of ${Math.ceil(total / 1048576)}` : ""} MB…`; },
+            });
+            if (source.packageUrl) downloadedBytes = bytes;
+          } finally { clearTimeout(timeout); controller = null; }
+        }
         if (cancelRequested) throw new DOMException("Download cancelled.", "AbortError");
         setBusy(true, true); status.textContent = "Checking and loading the complete package…";
         result = await globalThis.importProjectPackage(new Blob([bytes]), { key, requireEncrypted: true });
@@ -110,8 +136,9 @@
       } else if (mode === "restore") result = await globalThis.restorePreviousPackage();
       else { status.textContent = "Collecting data and image files…"; await globalThis.exportProjectPackage(key); }
       completed = true;
+      downloadedBytes = null;
       if (mode === "export") keyInput.value = key;
-      status.textContent = mode === "export" ? (key ? "master_ppc.pkg is ready. Replace the master file in SharePoint and keep the key separate." : "Private backup package created.") : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
+      status.textContent = mode === "export" ? (key ? "master_ppc.pkg is ready. Replace public/data/master_ppc.pkg in GitHub on the main branch, then wait for the site update to finish. Keep the same key for future updates." : "Private backup package created.") : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
       get("packageTitle").textContent = mode === "export" ? "Package built" : mode === "restore" ? "Workspace restored" : "Data updated";
       refresh(); updateKeyControls(); setBusy(false);
       get("packageExportOptions").classList.add("hidden");
@@ -119,7 +146,7 @@
     } catch (problem) {
       if (mode === "export" && key) keyInput.value = key;
       error.textContent = problem.name === "AbortError" ? "Download cancelled or timed out. Your workspace was not changed." : problem.message || "The package could not be loaded. Your previous workspace is available.";
-      status.textContent = ""; setBusy(false);
+      status.textContent = downloadedBytes && !cancelRequested ? "The package is downloaded. You can try again without downloading it again." : ""; setBusy(false);
       if (cancelRequested) close(); else keyInput.focus();
     } finally { key = ""; controller = null; }
   });

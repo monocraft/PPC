@@ -198,8 +198,8 @@
         <label for="packageKey">Package key</label>
         <input id="packageKey" type="password" placeholder="PPC-…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="packageKeyHelp">
         <div class="package-key-actions"><label class="checkbox-label"><input id="packageShowKey" type="checkbox">Show key</label><button id="packageGenerateKey" type="button">Create new key</button><button id="packageCopyKey" type="button">Copy key</button></div>
-        <p id="packageKeyHelp" class="settings-note">The key is used for this request and is not saved on this device.</p>
-        <p id="packagePublisherHelp" class="settings-note hidden">Reuse the current key, build master_ppc.pkg, then replace the same file in SharePoint. Keep the key separate from the package.</p>
+        <p id="packageKeyHelp" class="settings-note">The key unlocks the package in your browser and is not saved on this device.</p>
+        <p id="packagePublisherHelp" class="settings-note hidden">Reuse the current key, build master_ppc.pkg, then replace public/data/master_ppc.pkg in GitHub on the main branch. Wait for the site update to finish. Keep the key separate from GitHub and the package.</p>
       </section>
       <p id="packageStatus" class="package-status" role="status" aria-live="polite"></p>
       <p id="packageError" class="package-error" role="alert"></p>
