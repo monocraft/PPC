@@ -33,20 +33,24 @@ jobs:
         run: node scripts/checks/project.mjs
 
       - name: Prepare static site
+        env:
+          PPC_PACKAGE_ENDPOINT: ${{ vars.PPC_PACKAGE_ENDPOINT }}
         run: |
           mkdir -p _site/css _site/js
           cp public/index.html _site/
           cp public/css/styles.css _site/css/
-          cp public/js/app.js public/js/workspace-ui.js public/js/portfolio-model.js public/js/product-details.js public/js/ascm-import.js public/js/catalog-data.js public/js/pptx-pagination.js _site/js/
+          cp public/js/app.js public/js/workspace-ui.js public/js/portfolio-model.js public/js/product-details.js public/js/ascm-import.js public/js/catalog-data.js public/js/pptx-pagination.js public/js/package-codec.js public/js/package-source.js public/js/package-client.js public/js/package-ui.js _site/js/
+          node scripts/configure-package-source.mjs
           cp -R public/assets public/vendor _site/
 
-          for required_path in index.html css/styles.css js/app.js js/workspace-ui.js js/portfolio-model.js js/product-details.js js/ascm-import.js js/catalog-data.js js/pptx-pagination.js assets vendor; do
+          for required_path in index.html css/styles.css js/app.js js/workspace-ui.js js/portfolio-model.js js/product-details.js js/ascm-import.js js/catalog-data.js js/pptx-pagination.js js/package-codec.js js/package-source.js js/package-client.js js/package-ui.js assets vendor; do
             test -e "_site/${required_path}"
           done
           test ! -e _site/project-data/private
           test ! -e _site/docs
           test ! -e _site/artifacts
           test ! -e _site/scripts
+          test ! -e _site/server
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -22,6 +22,7 @@
           <button class="view-tab" data-view="roadmap" role="tab" aria-selected="false">Roadmap</button>
         </div>
         <div class="toolbar-actions">
+          <button id="pullLatestData" class="shared-data-trigger" title="Load the shared portfolio and roadmap with your package key">Pull latest data</button>
           <button id="exportPptx" class="primary-button" title="Export Product Portfolio, Roadmap, or both to PowerPoint">Export PPTX</button>
           <button id="workspaceSettingsButton" class="settings-trigger" aria-haspopup="dialog" aria-controls="workspaceSettingsDialog" aria-expanded="false"><span aria-hidden="true">⚙</span> Settings</button>
           <button id="dataMenuButton" class="hidden" tabindex="-1" aria-hidden="true">Data</button>
@@ -95,7 +96,7 @@
         </div>
       </section>
 
-      <section id="workspaceEmpty" class="workspace-empty hidden" aria-labelledby="workspaceEmptyTitle"><span class="empty-symbol" aria-hidden="true">▦</span><h2 id="workspaceEmptyTitle">Start your portfolio</h2><p>Open a saved package or bring in an ASCM report.</p><div><button id="emptyImportPackage" class="primary-button">Import package</button><button id="emptyImportAscm">Import ASCM</button></div></section>
+      <section id="workspaceEmpty" class="workspace-empty hidden" aria-labelledby="workspaceEmptyTitle"><span class="empty-symbol" aria-hidden="true">▦</span><h2 id="workspaceEmptyTitle">Start your portfolio</h2><p>Pull the shared master, open a saved package, or bring in an ASCM report.</p><div><button id="emptyPullLatestData" class="primary-button">Pull latest data</button><button id="emptyImportPackage">Import package</button><button id="emptyImportAscm">Import ASCM</button></div></section>
       <aside id="inspector" class="inspector" aria-hidden="true"></aside>
     </section>
 
@@ -159,6 +160,7 @@
           <section id="settingsDataPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabData" data-settings-panel="data">
             <div class="settings-section-heading"><h3>Data & export</h3><span class="scope-badge">Entire portfolio</span></div>
             <p class="settings-note">ASCM adds and updates products. Package and data imports replace the workspace.</p>
+            <div class="shared-package-settings"><div><h4>Shared master package</h4><p id="sharedPackageStatus" class="settings-note"></p></div><button id="settingsPullLatestData" type="button">Pull latest data</button></div>
             <div id="dataMenu" class="popup-menu settings-action-list data-action-menu" aria-label="Import and export">
               <div class="data-direction-grid">
                 <section class="data-direction-panel data-import-panel" aria-labelledby="dataImportTitle">
@@ -174,6 +176,7 @@
                   <button id="exportPng" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Export PNG</strong><small>Save this category’s active view as a PNG image.</small></span></button>
                 </section>
               </div>
+              <button id="restorePreviousPackage" class="data-action" type="button" disabled><span class="data-action-copy"><strong>Restore previous workspace</strong><small>Recover the products, roadmap, settings and images saved before the last package import.</small></span></button>
               <div class="data-reset-row"><button id="restoreSample" class="data-action data-reset-action menu-danger" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6m4-6v6"/></svg><span class="data-action-copy"><strong>Clear all products</strong><small>Remove products from every category. Keep category and workspace settings.</small></span></button></div>
             </div>
           </section>
@@ -185,6 +188,24 @@
   <input id="importFile" class="visually-hidden" type="file" accept=".data,.json,.js,application/json,text/javascript,text/plain" tabindex="-1" aria-label="Import data file" aria-hidden="true">
   <input id="importPackageFile" class="visually-hidden" type="file" accept=".pkg,.zip,application/octet-stream,application/zip" tabindex="-1" aria-label="Import project package" aria-hidden="true">
   <input id="importAscmFile" class="visually-hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" tabindex="-1" aria-label="Import ASCM report" aria-hidden="true">
+  <div id="packageDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="packageTitle" aria-describedby="packageDescription">
+    <form id="packageForm" class="settings-dialog package-dialog">
+      <div class="settings-dialog-heading"><div><span class="eyebrow">Unified portfolio package</span><h2 id="packageTitle">Pull latest data</h2></div><button id="closePackage" class="icon-button" type="button" aria-label="Close package dialog">×</button></div>
+      <p id="packageDescription" class="package-description"></p>
+      <p id="packageFileName" class="package-file-name hidden"></p>
+      <div id="packageExportOptions" class="hidden"><label class="checkbox-label"><input id="packageEncrypt" type="checkbox" checked>Protect the package with a key</label><p class="settings-note">Use protection for the shared master. Turn it off only for a private local backup.</p></div>
+      <section id="packageKeySection" class="package-key-section">
+        <label for="packageKey">Package key</label>
+        <input id="packageKey" type="password" placeholder="PPC-…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="packageKeyHelp">
+        <div class="package-key-actions"><label class="checkbox-label"><input id="packageShowKey" type="checkbox">Show key</label><button id="packageGenerateKey" type="button">Create new key</button><button id="packageCopyKey" type="button">Copy key</button></div>
+        <p id="packageKeyHelp" class="settings-note">The key is used for this request and is not saved on this device.</p>
+        <p id="packagePublisherHelp" class="settings-note hidden">Reuse the current key when publishing updates. Keep it separate from the package; anyone with the key can load the shared data.</p>
+      </section>
+      <p id="packageStatus" class="package-status" role="status" aria-live="polite"></p>
+      <p id="packageError" class="package-error" role="alert"></p>
+      <div class="settings-actions"><button id="cancelPackage" type="button">Cancel</button><button id="confirmPackage" class="primary-button" type="submit">Pull latest data</button></div>
+    </form>
+  </div>
   <div id="ascmImportDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="ascmImportTitle">
     <form id="ascmImportForm" class="settings-dialog ascm-import-dialog">
       <div class="settings-dialog-heading">
@@ -311,7 +332,11 @@
   <script src="js/pptx-pagination.js"></script>
   <script src="js/portfolio-model.js"></script>
   <script src="js/product-details.js"></script>
+  <script src="js/package-codec.js"></script>
+  <script src="js/package-source.js"></script>
+  <script src="js/package-client.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/package-ui.js"></script>
   <script src="js/workspace-ui.js"></script>
 </body>
 </html>

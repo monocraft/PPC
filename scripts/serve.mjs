@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderPackageSource } from "./configure-package-source.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const documentRoot = path.resolve(scriptDirectory, "../public");
@@ -32,6 +33,7 @@ function readOption(name) {
 
 const listenHost = readOption("host") || process.env.PORTFOLIO_HOST || "127.0.0.1";
 const requestedPort = Number(readOption("port") || process.env.PORTFOLIO_PORT || 4173);
+const packageSource = renderPackageSource(readOption("package-endpoint") || process.env.PPC_PACKAGE_ENDPOINT);
 
 if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
   throw new Error("Port must be an integer between 0 and 65535.");
@@ -57,6 +59,12 @@ const server = createServer(async (request, response) => {
     pathname = decodeURIComponent(new URL(request.url || "/", "http://localhost").pathname);
   } catch {
     sendText(response, 400, "Invalid URL\n");
+    return;
+  }
+
+  if (pathname === "/js/package-source.js") {
+    response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "text/javascript; charset=utf-8", "Content-Length": Buffer.byteLength(packageSource) });
+    response.end(request.method === "HEAD" ? undefined : packageSource);
     return;
   }
 

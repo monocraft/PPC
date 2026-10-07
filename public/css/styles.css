@@ -63,6 +63,25 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .view-tab.is-active { border-color: #444c47; background: #303633; color: #dbe3dc; }
 .toolbar-actions { display: flex; align-items: center; gap: 7px; }
 .toolbar-actions > button { white-space: nowrap; }
+.shared-data-trigger { border-color: #465451; background: #252c2a; }
+.shared-package-settings { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 14px 0; padding: 12px; border: 1px solid var(--color-border); border-radius: 6px; }
+.shared-package-settings h4 { margin: 0 0 4px; }
+.shared-package-settings p { margin: 0; }
+.shared-package-settings button { flex-shrink: 0; }
+.package-dialog { width: min(490px, 100%); gap: 12px; }
+.package-description { margin: 0; color: var(--color-text-secondary); line-height: 1.6; }
+.package-file-name { margin: 0; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 5px; overflow-wrap: anywhere; }
+.package-key-section { display: grid; gap: 8px; }
+.package-key-section > label { color: var(--color-text-secondary); }
+.package-key-section > input { font-family: ui-monospace, monospace; font-size: 12px; }
+.package-key-section p { margin: 0; }
+.package-key-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.package-key-actions label { margin-right: auto; }
+.package-key-actions input[type="checkbox"] { width: auto; }
+.package-status, .package-error { margin: 0; line-height: 1.5; }
+.package-status { color: var(--color-new-product); }
+.package-error { color: var(--color-embargo); }
+.package-status:empty, .package-error:empty { display: none; }
 .settings-trigger { display: flex; align-items: center; gap: 6px; background: transparent; }
 .settings-trigger > span { color: #a8b2ab; font-size: 15px; }
 .workspace-controls { min-width: 0; background: #191919; }

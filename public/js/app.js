@@ -1,6 +1,8 @@
 "use strict";
 
 const STORAGE_KEY = "product-portfolio-canvas-v4";
+const PACKAGE_RECOVERY_KEY = `${STORAGE_KEY}-package-recovery`;
+const MAX_PACKAGE_MANIFEST_BYTES = 4 * 1024 * 1024;
 const PREVIOUS_STORAGE_KEY = "product-portfolio-canvas-v3";
 const LEGACY_STORAGE_KEY = "product-portfolio-canvas-v1";
 const IMAGE_DB_NAME = "product-portfolio-image-assets-v1";
@@ -165,6 +167,8 @@ const imageAssetUrlCache = new Map();
 const imageAssetLoadPromises = new Map();
 const missingImageAssetIds = new Set();
 const pendingLegacyImageBlobs = [];
+let imageAssetGeneration = 0;
+let packageOperationInProgress = false;
 let imageDbPromise = null;
 const productView = $("#productView");
 const roadmapView = $("#roadmapView");
@@ -312,6 +316,42 @@ async function imageStoreClear() {
     transaction.objectStore(IMAGE_STORE_NAME).clear();
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error || new Error("Unable to clear the image library."));
+  });
+}
+
+async function imageStoreWriteBatch(entries) {
+  if (!entries.length) return;
+  const database = await openImageDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(IMAGE_STORE_NAME);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("Unable to save package images."));
+    transaction.onabort = () => reject(transaction.error || new Error("Package image save was cancelled."));
+    try {
+      for (const entry of entries) store.put({ id: entry.id, blob: entry.blob, updatedAt: Date.now() });
+    } catch (error) {
+      transaction.abort();
+      reject(error);
+    }
+  });
+}
+
+async function imageStoreDeleteBatch(assetIds) {
+  if (!assetIds.length) return;
+  const database = await openImageDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(IMAGE_STORE_NAME);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("Unable to remove obsolete package images."));
+    transaction.onabort = () => reject(transaction.error || new Error("Image cleanup was cancelled."));
+    try {
+      for (const assetId of assetIds) store.delete(assetId);
+    } catch (error) {
+      transaction.abort();
+      reject(error);
+    }
   });
 }
 
@@ -467,8 +507,10 @@ async function flushPendingLegacyImages() {
 
 function loadLocalImageAsset(assetId) {
   if (!assetId || missingImageAssetIds.has(assetId) || imageAssetLoadPromises.has(assetId) || imageAssetUrlCache.has(assetId)) return;
+  const generation = imageAssetGeneration;
   const promise = imageStoreGet(assetId)
     .then((blob) => {
+      if (generation !== imageAssetGeneration) return;
       if (!blob) {
         missingImageAssetIds.add(assetId);
         renderInspector();
@@ -481,7 +523,7 @@ function loadLocalImageAsset(assetId) {
       renderInspector();
     })
     .catch(() => {})
-    .finally(() => imageAssetLoadPromises.delete(assetId));
+    .finally(() => { if (imageAssetLoadPromises.get(assetId) === promise) imageAssetLoadPromises.delete(assetId); });
   imageAssetLoadPromises.set(assetId, promise);
 }
 
@@ -1318,6 +1360,7 @@ function loadPortfolio() {
 
 function scheduleSave() {
   clearTimeout(saveTimer);
+  if (packageOperationInProgress) return;
   saveTimer = setTimeout(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(portfolio));
@@ -4804,183 +4847,267 @@ function clonePortfolioData() {
   return JSON.parse(JSON.stringify(portfolio));
 }
 
-let crc32Table = null;
-function crc32(bytes) {
-  if (!crc32Table) {
-    crc32Table = new Uint32Array(256);
-    for (let index = 0; index < 256; index += 1) {
-      let value = index;
-      for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
-      crc32Table[index] = value >>> 0;
+
+function packageCodec() {
+  if (!globalThis.PortfolioPackage) throw new Error("The package tools did not load. Refresh the page and try again.");
+  return globalThis.PortfolioPackage;
+}
+
+function validatePackageManifest(manifest) {
+  const isRecord = (value) => value && typeof value === "object" && !Array.isArray(value);
+  const productIds = new Set();
+  const validateBoard = (target) => {
+    if (!isRecord(target) || !Array.isArray(target.products) || !Array.isArray(target.lanes)) {
+      throw new Error("The package contains an invalid product board.");
     }
+    const laneIds = new Set();
+    for (const lane of target.lanes) {
+      if (!isRecord(lane) || typeof lane.id !== "string" || !lane.id || laneIds.has(lane.id)) {
+        throw new Error("The package contains an invalid or repeated product lane.");
+      }
+      laneIds.add(lane.id);
+    }
+    for (const product of target.products) {
+      if (!isRecord(product) || typeof product.id !== "string" || !product.id || productIds.has(product.id) || typeof product.name !== "string") {
+        throw new Error("The package contains an invalid or repeated product.");
+      }
+      productIds.add(product.id);
+      if (product.variantGroups !== undefined && !Array.isArray(product.variantGroups)) throw new Error("The package contains invalid product variants.");
+      for (const group of product.variantGroups || []) {
+        if (!isRecord(group) || !Array.isArray(group.items) || group.items.some((item) => !isRecord(item))) {
+          throw new Error("The package contains invalid product variants.");
+        }
+      }
+    }
+  };
+  if (!isRecord(manifest)) throw new Error("The package does not contain a portfolio.");
+  if ([2, 3, 4].includes(manifest.version) && Array.isArray(manifest.categories) && manifest.categories.length) {
+    const categoryIds = new Set();
+    const knownCategoryIds = new Set(CATEGORY_DEFINITIONS.map((definition) => definition.id));
+    for (const category of manifest.categories) {
+      if (!isRecord(category) || !knownCategoryIds.has(category.id) || categoryIds.has(category.id)) {
+        throw new Error("The package contains an unsupported or repeated category.");
+      }
+      categoryIds.add(category.id);
+      validateBoard(category.board);
+    }
+  } else if (manifest.version === 1 && Array.isArray(manifest.products) && Array.isArray(manifest.lanes)) {
+    validateBoard(manifest);
+  } else {
+    throw new Error("The package uses an unsupported portfolio version.");
   }
-  let value = 0xffffffff;
-  for (const byte of bytes) value = crc32Table[(value ^ byte) & 0xff] ^ (value >>> 8);
-  return (value ^ 0xffffffff) >>> 0;
-}
-
-function concatBytes(chunks) {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const output = new Uint8Array(total);
-  let offset = 0;
-  chunks.forEach((chunk) => { output.set(chunk, offset); offset += chunk.length; });
-  return output;
-}
-
-function zipLocalHeader(nameBytes, dataBytes, checksum) {
-  const header = new Uint8Array(30 + nameBytes.length);
-  const view = new DataView(header.buffer);
-  view.setUint32(0, 0x04034b50, true);
-  view.setUint16(4, 20, true);
-  view.setUint16(6, 0x0800, true);
-  view.setUint16(8, 0, true);
-  view.setUint16(10, 0, true);
-  view.setUint16(12, 0, true);
-  view.setUint32(14, checksum, true);
-  view.setUint32(18, dataBytes.length, true);
-  view.setUint32(22, dataBytes.length, true);
-  view.setUint16(26, nameBytes.length, true);
-  view.setUint16(28, 0, true);
-  header.set(nameBytes, 30);
-  return header;
-}
-
-function zipCentralHeader(nameBytes, dataBytes, checksum, localOffset) {
-  const header = new Uint8Array(46 + nameBytes.length);
-  const view = new DataView(header.buffer);
-  view.setUint32(0, 0x02014b50, true);
-  view.setUint16(4, 20, true);
-  view.setUint16(6, 20, true);
-  view.setUint16(8, 0x0800, true);
-  view.setUint16(10, 0, true);
-  view.setUint16(12, 0, true);
-  view.setUint16(14, 0, true);
-  view.setUint32(16, checksum, true);
-  view.setUint32(20, dataBytes.length, true);
-  view.setUint32(24, dataBytes.length, true);
-  view.setUint16(28, nameBytes.length, true);
-  view.setUint16(30, 0, true);
-  view.setUint16(32, 0, true);
-  view.setUint16(34, 0, true);
-  view.setUint16(36, 0, true);
-  view.setUint32(38, 0, true);
-  view.setUint32(42, localOffset, true);
-  header.set(nameBytes, 46);
-  return header;
-}
-
-function createStoredZip(entries) {
-  const encoder = new TextEncoder();
-  const localChunks = [];
-  const centralChunks = [];
-  let localOffset = 0;
-  entries.forEach((entry) => {
-    const nameBytes = encoder.encode(entry.name);
-    const dataBytes = entry.data instanceof Uint8Array ? entry.data : new Uint8Array(entry.data);
-    const checksum = crc32(dataBytes);
-    const localHeader = zipLocalHeader(nameBytes, dataBytes, checksum);
-    localChunks.push(localHeader, dataBytes);
-    centralChunks.push(zipCentralHeader(nameBytes, dataBytes, checksum, localOffset));
-    localOffset += localHeader.length + dataBytes.length;
-  });
-  const centralDirectory = concatBytes(centralChunks);
-  const end = new Uint8Array(22);
-  const endView = new DataView(end.buffer);
-  endView.setUint32(0, 0x06054b50, true);
-  endView.setUint16(4, 0, true);
-  endView.setUint16(6, 0, true);
-  endView.setUint16(8, entries.length, true);
-  endView.setUint16(10, entries.length, true);
-  endView.setUint32(12, centralDirectory.length, true);
-  endView.setUint32(16, localOffset, true);
-  endView.setUint16(20, 0, true);
-  return concatBytes([...localChunks, centralDirectory, end]);
-}
-
-function findZipEnd(bytes) {
-  const minimum = Math.max(0, bytes.length - 65557);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let offset = bytes.length - 22; offset >= minimum; offset -= 1) {
-    if (view.getUint32(offset, true) === 0x06054b50) return offset;
-  }
-  return -1;
-}
-
-function readStoredZip(bytes) {
-  const output = new Map();
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const endOffset = findZipEnd(bytes);
-  if (endOffset < 0) throw new Error("This is not a supported project package.");
-  const entryCount = view.getUint16(endOffset + 10, true);
-  let centralOffset = view.getUint32(endOffset + 16, true);
-  const decoder = new TextDecoder();
-  for (let entryIndex = 0; entryIndex < entryCount; entryIndex += 1) {
-    if (view.getUint32(centralOffset, true) !== 0x02014b50) throw new Error("The project package directory is damaged.");
-    const method = view.getUint16(centralOffset + 10, true);
-    const compressedSize = view.getUint32(centralOffset + 20, true);
-    const nameLength = view.getUint16(centralOffset + 28, true);
-    const extraLength = view.getUint16(centralOffset + 30, true);
-    const commentLength = view.getUint16(centralOffset + 32, true);
-    const localOffset = view.getUint32(centralOffset + 42, true);
-    const name = decoder.decode(bytes.subarray(centralOffset + 46, centralOffset + 46 + nameLength));
-    if (method !== 0) throw new Error("The project package uses an unsupported compression method.");
-    if (view.getUint32(localOffset, true) !== 0x04034b50) throw new Error("The project package contains a damaged image entry.");
-    const localNameLength = view.getUint16(localOffset + 26, true);
-    const localExtraLength = view.getUint16(localOffset + 28, true);
-    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
-    output.set(name, bytes.slice(dataOffset, dataOffset + compressedSize));
-    centralOffset += 46 + nameLength + extraLength + commentLength;
-  }
-  return output;
-}
-
-async function exportProjectPackage() {
-  closePopupMenus();
-  const manifest = clonePortfolioData();
-  const entries = [];
-  const missingAssets = [];
+  if (manifest.imageAssets !== undefined && !Array.isArray(manifest.imageAssets)) throw new Error("The package image library is invalid.");
+  const imageIds = new Set();
   for (const asset of manifest.imageAssets || []) {
-    if (asset.sourceType !== "local") continue;
-    const sourceAsset = imageAssetById(asset.id);
-    const blob = await imageStoreGet(asset.id).catch(() => null);
-    if (!blob) {
-      missingAssets.push(asset.name || asset.id);
-      continue;
+    if (!isRecord(asset) || typeof asset.id !== "string" || !asset.id || imageIds.has(asset.id)
+      || (asset.sourceType !== undefined && !["local", "url"].includes(asset.sourceType))) {
+      throw new Error("The package contains an invalid or repeated image.");
     }
-    const packagePath = `images/${asset.id}.${extensionForImageAsset(sourceAsset || asset)}`;
-    asset.packagePath = packagePath;
-    entries.push({ name: packagePath, data: new Uint8Array(await blob.arrayBuffer()) });
+    imageIds.add(asset.id);
   }
-  entries.unshift({
-    name: "portfolio.json",
-    data: new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
-  });
-  const zipBytes = createStoredZip(entries);
-  downloadBlob(new Blob([zipBytes], { type: "application/octet-stream" }), "product-portfolio-project.pkg");
-  if (missingAssets.length) alert(`The package was exported, but ${missingAssets.length} local image asset(s) were unavailable in this browser and could not be included.`);
 }
 
-async function importProjectPackage(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const entries = readStoredZip(bytes);
-  const manifestBytes = entries.get("portfolio.json");
-  if (!manifestBytes) throw new Error("The project package is missing portfolio.json.");
-  const parsed = JSON.parse(new TextDecoder().decode(manifestBytes));
-  const normalized = ensurePortfolioSchema(parsed);
-  await imageStoreClear();
+function validatePackageImageReferences(target) {
+  const imageIds = new Set(target.imageAssets.map((asset) => asset.id));
+  const validateReference = (assetId) => {
+    if (assetId && !imageIds.has(assetId)) throw new Error("The package refers to an image that is missing from its image library.");
+  };
+  for (const category of target.categories) {
+    for (const product of category.board.products) {
+      validateReference(product.imageAssetId);
+      for (const group of product.variantGroups || []) for (const item of group.items) validateReference(item.imageAssetId);
+    }
+  }
+}
+
+function localPackageImageIds(target) {
+  return (target?.imageAssets || []).filter((asset) => asset.sourceType === "local").map((asset) => asset.id);
+}
+
+function clearPackageImageCaches() {
+  imageAssetGeneration += 1;
   imageAssetUrlCache.forEach((url) => URL.revokeObjectURL(url));
   imageAssetUrlCache.clear();
   imageAssetLoadPromises.clear();
   missingImageAssetIds.clear();
-  for (const asset of normalized.imageAssets) {
-    if (asset.sourceType !== "local") continue;
-    const packagePath = asset.packagePath || `images/${asset.id}.${extensionForImageAsset(asset)}`;
-    const imageBytes = entries.get(packagePath);
-    if (imageBytes) await imageStorePut(asset.id, new Blob([imageBytes], { type: asset.mimeType || "application/octet-stream" }));
-    delete asset.packagePath;
+}
+
+function readPackageRecovery(raw = localStorage.getItem(PACKAGE_RECOVERY_KEY)) {
+  if (!raw) return null;
+  const snapshot = JSON.parse(raw);
+  if (snapshot?.version !== 1 || !snapshot.portfolio) throw new Error("The previous package recovery copy is invalid.");
+  validatePackageManifest(snapshot.portfolio);
+  validatePackageImageReferences(snapshot.portfolio);
+  return snapshot;
+}
+
+function hasPreviousPackage() {
+  try { return Boolean(readPackageRecovery()); } catch (_) { return false; }
+}
+
+async function commitPackageDraft(draft, expectedCurrent) {
+  if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was loading. Try again after your changes are saved.");
+  const previousPortfolio = portfolio;
+  const previousStored = localStorage.getItem(STORAGE_KEY);
+  const previousRecovery = localStorage.getItem(PACKAGE_RECOVERY_KEY);
+  const serialized = JSON.stringify(draft);
+  if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+  const recovery = JSON.stringify({ version: 1, savedAt: new Date().toISOString(), portfolio: JSON.parse(expectedCurrent) });
+  const restoreStorage = (key, value) => { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); };
+  try {
+    // Image staging has completed. Keep the original library until this recovery
+    // copy is replaced by a later successful package import or restore.
+    localStorage.setItem(PACKAGE_RECOVERY_KEY, recovery);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    portfolio = draft;
+    clearPackageImageCaches();
+    activateCategory(portfolio.activeCategoryId, { fitVertical: true });
+  } catch (error) {
+    portfolio = previousPortfolio;
+    try { localStorage.removeItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
+    try { restoreStorage(STORAGE_KEY, previousStored); } catch (_) {}
+    try { restoreStorage(PACKAGE_RECOVERY_KEY, previousRecovery); } catch (_) {}
+    clearPackageImageCaches();
+    try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
+    throw error;
   }
-  portfolio = normalized;
-  activateCategory(portfolio.activeCategoryId, { fitVertical: true });
+  // Cleanup is limited to the obsolete recovery snapshot. It cannot touch
+  // images referenced by the current workspace or its new recovery copy.
+  let obsoleteRecovery = null;
+  try { obsoleteRecovery = readPackageRecovery(previousRecovery); } catch (_) {}
+  const protectedIds = new Set([...localPackageImageIds(draft), ...localPackageImageIds(previousPortfolio)]);
+  const obsoleteIds = localPackageImageIds(obsoleteRecovery?.portfolio).filter((assetId) => !protectedIds.has(assetId));
+  try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {}
+  return {
+    categoryCount: draft.categories.length,
+    productCount: draft.categories.reduce((total, category) => total + category.board.products.length, 0),
+  };
+}
+
+async function buildProjectPackageBytes() {
+  const codec = packageCodec();
+  const expectedCurrent = JSON.stringify(portfolio);
+  const manifest = JSON.parse(expectedCurrent);
+  validatePackageManifest(manifest);
+  validatePackageImageReferences(manifest);
+  const entries = [];
+  for (const asset of manifest.imageAssets || []) {
+    if (asset.sourceType !== "local") continue;
+    const blob = await imageStoreGet(asset.id);
+    if (!blob || !blob.size) throw new Error("A saved product image is unavailable. Restore the image before exporting a complete package.");
+    const packagePath = `images/${asset.id}.${extensionForImageAsset(asset)}`;
+    asset.packagePath = packagePath;
+    entries.push({ name: packagePath, data: new Uint8Array(await blob.arrayBuffer()) });
+  }
+  const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+  if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+  if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was being prepared. Try exporting again.");
+  entries.unshift({ name: "portfolio.json", data: manifestBytes });
+  return codec.createZip(entries);
+}
+
+async function exportProjectPackage(key = "") {
+  closePopupMenus();
+  if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
+  const codec = packageCodec();
+  const normalizedKey = key ? codec.normalizeKey(key) : "";
+  packageOperationInProgress = true;
+  clearTimeout(saveTimer);
+  const expectedCurrent = JSON.stringify(portfolio);
+  try {
+    const bytes = await buildProjectPackageBytes();
+    const output = normalizedKey ? await codec.encrypt(bytes, normalizedKey) : bytes;
+    if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was being prepared. Try exporting again.");
+    downloadBlob(new Blob([output], { type: "application/octet-stream" }), normalizedKey ? "master_ppc.pkg" : "product-portfolio-project.pkg");
+  } finally {
+    packageOperationInProgress = false;
+    scheduleSave();
+  }
+}
+
+async function importProjectPackage(file, { key = "", requireEncrypted = false } = {}) {
+  if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
+  const codec = packageCodec();
+  if (Number(file?.size || 0) > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
+  packageOperationInProgress = true;
+  clearTimeout(saveTimer);
+  const expectedCurrent = JSON.stringify(portfolio);
+  const pendingStart = pendingLegacyImageBlobs.length;
+  const stagedImages = [];
+  let staged = false;
+  try {
+    const input = new Uint8Array(await file.arrayBuffer());
+    if (input.length > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
+    const encrypted = codec.isEncrypted(input);
+    if (requireEncrypted && !encrypted) throw new Error("The shared master must be an encrypted package.");
+    const bytes = encrypted ? await codec.decrypt(input, key) : input;
+    const entries = codec.readZip(bytes);
+    const manifestBytes = entries.get("portfolio.json");
+    if (!manifestBytes) throw new Error("The project package is missing portfolio.json.");
+    if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+    let parsed;
+    try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes)); }
+    catch (_) { throw new Error("The package portfolio data is damaged."); }
+    validatePackageManifest(parsed);
+    const draft = normalizeImportedPortfolio(JSON.parse(JSON.stringify(parsed)));
+    const legacyImages = new Map(pendingLegacyImageBlobs.splice(pendingStart).map((entry) => [entry.id, entry.blob]));
+    validatePackageImageReferences(draft);
+    const replacements = new Map();
+    for (const asset of draft.imageAssets) {
+      if (asset.sourceType !== "local") { delete asset.packagePath; continue; }
+      const packagePath = asset.packagePath || `images/${asset.id}.${extensionForImageAsset(asset)}`;
+      const imageBytes = entries.get(packagePath);
+      if (!legacyImages.has(asset.id) && (!packagePath.startsWith("images/") || !imageBytes?.length)) {
+        throw new Error("The package is missing a saved product image.");
+      }
+      const blob = legacyImages.get(asset.id) || new Blob([imageBytes], { type: asset.mimeType || "application/octet-stream" });
+      const replacementId = `pkg-${id()}`;
+      replacements.set(asset.id, replacementId);
+      asset.id = replacementId;
+      asset.size = blob.size;
+      delete asset.packagePath;
+      stagedImages.push({ id: replacementId, blob });
+    }
+    for (const category of draft.categories) {
+      for (const product of category.board.products) {
+        product.imageAssetId = replacements.get(product.imageAssetId) || product.imageAssetId;
+        for (const group of product.variantGroups || []) {
+          for (const item of group.items) item.imageAssetId = replacements.get(item.imageAssetId) || item.imageAssetId;
+        }
+      }
+    }
+    await imageStoreWriteBatch(stagedImages);
+    staged = true;
+    const result = await commitPackageDraft(draft, expectedCurrent);
+    return { ...result, encrypted };
+  } catch (error) {
+    pendingLegacyImageBlobs.splice(pendingStart);
+    if (staged) { try { await imageStoreDeleteBatch(stagedImages.map((entry) => entry.id)); } catch (_) {} }
+    throw error;
+  } finally {
+    packageOperationInProgress = false;
+    scheduleSave();
+  }
+}
+
+async function restorePreviousPackage() {
+  if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
+  const snapshot = readPackageRecovery();
+  if (!snapshot) throw new Error("There is no previous package to restore on this device.");
+  packageOperationInProgress = true;
+  clearTimeout(saveTimer);
+  const expectedCurrent = JSON.stringify(portfolio);
+  try {
+    const draft = JSON.parse(JSON.stringify(snapshot.portfolio));
+    for (const assetId of localPackageImageIds(draft)) {
+      if (!await imageStoreGet(assetId)) throw new Error("A recovery image is unavailable. Import your saved backup package instead.");
+    }
+    const result = await commitPackageDraft(draft, expectedCurrent);
+    return { ...result, encrypted: false };
+  } finally {
+    packageOperationInProgress = false;
+    scheduleSave();
+  }
 }
 
 
@@ -5937,7 +6064,7 @@ $("#importPackageFile").onchange = async (event) => {
   const file = event.target.files?.[0];
   event.target.value = "";
   if (!file) return;
-  try { await importProjectPackage(file); }
+  try { await globalThis.PortfolioPackageUI.openImport(file); }
   catch (error) { alert(error.message || "Unable to import the project package."); }
 };
 $("#exportPackage").onclick = async () => {
@@ -6018,10 +6145,8 @@ $("#restoreSample").onclick = async () => {
   closePopupMenus();
   if (!confirm("Clear every product in all categories and remove their saved images? Your categories, lanes, settings, and templates will stay. Export a project package first if you need a backup.")) return;
   try { await imageStoreClear(); } catch (_) {}
-  imageAssetUrlCache.forEach((url) => URL.revokeObjectURL(url));
-  imageAssetUrlCache.clear();
-  imageAssetLoadPromises.clear();
-  missingImageAssetIds.clear();
+  localStorage.removeItem(PACKAGE_RECOVERY_KEY);
+  clearPackageImageCaches();
   PortfolioModel.clearAllProducts(portfolio);
   activateCategory(activeCategoryId, { fitVertical: true });
 };
