@@ -8,13 +8,16 @@ const key = codec.generateKey();
 const wrongKey = codec.generateKey();
 const encrypted = await codec.encrypt(new Uint8Array([1, 2, 3]), key);
 const source = await readFile(new URL("../../public/js/package-ui.js", import.meta.url), "utf8");
+const loadedInfo = { version: 1, updatedAt: "2026-10-07T09:30:00.000Z", comments: "Previous package notes" };
+const incomingInfo = { version: 1, updatedAt: "2026-10-08T01:15:00.000Z", comments: "Prices updated.\n<svg onload=alert(1)> stays plain text." };
+const formatDate = (info) => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(info.updatedAt));
 
 function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg", endpoint: "" }) {
   const listeners = new Map();
   const elements = new Map();
   const calls = { downloads: [], imports: [], exports: [], generated: 0 };
   const document = { activeElement: null, getElementById: (id) => elements.get(id), querySelector: () => elements.get("app-shell") };
-  const ids = ["app-shell", "packageDialog", "packageForm", "packageKey", "confirmPackage", "packageStatus", "packageError", "sharedPackageStatus", "packageKeySection", "packageShowKey", "packageEncrypt", "packageGenerateKey", "packageCopyKey", "packagePublisherHelp", "packageKeyHelp", "cancelPackage", "closePackage", "workspaceEmpty", "packageTitle", "packageDescription", "packageExportOptions", "packageFileName", "pullLatestData", "emptyPullLatestData", "settingsPullLatestData", "exportPackage", "restorePreviousPackage"];
+  const ids = ["app-shell", "packageDialog", "packageForm", "packageKey", "confirmPackage", "packageStatus", "packageError", "sharedPackageStatus", "packageKeySection", "packageShowKey", "packageEncrypt", "packageGenerateKey", "packageCopyKey", "packagePublisherHelp", "packageKeyHelp", "cancelPackage", "closePackage", "workspaceEmpty", "packageTitle", "packageDescription", "packageExportOptions", "packageFileName", "pullLatestData", "emptyPullLatestData", "settingsPullLatestData", "exportPackage", "restorePreviousPackage", "packageUpdateComments", "sharedPackageUpdated", "sharedPackageComments", "packageResultInfo", "packageResultUpdated", "packageResultComments"];
   for (const id of ids) {
     const classes = new Set();
     elements.set(id, {
@@ -30,11 +33,15 @@ function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg"
       getClientRects: () => [1],
       contains: (element) => ids.includes(element?.id),
       addEventListener: (name, handler) => listeners.set(`${id}:${name}`, handler),
-      querySelectorAll: () => ["packageKey", "confirmPackage", "packageShowKey", "packageEncrypt", "packageGenerateKey", "packageCopyKey"].map((control) => elements.get(control)),
+      querySelectorAll: (selector) => ["packageUpdateComments", "packageKey", "packageShowKey", "packageEncrypt", "packageGenerateKey", "packageCopyKey", "confirmPackage"].filter((control) => (selector.includes("textarea") || control !== "packageUpdateComments") && (!selector.includes(":not([disabled])") || !elements.get(control).disabled)).map((control) => elements.get(control)),
     });
+    Object.defineProperty(elements.get(id), "innerHTML", { set() { throw new Error("Package metadata must never use innerHTML."); } });
   }
   elements.get("packageDialog").classList.add("hidden");
   let download = async () => encrypted;
+  let currentInfo = loadedInfo;
+  let importInfo = incomingInfo;
+  let exportFailure = false;
   const sandbox = {
     document,
     window: { addEventListener: (name, handler) => listeners.set(`window:${name}`, handler) },
@@ -52,18 +59,24 @@ function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg"
     },
     closePopupMenus: () => {},
     hasPreviousPackage: () => false,
+    getCurrentPackageInfo: () => currentInfo,
     restorePreviousPackage: async () => ({ productCount: 198, categoryCount: 11 }),
     copyTextToClipboard: async () => true,
     importProjectPackage: async (file, options) => {
       calls.imports.push(options);
       await codec.decrypt(new Uint8Array(await file.arrayBuffer()), options.key);
-      return { productCount: 198, categoryCount: 11 };
+      currentInfo = importInfo;
+      return { productCount: 198, categoryCount: 11, packageInfo: importInfo };
     },
-    exportProjectPackage: async (value) => { calls.exports.push(value); },
+    exportProjectPackage: async (value, options) => {
+      calls.exports.push({ key: value, comments: options.comments });
+      if (exportFailure) throw new Error("Package build failed.");
+      return { version: 1, updatedAt: "2026-10-09T08:00:00.000Z", comments: options.comments };
+    },
   };
   vm.createContext(sandbox);
   new vm.Script(source).runInContext(sandbox);
-  return { elements, calls, ui: sandbox.PortfolioPackageUI, document, setDownload: (handler) => { download = handler; }, submit: () => listeners.get("packageForm:submit")({ preventDefault() {} }) };
+  return { elements, calls, ui: sandbox.PortfolioPackageUI, document, setDownload: (handler) => { download = handler; }, setImportInfo: (info) => { importInfo = info; }, setExportFailure: (value) => { exportFailure = value; }, keydown: (event) => listeners.get("packageDialog:keydown")({ stopPropagation() {}, ...event }), submit: () => listeners.get("packageForm:submit")({ preventDefault() {} }) };
 }
 
 const staticUi = createUi();
@@ -71,6 +84,9 @@ staticUi.ui.open("pull");
 assert.equal(staticUi.elements.get("confirmPackage").disabled, false);
 assert.match(staticUi.elements.get("packageKeyHelp").textContent, /never sent to GitHub/);
 assert.match(staticUi.elements.get("sharedPackageStatus").textContent, /latest master/);
+assert.equal(staticUi.elements.get("sharedPackageUpdated").textContent, formatDate(loadedInfo));
+assert.equal(staticUi.elements.get("sharedPackageUpdated").title, new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" }).format(new Date(loadedInfo.updatedAt)));
+assert.equal(staticUi.elements.get("sharedPackageComments").textContent, loadedInfo.comments);
 staticUi.elements.get("packageKey").value = "incomplete-key";
 await staticUi.submit();
 assert.equal(staticUi.calls.downloads.length, 0, "invalid keys must fail before a download");
@@ -83,6 +99,8 @@ assert.equal(staticUi.calls.downloads[0].packageUrl, "https://monocraft.github.i
 assert.match(staticUi.elements.get("packageError").textContent, /Unable to unlock/);
 assert.equal(staticUi.elements.get("packageKey").value, "");
 assert.match(staticUi.elements.get("packageStatus").textContent, /without downloading it again/);
+assert.equal(staticUi.elements.get("sharedPackageComments").textContent, loadedInfo.comments, "a wrong key must not alter the loaded metadata");
+assert.equal(staticUi.elements.get("packageResultInfo").classList.contains("hidden"), true, "update metadata is revealed only after unlocking");
 staticUi.elements.get("packageKey").value = key;
 await staticUi.submit();
 assert.equal(staticUi.calls.downloads.length, 1, "wrong-key retry should reuse encrypted bytes for this dialog only");
@@ -90,6 +108,11 @@ assert.equal(staticUi.calls.imports.at(-1).requireEncrypted, true);
 assert.match(staticUi.elements.get("packageStatus").textContent, /198 products across 11 categories/);
 assert.equal(staticUi.elements.get("packageKey").value, "");
 assert.equal(staticUi.elements.get("confirmPackage").textContent, "Done");
+assert.equal(staticUi.elements.get("sharedPackageUpdated").textContent, formatDate(incomingInfo));
+assert.equal(staticUi.elements.get("sharedPackageComments").textContent, incomingInfo.comments, "HTML-like updater comments must remain plain text with their line breaks");
+assert.equal(staticUi.elements.get("packageResultComments").textContent, incomingInfo.comments);
+assert.equal(staticUi.elements.get("packageResultUpdated").dateTime, incomingInfo.updatedAt);
+assert.equal(staticUi.elements.get("packageResultInfo").classList.contains("hidden"), false);
 await staticUi.submit();
 assert.equal(staticUi.elements.get("packageDialog").classList.contains("hidden"), true);
 assert.equal(staticUi.elements.get("app-shell").inert, false);
@@ -136,18 +159,64 @@ publisherUi.ui.open("export");
 assert.match(publisherUi.elements.get("packagePublisherHelp").textContent, /Reuse the current package key/);
 assert.match(publisherUi.elements.get("packagePublisherHelp").textContent, /public\/data\/master_ppc\.pkg/);
 publisherUi.elements.get("packageKey").value = key;
+publisherUi.elements.get("packageUpdateComments").value = "Updated launch dates.\nNew headset specifications.";
 await publisherUi.submit();
-assert.equal(publisherUi.calls.exports[0], key, "building an update must reuse the entered key");
+assert.equal(publisherUi.calls.exports[0].key, key, "building an update must reuse the entered key");
+assert.equal(publisherUi.calls.exports[0].comments, "Updated launch dates.\nNew headset specifications.");
 assert.equal(publisherUi.calls.generated, 0, "updates must not silently rotate the key");
 assert.equal(publisherUi.elements.get("packageKey").value, key, "the publisher can copy the existing key before closing");
 assert.match(publisherUi.elements.get("packageStatus").textContent, /GitHub on the main branch/);
+assert.equal(publisherUi.elements.get("packageResultComments").textContent, publisherUi.calls.exports[0].comments);
+assert.equal(publisherUi.elements.get("packageResultUpdated").dateTime, "2026-10-09T08:00:00.000Z");
+assert.equal(publisherUi.elements.get("sharedPackageComments").textContent, loadedInfo.comments, "a new export must not replace the metadata of the loaded workspace");
 await publisherUi.submit();
 assert.equal(publisherUi.elements.get("packageKey").value, "");
 publisherUi.ui.open("export");
+assert.equal(publisherUi.elements.get("packageUpdateComments").value, "", "a fresh build must not carry forward previous comments");
 publisherUi.elements.get("packageGenerateKey").onclick();
 assert.equal(publisherUi.calls.generated, 1, "key rotation requires the explicit Create new key action");
 assert.match(publisherUi.elements.get("packageKey").value, /^PPC-/);
 publisherUi.ui.close();
 assert.equal(publisherUi.elements.get("packageKey").value, "");
 
-console.log("Package UI checks passed: local-only static keys, wrong-key retry without another download, fresh pulls, cancellation before import, invalid-source handling, relay compatibility, and explicit publisher key reuse and rotation.");
+const legacyUi = createUi();
+legacyUi.setImportInfo(null);
+legacyUi.ui.open("pull");
+legacyUi.elements.get("packageKey").value = key;
+await legacyUi.submit();
+assert.equal(legacyUi.elements.get("sharedPackageUpdated").textContent, "Date not supplied", "legacy imports must not invent an update or download time");
+assert.equal(legacyUi.elements.get("packageResultUpdated").dateTime, "");
+assert.equal(legacyUi.elements.get("packageResultComments").textContent, "No comments supplied.");
+legacyUi.ui.close();
+legacyUi.setImportInfo({ ...incomingInfo, comments: " \n \t " });
+legacyUi.ui.open("pull");
+legacyUi.elements.get("packageKey").value = key;
+await legacyUi.submit();
+assert.equal(legacyUi.elements.get("packageResultComments").textContent, "No comments supplied.", "whitespace-only notes must use the empty-notes label");
+
+const failedBuildUi = createUi();
+failedBuildUi.ui.open("export");
+failedBuildUi.setExportFailure(true);
+failedBuildUi.elements.get("packageKey").value = key;
+failedBuildUi.elements.get("packageUpdateComments").value = "Keep these comments after a failed build.";
+const failedBuild = failedBuildUi.submit();
+assert.equal(failedBuildUi.elements.get("packageUpdateComments").disabled, true, "comments must be disabled while a package is being built");
+await failedBuild;
+assert.equal(failedBuildUi.elements.get("packageUpdateComments").disabled, false);
+assert.equal(failedBuildUi.elements.get("packageUpdateComments").value, "Keep these comments after a failed build.");
+assert.equal(failedBuildUi.elements.get("packageResultInfo").classList.contains("hidden"), true);
+for (const element of failedBuildUi.elements.values()) element.getClientRects = () => [];
+failedBuildUi.elements.get("packageUpdateComments").getClientRects = () => [1];
+failedBuildUi.elements.get("confirmPackage").getClientRects = () => [1];
+failedBuildUi.document.activeElement = failedBuildUi.elements.get("confirmPackage");
+let prevented = false;
+failedBuildUi.keydown({ key: "Tab", shiftKey: false, preventDefault() { prevented = true; } });
+assert.equal(prevented, true);
+assert.equal(failedBuildUi.document.activeElement, failedBuildUi.elements.get("packageUpdateComments"), "the dialog focus trap must include the comments textarea");
+
+const html = await readFile(new URL("../../public/index.html", import.meta.url), "utf8");
+assert.match(html, /<textarea[^>]*id="packageUpdateComments"[^>]*maxlength="2000"/);
+assert.match(html, /<label for="packageUpdateComments">/);
+assert.match(html, /update date is set automatically/);
+
+console.log("Package UI checks passed: local-only static keys, wrong-key retry, fresh/cancelled pulls, publisher key reuse, automatic package dates and updater comments, safe text rendering, legacy metadata, failed-build preservation, and textarea focus and busy controls.");

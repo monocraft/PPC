@@ -161,6 +161,7 @@
             <div class="settings-section-heading"><h3>Data & export</h3><span class="scope-badge">Entire portfolio</span></div>
             <p class="settings-note">ASCM adds and updates products. Package and data imports replace the workspace.</p>
             <div class="shared-package-settings"><div><h4>Shared master package</h4><p id="sharedPackageStatus" class="settings-note"></p></div><button id="settingsPullLatestData" type="button">Pull latest data</button></div>
+            <section class="package-info" aria-label="Loaded package information"><dl><dt>Package updated</dt><dd><time id="sharedPackageUpdated"></time></dd><dt>Updater comments</dt><dd id="sharedPackageComments" class="package-info-comments"></dd></dl></section>
             <div id="dataMenu" class="popup-menu settings-action-list data-action-menu" aria-label="Import and export">
               <div class="data-direction-grid">
                 <section class="data-direction-panel data-import-panel" aria-labelledby="dataImportTitle">
@@ -193,7 +194,7 @@
       <div class="settings-dialog-heading"><div><span class="eyebrow">Unified portfolio package</span><h2 id="packageTitle">Pull latest data</h2></div><button id="closePackage" class="icon-button" type="button" aria-label="Close package dialog">×</button></div>
       <p id="packageDescription" class="package-description"></p>
       <p id="packageFileName" class="package-file-name hidden"></p>
-      <div id="packageExportOptions" class="hidden"><label class="checkbox-label"><input id="packageEncrypt" type="checkbox" checked>Protect the package with a key</label><p class="settings-note">Use protection for the shared master. Turn it off only for a private local backup.</p></div>
+      <div id="packageExportOptions" class="hidden"><label class="checkbox-label"><input id="packageEncrypt" type="checkbox" checked>Protect the package with a key</label><p class="settings-note">Use protection for the shared master. Turn it off only for a private local backup.</p><div class="package-comment-field"><label for="packageUpdateComments">Updater comments <span>(optional)</span></label><textarea id="packageUpdateComments" rows="3" maxlength="2000" placeholder="Describe what changed in this update…" aria-describedby="packageUpdateCommentsHelp"></textarea><p id="packageUpdateCommentsHelp" class="settings-note">The update date is set automatically when you build. In a protected master, comments are encrypted and shown after unlocking.</p></div></div>
       <section id="packageKeySection" class="package-key-section">
         <label for="packageKey">Package key</label>
         <input id="packageKey" type="password" placeholder="PPC-…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="packageKeyHelp">
@@ -201,6 +202,7 @@
         <p id="packageKeyHelp" class="settings-note">The key unlocks the package in your browser and is not saved on this device.</p>
         <p id="packagePublisherHelp" class="settings-note hidden">Reuse the current key, build master_ppc.pkg, then replace public/data/master_ppc.pkg in GitHub on the main branch. Wait for the site update to finish. Keep the key separate from GitHub and the package.</p>
       </section>
+      <section id="packageResultInfo" class="package-info hidden" aria-label="Package information"><dl><dt>Package updated</dt><dd><time id="packageResultUpdated"></time></dd><dt>Updater comments</dt><dd id="packageResultComments" class="package-info-comments"></dd></dl></section>
       <p id="packageStatus" class="package-status" role="status" aria-live="polite"></p>
       <p id="packageError" class="package-error" role="alert"></p>
       <div class="settings-actions"><button id="cancelPackage" type="button">Cancel</button><button id="confirmPackage" class="primary-button" type="submit">Pull latest data</button></div>

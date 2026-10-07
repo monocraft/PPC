@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-07 — package update date and comments
+
+- New package builds include an automatic UTC build timestamp and optional updater comments of up to 2,000 characters. Viewers see the package's own update details after unlocking and importing it.
+- Keep update details inside the encrypted master. No plaintext metadata sidecar, package key, or decrypted comments are published or printed by the owner helper.
+- Validate optional metadata consistently in browser import and authenticated local publication. Older packages without metadata remain supported; malformed metadata blocks replacement of the current package.
+- Document rebuilding with the same key and replacing `public/data/master_ppc.pkg`. Reuploading an existing package preserves its recorded build date and comments.
+
 ## 2026-10-07 — keep ASCM import in settings
 
 - Removed Import ASCM and its explanatory copy from the welcome screen. First launch and empty categories offer Pull latest data and Import package.

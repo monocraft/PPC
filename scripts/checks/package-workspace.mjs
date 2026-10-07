@@ -56,7 +56,7 @@ const functionNames = [
   "imageStorePut", "imageStoreGet", "imageStoreDelete", "imageStoreClear", "imageStoreWriteBatch", "imageStoreDeleteBatch",
   "dataUriToBlob", "extensionForImageAsset", "createImageAssetMetadata", "ensureImageAssetRegistry", "migrateLegacyProductImages",
   "loadLocalImageAsset", "normalizeAscmSnapshot", "createDefaultPortfolio", "ensurePortfolioSchema", "normalizeImportedPortfolio",
-  "scheduleSave", "clonePortfolioData", "packageCodec", "validatePackageManifest", "validatePackageImageReferences",
+  "scheduleSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
   "localPackageImageIds", "clearPackageImageCaches", "readPackageRecovery", "hasPreviousPackage", "commitPackageDraft",
   "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage", "restorePreviousPackage",
 ];
@@ -168,6 +168,8 @@ const result = await first.sandbox.importProjectPackage(new Blob([packageBytes(n
 assert.equal(result.productCount, 1);
 assert.equal(result.categoryCount, definitions.length);
 assert.equal(result.encrypted, false);
+assert.equal(result.packageInfo, null, "legacy packages must report their missing update metadata honestly");
+assert.equal(first.sandbox.getCurrentPackageInfo(), null);
 assert.equal(first.calls.clears, 0, "package replacement must never clear the image store");
 const updated = first.sandbox.portfolio.categories[0].board.products[0];
 assert.notEqual(updated.imageAssetId, "shared-image", "imported image IDs must be isolated from the original library");
@@ -210,8 +212,41 @@ const exportedManifest = JSON.parse(decoder.decode(exportedEntries.get("portfoli
 assert.equal(exportedManifest.categories[0].board.products[0].name, "Updated");
 assert.equal(exportedEntries.size, exportedManifest.imageAssets.length + 1);
 
-async function assertPreflightFailure(bytes, options = {}, pattern = /package|portfolio|image|category|product|board|key/i) {
-  const subject = harness();
+const stampedManifest = portfolioFixture("Stamped package");
+stampedManifest.packageInfo = { version: 1, updatedAt: "2025-08-19T12:30:00.000Z", comments: "Updated the launch plan.\nChecked pricing." };
+const stamped = harness();
+const stampedResult = await stamped.sandbox.importProjectPackage(new Blob([await codec.encrypt(packageBytes(stampedManifest), key)]), { key, requireEncrypted: true });
+assert.deepEqual(stampedResult.packageInfo, stampedManifest.packageInfo);
+assert.deepEqual(stamped.sandbox.getCurrentPackageInfo(), stampedManifest.packageInfo);
+assert.deepEqual(JSON.parse(stamped.stored.get(storageKey)).packageInfo, stampedManifest.packageInfo, "imported update metadata must persist with the workspace");
+const reloaded = harness(JSON.parse(stamped.stored.get(storageKey)));
+reloaded.sandbox.portfolio = reloaded.sandbox.ensurePortfolioSchema(reloaded.sandbox.portfolio);
+assert.deepEqual(reloaded.sandbox.getCurrentPackageInfo(), stampedManifest.packageInfo, "normal workspace loading must preserve imported metadata");
+const firstInfoCopy = stamped.sandbox.getCurrentPackageInfo();
+assert.notEqual(firstInfoCopy, stamped.sandbox.getCurrentPackageInfo());
+assert.throws(() => { firstInfoCopy.comments = "Changed outside the workspace"; }, TypeError);
+const buildStarted = Date.now();
+const builtInfo = await stamped.sandbox.exportProjectPackage(key, { comments: "Revised manufacturing dates.\nApproved the new colors." });
+assert.ok(Date.parse(builtInfo.updatedAt) >= buildStarted && Date.parse(builtInfo.updatedAt) <= Date.now());
+const builtBytes = new Uint8Array(await stamped.calls.downloads[0].blob.arrayBuffer());
+const builtManifest = JSON.parse(decoder.decode(codec.readZip(await codec.decrypt(builtBytes, key)).get("portfolio.json")));
+assert.deepEqual(builtManifest.packageInfo, builtInfo, "export must return the date/comments embedded in its successful package");
+assert.equal(Buffer.from(builtBytes).includes(Buffer.from(builtInfo.comments)), false);
+assert.deepEqual(stamped.sandbox.getCurrentPackageInfo(), stampedManifest.packageInfo, "building a package must not overwrite the loaded master information");
+assert.deepEqual(JSON.parse(stamped.stored.get(storageKey)).packageInfo, stampedManifest.packageInfo);
+await assert.rejects(stamped.sandbox.exportProjectPackage(key, { comments: "x".repeat(2001) }), /package update information/i);
+assert.equal(stamped.calls.downloads.length, 1, "invalid comments must fail before creating another package");
+assert.equal(stamped.sandbox.packageOperationInProgress, false);
+const standaloneBuiltManifest = JSON.parse(decoder.decode(codec.readZip(await stamped.sandbox.buildProjectPackageBytes()).get("portfolio.json")));
+assert.ok(Date.parse(standaloneBuiltManifest.packageInfo.updatedAt) >= buildStarted);
+assert.equal(standaloneBuiltManifest.packageInfo.comments, "");
+assert.deepEqual(stamped.sandbox.getCurrentPackageInfo(), stampedManifest.packageInfo);
+const legacyResult = await stamped.sandbox.importProjectPackage(new Blob([packageBytes(newManifest)]));
+assert.equal(legacyResult.packageInfo, null);
+assert.equal(stamped.sandbox.getCurrentPackageInfo(), null, "a legacy import must clear the replaced package's date/comments");
+
+async function assertPreflightFailure(bytes, options = {}, pattern = /package|portfolio|image|category|product|board|key/i, initial) {
+  const subject = harness(initial);
   const original = JSON.stringify(subject.sandbox.portfolio);
   const originalStorage = subject.stored.get(storageKey);
   await assert.rejects(subject.sandbox.importProjectPackage(new Blob([bytes]), options), pattern);
@@ -239,6 +274,17 @@ const missingReference = clone(newManifest); missingReference.categories[0].boar
 await assertPreflightFailure(packageBytes(missingReference));
 const invalidBoard = clone(newManifest); invalidBoard.categories[0].board.products = {};
 await assertPreflightFailure(packageBytes(invalidBoard));
+for (const packageInfo of [
+  { ...stampedManifest.packageInfo, version: 2 },
+  { ...stampedManifest.packageInfo, updatedAt: "2026-02-30T12:30:00.000Z" },
+  { ...stampedManifest.packageInfo, comments: "x".repeat(2001) },
+  { ...stampedManifest.packageInfo, comments: { text: "not plain text" } },
+  { version: 1, updatedAt: stampedManifest.packageInfo.updatedAt },
+  { ...stampedManifest.packageInfo, unrecognized: true },
+]) {
+  const invalidMetadata = { ...clone(newManifest), packageInfo };
+  await assertPreflightFailure(packageBytes(invalidMetadata), {}, /package update information/i, stampedManifest);
+}
 
 for (const fault of ["transaction", "synchronousPut", "storageKey", "activation"]) {
   const subject = harness();
@@ -342,4 +388,4 @@ if (process.argv[2]) {
   console.log(`Local package fixture passed: ${actualResult.categoryCount} categories, ${actualResult.productCount} products.`);
 }
 
-console.log("Package workspace checks passed: complete export, encrypted and legacy import, isolated image staging, failure recovery, rollback, and bounded cleanup.");
+console.log("Package workspace checks passed: automatically stamped update metadata, comments round trips and persistence, strict metadata preflight, complete export, encrypted and legacy import, isolated image staging, failure recovery, rollback, and bounded cleanup.");
