@@ -7,6 +7,13 @@
     return Math.max(1, Math.floor(Number(maxProducts) || MAX_PRODUCTS_PER_SLIDE));
   }
 
+  function selectExportCategories(categories, selectedIds = null) {
+    const available = (Array.isArray(categories) ? categories : []).filter((category) => category?.board);
+    if (selectedIds == null) return available;
+    const selected = new Set(Array.isArray(selectedIds) ? selectedIds : []);
+    return available.filter((category) => selected.has(category.id));
+  }
+
   function paginateRoadmapGroups(groups, maxProducts = MAX_PRODUCTS_PER_SLIDE) {
     const limit = normalizedLimit(maxProducts);
     const pages = [];
@@ -45,6 +52,7 @@
 
   globalObject.PPTXPagination = Object.freeze({
     MAX_PRODUCTS_PER_SLIDE,
+    selectExportCategories,
     paginateRoadmapGroups,
   });
 }(globalThis));

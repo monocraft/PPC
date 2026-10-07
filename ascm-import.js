@@ -11,7 +11,7 @@
    * and then read the same global.
    */
 
-  const API_VERSION = "1.0.0";
+  const API_VERSION = "1.1.0";
 
   const REQUIRED_HEADERS = Object.freeze({
     category: "Category",
@@ -1388,6 +1388,145 @@
     return matchResult("unmatched", null, [], { reason: "no-match" });
   }
 
+  function mergeSourceRecord(record) {
+    return {
+      basePartNumber: normalizeBasePn(record?.basePartNumber || record?.basePn),
+      featureId: cleanText(record?.featureId),
+      category: cleanText(record?.category),
+      fullProductName: cleanText(record?.fullProductName || record?.description),
+      codeName: cleanText(record?.codeName),
+      generalAvailabilityDate: parseExcelDate(record?.generalAvailabilityDate || record?.gaDate || record?.ga),
+      endManufacturingDate: parseExcelDate(record?.endManufacturingDate || record?.emDate || record?.em),
+      colorCode: cleanText(record?.colorCode || record?.color?.code || record?.inferredColor?.code).toUpperCase(),
+      rowNumber: Number(record?.rowNumber ?? record?.sourceRow) || null,
+    };
+  }
+
+  function mergePopulatedFields(existing, incoming) {
+    const merged = { ...existing };
+    for (const [key, value] of Object.entries(incoming)) {
+      if (value != null && value !== "") merged[key] = value;
+      else if (merged[key] == null) merged[key] = value;
+    }
+    return merged;
+  }
+
+  /**
+   * Apply only ASCM-owned fields to a product without modifying the source.
+   *
+   * A report is a partial update, never a replacement product record. Specs,
+   * pricing, images, roadmap state, names and arbitrary curated fields are
+   * intentionally outside this helper's write set. Previously linked part
+   * numbers, color variants and source records remain when a later report
+   * omits them. Empty source values cannot clear a saved value.
+   */
+  function mergeProductGroup(product, group, options = {}) {
+    if (!product || typeof product !== "object" || !group || typeof group !== "object") {
+      fail("INVALID_PRODUCT_UPDATE", "mergeProductGroup expected a product and an ASCM product group.");
+    }
+    const previousSource = product.ascm && typeof product.ascm === "object" ? product.ascm : {};
+    const datasetMetadata = options.datasetMetadata || {};
+    const createId = typeof options.createId === "function" ? options.createId : (kind, code) =>
+      `ascm-${cleanText(group.ascmKey || group.key || product.id).replace(/[^a-z0-9]+/gi, "-")}-${kind}-${cleanText(code).replace(/[^a-z0-9]+/gi, "-")}`;
+    const incomingRecords = (Array.isArray(group.records) ? group.records : []).map((record) => mergeSourceRecord({
+      ...record,
+      category: record.category || (group.sourceCategories || []).join(" / "),
+    })).filter((record) => record.basePartNumber);
+    const records = (Array.isArray(previousSource.records) ? previousSource.records : []).map((record) => ({
+      ...record,
+      ...mergeSourceRecord(record),
+    }));
+    for (const record of incomingRecords) {
+      const index = records.findIndex((saved) => saved.basePartNumber === record.basePartNumber);
+      if (index < 0) records.push(record);
+      else records[index] = mergePopulatedFields(records[index], record);
+    }
+
+    const incomingBasePns = uniqueSorted([
+      ...(Array.isArray(group.basePns) ? group.basePns : Array.isArray(group.basePartNumbers) ? group.basePartNumbers : []),
+      ...incomingRecords.map((record) => record.basePartNumber),
+    ].map(normalizeBasePn));
+    const partSkus = (Array.isArray(product.partSkus) ? product.partSkus : []).map((item) =>
+      typeof item === "string" ? { id: createId("part", item), code: item } : { ...item }
+    );
+    for (const code of incomingBasePns) {
+      if (!partSkus.some((item) => normalizeBasePn(item.code || item.sku || item.value) === code)) {
+        partSkus.push({ id: createId("part", code), code });
+      }
+    }
+
+    const sourceVariantGroups = Array.isArray(product.variantGroups) ? product.variantGroups
+      : Array.isArray(product.skus) && product.skus.length
+        ? [{ id: createId("group", "color"), type: "color", label: "COLOR SKU", items: product.skus }]
+        : [];
+    const variantGroups = sourceVariantGroups.map((variant) => ({
+      ...variant,
+      items: (Array.isArray(variant.items) ? variant.items : []).map((item) => ({ ...item })),
+    }));
+    const incomingColors = Array.isArray(group.colorVariants) ? group.colorVariants : [];
+    let colorGroup = variantGroups.find((variant) => variant.type === "color");
+    if (!colorGroup && incomingColors.length) {
+      colorGroup = { id: createId("group", "color"), type: "color", label: "COLOR SKU", items: [] };
+      variantGroups.push(colorGroup);
+    }
+    for (const variant of incomingColors) {
+      const incomingCode = normalizeColorCode(variant.canonicalCode || variant.code);
+      const existing = variantGroups.filter((saved) => saved.type === "color")
+        .flatMap((saved) => saved.items)
+        .find((item) => normalizeColorCode(item.canonicalCode || item.code) === incomingCode);
+      if (existing) {
+        // Existing presentation and image choices belong to the user. ASCM
+        // fills missing fields, including color information on older records.
+        for (const field of ["colorKey", "colorName", "colorHex", "colorKey2", "colorName2", "colorHex2"]) {
+          if (!existing[field] && variant[field]) existing[field] = variant[field];
+        }
+      } else {
+        colorGroup.items.push({
+          id: createId("color", incomingCode),
+          code: cleanText(variant.code || variant.canonicalCode || "SKU").toUpperCase(),
+          colorKey: variant.colorKey || "custom",
+          colorName: variant.colorName || "Custom",
+          colorHex: variant.colorHex || "#777777",
+          colorKey2: variant.colorKey2 || "",
+          colorName2: variant.colorName2 || "",
+          colorHex2: variant.colorHex2 || "",
+          imageAssetId: "",
+        });
+      }
+    }
+
+    const gaDate = parseExcelDate(group.gaDate) || incomingRecords.map((record) => record.generalAvailabilityDate).filter(Boolean).sort()[0] || "";
+    const emDate = parseExcelDate(group.emDate) || incomingRecords.map((record) => record.endManufacturingDate).filter(Boolean).sort().at(-1) || "";
+    const ascm = {
+      ...previousSource,
+      key: cleanText(group.ascmKey || group.key) || previousSource.key || "",
+      sourceCategory: (group.sourceCategories || []).join(" / ") || previousSource.sourceCategory || "",
+      sourceFile: cleanText(datasetMetadata.fileName) || previousSource.sourceFile || "ASCM report.xlsx",
+      exportedAt: cleanText(datasetMetadata.exportedAt) || previousSource.exportedAt || "",
+      importedAt: cleanText(options.importedAt) || previousSource.importedAt || "",
+      basePartNumbers: uniqueSorted([
+        ...(Array.isArray(previousSource.basePartNumbers) ? previousSource.basePartNumbers : []),
+        ...(Array.isArray(previousSource.basePns) ? previousSource.basePns : []),
+        ...records.map((record) => record.basePartNumber),
+        ...incomingBasePns,
+      ].map(normalizeBasePn)),
+      colorCodes: uniqueSorted([
+        ...(Array.isArray(previousSource.colorCodes) ? previousSource.colorCodes : []),
+        ...incomingColors.map((variant) => variant.canonicalCode || variant.code),
+        ...records.map((record) => record.colorCode),
+      ].map(normalizeColorCode)),
+      records,
+    };
+    return {
+      ...product,
+      partSkus,
+      variantGroups,
+      ...(gaDate ? { generalAvailabilityDate: gaDate } : {}),
+      ...(emDate ? { endManufacturingDate: emDate } : {}),
+      ascm,
+    };
+  }
+
   const api = Object.freeze({
     version: API_VERSION,
     AscmImportError,
@@ -1401,6 +1540,7 @@
     parseWorkbook: parseAscmWorkbook,
     buildProductGroups,
     matchProductGroup,
+    mergeProductGroup,
     helpers: Object.freeze({
       openZip,
       parseSharedStrings,

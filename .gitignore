@@ -2,6 +2,9 @@
 pwsh.log
 *.log
 
+# Local review screenshots and artifacts
+/artifacts/
+
 # Private project packages and local portfolio data
 project-data/private/
 *.pkg
