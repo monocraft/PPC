@@ -31,6 +31,7 @@ const ROADMAP_MIN_BODY_HEIGHT = 156;
 const ROADMAP_CATEGORY_LABEL_FONT_SIZE = 13;
 const ROADMAP_MIN_MONTH_WIDTH = 8;
 const ROADMAP_MAX_MONTH_WIDTH = 112;
+const ROADMAP_DEFAULT_MONTH_WIDTH = 82;
 const {
   paginateRoadmapGroups: paginateRoadmapGroupsForPptx,
 } = globalThis.PPTXPagination;
@@ -246,7 +247,7 @@ let activeView = "products";
 let roadmapDetailsOpen = true;
 let roadmapSearchQuery = "";
 let roadmapFilterScrollResetPending = false;
-let roadmapMonthWidth = 82;
+let roadmapMonthWidth = ROADMAP_DEFAULT_MONTH_WIDTH;
 let roadmapHitRegions = new Map();
 let roadmapDragState = null;
 let roadmapPanState = null;
@@ -1017,15 +1018,30 @@ async function copyTextToClipboard(value) {
     return true;
   } catch {
     const textarea = document.createElement("textarea");
+    const previousFocus = document.activeElement;
     textarea.value = text;
     textarea.setAttribute("readonly", "");
+    textarea.tabIndex = -1;
     textarea.style.position = "fixed";
+    textarea.style.top = "0";
+    textarea.style.left = "0";
+    textarea.style.width = "1px";
+    textarea.style.height = "1px";
+    textarea.style.minHeight = "0";
+    textarea.style.padding = "0";
+    textarea.style.border = "0";
     textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const copied = document.execCommand("copy");
-    textarea.remove();
-    return copied;
+    try {
+      document.body.appendChild(textarea);
+      textarea.focus({ preventScroll: true });
+      textarea.select();
+      return document.execCommand("copy");
+    } catch {
+      return false;
+    } finally {
+      textarea.remove();
+      previousFocus?.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -1036,7 +1052,7 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     ? target.lanes
     : definition.lanes.map((lane, order) => ({ ...lane, order }));
   target.products = Array.isArray(target.products) ? target.products : [];
-  target.settings = { showPrices: true, showSkus: true, fullSingleLaneSpecs: true, ...target.settings, freeMove: false };
+  target.settings = { showPrices: true, showSkus: true, ...target.settings, freeMove: false };
   target.settings.roadmap = {
     startMonth: "2026-01",
     endMonth: "2030-12",
@@ -1267,7 +1283,6 @@ function createCategoryBoard(definition) {
       freeMove: false,
       showPrices: true,
       showSkus: true,
-      fullSingleLaneSpecs: true,
       roadmap: {
         categoryLabel: definition.categoryLabel,
         familyOrder: [...definition.familyOrder],
@@ -1523,7 +1538,7 @@ function productCardLayout() {
   const definition = categoryDefinition();
   const supportsDetailedCards = lanes.length === 1 || definition.fullSpecCards === true;
   const products = board.products;
-  const detailed = Boolean(board?.settings?.fullSingleLaneSpecs) && supportsDetailedCards && products.some((product) => product.specs.length);
+  const detailed = supportsDetailedCards && products.some((product) => product.specs.length);
   if (!detailed) {
     // Size the category together so filtering never moves cards or their hit regions.
     const rowsTop = TITLE_BLOCK_TOP + DETAILS_TOP_OFFSET + 9;
@@ -2855,6 +2870,7 @@ function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
 }
 
 function renderRoadmaps() {
+  syncViewZoomControls();
   updateRoadmapEditControls();
   if (activeView === "roadmap") renderRoadmapFor(roadmapCanvas, roadmapScroll, roadmapNavigatorRefs());
   if (activeView === "split") {
@@ -2907,6 +2923,25 @@ function fitRoadmapTimeline() {
   const available = Math.max(320, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH - 24);
   roadmapMonthWidth = Math.max(ROADMAP_MIN_MONTH_WIDTH, Math.min(ROADMAP_MAX_MONTH_WIDTH, available / range.count));
   renderRoadmaps();
+}
+
+function syncViewZoomControls() {
+  $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
+  $("#zoomOut").disabled = zoom <= PRODUCT_MIN_ZOOM;
+  $("#zoomIn").disabled = zoom >= PRODUCT_MAX_ZOOM;
+  $("#roadmapZoomReset").textContent = `${Math.round(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH * 100)}%`;
+  $("#roadmapZoomOut").disabled = roadmapMonthWidth <= ROADMAP_MIN_MONTH_WIDTH;
+  $("#roadmapZoomIn").disabled = roadmapMonthWidth >= ROADMAP_MAX_MONTH_WIDTH;
+  $("#roadmapShowSelected").disabled = !selectedProduct();
+}
+
+function setRoadmapZoom(nextMonthWidth) {
+  const targetScroll = activeView === "split" ? splitRoadmapScroll : roadmapScroll;
+  const viewportCenter = Math.max(0, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH) / 2;
+  const centerMonth = (targetScroll.scrollLeft + viewportCenter) / roadmapMonthWidth;
+  roadmapMonthWidth = Math.max(ROADMAP_MIN_MONTH_WIDTH, Math.min(ROADMAP_MAX_MONTH_WIDTH, nextMonthWidth));
+  renderRoadmaps();
+  targetScroll.scrollLeft = Math.max(0, centerMonth * roadmapMonthWidth - viewportCenter);
 }
 
 function setRoadmapYearSpan(years) {
@@ -3398,7 +3433,7 @@ function renderBoard() {
   renderLaneRail(dimensions);
   canvasScroll.scrollLeft = previousLeft;
   canvasScroll.scrollTop = previousTop;
-  $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
+  syncViewZoomControls();
   renderStatus();
   positionViewerInfo();
   requestAnimationFrame(syncBoardNavigator);
@@ -4642,8 +4677,6 @@ function syncControls() {
   updateProductLayoutEditControls();
   $("#showPrices").checked = board.settings.showPrices;
   $("#showSkus").checked = board.settings.showSkus;
-  $("#fullSingleLaneSpecs").checked = board.settings.fullSingleLaneSpecs !== false;
-  $("#fullSingleLaneSpecs").disabled = !(sortedLanes().length === 1 || categoryDefinition().fullSpecCards === true);
   $("#roadmapStart").value = board.settings.roadmap.startMonth;
   $("#roadmapEnd").value = board.settings.roadmap.endMonth;
   $("#roadmapSnap").value = board.settings.roadmap.snap;
@@ -5873,7 +5906,6 @@ function emptyBoardFromCatalogCategory(category, definition) {
     settings: {
       showPrices: true,
       showSkus: true,
-      fullSingleLaneSpecs: true,
       freeMove: false,
       roadmap: {
         categoryLabel: category?.categoryLabel || definition.categoryLabel,
@@ -6412,10 +6444,6 @@ pptxExportDialog.addEventListener("keydown", (event) => {
 $("#searchInput").oninput = (event) => { searchQuery = event.target.value; renderBoard(); };
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
-$("#fullSingleLaneSpecs").onchange = (event) => {
-  updateBoard((current) => { current.settings.fullSingleLaneSpecs = event.target.checked; });
-  requestAnimationFrame(fitProductLanesVertically);
-};
 $("#resetLayout").onclick = () => {
   zoom = 1;
   closePopupMenus();
@@ -6480,6 +6508,9 @@ document.querySelectorAll("[data-roadmap-years]").forEach((button) => {
 });
 $("#roadmapToday").onclick = () => { closePopupMenus(); scrollRoadmapToday(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
 $("#roadmapFit").onclick = () => { closePopupMenus(); fitRoadmapTimeline(); };
+$("#roadmapZoomOut").onclick = () => setRoadmapZoom(roadmapMonthWidth - ROADMAP_DEFAULT_MONTH_WIDTH * .1);
+$("#roadmapZoomReset").onclick = () => setRoadmapZoom(ROADMAP_DEFAULT_MONTH_WIDTH);
+$("#roadmapZoomIn").onclick = () => setRoadmapZoom(roadmapMonthWidth + ROADMAP_DEFAULT_MONTH_WIDTH * .1);
 $("#roadmapShowSelected").onclick = () => { closePopupMenus(); scrollRoadmapSelected(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
 roadmapEditSelectedButton.onclick = () => {
   const product = selectedProduct();

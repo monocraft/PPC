@@ -12,6 +12,21 @@
 - Removed Import ASCM and its explanatory copy from the welcome screen. First launch and empty categories offer Pull latest data and Import package.
 - Keep the advanced Import ASCM report action in Settings → Data & export, with its existing reviewed additive import flow.
 
+## 2026-10-07 — grouped view controls outside settings
+
+- Grouped Products zoom out, percentage/reset, zoom in, Fit, and Reset layout in its main toolbar so viewing and layout actions are available beside the canvas.
+- Added the matching Roadmap zoom group with Fit, Today, and Show selected. Roadmap zoom changes the horizontal month scale, uses 82 px per month as 100%, remains within 8–112 px per month, and preserves the month at the center of the visible timeline. The bottom navigation remains available.
+- Removed Fit products, Reset layout, Go to today, Fit timeline, and Show selected from Workspace settings. Display retains saved MSRP and SKU-footer preferences; Timeline retains the global range/year-span, snap interval, and fixed stage/status legend. Category and data editing remain in their existing settings sections.
+- Zoom, fitting, and timeline navigation remain temporary view state; the saved timeline range and product dates are unchanged by these actions.
+- All thirteen project checks passed. Browser checks at 1280 px and 763 px widths confirmed toolbar controls remain visible without horizontal overflow, Product zoom/Fit/reset works, and Roadmap zoom/Fit works with its details pane open or closed.
+
+## 2026-10-07 — automatic specification card layouts
+
+- Removed the Display setting Full specifications for supported categories. A single-lane category or category that explicitly supports full-spec cards, including Gaming Accessories, uses the expanded layout automatically when at least one product has specifications. Every card in that category shares the layout/height; other multi-lane categories and categories with no specifications retain compact cards.
+- Kept the complete specification list in Overview and the shared card layout used by Products, PNG, and PPTX. Product/specification data is unchanged.
+- Retained existing saved `fullSingleLaneSpecs` values as inert compatibility data; new defaults no longer create the setting.
+- All thirteen project checks passed. Browser verification confirmed the checkbox is absent, existing MSRP/SKU-footer/layout controls remain available, and no browser errors occurred.
+
 ## 2026-10-07 — hide the header for an empty portfolio
 
 - Hide the bottom status bar for the same empty-portfolio state, so the welcome screen fills the full viewport. Restore status automatically when products are loaded; retain it for empty categories when other categories contain products and for zero-match searches.
@@ -19,6 +34,16 @@
 - Restore all header rows when products are loaded. Keep navigation for an empty category when another category has products, and retain controls when a search has no matches. Product counts across the portfolio determine this state.
 - Keep header controls out of keyboard navigation while hidden, and return package-dialog focus to the visible welcome action after an empty replacement import.
 - All twelve existing project checks passed. Isolated browser verification covered thirteen cases, including first launch, populated/empty replacement imports, final-product deletion, clear-all, both search views, empty categories, saved-data reloads, desktop/mobile layout, welcome actions, and focus restoration, with no browser errors.
+
+## 2026-10-07 — compact HP SKUs and row copy feedback
+
+- Replaced the wide HP SKU table with compact entries pairing each color/swatches with its part number. Six SKUs appear per page in two columns when the panel is at least 440 px wide, and one column in narrower panels.
+- Refined the entries to match the supplied mockup: a 40 px square swatch leads the stacked color name and bold part number, with the Copy button aligned on the right. Two-tone and multiple-color mappings remain visible; unassigned colors use an empty dashed placeholder.
+- Additional options shares the same card spacing, large swatches, stacked text, and responsive columns. Layout options use a neutral locale-code square and retain their descriptive names and group labels.
+- Colors without an assigned HP part number display Missing HP SKU instead of COLOR SKU, keeping their color code and swatch without implying that the code is an HP part number.
+- Removed the duplicate More → Variants view. HP SKUs now includes Additional options for layouts and colors without an HP SKU mapping, eight options per page; saved variants and editor controls remain available.
+- Copy success pulses the entire SKU entry for 700 ms, with a static highlight for reduced motion and a temporary Copied label. Fixed-width buttons, guarded request/timer handling, accessible status feedback, and a tiny fixed-position clipboard fallback prevent copy feedback from widening or scrolling the panel.
+- All ten project checks and the diff whitespace check pass. Browser verification confirmed two columns on Cloud Jet 2, exact clipboard text, fixed 52 px buttons, and unchanged panel client/scroll widths in both the 515 px Products pane and 322 px Roadmap pane. Eve 1800 retained all 15 keyboard layouts across two Additional options pages in a 312 px pane.
 
 ## 2026-10-07 — separate product objects in PowerPoint exports
 

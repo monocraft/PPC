@@ -35,13 +35,22 @@
           <label class="search-shell"><span aria-hidden="true">⌕</span><input id="searchInput" class="search-input" type="search" aria-label="Search products" placeholder="Search products, status, or SKU"></label>
           <label class="inline-field"><span>Sort</span><select id="sortMode"><option value="custom">Custom order</option><option value="name-asc">Name A–Z</option><option value="price-asc">Price low–high</option><option value="price-desc">Price high–low</option><option value="status">Status</option><option value="sku-count">Most SKUs</option></select></label>
           <button id="applySort" class="quiet-button">Apply</button>
-          <div class="zoom-control"><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset" class="zoom-reset" aria-label="Reset zoom to 100%">100%</button><button id="zoomIn" aria-label="Zoom in">+</button></div>
+          <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Product view controls">
+            <div class="zoom-control" role="group" aria-label="Product zoom"><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset" class="zoom-reset" aria-label="Reset zoom to 100%" title="Reset product zoom to 100%">100%</button><button id="zoomIn" aria-label="Zoom in">+</button></div>
+            <button id="fitProducts" class="view-tool" title="Fit the longest visible product lane to the available width">Fit</button>
+            <button id="resetLayout" class="view-tool" title="Restore automatic lane layout and 100% zoom while keeping the current product order">Reset layout</button>
+          </div></div>
         </section>
         <section id="roadmapControls" class="controlbar view-controls hidden" aria-label="Roadmap controls">
           <label class="search-shell"><span aria-hidden="true">⌕</span><input id="roadmapSearch" class="search-input" type="search" aria-label="Search roadmap" placeholder="Search product, family, or SKU"></label>
           <button id="quickTimelineSettings" class="quiet-button">Timeline range <span id="timelineRangeSummary"></span><span aria-hidden="true">↗</span></button>
           <button id="toggleRoadmapDetails" class="quiet-button" aria-pressed="false" aria-controls="splitView">Product details</button>
-          <span class="control-scope">Shared across categories</span>
+          <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Timeline view controls">
+            <div class="zoom-control" role="group" aria-label="Timeline zoom"><button id="roadmapZoomOut" aria-label="Zoom timeline out">−</button><button id="roadmapZoomReset" class="zoom-reset" aria-label="Reset timeline zoom to 100%" title="Reset timeline zoom to 100%">100%</button><button id="roadmapZoomIn" aria-label="Zoom timeline in">+</button></div>
+            <button id="roadmapFit" class="view-tool" title="Fit the selected timeline range to the available width">Fit</button>
+            <button id="roadmapToday" class="view-tool" title="Center the current month">Today</button>
+            <button id="roadmapShowSelected" class="view-tool" title="Center the selected product on the timeline" disabled>Show selected</button>
+          </div></div>
         </section>
         <div class="selection-bar"><span id="workspaceSummary">Loading portfolio…</span><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button><button id="linkedView" class="compact-button" disabled>View on roadmap</button></div></div>
       </div>
@@ -119,12 +128,7 @@
           <section id="settingsDisplayPanel" role="tabpanel" aria-labelledby="settingsTabDisplay" data-settings-panel="display"><div class="settings-section-heading"><h3>Display</h3><span class="scope-badge">View preferences</span></div><p class="settings-note">Card options apply to the active category. Roadmap options apply across categories.</p><div id="productMenu" class="popup-menu settings-action-list" aria-label="Display settings">
           <fieldset class="msrp-settings"><legend class="popup-menu-heading">MSRP</legend><div class="msrp-setting-options"><label class="menu-checkbox"><input id="showPrices" type="checkbox"><span>Show MSRP on product cards<small>Active category</small></span></label><label class="menu-checkbox"><input id="roadmapShowMsrp" type="checkbox"><span>Show MSRP on Roadmap<small>All categories · bars and details</small></span></label></div><p class="msrp-help">Both views use the same saved MSRP. Hiding it keeps the saved price. Products without a saved MSRP show no price; ASCM imports do not set MSRP.</p><p id="pricingAvailability" class="msrp-availability" aria-live="polite"></p></fieldset>
           <span class="popup-menu-heading">Product cards · active category</span>
-          <label class="menu-checkbox"><input id="showSkus" type="checkbox"><span>Show SKU footer</span></label>
-          <label class="menu-checkbox"><input id="fullSingleLaneSpecs" type="checkbox"><span>Full specifications for supported categories</span></label>
-          <div class="popup-menu-separator"></div>
-          <span class="popup-menu-heading">Layout</span>
-          <button id="fitProducts"><span>Fit products</span><small>Scale the longest visible lane to the available width</small></button>
-          <button id="resetLayout"><span>Reset layout</span><small>Restore automatic lane order and 100% zoom</small></button></div></section>
+          <label class="menu-checkbox"><input id="showSkus" type="checkbox"><span>Show SKU footer</span></label></div></section>
           <section id="settingsTimelinePanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabTimeline" data-settings-panel="timeline"><div class="settings-section-heading"><h3>Timeline</h3><span class="scope-badge">All categories</span></div><p class="settings-note">Every category uses the same dates, year span, snap interval, and fixed stage palette.</p><div id="roadmapMenu" class="popup-menu settings-action-list" aria-label="Timeline options"><span class="popup-menu-heading">View range</span>
           <div class="menu-choice-grid" role="group" aria-label="Timeline year span">
             <button data-roadmap-years="3">3 years</button>
@@ -147,11 +151,7 @@
               </label>
               <div class="timeline-stage-legend" aria-label="Fixed lifecycle stage palette"><span><i class="stage-launched" aria-hidden="true"></i>Launched</span><span><i class="stage-development" aria-hidden="true"></i>In development</span><span><i class="stage-planning" aria-hidden="true"></i>In planning</span><span><i class="status-new" aria-hidden="true"></i>New product</span><span><i class="status-embargo" aria-hidden="true"></i>Embargo</span></div>
             </div>
-          </details>
-          <div class="popup-menu-separator"></div>
-          <button id="roadmapToday"><span>Go to today</span><small>Center the current month</small></button>
-          <button id="roadmapFit"><span>Fit timeline</span><small>Fit the selected range to the viewport</small></button>
-          <button id="roadmapShowSelected"><span>Show selected</span><small>Center the selected product slot</small></button></div></section>
+          </details></div></section>
           <section id="settingsCategoryPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabCategory" data-settings-panel="category"><div class="settings-section-heading"><h3 id="settingsActiveCategory">Active category</h3><span class="scope-badge">Active category</span></div><p class="settings-note">Admin tools for category labels, lanes, and product editing.</p><div class="popup-menu settings-action-list" aria-label="Category actions"><button id="addProduct" class="menu-primary"><span>Add product</span><small>Admin action: create and edit a product in this category</small></button>
             <button id="editSelected" disabled><span>Edit selected product</span><small>Open the protected product editor</small></button>
             <button id="roadmapEditSelected" class="roadmap-edit-toggle" disabled><span>Edit selected roadmap slot</span><small>Enable protected timeline handles for the selected product</small></button>
