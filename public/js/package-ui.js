@@ -30,7 +30,7 @@
     for (const control of form.querySelectorAll("input, button")) control.disabled = value;
     get("cancelPackage").disabled = value && applying;
     get("closePackage").disabled = value && applying;
-    submit.textContent = value ? (applying ? "Loading package…" : mode === "export" ? "Creating package…" : "Downloading…") : mode === "pull" ? "Pull latest data" : mode === "export" ? "Export package" : mode === "restore" ? "Restore previous workspace" : "Import package";
+    submit.textContent = value ? (applying ? "Loading package…" : mode === "export" ? "Building package…" : "Downloading…") : mode === "pull" ? "Pull latest data" : mode === "export" ? "Build package" : mode === "restore" ? "Restore previous workspace" : "Import package";
   }
 
   function close() {
@@ -56,7 +56,7 @@
     keyInput.value = ""; get("packageShowKey").checked = false; get("packageEncrypt").checked = true;
     get("cancelPackage").classList.remove("hidden");
     error.textContent = ""; status.textContent = "";
-    const titles = { pull: "Pull latest data", export: "Export unified package", import: "Import project package", restore: "Restore previous workspace" };
+    const titles = { pull: "Pull latest data", export: "Build master package", import: "Import project package", restore: "Restore previous workspace" };
     get("packageTitle").textContent = titles[mode];
     get("packageDescription").textContent = mode === "export" ? "One file contains every category, Products, Roadmap, settings, variants and available image files." : mode === "restore" ? "Return to the workspace saved before your last package import. Your current workspace becomes the new recovery copy." : "Replace Products and Roadmap with one complete package. Your current workspace is kept as a recovery copy on this device.";
     get("packageExportOptions").classList.toggle("hidden", mode !== "export");
@@ -111,8 +111,8 @@
       else { status.textContent = "Collecting data and image files…"; await globalThis.exportProjectPackage(key); }
       completed = true;
       if (mode === "export") keyInput.value = key;
-      status.textContent = mode === "export" ? (key ? "Package created. Copy the key and keep it separate from the shared file." : "Private backup package created.") : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
-      get("packageTitle").textContent = mode === "export" ? "Package exported" : mode === "restore" ? "Workspace restored" : "Data updated";
+      status.textContent = mode === "export" ? (key ? "master_ppc.pkg is ready. Replace the master file in SharePoint and keep the key separate." : "Private backup package created.") : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
+      get("packageTitle").textContent = mode === "export" ? "Package built" : mode === "restore" ? "Workspace restored" : "Data updated";
       refresh(); updateKeyControls(); setBusy(false);
       get("packageExportOptions").classList.add("hidden");
       get("cancelPackage").classList.add("hidden"); submit.textContent = "Done"; submit.focus();
