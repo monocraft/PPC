@@ -1,5 +1,13 @@
 # Change Log
 
+## 2026-10-07 — hide the header for an empty portfolio
+
+- Hide the bottom status bar for the same empty-portfolio state, so the welcome screen fills the full viewport. Restore status automatically when products are loaded; retain it for empty categories when other categories contain products and for zero-match searches.
+- First launch and portfolios with zero products hide the entire top toolbar and controls, including category/view navigation, pull/export/settings buttons, search/sort/zoom, and the selection row. The welcome screen fills the available workspace and retains Pull latest data, Import package, and Import ASCM.
+- Restore all header rows when products are loaded. Keep navigation for an empty category when another category has products, and retain controls when a search has no matches. Product counts across the portfolio determine this state.
+- Keep header controls out of keyboard navigation while hidden, and return package-dialog focus to the visible welcome action after an empty replacement import.
+- All twelve existing project checks passed. Isolated browser verification covered thirteen cases, including first launch, populated/empty replacement imports, final-product deletion, clear-all, both search views, empty categories, saved-data reloads, desktop/mobile layout, welcome actions, and focus restoration, with no browser errors.
+
 ## 2026-10-07 — separate product objects in PowerPoint exports
 
 - Roadmap exports now place each visible product in one native rounded rectangle containing editable text. Product names, optional MSRP, stage/status colors, date placement, and concept dashed outlines remain attached to that product shape. Calendar and family context stay in a separate background image.

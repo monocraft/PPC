@@ -65,7 +65,7 @@
     get("packageShowKey").checked = false;
     keyInput.type = "password";
     if (restoreFocus?.isConnected && !restoreFocus.disabled && !restoreFocus.closest(".hidden")) restoreFocus.focus();
-    else get("pullLatestData").focus();
+    else get(get("workspaceEmpty").classList.contains("hidden") ? "pullLatestData" : "emptyPullLatestData").focus();
   }
 
   function open(nextMode, file = null) {

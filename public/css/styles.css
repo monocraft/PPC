@@ -52,6 +52,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .app-shell { display: block; height: 100dvh; width: 100%; min-width: 0; overflow: hidden; }
 .brand-mark { flex: 0 0 auto; display: grid; place-items: center; width: 27px; height: 29px; border: 1px solid #596660; border-radius: 7px; background: #2a3330; color: #acbcb5; font-size: 18px; font-weight: 750; }
 .workspace-main { height: 100%; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.app-shell.is-empty-portfolio .workspace-main { grid-template-rows: minmax(0, 1fr); }
 .topbar { display: flex; align-items: center; gap: 18px; min-width: 0; min-height: 64px; padding: 9px 16px; border-bottom: 1px solid var(--color-border); background: #191919; }
 .brand-block { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 150px; }
 .category-switcher { display: grid; gap: 2px; width: min(250px, 100%); min-width: 0; }
