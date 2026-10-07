@@ -31,6 +31,7 @@ const expected = html
 assert.equal(renderVersionedIndex(html, version), expected, "only local script and stylesheet URLs should change");
 assert.equal(renderVersionedIndex(expected, version), expected, "running versioning twice must be idempotent");
 assert.equal(renderVersionedIndex(expected, "release-2").includes("v=release-2"), true);
+assert.equal(renderVersionedIndex('<script src="js/app.js?x=1&#38;v=old&#x26;y=2#part"></script>', "new"), '<script src="js/app.js?x=1&amp;y=2&amp;v=new#part"></script>');
 for (const invalid of ["", "a".repeat(65), "release key", "x&key=private", 'x" onclick="bad', "../escape", "release?key=secret", null, 123]) {
   assert.throws(() => renderVersionedIndex(html, invalid));
 }

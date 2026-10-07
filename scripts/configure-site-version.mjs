@@ -10,7 +10,10 @@ function versionReference(value, version, extension) {
   const trailing = value.match(/\s*$/)[0];
   const reference = value.trim();
   if (!reference || reference.startsWith("/") || reference.startsWith("\\") || /^[a-z][a-z\d+.-]*:/i.test(reference)) return value;
-  const hashAt = reference.indexOf("#");
+  let hashAt = reference.indexOf("#");
+  while (hashAt >= 0 && reference[hashAt - 1] === "&" && /^#(?:0*38|x0*26);/i.test(reference.slice(hashAt))) {
+    hashAt = reference.indexOf("#", hashAt + 1);
+  }
   const fragment = hashAt >= 0 ? reference.slice(hashAt) : "";
   const withoutFragment = hashAt >= 0 ? reference.slice(0, hashAt) : reference;
   const queryAt = withoutFragment.indexOf("?");
@@ -18,7 +21,7 @@ function versionReference(value, version, extension) {
   // Entity-encoded schemes and protocol-relative URLs must not become local assets.
   if (/[&\\]/.test(pathname) || !new RegExp(`\\.${extension}$`, "i").test(pathname)) return value;
   const query = queryAt >= 0 ? withoutFragment.slice(queryAt + 1) : "";
-  const separator = /&amp;/i.test(query) ? "&amp;" : "&";
+  const separator = /&amp;|&#0*38;|&#x0*26;/i.test(query) ? "&amp;" : "&";
   const entries = query.replace(/&amp;|&#0*38;|&#x0*26;/gi, "&").split("&").filter(Boolean).filter(entry => {
     const key = entry.split("=", 1)[0];
     try { return decodeURIComponent(key.replace(/\+/g, " ")) !== "v"; }
