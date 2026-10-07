@@ -1,11 +1,14 @@
 # Change Log
 
-## 2026-10-07 — GitHub repository connection
+## 2026-10-07 — GitHub repository connection and code publication
 
 - Connected this workspace to `https://github.com/monocraft/PPC.git`; local `main` tracks `origin/main`. The remote baseline is `6665bd6e7e7589b31f317f3e931d8cfb6fec35ce` (2026-09-23, `Color Variant`).
 - Aligned branch/index history while preserving the current local application files; core file hashes remained unchanged. Original ZIP provenance and earlier records without a Git repository remain historical.
-- Removed the baseline's tracked `project-data/private/product-portfolio-project.pkg` from the local index only, preserving the package on disk. Private packages remain ignored, and `artifacts/` is now ignored so portfolio screenshots stay local. Prior Git history still contains the package.
-- Updated repository/source guidance. This entry records the local connection and does not claim a successful push or deployment of the latest local changes.
+- Removed the baseline's tracked `project-data/private/product-portfolio-project.pkg` from the local index only, preserving the package on disk. The published update removes it from the repository's current tree. Private packages remain ignored, and `artifacts/` is now ignored so portfolio screenshots stay local. Prior Git history still contains the package.
+- Pushed commit `548c936` (`Update portfolio workspace and parent-height product details`) to `origin/main` as a normal fast-forward update from the connection baseline. The [Deploy to GitHub Pages run](https://github.com/monocraft/PPC/actions/runs/37658673619) succeeded for full commit `548c9363fbc67bd949e671187f613da5033c05dc`.
+- Changed Pages from legacy `main` branch-root publishing to workflow publishing through the authenticated Pages API, then re-read the configuration to confirm it. This uses the reviewed static-site allowlist and removes the competing branch-root publishing path.
+- Verified all nine public HTML/CSS/application JavaScript files returned HTTP 200 and matched the published commit byte-for-byte by SHA-256 comparison. The live app rendered correctly in the browser with the expected empty starter portfolio (zero public seed products).
+- Updated repository/source guidance while preserving the original archive provenance and private-package history.
 
 ## 2026-10-07 — parent-height product details redesign
 
