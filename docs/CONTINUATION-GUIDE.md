@@ -4,6 +4,8 @@ This is the operating guide for future changes. It keeps code provenance, privat
 
 Read [Feature Index](FEATURE-INDEX.md) before modifying a feature. It documents existing user flows, settings scope, template fields, persistence, and function/module search anchors.
 
+Current layout: `public/` contains the complete static site, with JavaScript modules in `public/js/`, CSS in `public/css/`, and unchanged asset/vendor subdirectories. `scripts/checks/` contains development validation; `scripts/serve.mjs` serves `public/` at the local site root. Keep the root README as the short public introduction and detailed local setup in the ignored internal README.
+
 ## 1. Sources of truth
 
 Use this order when deciding what is authoritative:
@@ -11,11 +13,11 @@ Use this order when deciding what is authoritative:
 | Concern | Source of truth |
 | --- | --- |
 | Current application code | This workspace, connected to `https://github.com/monocraft/PPC.git` with local `main` tracking `origin/main`; original archive provenance remains hash-pinned |
-| Category/lane/spec templates | `catalog-data.js` |
+| Category/lane/spec templates | `public/js/catalog-data.js` |
 | Current private portfolio content | `project-data/private/product-portfolio-project.pkg` |
 | Current browser session | `localStorage` plus IndexedDB for the exact origin being tested |
 | UI palette | CSS/JavaScript tokens derived from the supplied charcoal/core palette references |
-| Deployment contents | `.github/workflows/deploy.yml`, checked against `index.html` runtime references |
+| Deployment contents | `.github/workflows/deploy.yml`, checked against `public/index.html` runtime references |
 
 Do not copy an older local folder over this workspace. A future GitHub ZIP or clone should be staged separately, inventoried, and diffed before any merge.
 
@@ -38,18 +40,18 @@ Before feature work:
 4. Verify that `main` still tracks the intended `origin/main`, review the working diff, and record a known-good commit before refactoring. This workspace is already connected; do not reinitialize or overwrite local files to repeat the connection.
 5. Export the active browser workspace as a `.pkg` before any schema migration or destructive import.
 
-Never add the private package with `git add -f`, copy it into `assets/`, or add `project-data/private/` to the Pages workflow.
+Never add the private package with `git add -f`, copy it into `public/assets/`, or add `project-data/private/` to the Pages workflow.
 
 ## 3. Run and validate
 
 No package installation is required.
 
 ```powershell
-node scripts/validate-project.mjs
-node scripts/test-ascm-import.mjs
-node scripts/test-pptx-pagination.mjs
-node scripts/test-portfolio-model.mjs
-node scripts/test-product-details.mjs
+node scripts/checks/project.mjs
+node scripts/checks/ascm-import.mjs
+node scripts/checks/pptx-pagination.mjs
+node scripts/checks/portfolio-model.mjs
+node scripts/checks/product-details.mjs
 node scripts/serve.mjs
 ```
 
@@ -58,8 +60,8 @@ The equivalent `npm test` runs the validator and regression checks; `npm run ser
 For a quick syntax-only check:
 
 ```powershell
-node --check app.js
-node --check catalog-data.js
+node --check public/js/app.js
+node --check public/js/catalog-data.js
 ```
 
 Keep the same local URL and port during a test cycle. Browser storage is origin-scoped; switching from `127.0.0.1` to `localhost` or changing ports creates a separate workspace.
@@ -97,20 +99,20 @@ When GitHub changes arrive as a ZIP, use a staged comparison instead of overwrit
 
 Inspect in this order:
 
-1. `index.html`: runtime references, IDs, menu actions, forms, and canvases.
-2. `catalog-data.js`: schema version, category IDs, lanes, spec sets, products, and image references.
-3. `app.js`: storage keys, schema normalizers, startup, import/export, rendering entrypoints, and event wiring.
-   Also inspect `portfolio-model.js` for global timeline/lane geometry/specification/SKU/shared-tone rules, `product-details.js` for Overview and secondary-list tabs/paging, `workspace-ui.js` for shell/settings interactions, `ascm-import.js` for workbook parsing/matching/additive merges, and `pptx-pagination.js` for ordered category selection and roadmap slide limits before changing those flows.
-4. `styles.css`: token definitions, layout breakpoints, focus styles, and literal colors.
+1. `public/index.html`: runtime references, IDs, menu actions, forms, and canvases.
+2. `public/js/catalog-data.js`: schema version, category IDs, lanes, spec sets, products, and image references.
+3. `public/js/app.js`: storage keys, schema normalizers, startup, import/export, rendering entrypoints, and event wiring.
+   Also inspect `public/js/portfolio-model.js` for global timeline/lane geometry/specification/SKU/shared-tone rules, `public/js/product-details.js` for Overview and secondary-list tabs/paging, `public/js/workspace-ui.js` for shell/settings interactions, `public/js/ascm-import.js` for workbook parsing/matching/additive merges, and `public/js/pptx-pagination.js` for ordered category selection and roadmap slide limits before changing those flows.
+4. `public/css/styles.css`: token definitions, layout breakpoints, focus styles, and literal colors.
 5. `.github/workflows/deploy.yml`: every runtime file and directory copied into the Pages artifact.
-6. `vendor/`: version and provenance of vendored libraries.
+6. `public/vendor/`: version and provenance of vendored libraries.
 
 Search for migration and trust boundaries early:
 
 ```powershell
-rg -n "STORAGE_KEY|ensurePortfolioSchema|ensureBoardSchema|loadPortfolio|importProjectPackage|exportProjectPackage" app.js
-rg -n "innerHTML|insertAdjacentHTML|href=|src=|style=" app.js
-rg -n "<script|<link" index.html
+rg -n "STORAGE_KEY|ensurePortfolioSchema|ensureBoardSchema|loadPortfolio|importProjectPackage|exportProjectPackage" public/js/app.js
+rg -n "innerHTML|insertAdjacentHTML|href=|src=|style=" public/js/app.js
+rg -n "<script|<link" public/index.html
 ```
 
 ### 5.3 Merge discipline
@@ -129,6 +131,8 @@ rg -n "<script|<link" index.html
 - Increment a version only when the stored representation changes.
 - Keep normalization idempotent: normalizing already-current data must not alter it again.
 - Treat `portfolio.settings.timeline` as authoritative; keep board compatibility copies synchronized without changing product lifecycle dates. Legacy workspaces migrate from the active category once.
+- Keep GA/EM editing in Details as the single input home. Timeline explains date synchronization and links back with Edit dates in Details; do not restore duplicate launch/end month inputs.
+- Use `PortfolioModel.mergeProductUpdate` for explicit product/roadmap date changes. A valid populated GA/EM derives its roadmap month, while clearing it to blank/TBD retains the planned month. A protected month drag shifts a known exact date, preserving its day or clamping to month end; missing exact dates stay missing. Unrelated edits and schema normalization must not reconcile existing saved date/month differences.
 - Preserve recognized specification shapes and stable IDs; test tuples, object maps, JSON/plain strings, label/value edits, and removal.
 - Add fixture tests for v4, v3, legacy v1, empty catalog, malformed input, and missing optional fields.
 - Never silently drop unknown fields during a migration unless the removal is documented.
@@ -140,6 +144,7 @@ rg -n "<script|<link" index.html
 - Keep workbook updates additive through `ASCMImporter.mergeProductGroup`; do not replace matched products with freshly created records.
 - Preserve curated specifications, prices, name, status, product/colorway images, variant identities, manual SKU-color links, and fields outside the documented ASCM write set.
 - Missing PNs/variants/source records and blank or invalid dates must not clear saved facts.
+- Derive roadmap timing from normalized valid day-level GA/EM before group month hints. Preserve exact source dates and existing placement when dates are omitted; keep this importer rule separate from manual TBD clearing.
 - Match using exact ASCM key/Base PN before cautious category/platform-aware names; skip ambiguous groups and several groups targeting one product.
 - Test the real `applyAscmImportPlan` path as well as pure helpers, including normalizers, category moves, update/add flags, blank reports, and repeat imports.
 - The current ASCM importer does not import specification facts or MSRP; omit unknown prices and initialize editable category/lane template placeholders only for newly added records. Do not overwrite/backfill matched specs or imply placeholders are source facts.
@@ -165,9 +170,10 @@ rg -n "<script|<link" index.html
 - Keep standard status text as the primary banner, including Console products. A distinct platform/custom variant label is a quiet secondary badge in cards and Roadmap details; do not let it replace NEW PRODUCT or change saved metadata.
 - Keep only Products/Roadmap main tabs; Roadmap can show/hide its details pane. Keep Export PPTX prominent in both views, package/ASCM imports on the empty canvas, and manual Add product always reachable in Settings → Category rather than the main toolbar.
 - Keep both MSRP switches together in Display: card visibility is active-category, Roadmap bars/details visibility is portfolio-wide. Both read the same saved MSRP through `msrpText`; numeric amounts take precedence over meaningful labels, unknown prices stay blank, and hiding never changes price data. Preserve the saved-price availability explanation and the fact that the current ASCM importer does not import MSRP.
-- Share Overview / HP SKUs / More on the card drawer and optional Roadmap pane. Overview places all six dates/lifecycle beside every specification, with independent keyboard-focusable overflow; adapt that shared content to the narrow Roadmap panel. Specifications stay unpaged; only SKU/variant/source lists use pages. Check tabs/pages and access to every value at 20–150% card zoom.
+- Share Overview / HP SKUs / More on the card drawer and optional Roadmap pane. Overview places all six dates, stage/confidence, and needed planned context beside every specification, with independent keyboard-focusable overflow; adapt that shared content to the narrow Roadmap panel. Omit launch/end month duplicates when a known GA/EM has the same month; retain Planned launch/Planned end only for missing or differing exact dates. Specifications stay unpaged; only SKU/variant/source lists use pages. Check tabs/pages and access to every value at 20–150% card zoom.
 - Keep one Details/Close action per card and Enter for the selected card when the Products canvas is focused. The muted `+N specifications` count is not another control; do not reintroduce the circular information icon or a separate full-specifications popup.
-- Keep the inline pane exactly as tall as its rendered parent card: fallback to `productCardLayout().cardHeight * zoom`, then position with the actual `card.height * zoom`. Never derive its frame height from content or the viewport. Width is 620 px normally, 760 px for a parent at most 280 px tall, and 840 px for a parent at most 180 px tall or more than 14 specs; short/dense layouts gain specification columns. Allow horizontal canvas scrolling while keeping readable text and internal overflow.
+- Keep the inline pane exactly as tall as its rendered parent card: fallback to `productCardLayout().cardHeight * zoom`, then position with the actual `card.height * zoom`. Never derive its frame height from content or the viewport. Width is 540 px normally, 680 px for a parent at most 280 px tall, and 720 px for a parent at most 180 px tall. Use two specification columns only for parents at most 280 px tall when every normalized value is at most 80 characters; long values keep one column and wrap. Allow horizontal canvas scrolling while keeping readable text and internal overflow.
+- Keep paired date values aligned by reserving two text lines for labels. Use the shared teal `#5fd6c1` for general availability, FFS, and planned launch; use embargo red `#ef5b5b` for end of manufacturing and planned end. Preserve semantic date/lifecycle keys, muted secondary dates, and wrapping specification values across categories.
 - `productLaneGeometry` must retain base lane heights and positions throughout opening/closing, tab changes, retargeting, zoom, and filtering. Reserve horizontal room only, shifting later cards in the viewed lane; lower lanes never move. Keep canvas bounds/backgrounds/rails/hit regions/drag targets consistent, and remove the horizontal reserve when the viewed product is closed or filtered out.
 - Choose text color dynamically for rendered fills and verify at least WCAG AA contrast.
 - Do not theme `STANDARD_PRODUCT_COLORS`; those are SKU/product attributes.
@@ -184,21 +190,23 @@ rg -n "<script|<link" index.html
 
 ### 6.6 Deployment
 
-The Pages artifact must include at minimum:
+The Pages workflow copies the contents of `public/` to the artifact root. Its source tree must include at minimum:
 
 ```text
-index.html
-styles.css
-app.js
-catalog-data.js
-ascm-import.js
-pptx-pagination.js
-portfolio-model.js
-product-details.js
-workspace-ui.js
-assets/
-vendor/pptxgen.bundle.js
+public/index.html
+public/css/styles.css
+public/js/app.js
+public/js/catalog-data.js
+public/js/ascm-import.js
+public/js/pptx-pagination.js
+public/js/portfolio-model.js
+public/js/product-details.js
+public/js/workspace-ui.js
+public/assets/
+public/vendor/pptxgen.bundle.js
 ```
+
+The deployed entrypoint remains `index.html`; runtime URLs are `css/styles.css`, `js/…`, `assets/…`, and `vendor/…`. Do not add an extra `public/` level to the deployed URL or publish the repository root.
 
 It must exclude:
 
@@ -208,7 +216,7 @@ pwsh.log
 docs and development scripts, unless intentionally published
 ```
 
-Run the validator after every `index.html` or workflow change. A local page loading successfully does not prove the deployed artifact is complete.
+Run the validator after every `public/index.html` or workflow change. A local page loading successfully does not prove the deployed artifact is complete.
 
 ## 7. Browser verification matrix
 
@@ -221,12 +229,13 @@ Use a fresh test origin/profile for the default-catalog pass, then import the pa
 | Inline Details geometry | Create compact/full-spec products in multiple lanes; Details/Close is the single all-specs action | Open first/middle/last-lane products at 20/50/65/100/150% zoom; pane top/bottom exactly match the parent, every lane and board height stay unchanged through opening/tab changes/retargeting, later cards shift only horizontally, rails/hit tests/drop targets align, closing/filtering remove horizontal reserve, and exports retain base geometry |
 | Roadmap | Empty state, year range, zoom/pan | Families, bars, selected state, search, dates, slot editing, predecessor/successor links |
 | Roadmap details option | Show/hide control works; graceful no-selection state | Selected details and roadmap remain synchronized; only Products/Roadmap main tabs are present |
-| Compact details | Overview default; six dates/lifecycle beside specs; keyboard tabs and empty states work | Every spec remains reachable without a separate tab/pager; independently focus/scroll the date and specification regions inside the parent-height pane, including dense/long values. SKU pages of five, variant pages of eight, source pages of two; Roadmap adapts the shared content to its narrow panel |
+| Compact details | Overview default; six dates, stage/confidence, and needed planned context beside specs; keyboard tabs and empty states work | Known GA/EM with matching roadmap months appear once; missing/mismatched dates retain Planned launch/Planned end. Paired date values align; GA/FFS/planned launch use teal and EM/planned end use embargo red. Every spec remains reachable at 540/680/720 px widths without a separate tab/pager; independently focus/scroll the date and specification regions, including dense/long values and one-/two-column layouts. SKU pages of five, variant pages of eight, source pages of two; Roadmap adapts the shared content to its narrow panel |
 | Persistence | Create one test product, reload, confirm it remains | Modify a product and local image, reload on the same origin |
 | Lightweight data | Export and re-import `.data`; understand that local binaries are excluded | References and metadata survive; local binary behavior is explicit |
 | Full package | Export then import into a clean origin | Product counts and local image survive round trip |
 | ASCM import | Workbook preview works without changing data; new products enter mapped categories with lane/category specification placeholders | Preview/reimport updates retain manually curated specifications (including empty arrays), price, images, variants, stage, and absent PNs; ambiguous candidates are skipped |
 | Timeline consistency | Choose 3/5/10 years and custom From/To; inspect every category | Switching categories and exporting uses the same configured range; product GA/EM and lifecycle dates are unchanged by a viewport-only change |
+| Product date editing | Details is the only GA/EM input home; Timeline's Edit dates button switches to Details and focuses GA | Exact GA/EM edits update roadmap months; clearing retains planned months. Protected drag keeps known days or clamps month end, while unknown exact dates stay TBD. Reload/unrelated edits preserve saved mismatches. Verify leap-year February, a 31-day-to-shorter-month drag, and ASCM valid day dates taking priority over inconsistent group month hints |
 | MSRP consistency | Display groups card/Roadmap switches with clear scopes and price availability | Exercise all four visibility combinations with a known price, zero, meaningful text label, and missing/TBD price; Roadmap bars/details share the global switch, prices survive saving/reload, and ASCM retains existing prices |
 | Settings and edits | All display/timeline/category controls have one clear entry point | Specifications label/value/remove actions persist after reload; category lanes remain category-specific; slot drag mode requires explicit enablement |
 | Clear all products | Confirm clear preserves category names, lane structure, templates, active category, global/display settings | Test only in a disposable workspace; products, image registry/local library, and ASCM snapshot are removed |
@@ -239,9 +248,9 @@ Use a fresh test origin/profile for the default-catalog pass, then import the pa
 
 Test browser console and network failures, not only appearance.
 
-### Current verification record — 2026-10-07
+### Earlier verification record — 2026-10-07
 
-The parent-height redesign supersedes the content-measured drawer and lower-lane expansion described in the historical record below.
+The parent-height redesign supersedes the content-measured drawer and lower-lane expansion described in the historical record below. These measurements describe the initial 620/760/840 px version before the compact 540/680/720 px refinement and source-directory reorganization; the current commands and acceptance rules above are authoritative.
 
 | Check | Environment and result |
 | --- | --- |

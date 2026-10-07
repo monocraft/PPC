@@ -2,20 +2,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-await import("../portfolio-model.js");
+await import("../../public/js/portfolio-model.js");
 const modelRules = globalThis.PortfolioModel;
 const timers = [];
 const sandbox = { setTimeout: (callback) => timers.push(callback) };
 vm.createContext(sandbox);
-new vm.Script(await readFile(new URL("../product-details.js", import.meta.url), "utf8")).runInContext(sandbox);
+new vm.Script(await readFile(new URL("../../public/js/product-details.js", import.meta.url), "utf8")).runInContext(sandbox);
 const details = sandbox.PortfolioDetails;
 assert.ok(details, "details rendering must load without a browser document");
 
 const dateLabels = ["General availability", "End of manufacturing", "FFS", "Global announcement", "Web readiness", "Final assets"];
+const dateKeys = ["general-availability", "end-manufacturing", "ffs", "global-announcement", "web-readiness", "final-assets"];
+const lifecycleKeys = ["launch", "lifecycle-end", "stage", "confidence"];
 const longModel = {
   id: "long-product",
-  dates: dateLabels.map((label, index) => ({ label, value: `Jan ${index + 1}, 2026`, empty: false })),
-  lifecycle: [{ label: "Stage", value: "In development" }],
+  dates: dateLabels.map((label, index) => ({ key: dateKeys[index], label, value: `Jan ${index + 1}, 2026`, empty: false })),
+  lifecycle: [{ key: "stage", label: "Stage", value: "In development" }],
   identity: [{ label: "Category", value: "PC Gaming Audio" }],
   skus: Array.from({ length: 17 }, (_, index) => ({ code: `HP-SKU-${index}`, colors: [{ label: "Black", colorHex: "#111111" }] })),
   specs: Array.from({ length: 11 }, (_, index) => ({ label: `Spec label ${index}`, value: `Spec value ${index}` })),
@@ -32,6 +34,7 @@ const overviewPanel = initialHtml.match(/<section\b[^>]*data-detail-panel="overv
 assert.ok(overviewPanel, "key dates and specifications must share an accessible Overview panel");
 assert.ok(!overviewPanel[0].split(">")[0].includes("hidden"), "Overview must be visible on initial render");
 for (const label of dateLabels) assert.ok(overviewPanel[1].includes(`<span>${label}</span>`), `${label} must appear in Overview`);
+assert.deepEqual([...overviewPanel[1].matchAll(/data-date-kind="([^"]+)"/g)].map((match) => match[1]), dateKeys, "each date must expose its semantic styling hook independently of the displayed label");
 assert.ok(overviewPanel[1].includes("In development"), "Overview must include the lifecycle summary with dates and specifications");
 assert.match(initialHtml, /role="tab"[^>]*id="product-detail-split-overview-tab"[^>]*aria-controls="product-detail-split-overview"[^>]*aria-selected="true"[^>]*tabindex="0"[^>]*>Overview<\/button>/);
 assert.match(overviewPanel[0], /role="tabpanel"[^>]*aria-labelledby="product-detail-split-overview-tab"/);
@@ -205,9 +208,9 @@ assert.ok(!another.groups.find((group) => group.dataset.detailPageGroup === "SKU
 const hostile = `<img src=x onerror="alert('attack')"> & <script>attack()</script>`;
 const hostileModel = {
   id: hostile,
-  dates: [{ label: hostile, value: hostile }],
+  dates: [{ key: 'end-manufacturing" onmouseover="attack()', label: hostile, value: hostile }],
   identity: [{ label: hostile, value: hostile }],
-  lifecycle: [{ label: hostile, value: hostile }],
+  lifecycle: [{ key: 'launch" onclick="attack()', label: hostile, value: hostile }],
   skus: [{ code: hostile, colors: [{ label: hostile, colorHex: 'red;" onmouseover="attack()', colorHex2: "url(javascript:attack())" }] }],
   specs: [{ label: hostile, value: hostile }],
   variants: [{ group: hostile, code: hostile, label: hostile, colors: [] }],
@@ -219,6 +222,20 @@ assert.ok(!hostileHtml.includes('onclick="attack()'), "renderer surface options 
 assert.ok(hostileHtml.includes("&lt;img") && hostileHtml.includes("&amp;") && hostileHtml.includes("&quot;") && hostileHtml.includes("&#39;"));
 assert.ok(!hostileHtml.includes("url(javascript:") && !hostileHtml.includes("--sku-primary:red"), "swatch styles must reject arbitrary CSS and URL values");
 assert.match(hostileHtml, /data-detail-surface="split"/, "unrecognized surface options must use a valid state and ID namespace");
+assert.ok(!hostileHtml.includes("data-date-kind") && !hostileHtml.includes("data-lifecycle-kind"), "unknown or injected semantic keys must never create styling attributes");
+const knownKindsHtml = details.render({
+  id: "known-semantic-kinds",
+  dates: dateKeys.map((key) => ({ key, label: "Custom label", value: "TBD", empty: true })),
+  lifecycle: lifecycleKeys.map((key) => ({ key, label: "Custom lifecycle label", value: "Not set" })),
+});
+assert.deepEqual([...knownKindsHtml.matchAll(/data-date-kind="([^"]+)"/g)].map((match) => match[1]), dateKeys, "date styling must use known semantic keys even when labels are customized");
+assert.deepEqual([...knownKindsHtml.matchAll(/data-lifecycle-kind="([^"]+)"/g)].map((match) => match[1]), lifecycleKeys, "lifecycle styling must expose only its four known semantic hooks");
+const unknownKindsHtml = details.render({
+  id: "unknown-semantic-kinds",
+  dates: ["unknown", "GENERAL-AVAILABILITY", "ffs ", '__proto__', null, {}].map((key) => ({ key, label: "General availability", value: "TBD" })),
+  lifecycle: ["unknown", "LAUNCH", "launch ", '__proto__', null, {}].map((key) => ({ key, label: "Launch", value: "Not set" })),
+});
+assert.ok(!unknownKindsHtml.includes("data-date-kind") && !unknownKindsHtml.includes("data-lifecycle-kind"), "display labels and arbitrary keys must not grant a semantic styling hook");
 
 const dualProduct = {
   variantGroups: [{ type: "color", items: [{ id: "dual", code: "WHT-PNK", colorName: "White", colorName2: "Pink", colorHex: "#eeeeee", colorHex2: "#ff5599" }] }],
@@ -226,7 +243,39 @@ const dualProduct = {
 };
 // Verify the actual application adapter supplies all six dates and the manual
 // mapping before handing its model to the shared renderer.
-const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
+const inspectorSource = appSource.match(/^function renderInspector\([^]*?^\}/m)?.[0];
+assert.ok(inspectorSource, "date-entry coverage requires the actual inspector renderer");
+for (const id of ["fieldGeneralAvailabilityDate", "fieldEndManufacturingDate"]) {
+  assert.equal([...inspectorSource.matchAll(new RegExp(`\\bid="${id}"`, "g"))].length, 1, "each canonical date must have exactly one rendered input, without counting handler references");
+}
+assert.ok(!/\bid="fieldRoadmap(?:Start|End)"/.test(inspectorSource), "Timeline must not create duplicate editable launch/end month controls");
+assert.match(inspectorSource, /<button\b[^>]*id="editProductDates"[^>]*type="button"[^>]*>Edit dates in Details<\/button>/, "Timeline must provide a clear shortcut to the canonical date controls");
+const dateShortcutHandler = inspectorSource.match(/\$\("#editProductDates"\)\.onclick = \(\) => \{[^]*?\n  \};/)?.[0];
+assert.ok(dateShortcutHandler, "the Timeline date shortcut must be wired");
+const dateShortcutEvents = [];
+const dateShortcutButton = {};
+const canonicalDateField = {
+  scrollIntoView(options) { dateShortcutEvents.push(["scroll", options.block]); },
+  focus(options) { dateShortcutEvents.push(["focus", options.preventScroll]); },
+};
+const dateShortcutSandbox = {
+  $(selector) {
+    if (selector === "#editProductDates") return dateShortcutButton;
+    assert.equal(selector, "#fieldGeneralAvailabilityDate", "the shortcut must target the canonical GA date control");
+    return canonicalDateField;
+  },
+  inspector: {
+    querySelector(selector) {
+      assert.equal(selector, '[data-editor-tab="details"]', "the shortcut must open Details before focusing its date field");
+      return { click: () => dateShortcutEvents.push(["tab", "details"]) };
+    },
+  },
+};
+vm.createContext(dateShortcutSandbox);
+new vm.Script(dateShortcutHandler).runInContext(dateShortcutSandbox);
+dateShortcutButton.onclick();
+assert.deepEqual(dateShortcutEvents, [["tab", "details"], ["scroll", "center"], ["focus", true]], "Timeline's date shortcut must open Details, reveal GA, and focus it in order");
 const appModelSandbox = {
   PortfolioModel: modelRules,
   PRODUCT_TIER_OPTIONS: ["", "Core", "Core+", "Hero", "Star", "Star+"],
@@ -252,15 +301,48 @@ const actualProduct = {
   globalAnnouncementDate: "2026-01-04",
   webReadinessDate: "2026-01-05",
   finalAssetsDate: "2026-01-06",
+  roadmap: { startMonth: "2026-01", launchMonth: "2026-01", endMonth: "2026-01", status: "in-development", confidence: "high" },
   specs: [],
 };
 const actualDetailModel = appModelSandbox.productDetailsModel(actualProduct);
 assert.deepEqual(JSON.parse(JSON.stringify(actualDetailModel.dates.map((item) => item.label))), dateLabels, "the actual app adapter must include all six date fields in order");
+assert.deepEqual(JSON.parse(JSON.stringify(actualDetailModel.dates.map((item) => item.key))), dateKeys, "the application must identify all six milestone fields without relying on their label text");
+assert.deepEqual(JSON.parse(JSON.stringify(actualDetailModel.lifecycle.map((item) => item.key))), ["stage", "confidence"], "matching launch/end months must not duplicate GA/EM dates in Overview");
 assert.deepEqual(JSON.parse(JSON.stringify(actualDetailModel.dates.map((item) => item.value))), ["Jan 1, 2026", "Jan 2, 2026", "Jan 3, 2026", "Jan 4, 2026", "Jan 5, 2026", "Jan 6, 2026"]);
 const actualDatesHtml = details.render(actualDetailModel, { surface: "viewer" });
 const actualDatesPanel = actualDatesHtml.match(/<section\b[^>]*data-detail-panel="overview"[^>]*>([\s\S]*?)<\/section>/);
 assert.ok(!actualDatesPanel[0].split(">")[0].includes("hidden"));
 for (const date of actualDetailModel.dates) assert.ok(actualDatesPanel[1].includes(`<span>${date.label}</span>`) && actualDatesPanel[1].includes(date.value), "actual product dates must remain visible in the primary information panel");
+assert.deepEqual([...actualDatesPanel[1].matchAll(/data-date-kind="([^"]+)"/g)].map((match) => match[1]), dateKeys, "actual milestone keys must survive the application-to-renderer boundary");
+assert.deepEqual([...actualDatesPanel[1].matchAll(/data-lifecycle-kind="([^"]+)"/g)].map((match) => match[1]), ["stage", "confidence"], "matching date months must render only Stage/Confidence in the lifecycle summary");
+assert.ok(!actualDatesPanel[1].includes("Planned launch") && !actualDatesPanel[1].includes("Planned end"), "matching exact dates must display once without redundant month rows");
+const savedPlanProduct = { ...actualProduct, roadmap: { ...actualProduct.roadmap, startMonth: "2026-02", launchMonth: "2026-02", endMonth: "2026-03" } };
+const originalSavedPlan = structuredClone(savedPlanProduct);
+const savedPlanModel = appModelSandbox.productDetailsModel(savedPlanProduct);
+assert.deepEqual(JSON.parse(JSON.stringify(savedPlanModel.lifecycle)), [
+  { key: "launch", label: "Planned launch", value: "Feb 2026" },
+  { key: "lifecycle-end", label: "Planned end", value: "Mar 2026" },
+  { key: "stage", label: "Stage", value: "In development" },
+  { key: "confidence", label: "Confidence", value: "high" },
+], "independently saved month plans must remain visible under clear planned-date labels");
+assert.deepEqual(savedPlanProduct, originalSavedPlan, "deduplicating Overview must not rewrite exact dates or legacy roadmap plans");
+const savedPlanHtml = details.render(savedPlanModel, { surface: "viewer" });
+assert.deepEqual([...savedPlanHtml.matchAll(/data-lifecycle-kind="([^"]+)"/g)].map((match) => match[1]), lifecycleKeys, "planned fallback dates must retain their teal/red semantic hooks through rendering");
+for (const [field, expectedKeys, expectedLabel] of [
+  ["generalAvailabilityDate", ["launch", "stage", "confidence"], "Planned launch"],
+  ["endManufacturingDate", ["lifecycle-end", "stage", "confidence"], "Planned end"],
+]) {
+  const fallbackModel = appModelSandbox.productDetailsModel({ ...actualProduct, [field]: "" });
+  assert.deepEqual(JSON.parse(JSON.stringify(fallbackModel.lifecycle.map((item) => item.key))), expectedKeys, "only the missing exact date should expose its saved month fallback");
+  assert.equal(fallbackModel.lifecycle[0].label, expectedLabel);
+  assert.equal(fallbackModel.lifecycle[0].value, "Jan 2026");
+}
+const missingPlanModel = appModelSandbox.productDetailsModel({ ...actualProduct, generalAvailabilityDate: "", endManufacturingDate: "", roadmap: { status: "in-development", confidence: "high" } });
+assert.deepEqual(JSON.parse(JSON.stringify(missingPlanModel.lifecycle.map((item) => item.key))), ["stage", "confidence"], "missing dates and absent roadmap months must not invent planned dates");
+const invalidPlanModel = appModelSandbox.productDetailsModel({ ...actualProduct, roadmap: { ...actualProduct.roadmap, startMonth: "invalid", endMonth: "2026-13" } });
+assert.deepEqual(JSON.parse(JSON.stringify(invalidPlanModel.lifecycle.map((item) => item.key))), ["stage", "confidence"], "invalid saved months must not appear as planned fallback rows");
+const legacyLaunchModel = appModelSandbox.productDetailsModel({ ...actualProduct, generalAvailabilityDate: "", roadmap: { ...actualProduct.roadmap, startMonth: "", launchMonth: "2025-12" } });
+assert.equal(legacyLaunchModel.lifecycle[0].value, "Dec 2025", "a legacy launchMonth remains visible when startMonth is absent");
 const missingDateModel = appModelSandbox.productDetailsModel({ ...actualProduct, ffsDate: "" });
 assert.equal(missingDateModel.dates[2].value, "TBD", "missing dates must remain visible as TBD rather than disappearing");
 assert.equal(missingDateModel.dates[2].empty, true);
@@ -364,6 +446,7 @@ const laneSnapshot = (dimensions) => JSON.parse(JSON.stringify(dimensions.laneRo
 const paneScenarios = [
   { name: "empty compact card", specs: [], full: false },
   { name: "bounded compact card", specs: longModel.specs, full: false },
+  { name: "bounded long compatibility values", specs: [{ label: "Compatibility", value: "Supported operating systems and devices ".repeat(8) }], full: false },
   { name: "full specifications", specs: Array.from({ length: 24 }, (_, index) => ({ label: `Compatibility ${index}`, value: "Detailed specification content ".repeat(9) })), full: true },
 ];
 for (const scenario of paneScenarios) {
@@ -385,9 +468,9 @@ for (const scenario of paneScenarios) {
       const card = { productId: `pane-${lane.id}`, x: 18, y: row.top, width: 246, height: layout.cardHeight };
       paneSandbox.renderedCards = [card];
       const parentHeight = card.height * drawZoom;
-      const expectedWidth = parentHeight <= 180 || scenario.specs.length > 14 ? 840 : parentHeight <= 280 ? 760 : 620;
+      const expectedWidth = parentHeight <= 180 ? 720 : parentHeight <= 280 ? 680 : 540;
       closeEnough(paneSandbox.viewerInfoVisualHeight(), parentHeight, "fallback height exactly follows the parent's rendered height");
-      assert.equal(paneSandbox.viewerInfoVisualWidth(), expectedWidth, "short or information-heavy cards gain horizontal space");
+      assert.equal(paneSandbox.viewerInfoVisualWidth(), expectedWidth, "short parent cards receive bounded horizontal room while tall cards keep compact specifications");
       paneSandbox.renderViewerInfo();
       assert.ok(viewerPane.innerHTML.includes('data-detail-surface="viewer"'), "the app must mount the shared detail controls on the viewer surface");
       assert.equal(bindCalls.at(-1).container, viewerPane);
@@ -409,7 +492,8 @@ for (const scenario of paneScenarios) {
         closeEnough(placement.paneLeft, (card.x + card.width) * drawZoom + 10, "pane remains beside its own product");
         closeEnough(placement.paneRight - placement.paneLeft, expectedWidth * progress, "opening reveals the pane horizontally");
         assert.equal(viewerPane.dataset.compactHeight, String(parentHeight <= 180));
-        assert.equal(viewerPane.dataset.detailColumns, String(parentHeight <= 280 || scenario.specs.length > 14 ? 2 : 1));
+        const hasLongValues = scenario.specs.some((item) => String(item.value ?? "").replace(/\s+/g, " ").trim().length > 80);
+        assert.equal(viewerPane.dataset.detailColumns, String(parentHeight <= 280 && !hasLongValues ? 2 : 1), "long category specifications must retain their full single-column width at every zoom");
         assert.equal(viewerPane.style.pointerEvents, progress > .96 ? "auto" : "none", "controls become interactive when the pane finishes opening");
         const exported = paneSandbox.getCanvasDimensions({ includeViewer: false });
         assert.equal(exported.width, closedDimensions.width, "exports omit the temporary horizontal detail reserve");
@@ -418,6 +502,29 @@ for (const scenario of paneScenarios) {
     }
   }
 }
+
+// Boundaries keep wide compatibility strings legible without rewarding large
+// specification counts with an unnecessarily wide pane. Whitespace from an
+// imported cell does not turn an otherwise short value into a long one.
+const positionedProductId = paneSandbox.viewerInfoProductId;
+paneSandbox.viewerInfoProductId = "pane-first";
+const boundaryProduct = paneSandbox.board.products.find((item) => item.id === "pane-first");
+for (const [height, expectedWidth] of [[180, 720], [180.01, 680], [280, 680], [280.01, 540], [1000, 540]]) {
+  assert.equal(paneSandbox.viewerInfoVisualWidth(height), expectedWidth, "pane width must respect exact parent-height boundaries");
+}
+for (const [value, height, expectedColumns] of [
+  ["a".repeat(80), 180, "2"],
+  [`  ${"a".repeat(40)}\n\t${"b".repeat(39)}  `, 280, "2"],
+  ["a".repeat(81), 180, "1"],
+  ["short", 280.01, "1"],
+]) {
+  boundaryProduct.specs = [{ label: "Compatibility", value }];
+  paneSandbox.setViewerInfoSize(paneSandbox.viewerInfoVisualWidth(height), height);
+  assert.equal(viewerPane.dataset.detailColumns, expectedColumns, "column selection must use normalized value length and available parent height");
+}
+boundaryProduct.specs = Array.from({ length: 100 }, (_, index) => ({ label: `Specification ${index}`, value: "Short" }));
+assert.equal(paneSandbox.viewerInfoVisualWidth(500), 540, "many short specifications must not inflate the normal pane width");
+paneSandbox.viewerInfoProductId = positionedProductId;
 
 // Use a deliberately different rendered height to catch accidental dependence
 // on category/card estimates when positioning the live pane.
@@ -435,4 +542,4 @@ paneSandbox.viewerInfoProgress = 0;
 paneSandbox.renderViewerInfo();
 assert.equal(viewerPane.innerHTML, "", "closing must clear the pane's obsolete content");
 
-console.log("Product detail tests passed: complete information and tab/copy controls, escaped markup, exact parent-height panes across compact/full-spec zoom and animation, stable lanes, horizontal reserves, and preserved clearing structure.");
+console.log("Product detail checks passed: complete information and tab/copy controls, escaped markup, exact parent-height panes across compact/full-spec zoom and animation, stable lanes, horizontal reserves, and preserved clearing structure.");

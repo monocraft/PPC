@@ -1,5 +1,22 @@
 # Change Log
 
+## 2026-10-07 — consolidated product date editing
+
+- Kept GA/EM and the other exact key-date inputs in Details as their single editing home. Removed duplicate launch/end month inputs from Timeline; Edit dates in Details switches tabs and focuses general availability.
+- Added `PortfolioModel.mergeProductUpdate()` to synchronize explicit product date edits with roadmap placement. Populated valid GA/EM derive their corresponding months; blank/TBD retains the planned month without inventing a day.
+- Protected roadmap dragging shifts known exact dates while preserving their day where possible and clamping to month end when needed. Unknown exact dates remain unknown, and other milestones retain their separate values. Schema normalization and unrelated edits preserve existing saved date/month differences.
+- Removed duplicate matching launch/end month rows from both Overview surfaces. Stage/confidence remain; Planned launch/Planned end appear only when exact dates are missing or their months differ.
+- Made normalized valid day-level ASCM GA/EM take priority over group month hints while retaining the existing additive, blank-date-preserving import behavior.
+- Updated current feature, audit, and continuation guidance without changing the public README or dated historical verification records.
+
+## 2026-10-07 — compact dates/specifications and public source layout
+
+- Aligned key-date values with fixed two-line label slots. General availability, FFS, and launch use the shared teal; end of manufacturing and lifecycle end use embargo red through whitelisted semantic keys.
+- Reduced the parent-height pane to 540 px normally, 680 px for parents at most 280 px tall, and 720 px for parents at most 180 px tall. Specification labels/values sit closer together. Two columns are limited to short parents whose normalized values are all at most 80 characters; longer text wraps in one column. Exact parent height, independent keyboard scrolling, stable lanes, and export geometry are preserved.
+- Moved the static site into `public/`: `public/index.html`, `public/js/` application modules, `public/css/styles.css`, `public/assets/`, and `public/vendor/`. The local server and Pages workflow publish that directory's contents as the site root, retaining the live app URL.
+- Consolidated development validation under `scripts/checks/` with `project.mjs`, `ascm-import.mjs`, `pptx-pagination.mjs`, `portfolio-model.mjs`, and `product-details.mjs`; `scripts/serve.mjs` remains the local-server entry point.
+- Updated current source maps and commands while preserving dated archive/publication/browser evidence below. The root README remains the short public introduction; detailed local guidance stays in ignored `project-data/private/README-INTERNAL.md`.
+
 ## 2026-10-07 — GitHub repository connection and code publication
 
 - Connected this workspace to `https://github.com/monocraft/PPC.git`; local `main` tracks `origin/main`. The remote baseline is `6665bd6e7e7589b31f317f3e931d8cfb6fec35ce` (2026-09-23, `Color Variant`).

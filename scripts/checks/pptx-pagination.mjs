@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-await import("../pptx-pagination.js");
+await import("../../public/js/pptx-pagination.js");
 
 const {
   MAX_PRODUCTS_PER_SLIDE,
@@ -87,7 +87,7 @@ assert.equal(JSON.stringify(exportCategories), sourceCategoriesBefore);
 
 // Use the real application selection, summary, planning, and slide composer.
 // The adapters replace DOM and file/image delivery, not export decisions.
-const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const sectionStart = appSource.indexOf("function addPptxPortfolioSlide(");
 const sectionEnd = appSource.indexOf("function exportPng(", sectionStart);
 assert.ok(sectionStart >= 0 && sectionEnd > sectionStart);
@@ -250,7 +250,7 @@ assert.equal(JSON.stringify(exportCategories), sourceCategoriesBefore, "selectio
 // OOXML and image payload with the same bundle's ZIP reader.
 const librarySandbox = { console, setTimeout, clearTimeout, setImmediate, clearImmediate, Buffer, Blob, URL, TextEncoder, TextDecoder };
 vm.createContext(librarySandbox);
-vm.runInContext(await readFile(new URL("../vendor/pptxgen.bundle.js", import.meta.url), "utf8"), librarySandbox, { timeout: 5000 });
+vm.runInContext(await readFile(new URL("../../public/vendor/pptxgen.bundle.js", import.meta.url), "utf8"), librarySandbox, { timeout: 5000 });
 assert.equal(typeof librarySandbox.PptxGenJS, "function");
 assert.equal(typeof librarySandbox.JSZip.loadAsync, "function");
 const realPptx = new librarySandbox.PptxGenJS();
@@ -283,4 +283,4 @@ assert.match(imageTarget, /^\.\.\/media\/.+\.png$/);
 const imagePayload = await realArchive.file(`ppt/${imageTarget.slice(3)}`).async("uint8array");
 assert.deepEqual(Buffer.from(imagePayload), Buffer.from(tinyPng, "base64"), "the image relationship resolves to the intact real PNG payload");
 assert.match(await realArchive.file("[Content_Types].xml").async("string"), /Extension="png"\s+ContentType="image\/png"/);
-console.log(`PPTX tests passed: pagination, category selection, actual preview/export coverage, numberless slide chrome, and real bundled-library OOXML (${serializedPptx.byteLength} bytes).`);
+console.log(`PPTX checks passed: pagination, category selection, actual preview/export coverage, numberless slide chrome, and real bundled-library OOXML (${serializedPptx.byteLength} bytes).`);

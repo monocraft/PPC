@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-await import("../ascm-import.js");
+await import("../../public/js/ascm-import.js");
 
 const importer = globalThis.ASCMImporter;
 assert.ok(importer, "ASCM importer should register on globalThis");
@@ -284,8 +284,8 @@ assert.ok(mergedLegacyVariants.variantGroups[0].items.some((item) => item.id ===
 // Exercise the application's actual plan/upsert/schema functions in isolation.
 // Only rendering/category activation is replaced; imports still traverse the
 // real board and portfolio normalizers used by the browser.
-await import("../portfolio-model.js");
-const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+await import("../../public/js/portfolio-model.js");
+const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 function appFunctionSource(name) {
   const definition = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, "m"));
   assert.ok(definition, `App integration fixture requires the actual ${name} function`);
@@ -302,7 +302,7 @@ const sandbox = {
   editorRows: [],
 };
 vm.createContext(sandbox);
-new vm.Script(await readFile(new URL("../catalog-data.js", import.meta.url), "utf8")).runInContext(sandbox);
+new vm.Script(await readFile(new URL("../../public/js/catalog-data.js", import.meta.url), "utf8")).runInContext(sandbox);
 const testedFunctions = [
   "id", "ensureImageAssetRegistry", "migrateLegacyProductImages", "standardColorByKey", "inferStandardColor",
   "variantGroup", "normalizeColorVariant", "normalizeLayoutVariant", "normalizeVariantGroup", "productVariantGroups",
@@ -314,7 +314,7 @@ const testedFunctions = [
   "ascmGroupBasePartNumbers", "ascmGroupDates", "ascmRecordSignature", "ascmProductNeedsUpdate", "buildAscmImportPlan",
   "ascmRoadmapStatus", "applyAscmGroupToProduct", "ascmProductId", "findPortfolioProductLocation", "applyAscmImportPlan",
   "normalizeOrdersForBoard", "makeProduct",
-  "selectedProduct", "categorySpecSets", "defaultSpecificationsForCategory", "spec", "updateBoard", "updateProduct",
+  "selectedProduct", "categorySpecSets", "defaultSpecificationsForCategory", "spec", "updateBoard", "updateProduct", "updateRoadmap",
 ];
 const specBindingStart = appSource.indexOf('  $("#addSpec").onclick =');
 const specBindingEnd = appSource.indexOf('  $("#addVariantGroup").onclick =', specBindingStart);
@@ -345,6 +345,8 @@ const appFixtureSource = `${appSource.slice(0, appSource.indexOf("const $ ="))}
     plan: buildAscmImportPlan,
     apply: applyAscmImportPlan,
     needsUpdate: ascmProductNeedsUpdate,
+    edit(patch) { updateProduct(selectedId, patch, false); },
+    moveSlot(patch) { updateRoadmap(selectedId, patch, false); },
     bindSpecEditor() {
       const product = selectedProduct();
       ${specBindingSource}
@@ -451,6 +453,49 @@ integration.apply({
 });
 const invalidAppProduct = integration.state().categories[0].board.products[0];
 assert.equal(invalidAppProduct.roadmap.startMonth, normalizedOriginalProduct.roadmap.startMonth, "invalid imported GA must not change the saved timeline start");
+
+// One date-editing source drives both displays; old month-only plans retain
+// their precision, and reopening does not silently rewrite saved timing.
+integration.load(structuredClone(normalizedOriginal));
+integration.edit({ generalAvailabilityDate: "2024-01-31", endManufacturingDate: "2024-03-31" });
+let dateEditedProduct = integration.state().categories[0].board.products[0];
+assert.equal(dateEditedProduct.roadmap.startMonth, "2024-01", "actual GA edit must update roadmap start");
+assert.equal(dateEditedProduct.roadmap.launchMonth, "2024-01", "actual GA edit must update the launch alias");
+assert.equal(dateEditedProduct.roadmap.endMonth, "2024-03", "actual EM edit must update roadmap end");
+integration.moveSlot({ startMonth: "2024-02", launchMonth: "2024-02", endMonth: "2024-04" });
+dateEditedProduct = integration.state().categories[0].board.products[0];
+assert.equal(dateEditedProduct.generalAvailabilityDate, "2024-02-29", "actual month drag clamps GA to leap-month end");
+assert.equal(dateEditedProduct.endManufacturingDate, "2024-04-30", "actual month drag clamps EM to target-month end");
+assert.equal(dateEditedProduct.roadmap.family, normalizedOriginalProduct.roadmap.family);
+assert.equal(dateEditedProduct.roadmap.status, normalizedOriginalProduct.roadmap.status);
+assert.equal(dateEditedProduct.roadmap.notes, normalizedOriginalProduct.roadmap.notes);
+integration.load(integration.state());
+assert.equal(integration.state().categories[0].board.products[0].generalAvailabilityDate, "2024-02-29", "synchronized dates survive reload");
+integration.edit({ generalAvailabilityDate: "", endManufacturingDate: "" });
+integration.moveSlot({ startMonth: "2025-05", endMonth: "2026-06" });
+dateEditedProduct = integration.state().categories[0].board.products[0];
+assert.equal(dateEditedProduct.generalAvailabilityDate, "", "month-only plans must not gain an invented day");
+assert.equal(dateEditedProduct.endManufacturingDate, "");
+assert.equal(dateEditedProduct.roadmap.startMonth, "2025-05");
+assert.equal(dateEditedProduct.roadmap.endMonth, "2026-06");
+integration.load(integration.state());
+assert.equal(integration.state().categories[0].board.products[0].roadmap.startMonth, "2025-05", "month-only timing survives reload");
+const independentlySaved = structuredClone(normalizedOriginal);
+independentlySaved.categories[0].board.products[0].roadmap.startMonth = "2025-08";
+independentlySaved.categories[0].board.products[0].roadmap.launchMonth = "2025-08";
+integration.load(independentlySaved);
+integration.edit({ priceLabel: "Updated label" });
+assert.equal(integration.state().categories[0].board.products[0].roadmap.startMonth, "2025-08", "unrelated edits must preserve independently saved timing");
+
+integration.load(structuredClone(normalizedOriginal));
+const conflictingMonthHints = { ...cloud, launchMonth: "2022-01", endMonth: "2038-12" };
+integration.apply({
+  dataset: integrationDataset, currentPns: cloud.basePns,
+  items: [{ group: conflictingMonthHints, match: importer.matchProductGroup(conflictingMonthHints, integration.state()), action: "update", matchedProductId: curatedProduct.id }],
+});
+const canonicalImportProduct = integration.state().categories[0].board.products[0];
+assert.equal(canonicalImportProduct.roadmap.startMonth, cloud.gaDate.slice(0, 7), "valid imported GA must take priority over stale month hints");
+assert.equal(canonicalImportProduct.roadmap.endMonth, cloud.emDate.slice(0, 7), "valid imported EM must take priority over stale month hints");
 
 integration.load(structuredClone(normalizedOriginal));
 const addDataset = { rows: [rows[2], rows[3]], metadata: {} };
@@ -591,4 +636,4 @@ const editedThenRemoved = integration.state().categories[0].board.products[0].sp
 assert.equal(editedThenRemoved.length, normalizedOriginalProduct.specs.length - 1);
 assert.equal(editedThenRemoved[0].value, "Edited before removal", "removing another specification must retain current edits");
 
-console.log("ASCM importer tests passed: grouping, matching, additive updates, preserved specs/prices/images, partial reports, idempotence, app normalization/category moves, new-product category/lane baseline specs, and specification editing.");
+console.log("ASCM importer checks passed: grouping, matching, additive updates, preserved specs/prices/images, partial reports, idempotence, app normalization/category moves, new-product category/lane baseline specs, and specification editing.");

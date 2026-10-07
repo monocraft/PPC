@@ -6,8 +6,9 @@
   "type": "module",
   "scripts": {
     "serve": "node scripts/serve.mjs",
-    "validate": "node scripts/validate-project.mjs",
-    "test": "node scripts/validate-project.mjs && node scripts/test-ascm-import.mjs && node scripts/test-pptx-pagination.mjs && node scripts/test-portfolio-model.mjs && node scripts/test-product-details.mjs"
+    "validate": "node scripts/checks/project.mjs",
+    "check": "node scripts/checks/project.mjs && node scripts/checks/ascm-import.mjs && node scripts/checks/pptx-pagination.mjs && node scripts/checks/portfolio-model.mjs && node scripts/checks/product-details.mjs",
+    "test": "npm run check"
   },
   "engines": {
     "node": ">=20"
