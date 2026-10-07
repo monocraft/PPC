@@ -72,9 +72,9 @@ assert.deepEqual(
 );
 
 const exportCategories = [
-  { id: "alpha", name: "Audio 2", board: { products: [...longFamilyProducts.map((product) => ({ ...product, family: "Long Family" })), ...secondFamilyProducts.map((product) => ({ ...product, family: "Second Family" }))] } },
-  { id: "beta", name: "Console <limited>", board: { products: [{ id: "console-1", family: "Cloud" }, { id: "console-2", family: "Cloud" }] } },
-  { id: "empty", name: "Empty", board: { products: [] } },
+  { id: "alpha", name: "Audio 2", board: { lanes: [{ id: "main", label: "Main", order: 0 }], products: [...longFamilyProducts.map((product, order) => ({ ...product, laneId: "main", order, family: "Long Family", roadmap: { family: "Long Family" } })), ...secondFamilyProducts.map((product, index) => ({ ...product, laneId: "main", order: longFamilyProducts.length + index, family: "Second Family", roadmap: { family: "Second Family" } }))] } },
+  { id: "beta", name: "Console <limited>", board: { lanes: [{ id: "main", label: "Main", order: 0 }], products: [{ id: "console-1", laneId: "main", order: 0, family: "Cloud", roadmap: { family: "Cloud" } }, { id: "console-2", laneId: "main", order: 1, family: "Cloud", roadmap: { family: "Cloud" } }] } },
+  { id: "empty", name: "Empty", board: { lanes: [{ id: "main", label: "Main", order: 0 }], products: [] } },
   { id: "unavailable", name: "No board" },
 ];
 const sourceCategoriesBefore = JSON.stringify(exportCategories);
@@ -205,6 +205,9 @@ assert.equal(JSON.stringify(renderCategory), categoryBeforeRender, "failed rende
 const sectionStart = appSource.indexOf("function addPptxPortfolioSlide(");
 const sectionEnd = appSource.indexOf("function exportPng(", sectionStart);
 assert.ok(sectionStart >= 0 && sectionEnd > sectionStart);
+const productPagesStart = appSource.indexOf("function productPagesForPptx(");
+const productPagesEnd = appSource.indexOf("async function renderCategoryImageForPptx(", productPagesStart);
+assert.ok(productPagesStart >= 0 && productPagesEnd > productPagesStart);
 let selectedScope = "both";
 const categoryInputs = exportCategories.filter((category) => category.board).map((category) => ({ value: category.id, checked: true }));
 const exportControls = new Map(["pptxExportCategories", "pptxExportCategoryCount", "pptxExportSlideCount", "pptxSelectAllCategories", "pptxExportSelectionHint"].map((id) => [`#${id}`, { textContent: "", innerHTML: "" }]));
@@ -230,8 +233,9 @@ class RecordingPptx {
   }
   async writeFile({ fileName }) { this.fileName = fileName; }
 }
-function recordImage(kind, category, groups = null) {
-  const productIds = Array.from(groups ? groups.flatMap((group) => group.products) : category.board.products, (product) => product.id);
+function recordImage(kind, category, page = null) {
+  const pageProducts = kind === "products" ? page.rows.flatMap((row) => row.products) : page.flatMap((group) => group.products);
+  const productIds = Array.from(pageProducts, (product) => product.id);
   const image = kind === "products" ? { data: `${kind}:${category.id}`, width: 1200, height: 600 } : { data: `${kind}:${category.id}`, width: 800, height: 1600 };
   image.products = productIds.map((id, index) => kind === "products" ? {
     kind: "card", id, name: `Product ${id}`,
@@ -249,11 +253,12 @@ function recordImage(kind, category, groups = null) {
     x: 80, y: 120 + index * 52, width: 640, height: 38,
     fill: "#96C6BA", textColor: "#171717", lineColor: "#345678", concept: index % 2 === 1, fontSize: 12,
   });
-  renderCalls.push({ kind, categoryId: category.id, productIds, image });
+  renderCalls.push({ kind, categoryId: category.id, productIds, image, page });
   return image;
 }
 const sandbox = {
   PPTXPagination: globalThis.PPTXPagination, paginateRoadmapGroupsForPptx: paginateRoadmapGroups,
+  CARD_WIDTH: 246, CARD_GAP: 10, GUTTER: 18, SIDE_PADDING: 40, LANE_TOP: 34,
   portfolio: { categories: exportCategories }, pptxSelectedCategoryIds: null, pptxExportInProgress: false,
   pptxExportDialog: { classList: { add() {}, remove() {} } }, confirmPptxExportButton: { disabled: false },
   pptxExportForm: {
@@ -263,19 +268,44 @@ const sandbox = {
   $: (selector) => exportControls.get(selector),
   escapeHtml: (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]),
   categoryDefinition: (id) => ({ id }), ensureBoardSchema: (board) => board,
+  productCardLayout: () => ({ cardHeight: 552, laneHeight: 622, detailed: false }),
+  inferFamily: (name) => name || "Other",
   roadmapGroupsForProducts: (products) => [...new Set(products.map((product) => product.family))].map((family) => ({ family, products: products.filter((product) => product.family === family) })),
   closePopupMenus() {}, renderActiveView() {}, PptxGenJS: RecordingPptx,
   PPTXEditable: { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) },
   downloadBlob() {},
-  renderCategoryImageForPptx: async (category) => recordImage("products", category),
+  renderCategoryImageForPptx: async (category, page) => recordImage("products", category, page),
   renderCategoryRoadmapImageForPptx: async (category, groups) => recordImage("roadmap", category, groups),
 };
 vm.createContext(sandbox);
-vm.runInContext(appSource.slice(sectionStart, sectionEnd), sandbox);
+vm.runInContext(appSource.slice(productPagesStart, productPagesEnd) + appSource.slice(sectionStart, sectionEnd), sandbox);
+const productBoundaryCategory = (productCount, laneCount = 1) => ({
+  id: `boundary-${productCount}-${laneCount}`, name: "Pagination boundary",
+  board: {
+    lanes: Array.from({ length: laneCount }, (_, index) => ({ id: `lane-${index}`, label: `Lane ${index + 1}`, order: index })),
+    products: Array.from({ length: productCount }, (_, index) => ({ id: `boundary-product-${index}`, name: "Boundary family", laneId: `lane-${index % laneCount}`, order: index })),
+  },
+});
+for (const [productCount, expectedRows] of [[13, [13]], [14, [13, 1]]]) {
+  const category = productBoundaryCategory(productCount);
+  const before = JSON.stringify(category);
+  const planned = sandbox.buildPptxExportPlan("products", [category]);
+  assert.deepEqual(Array.from(planned, (slide) => Array.from(slide.page.rows, (row) => row.products.length)), [expectedRows], "the real application limits horizontal product rows without unnecessarily adding a slide");
+  assert.equal(sandbox.pptxSlideCountForScope("products", [category]), planned.length, "product boundary previews use the actual page plan");
+  assert.ok(planned.every((slide) => slide.page.layout.cardHeight === 552), "each product page carries the category's real card layout to its renderer");
+  assert.equal(JSON.stringify(category), before, "boundary planning leaves the saved category unchanged");
+}
+const tallCategory = productBoundaryCategory(5, 5);
+const tallPlan = sandbox.buildPptxExportPlan("products", [tallCategory]);
+assert.equal(tallPlan.length, 5, "many short lanes paginate vertically instead of shrinking every lane into one slide");
+assert.equal(sandbox.pptxSlideCountForScope("products", [tallCategory]), tallPlan.length, "height pagination is included in the preview");
+assert.deepEqual(Array.from(tallPlan, (slide) => slide.pageIndex), [0, 1, 2, 3, 4]);
+assert.ok(tallPlan.every((slide) => slide.pageCount === 5 && slide.page.rows.length === 1));
+assert.equal(new Set(tallPlan.map((slide) => `${slide.page.width}:${slide.page.height}`)).size, 1, "continuation pages retain a consistent product scale");
 sandbox.renderPptxExportCategories();
 assert.ok(exportControls.get("#pptxExportCategories").innerHTML.includes("Console &lt;limited&gt;"), "category picker safely displays saved names");
 assert.ok(!exportControls.get("#pptxExportCategories").innerHTML.includes('value="unavailable"'));
-for (const [scope, expectedSlides] of [["products", 2], ["roadmap", 4], ["both", 6]]) {
+for (const [scope, expectedSlides] of [["products", 3], ["roadmap", 4], ["both", 7]]) {
   selectedScope = scope;
   sandbox.setPptxCategorySelection(["beta", "alpha", "stale"]);
   assert.equal(exportControls.get("#pptxExportCategoryCount").textContent, "2");
@@ -340,15 +370,16 @@ assert.ok(!hintClasses.has("is-empty"), "export progress does not mark a valid c
 sandbox.pptxExportInProgress = false;
 
 for (const [scope, expectedKinds, expectedFilename] of [
-  ["products", ["products:alpha", "products:beta"], "product-portfolio.pptx"],
+  ["products", ["products:alpha", "products:alpha", "products:beta"], "product-portfolio.pptx"],
   ["roadmap", ["roadmap:alpha", "roadmap:alpha", "roadmap:alpha", "roadmap:beta"], "product-roadmaps.pptx"],
-  ["both", ["products:alpha", "roadmap:alpha", "roadmap:alpha", "roadmap:alpha", "products:beta", "roadmap:beta"], "product-portfolio-and-roadmaps.pptx"],
+  ["both", ["products:alpha", "products:alpha", "roadmap:alpha", "roadmap:alpha", "roadmap:alpha", "products:beta", "roadmap:beta"], "product-portfolio-and-roadmaps.pptx"],
 ]) {
   renderCalls.length = 0;
   await sandbox.exportPptx(scope, ["beta", "alpha", "stale", "alpha"]);
   const deck = decks.at(-1);
   assert.deepEqual(renderCalls.map((call) => `${call.kind}:${call.categoryId}`), expectedKinds, "the actual export renders only chosen categories in portfolio order");
   assert.equal(deck.slides.length, expectedKinds.length);
+  assert.equal(sandbox.pptxSlideCountForScope(scope, PPTXPagination.selectExportCategories(exportCategories, ["alpha", "beta"])), deck.slides.length, "the dialog preview and actual paginated export agree");
   assert.equal(deck.fileName, expectedFilename);
   for (const category of exportCategories.slice(0, 2)) {
     for (const kind of ["products", "roadmap"].filter((kind) => scope === "both" || scope === kind)) {
@@ -358,11 +389,11 @@ for (const [scope, expectedKinds, expectedFilename] of [
   deck.slides.forEach((slide, index) => {
     const call = renderCalls[index];
     const category = exportCategories.find((item) => item.id === call.categoryId);
-    const previousSameRoadmap = call.kind === "roadmap" && renderCalls.slice(0, index).some((earlier) => earlier.kind === call.kind && earlier.categoryId === call.categoryId);
+    const previousSameView = renderCalls.slice(0, index).some((earlier) => earlier.kind === call.kind && earlier.categoryId === call.categoryId);
     const expectedProducts = call.image.products;
     const nativeProductTexts = slide.texts.slice(1);
     assert.equal(slide.texts.length, 1 + expectedProducts.length * (call.kind === "roadmap" ? 1 : 4), "product labels, prices, specifications, and SKUs remain native editable text beside the slide title");
-    assert.equal(slide.texts[0].text, `${category.name} — ${call.kind === "products" ? "Product Portfolio" : "Roadmap"}${previousSameRoadmap ? " (continued)" : ""}`, "continuation titles retain user content without numeric pagination");
+    assert.equal(slide.texts[0].text, `${category.name} — ${call.kind === "products" ? "Product Portfolio" : "Roadmap"}${previousSameView ? " (continued)" : ""}`, "both portfolio and roadmap continuation titles retain user content without numeric pagination");
     assert.equal(slide.background.color, "171717");
     assert.equal(slide.shapes.length, 1 + (call.kind === "products" ? expectedProducts.length : 0), "each portfolio card retains its own editable rounded rectangle");
     assert.deepEqual(structuredClone(slide.shapes[0].options.line), { color: "2B2E2B", width: .4, transparency: 25 }, "slide divider remains faint");
@@ -373,6 +404,8 @@ for (const [scope, expectedKinds, expectedFilename] of [
     assert.ok(Math.abs(image.w / image.h - (call.kind === "products" ? 2 : .5)) < 1e-8, "slide composition preserves image proportions");
     const scale = image.w / call.image.width;
     if (call.kind === "products") {
+      assert.ok(call.page.rows.every((row) => row.products.length <= 13), "the renderer receives no portfolio row wider than 13 products");
+      assert.ok(call.page.rows.length <= call.page.rowsPerSlide, "the renderer receives only rows that fit the page height");
       const partsByName = new Map([
         ...slide.texts.map((part) => [part.options.objectName, { ...part.options, text: part.text, kind: "text" }]),
         ...slide.shapes.map((part) => [part.options.objectName, { ...part.options, type: part.type, kind: "shape" }]),
@@ -423,7 +456,7 @@ await assert.rejects(sandbox.exportPptx("products", ["stale"]), /Select at least
 assert.equal(decks.length, deckCountBeforeEmpty, "empty or stale selections never create a PowerPoint file");
 assert.deepEqual(renderCalls, []);
 await sandbox.exportPptx("products");
-assert.deepEqual(renderCalls.map((call) => call.categoryId), ["alpha", "beta", "empty"], "the API's default still exports all available categories");
+assert.deepEqual(renderCalls.map((call) => call.categoryId), ["alpha", "alpha", "beta", "empty"], "the API's default still exports all available categories with the required continuation pages");
 assert.equal(JSON.stringify(exportCategories), sourceCategoriesBefore, "selection/planning never deletes or reorders saved category data");
 
 // Serialize a real slide through the shipped library, then inspect its actual

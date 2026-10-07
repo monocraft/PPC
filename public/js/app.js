@@ -1533,17 +1533,16 @@ function detailedSpecsHeight(product) {
   return detailedSpecRows(product?.specs).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
 }
 
-function productCardLayout() {
-  const lanes = sortedLanes();
-  const definition = categoryDefinition();
+function productCardLayout(targetBoard = board, definition = categoryDefinition()) {
+  const lanes = targetBoard === board ? sortedLanes() : [...targetBoard.lanes].sort((a, b) => a.order - b.order);
   const supportsDetailedCards = lanes.length === 1 || definition.fullSpecCards === true;
-  const products = board.products;
+  const products = targetBoard.products;
   const detailed = supportsDetailedCards && products.some((product) => product.specs.length);
   if (!detailed) {
     // Size the category together so filtering never moves cards or their hit regions.
     const rowsTop = TITLE_BLOCK_TOP + DETAILS_TOP_OFFSET + 9;
     const maxContentHeight = Math.max(0, ...products.map((product) => (
-      rowsTop + product.specs.length * 32 + (board.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
+      rowsTop + product.specs.length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
     )));
     const cardHeight = Math.max(300, Math.min(CARD_HEIGHT, maxContentHeight));
     return {
@@ -1559,7 +1558,7 @@ function productCardLayout() {
   }
 
   const maxDetailsHeight = Math.max(0, ...products.map((product) => detailedSpecsHeight(product)));
-  const maxFooterHeight = board.settings.showSkus
+  const maxFooterHeight = targetBoard.settings.showSkus
     ? Math.max(0, ...products.map((product) => variantFooterLayout(product).height))
     : 0;
   const detailsTop = FULL_SPEC_TITLE_TOP + FULL_SPEC_DETAILS_TOP_OFFSET;
@@ -1931,18 +1930,25 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
 
   const lanes = sortedLanes();
   const products = visibleProducts();
-  const layout = productCardLayout();
+  const layout = dimensions.layout || productCardLayout();
   renderedCards = [];
   renderedVariantOverflow = [];
   renderedHeroVariantRegions = [];
   renderedInfoButtons = [];
 
   const laneRows = dimensions.laneRows || productLaneGeometry(layout).rows;
-  laneRows.forEach(({ lane, top: laneY, contentHeight }) => {
+  laneRows.forEach(({ lane, top: laneY, contentHeight, products: rowProducts, continued }) => {
     roundRect(context, 0, laneY - 4, dimensions.width, contentHeight + 8, 0, UI_PALETTE.charcoal800);
-    const laneProducts = products
-      .filter((product) => product.laneId === lane.id)
+    const laneProducts = (rowProducts || products.filter((product) => product.laneId === lane.id))
+      .slice()
       .sort((a, b) => a.order - b.order);
+    if (dimensions.pptxPage) {
+      context.fillStyle = UI_PALETTE.silver;
+      context.font = "700 11px Arial";
+      context.textAlign = "left";
+      const label = lane.name || lane.label || lane.id || "Products";
+      context.fillText(`${label}${continued ? " (continued)" : ""}`, GUTTER, laneY - (layout.detailed ? 31 : 13), dimensions.width - GUTTER - SIDE_PADDING);
+    }
     if (layout.detailed) drawDetailedFamilyHeaders(context, laneProducts, laneY);
 
     if (!includeProducts) return;
@@ -5322,7 +5328,19 @@ function recordCardElementsForPptx(cardCanvas, product, layout) {
   return elements;
 }
 
-async function renderCategoryImageForPptx(category) {
+function productPagesForPptx(category, targetBoard = null) {
+  const definition = categoryDefinition(category.id);
+  const categoryBoard = targetBoard || ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
+  const layout = productCardLayout(categoryBoard, definition);
+  return PPTXPagination.paginateProductLanes(categoryBoard.lanes, categoryBoard.products, {
+    cardWidth: CARD_WIDTH, cardGap: CARD_GAP, cardHeight: layout.cardHeight,
+    laneGap: layout.laneHeight - layout.cardHeight, gutter: GUTTER, sidePadding: SIDE_PADDING,
+    top: LANE_TOP + 18, bottom: 20,
+    getFamily: (product) => String(product.roadmap?.family || inferFamily(product.name) || "Other").trim(),
+  }).map((page) => ({ ...page, layout }));
+}
+
+async function renderCategoryImageForPptx(category, page = null) {
   const previous = {
     activeCategoryId,
     board,
@@ -5353,8 +5371,22 @@ async function renderCategoryImageForPptx(category) {
     dragState = null;
     hoveredHeroVariant = null;
 
-    await preloadCategoryImagesForPptx(board.products);
-    const dimensions = getCanvasDimensions({ includeViewer: false });
+    const exportPage = page || productPagesForPptx(category, categoryBoard)[0];
+    const layout = exportPage.layout;
+    const byId = new Map(board.products.map((product) => [product.id, product]));
+    const laneRows = exportPage.rows.map((row, index) => ({
+      lane: row.lane,
+      top: LANE_TOP + 18 + index * layout.laneHeight,
+      contentHeight: layout.cardHeight,
+      continued: row.continued,
+      products: row.products.map((product) => {
+        const exportedProduct = byId.get(product.id);
+        if (!exportedProduct) throw new Error("A product could not be found on its PowerPoint page.");
+        return exportedProduct;
+      }),
+    }));
+    await preloadCategoryImagesForPptx(laneRows.flatMap((row) => row.products));
+    const dimensions = { width: exportPage.width, height: exportPage.height, laneRows, layout, includeViewer: false, pptxPage: true };
     const exportCanvas = document.createElement("canvas");
     const maxPixelWidth = 2800;
     const scale = Math.min(1, maxPixelWidth / dimensions.width);
@@ -5367,12 +5399,8 @@ async function renderCategoryImageForPptx(category) {
     drawBoardTo(exportContext, dimensions, false, true, false);
 
     const products = [];
-    const layout = productCardLayout();
     const shadowPadding = 8;
-    dimensions.laneRows.forEach(({ lane, top }) => {
-      const laneProducts = board.products
-        .filter((product) => product.laneId === lane.id)
-        .sort((a, b) => a.order - b.order);
+    dimensions.laneRows.forEach(({ products: laneProducts, top }) => {
       laneProducts.forEach((product, displayIndex) => {
         const x = cardXForDisplayIndex(laneProducts, displayIndex, false);
         const cardCanvas = document.createElement("canvas");
@@ -5586,10 +5614,13 @@ function buildPptxExportPlan(scope, categories) {
 
   categories.forEach((category, categoryIndex) => {
     const definition = categoryDefinition(category.id);
-    const targetBoard = ensureBoardSchema(category.board, definition);
+    const targetBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
 
     if (includeProducts) {
-      slides.push({ category, categoryIndex, kind: "products", pageIndex: 0, pageCount: 1 });
+      const pages = productPagesForPptx(category, targetBoard);
+      pages.forEach((page, pageIndex) => {
+        slides.push({ category, categoryIndex, kind: "products", page, pageIndex, pageCount: pages.length });
+      });
     }
 
     if (includeRoadmap) {
@@ -5715,7 +5746,7 @@ async function exportPptx(scope = "both", selectedCategoryIds = null) {
   for (let index = 0; index < exportPlan.length; index += 1) {
     const planItem = exportPlan[index];
     const image = planItem.kind === "products"
-      ? await renderCategoryImageForPptx(planItem.category)
+      ? await renderCategoryImageForPptx(planItem.category, planItem.page)
       : await renderCategoryRoadmapImageForPptx(planItem.category, planItem.groups);
     addPptxPortfolioSlide(
       pptx,
