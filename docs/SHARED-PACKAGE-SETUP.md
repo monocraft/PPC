@@ -1,17 +1,23 @@
-# Shared package setup without Azure
+# Unified SharePoint master package
+
+The package builder and encrypted local imports are available now. The authoritative `master_ppc.pkg` stays in SharePoint. Automatic pulling from the public app is still awaiting an approved cloud retrieval connection; neither a folder link nor a normal private file viewing link supplies that connection. This PC is not the production package host.
 
 The viewer presses **Pull latest data**, enters a package key, and loads one encrypted package containing the Portfolio, Roadmap, and included product images. The package is decrypted and validated before the browser replaces its current workspace. The key is required for each pull and is not saved by the relay. The SharePoint link and package contents are not embedded in the public site.
 
-The portable relay uses Node.js on an approved computer or server. Azure is not required. A signed-in owner or an approved synchronization job maintains a local mirror of the private SharePoint file. Viewers do not sign in to Microsoft through the application; they use the package key. The synchronization owner still needs Microsoft access, and the relay host must remain available.
+The optional portable relay uses Node.js on an approved remote host. This PC is not configured as the production host. Azure is not required. A signed-in owner or an approved synchronization job maintains a local mirror of the private SharePoint file. Viewers do not sign in to Microsoft through the application; they use the package key. The synchronization owner still needs Microsoft access, and the relay host must remain available.
 
 ## 1. Publish the encrypted master package
 
-1. Open the complete Portfolio workspace and choose **Settings → Data & export → Export project package**. Keep **Protect the package with a key** selected. Enter the current package key to publish an update, or choose **Create new key** for the first publication. Choose **Export package** to download the encrypted `master_ppc.pkg`. The key remains available to copy until **Done** closes the dialog; keep it separately from the file. The optional unprotected private-backup choice is off by default.
+1. Open the complete Portfolio workspace and choose **Settings → Data & export → Build master package**. Keep **Protect the package with a key** selected. Enter the current package key to publish an update, or choose **Create new key** for the first publication. Choose **Build package** to download the encrypted `master_ppc.pkg`. The key remains available to copy until **Done** closes the dialog; keep it separately from the file. The optional unprotected private-backup choice is off by default.
 2. Name the encrypted result `master_ppc.pkg` and upload it to your chosen SharePoint folder. If the initial file is a legacy unencrypted package, import it locally and export an encrypted shared package first. Renaming an unencrypted file does not encrypt it.
 3. Keep the SharePoint file private. Give the publishing owners edit permission and the synchronization account read permission. An **Anyone** link is unnecessary for this setup. Microsoft explains that Anyone links allow access without authentication and can be forwarded: [SharePoint sharing link types](https://learn.microsoft.com/en-us/sharepoint/shareable-links-anyone-specific-people-organization).
 4. Replace the same file when publishing updates, using the same package key while it remains valid. A changed key takes effect as soon as the new encrypted package reaches the relay; distribute the replacement key separately.
 
 One package is authoritative for both application views. Pulling it replaces the current workspace rather than merging two independently maintained Portfolio and Roadmap exports. Keep a local backup before pulling if local changes must be retained.
+
+For every update: open the current master, make the product or roadmap changes, build with the existing key, and replace the same `master_ppc.pkg` in SharePoint. If the browser adds a suffix such as `(1)` to the downloaded name, restore the exact master filename before replacing it. Confirm the upload has completed before announcing the update. There is no application rebuild or GitHub deployment for a data-only package update once a cloud source connection is active. The key must change only when the publisher deliberately rotates access.
+
+Until automatic retrieval is connected, authorized SharePoint users can download the master and choose **Settings → Data & export → Import project package**, then enter the package key. The key unlocks the file; SharePoint continues to control who can download it.
 
 ## 2. Mirror the private SharePoint file
 
