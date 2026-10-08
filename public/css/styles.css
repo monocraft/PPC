@@ -131,7 +131,8 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .category-switcher { display: grid; gap: 2px; width: min(250px, 100%); min-width: 0; }
 .brand-block .eyebrow { margin: 0 0 2px; font-size: 7px; }
 .category-select { display: block; width: 100%; padding: 6px 25px 6px 8px; background: #202020; color: #d5dcd6; font-size: 11px; }
-.view-switch { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid #303030; border-radius: 6px; background: #121212; }
+.view-switch { display: flex; align-items: center; gap: 8px; padding: 3px; border: 1px solid #303030; border-radius: 6px; background: #121212; }
+.view-switch-separator { flex: 0 0 1px; width: 1px; height: 17px; background: #3b423e; }
 .view-tab { min-height: 30px; padding: 6px 12px; border: 1px solid transparent; background: transparent; color: #878c88; font-size: 11px; white-space: nowrap; }
 .view-tab:hover { border-color: transparent; background: #232323; }
 .view-tab.is-active { border-color: #444c47; background: #303633; color: #dbe3dc; }

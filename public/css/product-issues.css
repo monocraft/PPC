@@ -1,0 +1,45 @@
+.product-issues-dialog { color: #d6dfdb; background: #171e1b; border: 1px solid #486057; border-radius: 16px; width: min(760px, calc(100vw - 36px)); max-height: min(86vh, 900px); padding: 0; box-shadow: 0 24px 90px #0008; }
+.product-issues-dialog::backdrop { background: #050a08ad; backdrop-filter: blur(4px); }
+.product-issues-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 26px 16px; }
+.product-issues-header h2 { margin: 6px 0 0; font-size: 24px; line-height: 1.25; }
+.product-issues-count { display: inline-block; vertical-align: middle; border-radius: 14px; padding: 3px 9px; background: #31463d; color: #cee1d6; font-size: 14px; }
+.product-issues-summary { margin: 0; padding: 0 26px 14px; color: #a7b8ae; font-size: 13px; line-height: 1.6; }
+.product-issues-feedback { margin: 0; padding: 0 26px; color: #e4c98d; font-size: 13px; line-height: 1.5; }
+.product-issues-feedback:not(:empty) { padding-bottom: 14px; }
+.product-issues-list { overflow: auto; padding: 0 26px 22px; max-height: min(58vh, 610px); overscroll-behavior: contain; }
+.product-issue-card { padding: 18px; border: 1px solid #38473f; border-radius: 12px; margin-top: 14px; background: #1c2620; }
+.product-issue-card:first-child { margin-top: 0; }
+.product-issue-heading h3 { margin: 7px 0 9px; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+.product-issue-severity { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; color: #a8c9b7; }
+.product-issue-card.is-error .product-issue-severity { color: #eda8a1; }
+.product-issue-card.is-warning .product-issue-severity { color: #e8c88c; }
+.product-issue-card p { margin: 8px 0; color: #c0cbc4; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.product-issue-card .product-issue-guidance { color: #9caf9f; }
+.product-issue-locations { list-style: none; padding: 0; margin: 16px 0 0; }
+.product-issue-locations li { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid #34463a; padding: 13px 0; }
+.product-issue-locations li:last-child { padding-bottom: 0; }
+.product-issue-locations li > div { min-width: 0; }
+.product-issue-locations strong, .product-issue-locations span, .product-issue-locations small { display: block; overflow-wrap: anywhere; }
+.product-issue-locations strong { font-size: 13px; font-weight: 650; }
+.product-issue-locations span { font-size: 12px; color: #a7b8ae; margin-top: 4px; }
+.product-issue-locations small { color: #84978a; margin-top: 4px; }
+.product-issue-locations button { flex-shrink: 0; }
+.product-issue-locations button span { display: inline; margin: 0; color: inherit; }
+.product-issues-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px solid #35453b; padding: 17px 26px; background: #1b251f; }
+.product-issues-footer > span { margin-right: auto; max-width: 350px; color: #91a99a; font-size: 11px; line-height: 1.5; }
+.product-issues-empty { padding: 40px 24px; text-align: center; color: #a7b8ae; }
+.product-issues-empty > span { display: inline-grid; place-items: center; width: 42px; height: 42px; background: #293f31; color: #bddbc7; border-radius: 50%; font-size: 22px; }
+.product-issues-empty h3 { font-size: 18px; margin: 16px 0 8px; color: #d5e2d8; }
+.product-issues-empty p { font-size: 13px; line-height: 1.6; }
+.product-issue-focus, .product-issue-target { outline: 2px solid #d6b77b !important; outline-offset: 4px; border-radius: 5px; box-shadow: 0 0 0 7px #d6b77b17; }
+@media (max-width: 560px) {
+  .product-issues-dialog { width: calc(100vw - 22px); max-height: 92vh; border-radius: 12px; }
+  .product-issues-header { padding: 20px 18px 14px; }
+  .product-issues-summary, .product-issues-feedback { padding-left: 18px; padding-right: 18px; }
+  .product-issues-list { padding-left: 18px; padding-right: 18px; max-height: 61vh; }
+  .product-issue-card { padding: 14px; }
+  .product-issue-locations li { align-items: flex-start; gap: 10px; }
+  .product-issue-locations button { font-size: 11px; padding: 8px; }
+  .product-issues-footer { flex-wrap: wrap; padding: 14px 18px; }
+  .product-issues-footer > span { width: 100%; max-width: none; }
+}
