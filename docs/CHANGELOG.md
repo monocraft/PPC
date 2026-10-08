@@ -1,5 +1,13 @@
 # Change Log
 
+## 2026-10-08 — compact view tools, practical zoom and readable specifications
+
+- Combine search, view tools, product count and selected-product actions into one desktop row for Products and Roadmap. Place sorting and secondary view actions in compact disclosures that open over the workspace, with keyboard dismissal and reliable focus restoration.
+- Retain readable controls and compact wrapping on narrower screens, keeping the category, primary view tabs, messages, updates, export and settings accessible.
+- Use familiar proportional zoom stops with finer low-scale increments, preserve the visible center while zooming, and return to 100% by clicking the percentage. Fit retains at least 65% for product cards and 40% for the timeline, with scrolling for larger collections. Clamp invalid or legacy tiny scales to the supported manual bounds.
+- Use the same readable silver text for every product specification value, including microphone and keyboard values previously shown in darker colors. The shared card renderer carries the correction into PNG and PowerPoint exports.
+- Remove repeated product/lane counts, view labels, import dates and storage notes from the footer; retain only the latest accepted update time and expandable comment.
+
 ## 2026-10-08 — portfolio-wide search and clearer roadmap status
 
 - Search product names, HP SKUs, variant codes, specifications and imported base part numbers across every category. Rank exact SKU matches first, display each result's category and lane, and open its product details directly on the matching SKU or variant page. Preserve legitimate listings in multiple portfolios and unsaved drafts.

@@ -182,6 +182,6 @@ assert.equal(clean.calls.length, 0); assert.equal(clean.controller.getState().de
 const css = await readFile(new URL("../../public/css/portfolio-search.css", import.meta.url), "utf8");
 const source = await readFile(new URL("../../public/js/portfolio-search-ui.js", import.meta.url), "utf8");
 assert.match(css, /portfolio-search-panel\s*\{[^}]*position:\s*absolute[^}]*max-width:\s*calc\(100vw - 40px\)[^}]*max-height:\s*min\(320px[^}]*overflow:\s*auto/s);
-assert.match(css, /@media \(max-width: 700px\)/); assert.match(css, /width:\s*calc\(100vw - 24px\)/);
+assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.portfolio-search-panel\s*\{[^}]*position:\s*fixed[^}]*left:\s*12px[^}]*right:\s*12px[^}]*width:\s*auto/);
 assert.doesNotMatch(source, /\.innerHTML\s*=|\bfetch\s*\(|localStorage|saveChanges\s*\(/);
 console.log("Portfolio search UI checks passed: cross-category name/SKU lookup, additive local filters, accessible keyboard selection, cancellation, current result validation, literal text rendering, counts and bounded paging, outside/focus dismissal, view switching, and full listener cleanup.");

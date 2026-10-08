@@ -608,6 +608,7 @@ async function setVariantImageAsset(productId, variantId, imageAssetId) {
 }
 
 function closePopupMenus(except = null) {
+  globalThis.PortfolioWorkspaceUI?.closeToolMenus?.();
   if (!except) window.dispatchEvent(new CustomEvent("close-workspace-settings"));
   [dataMenu, roadmapMenu, productMenu].forEach((menu) => {
     if (!menu || menu === except || menu.closest("#workspaceSettingsDialog")) return;
@@ -2116,10 +2117,7 @@ function contrastTextColor(fill) {
   return darkContrast >= lightContrast ? UI_PALETTE.trueBlack : UI_PALETTE.whiteSmoke;
 }
 
-function detailedValueColor(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (/^(yes|internal|external|removable|integrated|optical|magnetic|modular)$/.test(normalized)) return UI_PALETTE.steelTeal;
-  if (/^(no|none|—|-)$/.test(normalized)) return UI_PALETTE.greyOlive;
+function detailedValueColor() {
   return UI_PALETTE.silver;
 }
 
@@ -2951,6 +2949,7 @@ function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
 }
 
 function renderRoadmaps() {
+  roadmapMonthWidth = clampViewZoom(roadmapMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, ROADMAP_DEFAULT_MONTH_WIDTH);
   const previousView = activeView;
   syncRoadmapDetailsVisibility();
   syncViewZoomControls();
@@ -3004,12 +3003,30 @@ function scrollRoadmapToday(targetScroll) {
 function fitRoadmapTimeline() {
   const targetScroll = activeView === "split" ? splitRoadmapScroll : roadmapScroll;
   const range = roadmapRange();
-  const available = Math.max(320, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH - 24);
-  roadmapMonthWidth = Math.max(ROADMAP_MIN_MONTH_WIDTH, Math.min(ROADMAP_MAX_MONTH_WIDTH, available / range.count));
-  renderRoadmaps();
+  const available = Math.max(1, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH - 24);
+  // Keep month labels and product bars readable; longer timelines scroll.
+  setRoadmapZoom(Math.max(ROADMAP_DEFAULT_MONTH_WIDTH * .4, available / Math.max(1, range.count)));
+}
+
+function clampViewZoom(value, minimum, maximum, fallback = 1) {
+  return Math.max(minimum, Math.min(maximum, Number.isFinite(value) ? value : fallback));
+}
+
+function steppedViewZoom(current, direction, minimum, maximum) {
+  const value = clampViewZoom(current, minimum, maximum);
+  const visiblePercent = Math.round(value * 100);
+  // Familiar proportional stops remain easy to adjust even at overview scales.
+  // Omit stops that would display the same rounded percentage as an end limit.
+  const steps = [minimum, ...[.1, .125, .16, .2, .25, .33, .4, .5, .65, .8, 1, 1.25, 1.5]
+    .filter((step) => step > minimum + .005 && step < maximum - .005), maximum];
+  return direction < 0
+    ? [...steps].reverse().find((step) => step < value - .00001 && Math.round(step * 100) < visiblePercent) ?? minimum
+    : steps.find((step) => step > value + .00001 && Math.round(step * 100) > visiblePercent) ?? maximum;
 }
 
 function syncViewZoomControls() {
+  zoom = clampViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
+  roadmapMonthWidth = clampViewZoom(roadmapMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, ROADMAP_DEFAULT_MONTH_WIDTH);
   $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
   $("#zoomOut").disabled = zoom <= PRODUCT_MIN_ZOOM;
   $("#zoomIn").disabled = zoom >= PRODUCT_MAX_ZOOM;
@@ -3021,11 +3038,25 @@ function syncViewZoomControls() {
 
 function setRoadmapZoom(nextMonthWidth) {
   const targetScroll = activeView === "split" ? splitRoadmapScroll : roadmapScroll;
+  const previousMonthWidth = clampViewZoom(roadmapMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, ROADMAP_DEFAULT_MONTH_WIDTH);
   const viewportCenter = Math.max(0, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH) / 2;
-  const centerMonth = (targetScroll.scrollLeft + viewportCenter) / roadmapMonthWidth;
-  roadmapMonthWidth = Math.max(ROADMAP_MIN_MONTH_WIDTH, Math.min(ROADMAP_MAX_MONTH_WIDTH, nextMonthWidth));
+  const centerMonth = (targetScroll.scrollLeft + viewportCenter) / previousMonthWidth;
+  roadmapMonthWidth = clampViewZoom(nextMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, previousMonthWidth);
   renderRoadmaps();
   targetScroll.scrollLeft = Math.max(0, centerMonth * roadmapMonthWidth - viewportCenter);
+}
+
+function setProductZoom(nextZoom) {
+  const previousZoom = clampViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
+  const viewportX = canvasScroll.clientWidth / 2;
+  const viewportY = (canvasScroll.clientHeight || 0) / 2;
+  const centerX = (canvasScroll.scrollLeft + viewportX) / previousZoom;
+  const centerY = (canvasScroll.scrollTop + viewportY) / previousZoom;
+  zoom = clampViewZoom(nextZoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM, previousZoom);
+  renderBoard();
+  canvasScroll.scrollLeft = Math.max(0, centerX * zoom - viewportX);
+  canvasScroll.scrollTop = Math.max(0, centerY * zoom - viewportY);
+  requestAnimationFrame(syncBoardNavigator);
 }
 
 function setRoadmapYearSpan(years) {
@@ -3057,14 +3088,10 @@ function fitProductLanesVertically() {
 
 function fitProductBoard() {
   const dimensions = getCanvasDimensions();
-  const available = Math.max(280, canvasScroll.clientWidth - 18);
+  const available = Math.max(1, canvasScroll.clientWidth - 18);
   const fittedZoom = Math.floor((available / dimensions.width) * 100) / 100;
-  zoom = Math.max(PRODUCT_MIN_ZOOM, Math.min(1, fittedZoom));
-  renderBoard();
-  requestAnimationFrame(() => {
-    canvasScroll.scrollTo({ left: 0, behavior: "smooth" });
-    syncBoardNavigator();
-  });
+  // Fit gives a readable overview instead of shrinking a long lane into dots.
+  setProductZoom(Math.max(.65, Math.min(1, fittedZoom)));
 }
 
 function roadmapPoint(event, targetCanvas) {
@@ -3633,6 +3660,7 @@ function scrollSelectedIntoView() {
 }
 
 function renderBoard() {
+  zoom = clampViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
   const previousLeft = canvasScroll.scrollLeft;
   const previousTop = canvasScroll.scrollTop;
   const { context, dimensions } = setupCanvas(canvas, zoom);
@@ -3647,17 +3675,7 @@ function renderBoard() {
 }
 
 function renderStatus() {
-  const viewText = activeView === "products" ? "Product comparison" : activeView === "roadmap" ? "Roadmap" : "Roadmap · product details";
-  const ascmStatus = portfolio?.ascmSnapshot?.importedAt
-    ? `ASCM updated ${formatProductInfoDate(portfolio.ascmSnapshot.importedAt.slice(0, 10))}`
-    : "ASCM not imported";
-  $("#statusbar").innerHTML = `
-    <span>${board.products.length} products</span>
-    <span>${board.lanes.length} product lanes</span>
-    <span>${viewText}</span>
-    <span>${ascmStatus}</span>
-    <span>Data autosaved · images stored separately</span>
-    <div id="statusbarPackage" class="statusbar-package" aria-label="Package information"></div>`;
+  $("#statusbar").innerHTML = '<div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div>';
   publishWorkspaceState();
 }
 
@@ -6730,9 +6748,9 @@ $("#resetLayout").onclick = () => {
   updateBoard((current) => { current.products.forEach((product) => delete product.manualPosition); current.settings.freeMove = false; current.lanes.forEach((lane) => normalizeLaneOrders(lane.id)); });
 };
 $("#fitProducts").onclick = () => { closePopupMenus(); fitProductBoard(); };
-$("#zoomOut").onclick = () => { zoom = Math.max(PRODUCT_MIN_ZOOM, Number((zoom - .1).toFixed(2))); renderBoard(); };
-$("#zoomReset").onclick = () => { zoom = 1; renderBoard(); };
-$("#zoomIn").onclick = () => { zoom = Math.min(PRODUCT_MAX_ZOOM, Number((zoom + .1).toFixed(2))); renderBoard(); };
+$("#zoomOut").onclick = () => setProductZoom(steppedViewZoom(zoom, -1, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM));
+$("#zoomReset").onclick = () => setProductZoom(1);
+$("#zoomIn").onclick = () => setProductZoom(steppedViewZoom(zoom, 1, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM));
 $("#restoreSample").onclick = async () => {
   closePopupMenus();
   const clearingPortfolio = portfolio;
@@ -6787,9 +6805,9 @@ document.querySelectorAll("[data-roadmap-years]").forEach((button) => {
 });
 $("#roadmapToday").onclick = () => { closePopupMenus(); scrollRoadmapToday(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
 $("#roadmapFit").onclick = () => { closePopupMenus(); fitRoadmapTimeline(); };
-$("#roadmapZoomOut").onclick = () => setRoadmapZoom(roadmapMonthWidth - ROADMAP_DEFAULT_MONTH_WIDTH * .1);
+$("#roadmapZoomOut").onclick = () => setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, -1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
 $("#roadmapZoomReset").onclick = () => setRoadmapZoom(ROADMAP_DEFAULT_MONTH_WIDTH);
-$("#roadmapZoomIn").onclick = () => setRoadmapZoom(roadmapMonthWidth + ROADMAP_DEFAULT_MONTH_WIDTH * .1);
+$("#roadmapZoomIn").onclick = () => setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, 1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
 $("#roadmapShowSelected").onclick = () => { closePopupMenus(); scrollRoadmapSelected(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
 $("#roadmapModePan").onclick = () => setRoadmapInteractionMode("pan");
 $("#roadmapModeDates").onclick = () => setRoadmapInteractionMode("dates");
@@ -6836,7 +6854,7 @@ variantPopover.addEventListener("pointerleave", () => {
 });
 document.addEventListener("pointerdown", (event) => {
   if (!variantPopover.classList.contains("hidden") && !variantPopover.contains(event.target)) closeVariantPopover({ force: true });
-  if (!event.target.closest(".popup-menu-shell") && !event.target.closest(".popup-menu") && !event.target.closest("#workspaceSettingsDialog")) closePopupMenus();
+  if (!event.target.closest(".popup-menu-shell") && !event.target.closest(".popup-menu") && !event.target.closest(".workspace-tool-menu") && !event.target.closest("#workspaceSettingsDialog")) closePopupMenus();
 });
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;

@@ -23,7 +23,9 @@
 .portfolio-search-more:focus-visible { outline-offset: -3px; }
 @media (max-width: 700px) {
   .portfolio-search-shell { flex: 1 1 135px; width: auto; min-width: 135px; }
-  .portfolio-search-panel { width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
+  /* Anchor the horizontal bounds to the viewport while the static vertical
+     position stays directly below its input, wherever the toolbar wraps it. */
+  .portfolio-search-panel { position: fixed; top: auto; left: 12px; right: 12px; width: auto; max-width: none; margin-top: 5px; }
 }
 @media (max-width: 480px) {
   .portfolio-search-shell { flex-basis: 110px; min-width: 110px; }

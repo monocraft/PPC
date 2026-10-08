@@ -15,6 +15,46 @@
   let activeTab = "display";
   let snapshot = null;
 
+  function setupToolbarMenus() {
+    const menus = [...document.querySelectorAll(".workspace-tool-menu")];
+    const summaryFor = (menu) => menu?.querySelector("summary");
+    const visible = (node) => node?.isConnected && !node.closest(".hidden") && node.getClientRects().length > 0;
+    function close({ except = null, focus = false } = {}) {
+      const closing = menus.filter((menu) => menu !== except && menu.open);
+      for (const menu of closing) menu.open = false;
+      if (focus) {
+        const summary = summaryFor(closing[0]);
+        if (visible(summary)) summary.focus({ preventScroll: true });
+      }
+      return closing.length > 0;
+    }
+    for (const menu of menus) {
+      menu.addEventListener("toggle", () => { if (menu.open) close({ except: menu }); });
+      menu.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || !menu.open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close({ focus: true });
+      });
+      menu.addEventListener("focusout", (event) => {
+        if (event.relatedTarget && !menu.contains(event.relatedTarget)) menu.open = false;
+      });
+    }
+    document.addEventListener("pointerdown", (event) => {
+      if (!event.target.closest(".workspace-tool-menu")) close();
+    });
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest(".workspace-tool-menu-panel button");
+      if (!button || button.disabled) return;
+      const menu = button.closest(".workspace-tool-menu");
+      const summary = summaryFor(menu);
+      close();
+      if (!app.inert && document.activeElement === button && visible(summary)) summary.focus({ preventScroll: true });
+    });
+    return close;
+  }
+  const closeToolMenus = setupToolbarMenus();
+
   function activateTab(name, focus = false) {
     activeTab = tabs.some((tab) => tab.dataset.settingsTab === name) ? name : "display";
     for (const tab of tabs) {
@@ -30,7 +70,11 @@
 
   function openSettings(tabName = activeTab) {
     const wasClosed = dialog.classList.contains("hidden");
-    if (wasClosed) restoreFocus = document.activeElement;
+    if (wasClosed) {
+      const actionMenu = document.activeElement?.closest(".workspace-tool-menu");
+      restoreFocus = actionMenu?.querySelector("summary") || document.activeElement;
+    }
+    closeToolMenus();
     dialog.classList.remove("hidden");
     trigger.setAttribute("aria-expanded", "true");
     app.inert = true;
@@ -71,7 +115,10 @@
     get("settingsActiveCategory").textContent = active?.name || select.selectedOptions[0]?.textContent || "Active category";
     const visible = detail?.visibleCount;
     get("workspaceSummary").textContent = total == null ? "Portfolio" : `${visible != null && visible < total ? `${visible} of ` : ""}${total} ${total === 1 ? "product" : "products"}`;
-    if (detail) get("workspaceSelection").textContent = selected || "No product selected";
+    if (detail) {
+      get("workspaceSelection").textContent = selected || "No product selected";
+      get("workspaceSelection").title = selected || "No product selected";
+    }
     get("quickEditSelected").disabled = get("editSelected").disabled;
     get("workspaceEmpty").classList.toggle("hidden", total !== 0);
     get("workspaceEmptyTitle").textContent = hasPortfolioProducts ? "This category is empty" : "Start your portfolio";
@@ -137,7 +184,7 @@
   new MutationObserver(() => { if (!snapshot) refresh(); })
     .observe(select, { childList: true, subtree: true });
 
-  window.PortfolioWorkspaceUI = Object.freeze({ openSettings, closeSettings, refresh });
+  window.PortfolioWorkspaceUI = Object.freeze({ openSettings, closeSettings, refresh, closeToolMenus });
   refresh();
   window.dispatchEvent(new CustomEvent("portfolio:ui-ready"));
 })();
