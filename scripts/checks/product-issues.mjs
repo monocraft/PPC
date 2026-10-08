@@ -63,6 +63,10 @@ delete persistedLocation.productIndex;
 assert.equal(integrity.resolveLocator(clone, persistedLocation), null, "an incomplete locator cannot guess between duplicates");
 
 first.partSkus.push({ id: "extra-hp", code: "ABC123" });
+const mixed = integrity.scan(state).find((issue) => issue.kind === "hp-sku");
+assert.equal(mixed.members.length, 3, "the mixed assignment bucket includes rows on both products");
+assert.equal(mixed.severity, "error", "within-product repetitions remain blocking even when another product also uses the HP SKU");
+assert.ok(mixed.description.includes("across the portfolio"), "mixed assignment guidance still describes the full cross-product scope");
 let intra = integrity.scan({ categories: [category("pc", "PC Audio", [first])] }).find((issue) => issue.kind === "hp-sku");
 assert.equal(intra.severity, "error", "two HP rows on one product match the master save validation");
 assert.deepEqual(intra.members.map((location) => location.focus.rowIndex), [0, 1], "the review exposes both editor row locations");

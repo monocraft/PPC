@@ -35,6 +35,7 @@
 
     function updateStatus() {
       const state = session.getState(), count = state.pending.length;
+      const duplicateAttention = /duplicate|repeated.*(?:product|sku)/i.test(lastError) || Boolean(root.PortfolioProductIssues?.getState()?.errors);
       button.textContent = running ? "Saving…" : count ? "Save to master" : "Pull latest data";
       button.disabled = running || Boolean(adapter.hasPendingPackageOperation?.());
       button.title = count ? `Review and save changes for ${count} ${count === 1 ? "product" : "products"} to the shared master` : "Load the shared portfolio with your package key";
@@ -43,7 +44,7 @@
       else notices?.resolve("master-pending");
       if (count && !configured) notices?.publish({ id: "master-saving-unavailable", severity: "warning", title: "Team saving is not connected", message: "Your portfolio owner needs to finish connecting the private saving service. You can keep editing; your changes remain saved on this device.", toast: false });
       else notices?.resolve("master-saving-unavailable");
-      if (lastError) notices?.publish({ id: "master-sync-error", severity: "error", title: "Master connection needs attention", message: lastError, toast: false, actions: [...(/duplicate|repeated.*(?:product|sku)/i.test(lastError) ? [{ label: "Review duplicates", onClick: () => root.PortfolioProductIssues?.reviewDuplicateIssues?.() }] : []), { label: count ? "Review and try again" : "Pull latest data", onClick: () => count ? saveFlow() : root.PortfolioPackageUI?.open("pull") }] });
+      if (lastError) notices?.publish({ id: "master-sync-error", severity: "error", title: "Master update needs attention", message: lastError, toast: false, actions: [...(duplicateAttention ? [{ label: "Review duplicates", onClick: () => root.PortfolioProductIssues?.reviewDuplicateIssues?.() }] : []), { label: count ? "Review and try again" : "Pull latest data", onClick: () => count ? saveFlow() : root.PortfolioPackageUI?.open("pull") }] });
       else notices?.resolve("master-sync-error");
       root.dispatchEvent(new CustomEvent("portfolio:master-status", { detail: { connected: state.connected, hasKey: state.hasKey } }));
     }

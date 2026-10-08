@@ -57,7 +57,10 @@
     }
     for (const [code, matches] of buckets(hpRows, (row) => row.code)) {
       const sameProduct = new Set(matches.map((row) => row.entry.product)).size === 1;
-      issues.push({ id: issueKey("hp-sku", code), kind: "hp-sku", severity: sameProduct ? "error" : "warning", code, title: `Repeated HP SKU · ${code}`,
+      const assignments = new Map();
+      for (const row of matches) assignments.set(row.entry.product, (assignments.get(row.entry.product) || 0) + 1);
+      const repeatedOnProduct = [...assignments.values()].some((count) => count > 1);
+      issues.push({ id: issueKey("hp-sku", code), kind: "hp-sku", severity: repeatedOnProduct ? "error" : "warning", code, title: `Repeated HP SKU · ${code}`,
         description: sameProduct ? `HP SKU “${code}” is listed ${matches.length} times on the same product.` : `HP SKU “${code}” is assigned to ${matches.length} rows across the portfolio.`,
         guidance: "Open each assignment to compare the products and update the HP SKU or remove an unintended duplicate row.",
         members: matches.map((row) => ({ ...member(row.entry, { section: "partSkus", rowIndex: row.rowIndex, rowId: row.rowId }), detail: `HP SKU row ${row.rowIndex + 1}` })) });
