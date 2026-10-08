@@ -482,6 +482,58 @@
     return hash.map((value) => value.toString(16).padStart(8, "0")).join("");
   }
 
+  function updateTimestamp(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)) return "";
+    const canonical = value.replace(/(?:\.(\d{1,3}))?Z$/, (_, fraction = "") => `.${fraction.padEnd(3, "0")}Z`);
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) && date.toISOString() === canonical ? canonical : "";
+  }
+
+  function packageInfo(value) {
+    if (!object(value) || value.version !== 1 || Object.keys(value).length !== 3
+      || Object.keys(value).some((key) => !["version", "updatedAt", "comments"].includes(key))
+      || typeof value.comments !== "string" || value.comments.length > 2000
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.updatedAt)
+      || updateTimestamp(value.updatedAt) !== value.updatedAt) return null;
+    return Object.freeze({ version: 1, updatedAt: value.updatedAt, comments: value.comments });
+  }
+
+  function acceptedUpdate(record, maximumRevision) {
+    if (!object(record) || !Number.isSafeInteger(record.revision) || record.revision < 1 || record.revision > maximumRevision
+      || (record.status !== undefined && record.status !== "accepted") || record.accepted === false || record.changed === false
+      || (record.kind !== undefined && !["update", "create", "delete", "merge"].includes(record.kind))) return null;
+    const at = updateTimestamp(record.at), path = record.path ?? record.field;
+    if (!at || typeof path !== "string" || !path || path.length > 4096) return null;
+    try {
+      identity(record.productId, "Product");
+      if ((record.beforeExists !== undefined && typeof record.beforeExists !== "boolean") || (record.afterExists !== undefined && typeof record.afterExists !== "boolean")) return null;
+      if (own(record, "before") && own(record, "after") && record.beforeExists === record.afterExists && equal(record.before, record.after)) return null;
+    } catch { return null; }
+    return { productId: record.productId, revision: record.revision, at,
+      requestId: typeof record.requestId === "string" && record.requestId.length <= 180 ? record.requestId : "",
+      comments: typeof record.reason === "string" ? record.reason.slice(0, 2000) : "" };
+  }
+
+  function updateSummary(productCount) { return `${productCount} ${productCount === 1 ? "product" : "products"} updated.`; }
+
+  // Older masters already hold the accepted business edits in their audit
+  // history, even when their package information still describes the seed.
+  function latestPackageInfo(manifest) {
+    const original = packageInfo(manifest?.packageInfo);
+    const sync = object(manifest?.masterSync) ? manifest.masterSync : null;
+    const maximumRevision = Number.isSafeInteger(sync?.revision) && sync.revision >= 0 ? sync.revision : Number.MAX_SAFE_INTEGER;
+    const accepted = (Array.isArray(sync?.history) ? sync.history.slice(-1000) : []).map((record) => acceptedUpdate(record, maximumRevision)).filter(Boolean);
+    if (!accepted.length) return original;
+    const latest = accepted.reduce((current, record) => record.revision > current.revision || record.revision === current.revision && record.at > current.at ? record : current);
+    // Previous transports stamped package metadata just after accepting the
+    // batch and reused its old comment. Treat that short save window as the
+    // same update; a later explicit export keeps its own information.
+    if (original && Date.parse(original.updatedAt) > Date.parse(latest.at) + 1000) return original;
+    const batch = accepted.filter((record) => record.at === latest.at && record.requestId === latest.requestId);
+    const withNote = batch.filter((record) => record.comments.trim()).sort((left, right) => right.revision - left.revision)[0];
+    return Object.freeze({ version: 1, updatedAt: latest.at, comments: withNote?.comments || updateSummary(new Set(batch.map((record) => record.productId)).size) });
+  }
+
   function snapshot(manifest) {
     const products = entriesFromManifest(manifest).map((entry) => ({ productId: entry.productId, productName: entry.productName, categoryId: entry.categoryId, laneId: entry.laneId, productVersion: productVersion(entry.product), values: productValues(entry.product), revisions: safeRevisions(manifest.masterSync?.products?.[entry.productId]?.revisions) }));
     const known = new Set(products.map((entry) => entry.productId));
@@ -491,7 +543,7 @@
       identity(productId, "Product");
       tombstones.push({ productId, categoryId: String(metadata.categoryId || ""), laneId: String(metadata.laneId || ""), productName: String(metadata.productName || "Removed product"), revisions: safeRevisions(metadata.revisions), ...(metadata.mergedIntoProductId ? { mergedIntoProductId: identity(metadata.mergedIntoProductId, "Kept product"), mergeChoices: clone(metadata.mergeChoices || {}) } : {}) });
     }
-    return { version: 1, products, tombstones };
+    return { version: 1, products, tombstones, packageInfo: latestPackageInfo(manifest) };
   }
 
   function publicMetadata(manifest) {
@@ -779,7 +831,9 @@
       for (const revision of Object.values(entry.revisions)) metadata.revision = Math.max(metadata.revision, revision);
     }
     if (metadata.revision > Number.MAX_SAFE_INTEGER - updates.reduce((sum, entry) => sum + entry.operations.length + (entry.kind === "merge" ? 1 + (nextEntries.size + updates.length) * 2 : 0), 0)) throw new RangeError("The change counter needs attention from the portfolio owner before another save.");
-    const now = typeof context.now === "string" ? context.now : new Date().toISOString();
+    const now = updateTimestamp(context.now === undefined ? new Date().toISOString() : context.now);
+    if (!now) throw new TypeError("The update date is invalid.");
+    const comments = typeof context.reason === "string" ? context.reason.slice(0, 2000) : "";
     const history = [];
     let savedFields = 0;
     for (const update of updates) {
@@ -833,7 +887,7 @@
       for (const op of update.operations) {
         metadata.revision += 1;
         revisions[op.path] = metadata.revision;
-        const record = { productId: update.productId, productName: nextProduct.name || entry?.productName || "Untitled product", kind: update.kind, path: op.path, field: op.path, label: op.label, before: clone(op.base), after: clone(op.value), beforeExists: op.baseExists, afterExists: op.valueExists, revision: metadata.revision, at: now, actor: String(context.actor || "Team member").slice(0, 160), team: String(context.team || "").slice(0, 160), reason: String(context.reason || "").slice(0, 2000), requestId: String(context.requestId || "").slice(0, 180) };
+        const record = { productId: update.productId, productName: nextProduct.name || entry?.productName || "Untitled product", kind: update.kind, path: op.path, field: op.path, label: op.label, before: clone(op.base), after: clone(op.value), beforeExists: op.baseExists, afterExists: op.valueExists, revision: metadata.revision, at: now, actor: String(context.actor || "Team member").slice(0, 160), team: String(context.team || "").slice(0, 160), reason: comments, requestId: String(context.requestId || "").slice(0, 180) };
         history.push(record);
         savedFields += 1;
       }
@@ -851,8 +905,9 @@
     }
     metadata.history = boundedHistory([...metadata.history, ...history]);
     nextManifest.masterSync = metadata;
+    nextManifest.packageInfo = { version: 1, updatedAt: now, comments: comments.trim() ? comments : updateSummary(new Set(history.map((record) => record.productId)).size) };
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: updates.length, history };
   }
 
-  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
+  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, latestPackageInfo, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
 })(globalThis);

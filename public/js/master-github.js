@@ -315,7 +315,7 @@
 
     function snapshot(source, account) {
       return {
-        ...model().snapshot(source.manifest), revision: source.sha, packageInfo: codec().normalizePackageInfo(source.manifest.packageInfo),
+        ...model().snapshot(source.manifest), revision: source.sha, packageInfo: model().latestPackageInfo(source.manifest),
         masterSync: model().publicMetadata(source.manifest),
         source: "github", identity: account ? clone(account) : null, recentEditors: recentEditors(source.manifest),
         canWrite: Boolean(account), requiresGitHubToken: !account, requiresEditorToken: false,
@@ -365,8 +365,6 @@
         if (result.conflicts.length) return { error: "The master changed while you were editing. Choose which values to keep.", code: "MASTER_CONFLICT", snapshot: snapshot(source, account), conflicts: result.conflicts, requestId };
         if (!result.savedFields) return { snapshot: snapshot(source, account), savedFields: 0, savedProducts: 0, requestId };
         const manifest = result.manifest;
-        const previousInfo = codec().normalizePackageInfo(source.manifest.packageInfo);
-        manifest.packageInfo = codec().createPackageInfo({ comments: previousInfo?.comments || "" });
         manifest.masterSync.githubRequests = [...(Array.isArray(manifest.masterSync.githubRequests) ? manifest.masterSync.githubRequests : []).slice(-63), {
           requestId, actor: account.login, name: account.name, fingerprint, at: manifest.packageInfo.updatedAt,
           savedFields: result.savedFields, savedProducts: result.savedProducts,

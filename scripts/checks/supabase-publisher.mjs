@@ -133,7 +133,7 @@ for (const value of ['http://fixture.supabase.co/functions/v1/ppc-master/api/mas
   assert.deepEqual(manifest.categories[0].board.savedBoard, original.categories[0].board.savedBoard);
   assert.deepEqual(manifest.categories[0].board.products[0].privateExtra, original.categories[0].board.products[0].privateExtra);
   assert.deepEqual(manifest.imageAssets, original.imageAssets); assert.deepEqual(manifest.privateSource, original.privateSource);
-  assert.equal(manifest.packageInfo.comments, original.packageInfo.comments); assert.equal(manifest.masterSync.supabaseRevision, 1);
+  assert.equal(manifest.packageInfo.comments, '1 product updated.'); assert.equal(manifest.packageInfo.updatedAt, '2026-10-08T00:00:00.000Z'); assert.equal(manifest.masterSync.supabaseRevision, 1);
   assert.equal(h.calls.findIndex(call => call.operation === 'deploy') < h.calls.findIndex(call => call.operation === 'ack'), true, 'deployment dispatch precedes publication acknowledgement');
   const before = h.calls.filter(call => call.operation === 'put').length;
   assert.equal((await h.publisher.publish()).status, 'unchanged');

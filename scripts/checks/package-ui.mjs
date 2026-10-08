@@ -108,6 +108,7 @@ assert.equal(staticUi.elements.get("sharedPackageComments").textContent, loadedI
 const footerDate = (ui) => ui.elements.get("statusbarPackage").children[0].children[0];
 const footerComment = (ui) => ui.elements.get("statusbarPackage").children[1];
 assert.equal(footerDate(staticUi).textContent, formatDate(loadedInfo));
+assert.equal(staticUi.elements.get("statusbarPackage").children[0].textContent, "Updated ", "the everyday footer uses a plain update label");
 assert.equal(footerDate(staticUi).dateTime, loadedInfo.updatedAt);
 assert.equal(footerComment(staticUi).children[1].textContent, loadedInfo.comments);
 assert.equal(footerComment(staticUi).children[1].tabIndex, 0, "long comment content must support keyboard scrolling");
@@ -242,6 +243,7 @@ assert.equal(legacyUi.elements.get("sharedPackageUpdated").textContent, "Date no
 assert.equal(legacyUi.elements.get("packageResultUpdated").dateTime, "");
 assert.equal(legacyUi.elements.get("packageResultComments").textContent, "No comments supplied.");
 assert.equal(footerDate(legacyUi).dateTime, "", "legacy package dates must not invent a timestamp in the footer");
+assert.equal(legacyUi.elements.get("statusbarPackage").children[0].textContent, "Update date ");
 assert.equal(footerComment(legacyUi).textContent, "No comments supplied.");
 legacyUi.ui.close();
 legacyUi.setImportInfo({ ...incomingInfo, comments: " \n \t " });

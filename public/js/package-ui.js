@@ -45,7 +45,7 @@
     if (infoKey !== footerInfoKey) { footerInfoKey = infoKey; footerCommentsOpen = false; }
     const updated = document.createElement("span");
     updated.className = "statusbar-package-date";
-    updated.textContent = text.dateTime ? "Package updated " : "Package date ";
+    updated.textContent = text.dateTime ? "Updated " : "Update date ";
     const date = document.createElement("time");
     setPackageDate(date, text);
     updated.append(date);

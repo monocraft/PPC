@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="css/workspace-notifications.css">
   <link rel="stylesheet" href="css/product-issues.css">
   <link rel="stylesheet" href="css/product-merge.css">
+  <link rel="stylesheet" href="css/portfolio-search.css">
 </head>
 <body>
   <main class="app-shell">
@@ -36,7 +37,7 @@
       </header>
       <div class="workspace-controls">
         <section id="productControls" class="controlbar view-controls" aria-label="Product controls">
-          <label class="search-shell"><span aria-hidden="true">⌕</span><input id="searchInput" class="search-input" type="search" aria-label="Search products" placeholder="Search products, status, or SKU"></label>
+          <label class="search-shell"><span aria-hidden="true">⌕</span><input id="searchInput" class="search-input" type="search" aria-label="Search products" placeholder="Find a product or SKU in any category"></label>
           <label class="inline-field"><span>Sort</span><select id="sortMode"><option value="custom">Custom order</option><option value="name-asc">Name A–Z</option><option value="price-asc">Price low–high</option><option value="price-desc">Price high–low</option><option value="status">Status</option><option value="sku-count">Most SKUs</option></select></label>
           <button id="applySort" class="quiet-button">Apply</button>
           <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Product view controls">
@@ -46,12 +47,12 @@
           </div></div>
         </section>
         <section id="roadmapControls" class="controlbar view-controls hidden" aria-label="Roadmap controls">
-          <label class="search-shell"><span aria-hidden="true">⌕</span><input id="roadmapSearch" class="search-input" type="search" aria-label="Search roadmap" placeholder="Search product, family, or SKU"></label>
+          <label class="search-shell"><span aria-hidden="true">⌕</span><input id="roadmapSearch" class="search-input" type="search" aria-label="Search roadmap" placeholder="Find a product or SKU in any category"></label>
           <button id="quickTimelineSettings" class="quiet-button">Timeline range <span id="timelineRangeSummary"></span><span aria-hidden="true">↗</span></button>
           <button id="toggleRoadmapDetails" class="quiet-button" aria-pressed="false" aria-controls="splitView">Product details</button>
           <div class="roadmap-interaction-mode" role="group" aria-label="Timeline drag behavior">
-            <button id="roadmapModePan" type="button" aria-pressed="true" title="Drag anywhere on the timeline to move the view">Move view</button>
-            <button id="roadmapModeDates" type="button" aria-pressed="false" title="Enable dragging product bars, dates, and row order">Adjust dates</button>
+            <button id="roadmapModePan" type="button" aria-pressed="true" title="Browse the timeline without changing products">View Mode</button>
+            <button id="roadmapModeDates" type="button" aria-pressed="false" title="Adjust product dates and row order">Edit Mode</button>
           </div>
           <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Timeline view controls">
             <div class="zoom-control" role="group" aria-label="Timeline zoom"><button id="roadmapZoomOut" aria-label="Zoom timeline out">−</button><button id="roadmapZoomReset" class="zoom-reset" aria-label="Reset timeline zoom to 100%" title="Reset timeline zoom to 100%">100%</button><button id="roadmapZoomIn" aria-label="Zoom timeline in">+</button></div>
@@ -60,12 +61,10 @@
             <button id="roadmapShowSelected" class="view-tool" title="Center the selected product on the timeline" disabled>Show selected</button>
           </div></div>
           <div class="roadmap-edit-controls" role="group" aria-label="Edit selected roadmap product">
-            <span class="roadmap-interaction-hint">Drag to move the view · double-click a product for details</span>
-            <span id="roadmapEditSelection" class="roadmap-edit-selection">Select a product</span>
             <button id="roadmapMoveUp" class="compact-button" title="Move selected product up in its family (Alt + Up on timeline)" aria-label="Move selected roadmap product up" disabled>↑ Move up</button>
             <button id="roadmapMoveDown" class="compact-button" title="Move selected product down in its family (Alt + Down on timeline)" aria-label="Move selected roadmap product down" disabled>↓ Move down</button>
-            <span id="roadmapEditAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
           </div>
+          <span id="roadmapEditAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
         </section>
         <div class="selection-bar"><span id="workspaceSummary">Loading portfolio…</span><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button></div></div>
       </div>
@@ -93,7 +92,7 @@
 
       <section id="roadmapView" class="view-pane roadmap-view hidden">
         <div id="roadmapScroll" class="canvas-scroll roadmap-scroll">
-          <canvas id="roadmapCanvas" tabindex="0" aria-label="Roadmap. Drag anywhere to move the view horizontally or vertically. Select a product or double-click for details. Choose Adjust dates to drag product dates and row order; Escape returns to Move view."></canvas>
+          <canvas id="roadmapCanvas" tabindex="0" aria-label="Roadmap. View Mode lets you drag anywhere to browse horizontally or vertically. Select a product or double-click for details. Choose Edit Mode to adjust product dates and row order; Escape returns to View Mode."></canvas>
         </div>
         <nav id="roadmapNavigator" class="board-navigator hidden" aria-label="Horizontal roadmap navigation">
           <button id="roadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
@@ -108,7 +107,7 @@
         <aside id="splitProduct" class="split-product"></aside>
         <div class="split-roadmap-shell">
           <div id="splitRoadmapScroll" class="canvas-scroll roadmap-scroll">
-            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap with product details. Drag anywhere to move the view horizontally or vertically. Select a product to review its details. Choose Adjust dates to drag product dates and row order; Escape returns to Move view."></canvas>
+            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap with product details. View Mode lets you drag anywhere to browse horizontally or vertically. Select a product to review its details. Choose Edit Mode to adjust product dates and row order; Escape returns to View Mode."></canvas>
           </div>
           <nav id="splitRoadmapNavigator" class="board-navigator hidden" aria-label="Roadmap navigation">
             <button id="splitRoadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
@@ -355,6 +354,7 @@
   <script src="js/pptx-pagination.js"></script>
   <script src="js/pptx-editable.js"></script>
   <script src="js/portfolio-model.js"></script>
+  <script src="js/portfolio-search.js"></script>
   <script src="js/master-model.js"></script>
   <script src="js/product-merge.js"></script>
   <script src="js/roadmap-interaction.js"></script>
@@ -373,5 +373,6 @@
   <script src="js/master-ui.js"></script>
   <script src="js/master-presence.js"></script>
   <script src="js/product-merge-ui.js"></script>
+  <script src="js/portfolio-search-ui.js"></script>
 </body>
 </html>
