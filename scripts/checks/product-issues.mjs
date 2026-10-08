@@ -10,23 +10,42 @@ const other = product("b", " cloud   iii ", "abc123");
 const third = product("c", "Cloud III Wireless", "DEF456");
 const state = { categories: [category("pc", "PC Audio", [first, third]), category("console", "Console Audio", [other])] };
 const before = JSON.stringify(state);
-const issues = integrity.scan(state);
+const crossPortfolioIssues = integrity.scan(state);
 assert.equal(JSON.stringify(state), before, "finding duplicates must not rewrite or delete content");
-assert.equal(issues.filter((issue) => issue.kind === "hp-sku").length, 1, "HP codes are case insensitive and trim surrounding whitespace across categories");
+assert.equal(crossPortfolioIssues.length, 0, "the same name and HP SKU in PC and Console portfolios are legitimate listings, not duplicate alerts");
+const withinPc = product("d", " cloud   iii ", "abc123");
+state.categories[0].board.products.push(withinPc);
+const issues = integrity.scan(state);
+assert.equal(issues.filter((issue) => issue.kind === "hp-sku").length, 1, "HP codes are case insensitive and trim surrounding whitespace within a portfolio");
 assert.equal(issues.filter((issue) => issue.kind === "variant-sku").length, 0, "BK variants on different products are valid");
 const possible = issues.find((issue) => issue.kind === "possible-name");
 assert.equal(possible.severity, "info", "matching names remain a nonblocking possible match");
-assert.equal(possible.members.length, 2, "wireless suffix must not be erased into an additional match");
-assert.equal(possible.members[1].categoryName, "Console Audio");
+assert.equal(possible.members.length, 2, "different portfolios and wireless suffixes are excluded from the name match");
+assert.equal(possible.members[1].categoryName, "PC Audio");
 assert.equal(possible.members[0].laneName, "Wireless");
 assert.ok(possible.guidance.includes("do not block saving"));
+assert.ok(possible.description.includes("in PC Audio"), "the name review identifies its portfolio scope");
 const skuIssue = issues.find((issue) => issue.kind === "hp-sku");
+assert.ok(skuIssue.description.includes("in PC Audio"), "the SKU review identifies its portfolio scope");
+assert.ok(skuIssue.guidance.includes("different product portfolios are allowed"));
+assert.ok(issues.every((issue) => issue.members.every((location) => location.categoryName === "PC Audio")), "genuine PC duplicates do not include valid Console copies");
+assert.deepEqual(integrity.scan({ categories: [...state.categories].reverse() }).map((issue) => issue.id).sort(), issues.map((issue) => issue.id).sort(), "portfolio issue IDs remain stable when categories are reordered");
+
+const twoPortfolios = { categories: [category("pc", "PC Audio", [product("p1", "Same", "SKU"), product("p2", " same ", "sku")]),
+  category("console", "Console Audio", [product("c1", "Same", "SKU"), product("c2", "same", "sku")])] };
+const separateIssues = integrity.scan(twoPortfolios);
+assert.equal(separateIssues.length, 4, "identical codes and names with local duplicates yield two independent checks in each portfolio");
+assert.equal(new Set(separateIssues.map((issue) => issue.id)).size, 4, "scoped duplicate issues cannot overwrite another portfolio's review");
+assert.ok(separateIssues.every((issue) => new Set(issue.members.map((location) => location.locator.categoryId)).size === 1), "each issue contains assignments from only its own portfolio");
+const unnamedCategories = JSON.parse(JSON.stringify(twoPortfolios));
+unnamedCategories.categories.forEach((item) => { delete item.id; });
+assert.equal(new Set(integrity.scan(unnamedCategories).map((issue) => issue.id)).size, 4, "categories without IDs still have independent review IDs");
 const warningMessages = [];
-const crossController = integrity.createController({ document: null, adapter: { getPortfolio: () => state }, notifications: {
+const withinController = integrity.createController({ document: null, adapter: { getPortfolio: () => state }, notifications: {
   publish: (notification) => warningMessages.push(notification), resolve() {},
 } });
-assert.equal(warningMessages.at(-1).severity, "warning", "cross-product HP assignments are warnings even without a blocking local error");
-crossController.destroy();
+assert.equal(warningMessages.at(-1).severity, "warning", "same-portfolio HP assignments are warnings even without a blocking local error");
+withinController.destroy();
 const nameMessages = [];
 const nameOnly = integrity.createController({ document: null, adapter: { getPortfolio: () => ({ categories: [category("pc", "PC Audio", [product("n1", "Same"), product("n2", " same ")])] }) }, notifications: {
   publish: (notification) => nameMessages.push(notification), resolve() {},
@@ -35,30 +54,30 @@ assert.equal(nameMessages.at(-1).severity, "info", "possible names alone stay in
 nameOnly.destroy();
 assert.equal(skuIssue.members[0].focus.section, "partSkus");
 assert.equal(skuIssue.members[0].focus.rowIndex, 0);
-assert.equal(skuIssue.members[1].locator.categoryIndex, 1);
+assert.equal(skuIssue.members[1].locator.categoryIndex, 0);
 const navigation = integrity.navigationFor(state, skuIssue.members[1]);
-assert.equal(navigation.product, other, "navigation points to the actual record in the other category");
+assert.equal(navigation.product, withinPc, "navigation points to the exact duplicate assignment in the same portfolio");
 assert.equal(navigation.clearSearch, true, "find action requests clearing hidden comparison results");
 assert.equal(navigation.clearRoadmapSearch, true, "find action requests clearing hidden roadmap results");
 assert.equal(navigation.revealAllLanes, true);
 
 const duplicate = product("a", "Exact duplicate", "NEW123");
-state.categories[0].board.products.push(duplicate);
+state.categories[1].board.products.push(duplicate);
 const idIssue = integrity.scan(state).find((issue) => issue.kind === "product-id");
-assert.equal(idIssue.members.length, 2);
+assert.equal(idIssue.members.length, 2, "internal IDs remain globally unique even for products in different portfolios");
 assert.ok(idIssue.guidance.includes("source package"), "ID correction guidance cannot imply a nonexistent ID editor");
 const secondLocation = idIssue.members[1];
 assert.equal(integrity.resolveLocator(state, secondLocation.locator).product, duplicate, "duplicate IDs must retain their exact record location");
-state.categories[0].board.products.reverse();
+state.categories[1].board.products.reverse();
 assert.equal(integrity.resolveLocator(state, secondLocation.locator).product, duplicate, "reordered duplicates resolve by the scanned record reference");
-state.categories[0].board.products = state.categories[0].board.products.filter((item) => item !== duplicate);
+state.categories[1].board.products = state.categories[1].board.products.filter((item) => item !== duplicate);
 assert.equal(integrity.resolveLocator(state, secondLocation.locator), null, "removing the duplicate cannot fall through to its same-ID sibling");
 assert.equal(integrity.navigationFor(state, secondLocation), null, "unavailable records have no edit action target");
 
 const clone = JSON.parse(JSON.stringify(state));
 const persistedLocation = { ...skuIssue.members[1].locator };
-assert.equal(integrity.resolveLocator(clone, persistedLocation).product.name, other.name, "serialized location can resolve unchanged imported data");
-clone.categories[1].board.products.push({ ...clone.categories[1].board.products[0] });
+assert.equal(integrity.resolveLocator(clone, persistedLocation).product.name, withinPc.name, "serialized location can resolve unchanged imported data");
+clone.categories[0].board.products.push({ ...clone.categories[0].board.products.find((item) => item.id === withinPc.id) });
 delete persistedLocation.productIndex;
 assert.equal(integrity.resolveLocator(clone, persistedLocation), null, "an incomplete locator cannot guess between duplicates");
 
@@ -66,7 +85,12 @@ first.partSkus.push({ id: "extra-hp", code: "ABC123" });
 const mixed = integrity.scan(state).find((issue) => issue.kind === "hp-sku");
 assert.equal(mixed.members.length, 3, "the mixed assignment bucket includes rows on both products");
 assert.equal(mixed.severity, "error", "within-product repetitions remain blocking even when another product also uses the HP SKU");
-assert.ok(mixed.description.includes("across the portfolio"), "mixed assignment guidance still describes the full cross-product scope");
+assert.ok(mixed.description.includes("in PC Audio"), "mixed assignment guidance describes the affected portfolio");
+assert.ok(mixed.members.every((location) => location.categoryName === "PC Audio"), "a repeated row error does not draw in a valid Console copy");
+const crossAndRepeated = integrity.scan({ categories: [category("pc", "PC Audio", [first]), category("console", "Console Audio", [other])] });
+assert.equal(crossAndRepeated.length, 1, "a valid cross-portfolio listing does not add warnings beside a real repeated-row error");
+assert.equal(crossAndRepeated[0].members.length, 2, "both repeated rows remain locatable without the other portfolio's row");
+assert.equal(crossAndRepeated[0].severity, "error");
 let intra = integrity.scan({ categories: [category("pc", "PC Audio", [first])] }).find((issue) => issue.kind === "hp-sku");
 assert.equal(intra.severity, "error", "two HP rows on one product match the master save validation");
 assert.deepEqual(intra.members.map((location) => location.focus.rowIndex), [0, 1], "the review exposes both editor row locations");
@@ -174,4 +198,4 @@ assert.equal(prevented && stopped, true, "native cancellation also owns its even
 assert.equal(mountedDialog.open, false);
 keyboard.destroy();
 
-console.log("Product issue checks passed: cross-category HP SKUs, nonblocking names, legitimate color variants, exact duplicate-ID locators, hidden-filter navigation, stale-record protection, refreshed ASCM candidate locations, escaped review markup, persistent notification resolution, and modal keyboard isolation.");
+console.log("Product issue checks passed: legitimate PC/Console copies, portfolio-scoped SKU/name reviews, stable scoped issue IDs, repeated-row protections, global internal IDs, exact locators, hidden-filter navigation, stale-record protection, refreshed ASCM candidate locations, escaped review markup, persistent notification resolution, and modal keyboard isolation.");

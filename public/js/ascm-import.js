@@ -795,17 +795,21 @@
         continue;
       }
       const row = { sourceRow, category, featureId, basePn, basePnRaw, localFlag, localCode, description, codeName, ga, em };
-      const existing = retained.get(basePn);
+      const categoryId = mapAscmCategory(category, description);
+      const duplicateKey = JSON.stringify([categoryId ? `mapped:${categoryId}` : `unmapped:${categoryKey(category) || category}`, basePn]);
+      const existing = retained.get(duplicateKey);
       if (existing) {
         duplicateBasePnRows += 1;
-        diagnostics.push(diagnostic("warning", "DUPLICATE_BASE_PN", "A duplicate Base PN row was ignored; the earliest valid primary row was retained.", {
+        diagnostics.push(diagnostic("warning", "DUPLICATE_BASE_PN", "A duplicate Base PN row in the same portfolio was ignored; the earliest valid primary row was retained.", {
           sourceRow,
           retainedSourceRow: existing.sourceRow,
           basePn,
+          category,
+          categoryId,
         }));
         continue;
       }
-      retained.set(basePn, row);
+      retained.set(duplicateKey, row);
     }
     return {
       rows: [...retained.values()].sort((left, right) => left.sourceRow - right.sourceRow || left.basePn.localeCompare(right.basePn)),
@@ -1317,21 +1321,7 @@
     };
   }
 
-  /**
-   * Match one ASCM product group without mutating the portfolio. Exact saved
-   * ASCM keys and Base PNs take precedence. The fallback is an exact normalized
-   * name match inside the mapped category; no fuzzy threshold is used.
-   */
-  function matchProductGroup(group, portfolio) {
-    if (!group || typeof group !== "object") fail("INVALID_GROUP", "matchProductGroup expected an ASCM product group.");
-    const products = flattenPortfolioProducts(portfolio);
-    const groupKey = cleanText(group.ascmKey || group.key).toLowerCase();
-    const groupPartNumbers = Array.isArray(group.basePns)
-      ? group.basePns
-      : Array.isArray(group.basePartNumbers)
-        ? group.basePartNumbers
-        : [];
-    const groupBasePns = new Set(groupPartNumbers.map(normalizeBasePn).filter(Boolean));
+  function exactProductMatch(products, groupKey, groupBasePns) {
     const keyMatches = groupKey ? products.filter((candidate) => productAscmKeys(candidate.product).includes(groupKey)) : [];
     const baseMatches = products.filter((candidate) => productBasePns(candidate.product).some((partNumber) => groupBasePns.has(partNumber)));
 
@@ -1356,11 +1346,31 @@
         matchedBasePns: productBasePns(uniqueBaseMatches[0].product).filter((partNumber) => groupBasePns.has(partNumber)),
       });
     }
+    return null;
+  }
+
+  /**
+   * Match inside the report's mapped category before considering relocation.
+   * PC and Console audio may intentionally list the same name and HP SKU, so
+   * one category's listing never supplies a relocation match for the other.
+   */
+  function matchProductGroup(group, portfolio) {
+    if (!group || typeof group !== "object") fail("INVALID_GROUP", "matchProductGroup expected an ASCM product group.");
+    const products = flattenPortfolioProducts(portfolio);
+    const groupKey = cleanText(group.ascmKey || group.key).toLowerCase();
+    const groupPartNumbers = Array.isArray(group.basePns)
+      ? group.basePns
+      : Array.isArray(group.basePartNumbers)
+        ? group.basePartNumbers
+        : [];
+    const groupBasePns = new Set(groupPartNumbers.map(normalizeBasePn).filter(Boolean));
+    const categoryProducts = group.categoryId ? products.filter((candidate) => candidate.categoryId === group.categoryId) : products;
+    const categoryExact = exactProductMatch(categoryProducts, groupKey, groupBasePns);
+    if (categoryExact) return categoryExact;
 
     const normalizedName = cleanText(group.normalizedName || normalizeProductName(group.displayName));
-    if (!group.categoryId || !normalizedName) return matchResult("unmatched", null, [], { reason: "no-exact-key-or-usable-name" });
-    const nameMatches = products.filter((candidate) =>
-      candidate.categoryId === group.categoryId
+    const nameMatches = categoryProducts.filter((candidate) =>
+      group.categoryId && normalizedName
       && normalizeProductName(candidate.product?.name) === normalizedName
     );
     if (nameMatches.length > 1) return matchResult("ambiguous", "normalized-name", nameMatches, { reason: "duplicate-normalized-name" });
@@ -1368,9 +1378,8 @@
 
     if (group.categoryId === "console-gaming-audio") {
       const familyName = consoleFamilyName(group.displayName || group.normalizedName);
-      const familyMatches = familyName ? products.filter((candidate) =>
-        candidate.categoryId === group.categoryId
-        && consoleFamilyName(candidate.product?.name) === familyName
+      const familyMatches = familyName ? categoryProducts.filter((candidate) =>
+        consoleFamilyName(candidate.product?.name) === familyName
       ) : [];
       if (familyMatches.length) {
         const sourceText = [group.displayName, ...(group.records || []).map((record) => record.description)].join(" ");
@@ -1385,6 +1394,14 @@
         });
       }
     }
+    if (group.categoryId) {
+      const otherAudioCategory = group.categoryId === "pc-gaming-audio" ? "console-gaming-audio"
+        : group.categoryId === "console-gaming-audio" ? "pc-gaming-audio" : "";
+      const relocationProducts = products.filter((candidate) => candidate.categoryId !== group.categoryId && candidate.categoryId !== otherAudioCategory);
+      const relocationMatch = exactProductMatch(relocationProducts, groupKey, groupBasePns);
+      if (relocationMatch) return relocationMatch;
+    }
+    if (!group.categoryId || !normalizedName) return matchResult("unmatched", null, [], { reason: "no-exact-key-or-usable-name" });
     return matchResult("unmatched", null, [], { reason: "no-match" });
   }
 

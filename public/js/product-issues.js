@@ -1,4 +1,4 @@
-/* Product integrity review. Product names are possible matches, never deletion rules. */
+/* Product integrity review. Names and HP SKUs may repeat across product portfolios. */
 (function (root) {
   "use strict";
 
@@ -10,6 +10,8 @@
   const normalizeName = (value) => text(value).replace(/[®™©]/g, "").normalize("NFKC").replace(/\s+/g, " ").toLowerCase();
   const array = (value) => Array.isArray(value) ? value : [];
   const issueKey = (kind, value, suffix = "") => `${kind}:${encodeURIComponent(value)}${suffix ? `:${suffix}` : ""}`;
+  const portfolioIssueKey = (kind, value, entry) => issueKey(kind, value, entry.locator.categoryId
+    ? `portfolio-id-${encodeURIComponent(entry.locator.categoryId)}` : `portfolio-index-${entry.locator.categoryIndex}`);
 
   function products(portfolio) {
     const output = [];
@@ -55,14 +57,17 @@
         if (code) hpRows.push({ entry, code, rowIndex, rowId: typeof row === "object" ? text(row?.id) : "" });
       });
     }
-    for (const [code, matches] of buckets(hpRows, (row) => row.code)) {
+    // The same product may be sold in PC and Console portfolios. Review assignments
+    // only within the containing portfolio, while internal IDs remain global above.
+    for (const [, matches] of buckets(hpRows, (row) => `${row.entry.locator.categoryIndex}\u0000${row.code}`)) {
+      const code = matches[0].code, entry = matches[0].entry;
       const sameProduct = new Set(matches.map((row) => row.entry.product)).size === 1;
       const assignments = new Map();
       for (const row of matches) assignments.set(row.entry.product, (assignments.get(row.entry.product) || 0) + 1);
       const repeatedOnProduct = [...assignments.values()].some((count) => count > 1);
-      issues.push({ id: issueKey("hp-sku", code), kind: "hp-sku", severity: repeatedOnProduct ? "error" : "warning", code, title: `Repeated HP SKU · ${code}`,
-        description: sameProduct ? `HP SKU “${code}” is listed ${matches.length} times on the same product.` : `HP SKU “${code}” is assigned to ${matches.length} rows across the portfolio.`,
-        guidance: "Open each assignment to compare the products and update the HP SKU or remove an unintended duplicate row.",
+      issues.push({ id: portfolioIssueKey("hp-sku", code, entry), kind: "hp-sku", severity: repeatedOnProduct ? "error" : "warning", code, title: `Repeated HP SKU · ${code}`,
+        description: sameProduct ? `HP SKU “${code}” is listed ${matches.length} times on the same product in ${entry.categoryName}.` : `HP SKU “${code}” is assigned to ${matches.length} rows in ${entry.categoryName}.`,
+        guidance: "Open each assignment to compare the products and update the HP SKU or remove an unintended duplicate row. Matching HP SKUs in different product portfolios are allowed.",
         members: matches.map((row) => ({ ...member(row.entry, { section: "partSkus", rowIndex: row.rowIndex, rowId: row.rowId }), detail: `HP SKU row ${row.rowIndex + 1}` })) });
     }
     // Color/locale abbreviations belong to each product. Repeating BK on two products is valid.
@@ -82,10 +87,14 @@
           members: matches.map((row) => ({ ...member(entry, { section: "variantGroups", groupIndex: row.groupIndex, groupId: row.groupId, rowIndex: row.rowIndex, rowId: row.rowId }), detail: `${type === "layout" ? "Layout" : "Color"} variant row ${row.rowIndex + 1}` })) });
       }
     }
-    for (const [name, matches] of buckets(entries, (entry) => normalizeName(entry.product.name))) {
-      issues.push({ id: issueKey("possible-name", name), kind: "possible-name", severity: "info", code: name, title: `Possible product match · ${matches[0].productName}`,
-        description: `${matches.length} products have the same name after ignoring capitalization, spacing, and trademark symbols.`,
-        guidance: "These may be intentional variants or products in different categories. Compare them; matching names do not block saving.", members: matches.map((entry) => member(entry, { section: "name" })) });
+    for (const [, matches] of buckets(entries, (entry) => {
+      const name = normalizeName(entry.product.name);
+      return name ? `${entry.locator.categoryIndex}\u0000${name}` : "";
+    })) {
+      const entry = matches[0], name = normalizeName(entry.product.name);
+      issues.push({ id: portfolioIssueKey("possible-name", name, entry), kind: "possible-name", severity: "info", code: name, title: `Possible product match · ${entry.productName}`,
+        description: `${matches.length} products in ${entry.categoryName} have the same name after ignoring capitalization, spacing, and trademark symbols.`,
+        guidance: "These may be intentional variants. Compare them; matching names do not block saving. Products in different product portfolios are checked separately.", members: matches.map((entry) => member(entry, { section: "name" })) });
     }
     return issues;
   }
