@@ -4,6 +4,8 @@ The portfolio stays on GitHub Pages. Supabase accepts small product updates thro
 
 Team members use their existing package unlock key and an optional display name. They do not need GitHub tokens, Supabase accounts, a separate team editing password, or a second sign-in. Names identify browser sessions and are self-reported.
 
+After the first unlock, the browser tab reconnects and checks the shared master automatically. Its package key is kept in tab-scoped session storage for that exact master endpoint, so reloading does not require another package pull. Disconnecting or rejecting an invalid key clears the saved tab access. GitHub tokens and private backend credentials are never stored there. The connected sessions panel shows names and current product/category activity without setup instructions.
+
 This repository contains the saving function, restricted database migration, publisher, and tests. The live connection must only be changed after the project has been configured, seeded from the existing master package, and verified.
 
 ## What is saved and when

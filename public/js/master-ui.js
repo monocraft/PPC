@@ -103,7 +103,7 @@
         const reason = element("textarea", "master-reason"); reason.rows = 2; reason.maxLength = 1000; reason.placeholder = "For example: revised factory schedule"; reasonLabel.append(reason); body.append(reasonLabel);
         if (!configured) body.append(element("p", "master-notice", "Master sharing needs to be connected by the portfolio owner. Your changes remain saved on this device."));
         else if (session.getState().hasKey) {
-          const connection = element("div", "master-connection"); connection.append(element("span", "", githubMode ? `Saving to ${source.owner}/${source.repo}. Your package key and GitHub token stay in memory until you reload or disconnect.` : "Your master key is remembered until you reload or disconnect."));
+          const connection = element("div", "master-connection"); connection.append(element("span", "", githubMode ? `Saving to ${source.owner}/${source.repo}. Your package key and GitHub token stay in memory until you reload or disconnect.` : teamMode ? "This browser tab reconnects automatically. Disconnect clears its saved access." : "Your master key is remembered until you reload or disconnect."));
           const disconnect = element("button", "quiet-button", "Disconnect"); disconnect.type = "button"; disconnect.addEventListener("click", () => { root.PortfolioMasterPresence?.leave(); session.disconnect(); finish(null); updateStatus(); }); connection.append(disconnect); body.append(connection);
         }
         addCancel(footer, "Keep editing");
@@ -114,7 +114,7 @@
 
     function getAccess(editor = false, message = "") {
       const githubToken = editor === "github";
-      return show(githubToken ? "Connect your GitHub account" : editor ? "Team editing key" : "Connect to your master", githubToken ? `Use your own GitHub token with write access to ${source.owner}/${source.repo}. Your token stays in memory until you reload or disconnect.` : editor ? "Enter the editing key supplied by your portfolio owner. It is remembered only until you reload or disconnect." : "Use the same key you use to pull the master package. It is remembered only until you reload or disconnect.", ({ body, footer, form, finish }) => {
+      return show(githubToken ? "Connect your GitHub account" : editor ? "Team editing key" : "Connect to your master", githubToken ? `Use your own GitHub token with write access to ${source.owner}/${source.repo}. Your token stays in memory until you reload or disconnect.` : editor ? "Enter the editing key supplied by your portfolio owner. It is remembered only until you reload or disconnect." : teamMode ? "Use your existing package key. This browser tab reconnects automatically until you disconnect." : "Use the same key you use to pull the master package. It is remembered only until you reload or disconnect.", ({ body, footer, form, finish }) => {
         if (message) body.append(element("p", "master-notice master-error", message));
         if (githubToken) {
           const help = element("a", "", "GitHub token setup instructions"); help.href = "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens"; help.target = "_blank"; help.rel = "noopener noreferrer"; body.append(help);
@@ -243,6 +243,7 @@
       destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-publication"]) notices?.resolve(id); dialog.remove(); },
     });
     updateStatus();
+    if (teamMode && configured && session.getState().hasKey) refreshQuietly();
     if (source?.demo === true && source.demoKey && ["localhost", "127.0.0.1", "[::1]"].includes(String(root.location?.hostname || "").toLowerCase())) {
       const banner = element("aside", "master-demo-banner", "Team sharing trial · Edit a product, then Save to master. Open this page in a second tab to try team updates and conflicts.");
       banner.setAttribute("role", "note");

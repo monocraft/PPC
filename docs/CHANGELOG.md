@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-08 — automatic team sessions
+
+- Remove instructional footer text and manual-pull prompts from the connected sessions panel. Keep the session count, viewing/editing context, and optional display name.
+- Reconnect an unlocked Supabase master automatically when its browser tab reloads. Remember only that tab's package access, scoped to the configured master; disconnect or an invalid key clears it. Personal GitHub tokens and private publishing credentials are never stored for this feature.
+- Keep unsaved product drafts during automatic shared refreshes and continue updating team activity in the background.
+
 ## 2026-10-08 — private team master and complete colorway checks
 
 - Add a private Supabase saving function and restricted database for shared products, specifications, SKUs and all lifecycle dates. Reuse the existing package key and optional browser display name; team mode never requests personal GitHub tokens or a second editing password.

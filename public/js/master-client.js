@@ -1,4 +1,4 @@
-/* Shared product editing. Keys stay in memory; unsaved changes keep their original master values. */
+/* Shared product editing. Team unlocks can reconnect within one browser tab; drafts keep their original master values. */
 (function (root) {
   "use strict";
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -132,13 +132,43 @@
     const mode = source?.mode === "github" ? "github" : "service";
     const team = source?.team === true;
     const configured = mode === "github" || Boolean(String(endpoint || "").trim());
+    let rememberedEndpoint = "";
+    if (mode === "service" && team && configured) {
+      try { rememberedEndpoint = normalizeEndpoint(endpoint); } catch {}
+    }
+    const tabAccessName = rememberedEndpoint ? `portfolio.sharedTeamAccess:${rememberedEndpoint}` : "";
     let editorName = "", editorSessionId = root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     try { editorName = String(root.localStorage?.getItem("portfolio.sharedDisplayName") || "").trim().slice(0, 60); } catch {}
     let baseline = new Map(), tombstones = new Map(), snapshot = null, key = "", editorToken = "", githubToken = "", githubTransport = null, identity = null, connected = false, busy = false, generation = 0, accessVersion = 0, pendingRequest = null;
+    function normalizedAccessKey(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      try { return mode === "service" && team && root.PortfolioPackage?.normalizeKey ? root.PortfolioPackage.normalizeKey(text) : text; }
+      catch { throw errorOf("That master package key is incomplete. Check the key and try again.", "INVALID_KEY", 401); }
+    }
+    function rememberTeamAccess(value) {
+      if (!tabAccessName) return;
+      try {
+        if (!value) root.sessionStorage?.removeItem(tabAccessName);
+        else if (root.PortfolioPackage?.normalizeKey) root.sessionStorage?.setItem(tabAccessName, JSON.stringify({ version: 1, endpoint: rememberedEndpoint, key: root.PortfolioPackage.normalizeKey(value) }));
+      } catch {}
+    }
+    if (tabAccessName) {
+      try {
+        const stored = root.sessionStorage?.getItem(tabAccessName);
+        if (stored) {
+          if (typeof stored !== "string" || stored.length > 1024) throw new Error("Invalid saved tab access");
+          const access = JSON.parse(stored);
+          if (!root.PortfolioPackage?.normalizeKey || !access || access.version !== 1 || access.endpoint !== rememberedEndpoint || typeof access.key !== "string" || Object.keys(access).length !== 3) throw new Error("Invalid saved tab access");
+          key = root.PortfolioPackage.normalizeKey(access.key);
+        }
+      } catch { rememberTeamAccess(""); }
+    }
     function resetGitHubAccess() { githubTransport?.disconnect?.(); githubTransport = null; githubToken = ""; identity = null; }
     function clearAccess() {
       if (key || editorToken || githubToken || connected) accessVersion += 1;
       key = ""; editorToken = ""; connected = false;
+      rememberTeamAccess("");
       resetGitHubAccess();
     }
     function transport() {
@@ -256,26 +286,34 @@
 
     async function refresh() {
       if (!key || busy) return null;
-      const operationGeneration = generation;
+      const operationGeneration = generation, operationVersion = accessVersion;
       busy = true;
       try {
         const result = await send("latest");
         if (generation !== operationGeneration) throw new Error("The workspace changed while the master was loading. Your current workspace was kept; connect again to refresh it.");
-        connected = true; return applySnapshot(result.snapshot);
+        if (accessVersion !== operationVersion) throw errorOf("The master connection changed while data was loading. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
+        const applied = applySnapshot(result.snapshot);
+        connected = true; rememberTeamAccess(key); return applied;
       } catch (error) {
-        connected = false;
-        if (error.code === "INVALID_KEY") clearAccess();
-        if (["INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) { resetGitHubAccess(); accessVersion += 1; }
+        if (accessVersion === operationVersion) {
+          connected = false;
+          if (error.code === "INVALID_KEY") clearAccess();
+          if (["INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) { resetGitHubAccess(); accessVersion += 1; }
+        }
         throw error;
       } finally { busy = false; }
     }
 
     async function connect(access) {
-      const newKey = String(access?.key || access || "").trim();
-      if (newKey !== key) { accessVersion += 1; connected = false; resetGitHubAccess(); }
-      key = newKey; editorToken = String(access?.editorToken || "").trim();
+      let newKey;
+      try { newKey = normalizedAccessKey(access && typeof access === "object" ? access.key : access); }
+      catch (error) { clearAccess(); throw error; }
+      const nextEditorToken = team ? "" : String(access?.editorToken || "").trim();
+      if (newKey !== key || nextEditorToken !== editorToken) { accessVersion += 1; connected = false; if (newKey !== key) rememberTeamAccess(""); resetGitHubAccess(); }
+      key = newKey; editorToken = nextEditorToken;
+      const operationVersion = accessVersion;
       try { return await refresh(); }
-      catch (error) { connected = false; if (error.code === "INVALID_KEY") clearAccess(); throw error; }
+      catch (error) { if (accessVersion === operationVersion) { connected = false; if (error.code === "INVALID_KEY") clearAccess(); } throw error; }
     }
 
     async function save({ reason = "", resolveConflicts, requestId } = {}) {
@@ -286,14 +324,16 @@
       if (!originals.size) return { saved: false, snapshot };
       let changes = [...originals.values()].map(toChange);
       let rebase = null, attempt = 0, keptFences = [], recheckChanges = [];
-      const operationGeneration = generation;
+      const operationGeneration = generation, operationVersion = accessVersion;
       busy = true;
       try {
         for (;;) {
           if (generation !== operationGeneration) throw new Error("The workspace changed while the master was updating. Your current workspace was kept; reconnect before saving again.");
+          if (accessVersion !== operationVersion) throw errorOf("The master connection changed while saving. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
           if (!changes.length && rebase) {
             const latest = (await send("latest")).snapshot;
             if (generation !== operationGeneration) throw new Error("The workspace changed while checking the final master choices. Your current workspace was kept.");
+            if (accessVersion !== operationVersion) throw errorOf("The master connection changed while checking the final choices. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
             const priorProducts = new Map(rebase.products.map((product) => [product.productId, product]));
             const latestProducts = new Map(latest.products.map((product) => [product.productId, product]));
             const overlap = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
@@ -315,7 +355,8 @@
             reason: String(reason).trim(), changes, ...(mode === "service" ? team ? { sessionId: editorSessionId, ...(editorName ? { displayName: editorName } : {}) } : editorName ? { actor: editorName } : {} : {}),
           });
           if (generation !== operationGeneration) throw new Error("The workspace changed while the master was updating. Your current workspace was kept; reconnect to check the saved master.");
-          if (result.code !== "MASTER_CONFLICT") { connected = true; applySnapshot(result.snapshot, originals); pendingRequest = null; return { ...result, saved: true }; }
+          if (accessVersion !== operationVersion) throw errorOf("The master connection changed while saving. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
+          if (result.code !== "MASTER_CONFLICT") { applySnapshot(result.snapshot, originals); connected = true; rememberTeamAccess(key); pendingRequest = null; return { ...result, saved: true }; }
           const localPlans = new Map(), remoteProducts = new Map(result.snapshot.products.map((product) => [product.productId, product]));
           for (const change of changes) {
             const remote = remoteProducts.get(change.productId);
@@ -333,6 +374,8 @@
             for (const conflict of plan.conflicts) if (!conflicts.some((item) => String(item.productId) === productId && item.path === conflict.path)) throw new Error("The master returned an incomplete conflict review. Your local changes are safe.");
           }
           const selected = await resolveConflicts?.(conflicts, result.snapshot);
+          if (generation !== operationGeneration) throw new Error("The workspace changed while choosing the final values. Your current workspace was kept.");
+          if (accessVersion !== operationVersion) throw errorOf("The master connection changed while choosing the final values. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
           if (!selected) return { saved: false, cancelled: true, snapshot };
           for (const conflict of conflicts) if (!["mine", "master"].includes(selected instanceof Map ? selected.get(conflict.key) : selected[conflict.key])) throw new Error("Choose a final value for every conflict.");
           for (const conflict of conflicts) if (conflict.path === "@product") originals.get(conflict.productId).disposition = selected instanceof Map ? selected.get(conflict.key) : selected[conflict.key];
@@ -360,8 +403,10 @@
           if (attempt >= 12) throw new Error("The master is changing frequently. Your local changes are safe; try saving again shortly.");
         }
       } catch (error) {
-        if (error.code === "INVALID_KEY") clearAccess();
-        if (["INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) { resetGitHubAccess(); accessVersion += 1; }
+        if (accessVersion === operationVersion) {
+          if (error.code === "INVALID_KEY") clearAccess();
+          if (["INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) { resetGitHubAccess(); accessVersion += 1; }
+        }
         throw error;
       } finally { busy = false; }
     }
@@ -385,15 +430,19 @@
     function markImported(products, importedKey) {
       seed(products || adapter.getBaselineProducts?.() || adapter.getProducts()); connected = false;
       accessVersion += 1;
-      const newKey = String(importedKey || "").trim();
+      let newKey = "";
+      try { newKey = normalizedAccessKey(importedKey); } catch {}
       if (!newKey || newKey !== key) { editorToken = ""; resetGitHubAccess(); }
       key = newKey;
+      rememberTeamAccess(key);
       persistBaseline();
     }
     return Object.freeze({ connect, refresh, save, applySnapshot, track, markImported,
       async presence({ sessionId, displayName, editing, productId, categoryId, leave = false } = {}) {
         if (mode === "github" || !configured || !key) return null;
-        return request({ endpoint, operation: "presence", key, team, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, ...(categoryId ? { categoryId } : {}), leave: Boolean(leave) });
+        const operationVersion = accessVersion;
+        try { return await request({ endpoint, operation: "presence", key, team, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, ...(categoryId ? { categoryId } : {}), leave: Boolean(leave) }); }
+        catch (error) { if (error.code === "INVALID_KEY" && accessVersion === operationVersion) clearAccess(); throw error; }
       },
       setEditorProfile({ sessionId, displayName, editorName: suppliedName } = {}) {
         const id = String(sessionId || "");
