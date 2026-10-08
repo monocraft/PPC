@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-08 — portfolio-specific duplicate checks
+
+- Allow matching product names and HP SKUs in different product portfolios, including PC Gaming Audio and Console Gaming Audio. Review repeated assignments within a portfolio with exact product and row locations.
+- Match ASCM updates to the report's mapped portfolio first. Keep PC and Console listings separate, while preserving exact category corrections elsewhere.
+- Retain source rows for a shared HP SKU sold in different portfolios. Only repeated primary rows within the same mapped portfolio are deduplicated.
+- Retain protections for repeated SKU rows on one product, duplicate variants, and conflicting internal product IDs.
+
 ## 2026-10-07 — shared product saves and conflict choices
 
 - Reuse Pull latest data as Save to master when shared product details, dates, specifications or SKU edits are waiting. Review changes and an optional reason before submission; restore Pull latest data after success.

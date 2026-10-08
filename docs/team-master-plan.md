@@ -8,7 +8,7 @@ Each team member opens the portfolio, unlocks team access once on their device, 
 
 Different fields can save together. When two people change the same field, the first accepted save becomes the current master value. The next person sees both values and chooses which to keep. That choice is checked again if another person saves while the decision is open. No later submission silently overwrites someone else's edit.
 
-Messages provides detailed warnings and actions without stretching the toolbar. Duplicate review lists the affected products, categories, lanes, and rows. Matching names are possible matches; repeated generic color codes across different products remain valid.
+Messages provides detailed warnings and actions without stretching the toolbar. Duplicate review lists the affected products, categories, lanes, and rows. Matching product names and HP SKUs across different portfolios, including PC Gaming Audio and Console Gaming Audio, are valid and do not trigger duplicate warnings. Within a portfolio, matching names are possible matches; repeated generic color codes across different products remain valid.
 
 ## Shared data design
 
@@ -16,7 +16,7 @@ Messages provides detailed warnings and actions without stretching the toolbar. 
 - Save changes, revisions, history, and a request receipt in one transaction. Lock affected products in stable order and preserve unsaved drafts if any validation or conflict fails.
 - Compare field revisions as well as original values. This detects a value that changed and later changed back while another user was editing.
 - Use request receipts to prevent a retry from applying the same save twice when a connection drops after acceptance.
-- Enforce appropriate normalized SKU uniqueness at the database boundary. Duplicate failures should return existing product and row locations for review.
+- Keep normalized SKU checks within the appropriate portfolio or product scope; a SKU can be sold in multiple portfolios. Duplicate failures should return existing product and row locations for review.
 - Keep one writable master. Generate encrypted package snapshots from accepted database values and include the snapshot timestamp; a downloaded package can be older than the online master.
 
 ## Private access and optional names

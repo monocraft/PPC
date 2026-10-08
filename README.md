@@ -10,7 +10,7 @@ A browser-based workspace for organizing product portfolios and planning product
 - Plan launches and lifecycle milestones on a roadmap.
 - View product details, specifications, and variants.
 - Review updates and warnings through Messages beside the shared data action.
-- Locate duplicate SKU assignments across categories and open the field to correct them.
+- Locate duplicate SKU assignments within a portfolio and open the field to correct them. The same name or SKU can appear in different portfolios, including PC Gaming Audio and Console Gaming Audio.
 - Import and export project packages.
 - Create PowerPoint presentations from portfolios and roadmaps.
 

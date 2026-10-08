@@ -94,6 +94,44 @@ assert.equal(importer.helpers.normalizeColorCode("BLACK"), "BK");
 assert.equal(importer.helpers.normalizeColorCode("FROST"), "FRS");
 assert.equal(importer.helpers.normalizeColorCode("8-BIT"), "8-BIT", "non-color variants must remain distinct");
 
+function ascmWorkbook(dataRows) {
+  const xmlText = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const table = [Object.values(importer.REQUIRED_HEADERS), ...dataRows];
+  const worksheetRows = table.map((values, rowIndex) => `<row r="${rowIndex + 1}">${values.map((value, column) => `<c r="${String.fromCharCode(65 + column)}${rowIndex + 1}" t="inlineStr"><is><t>${xmlText(value)}</t></is></c>`).join("")}</row>`).join("");
+  const contents = {
+    "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
+    "xl/workbook.xml": '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="ASCM" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/worksheets/sheet1.xml": `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${worksheetRows}</sheetData></worksheet>`,
+  };
+  return globalThis.PortfolioPackage.createZip(Object.entries(contents).map(([name, xml]) => ({ name, data: new TextEncoder().encode(xml) })));
+}
+
+const sharedSkuWorkbook = await importer.parseAscmWorkbook(ascmWorkbook([
+  ["Headset", "A1AAA", "HyperX Cloud III BLK GAM HS", "2026-01-15", "2029-12-31"],
+  ["Headset", "A1AAA", "HyperX Cloud III PS BLK GAM HS", "2026-02-01", "2030-12-31"],
+  ["HEADSET", "a1aaa", "HyperX Cloud III BLK GAM HS", "2027-06-01", "2031-12-31"],
+]));
+assert.equal(sharedSkuWorkbook.rows.length, 2, "a canonical HP SKU sold in PC and Console must retain both workbook rows");
+assert.equal(sharedSkuWorkbook.metadata.duplicateBasePnRows, 1, "only the repeated row inside the PC portfolio is a duplicate");
+assert.deepEqual(sharedSkuWorkbook.rows.map((row) => row.sourceRow), [2, 3], "same-portfolio repetition must keep the earliest valid primary row");
+assert.equal(sharedSkuWorkbook.rows[0].ga, "2026-01-15", "a later duplicate must not replace the primary row's dates");
+const retainedAudioGroups = importer.buildProductGroups(sharedSkuWorkbook);
+assert.deepEqual(retainedAudioGroups.map((group) => group.categoryId).sort(), ["console-gaming-audio", "pc-gaming-audio"], "workbook parsing must feed separate PC and Console product groups");
+assert.ok(retainedAudioGroups.every((group) => group.basePns.length === 1 && group.basePns[0] === "A1AAA"));
+const samePortfolioWarning = sharedSkuWorkbook.diagnostics.filter((item) => item.code === "DUPLICATE_BASE_PN");
+assert.equal(samePortfolioWarning.length, 1);
+assert.equal(samePortfolioWarning[0].categoryId, "pc-gaming-audio", "the duplicate warning must identify the portfolio where repetition occurred");
+
+const unknownCategoryWorkbook = await importer.parseAscmWorkbook(ascmWorkbook([
+  ["Unmapped Type A", "Z9AAA", "Unmapped product", "2026-01-15", "2029-12-31"],
+  ["Unmapped Type B", "Z9AAA", "Unmapped product", "2026-02-01", "2030-12-31"],
+  ["UNMAPPED TYPE A", "z9aaa", "Unmapped product", "2027-06-01", "2031-12-31"],
+]));
+assert.equal(unknownCategoryWorkbook.rows.length, 2, "unrelated unmapped source categories must not lose their matching SKU rows");
+assert.equal(unknownCategoryWorkbook.metadata.duplicateBasePnRows, 1, "an unmapped source category still deduplicates its own repeated primary row");
+assert.deepEqual(unknownCategoryWorkbook.rows.map((row) => row.sourceRow), [2, 3]);
+
 const portfolio = {
   categories: [
     {
@@ -119,6 +157,63 @@ const nameOnlyMatch = importer.matchProductGroup(
 );
 assert.equal(nameOnlyMatch.status, "matched");
 assert.equal(nameOnlyMatch.method, "normalized-name");
+
+const sharedAudioPortfolio = {
+  categories: ["pc-gaming-audio", "console-gaming-audio"].map((categoryId) => ({
+    id: categoryId,
+    board: { products: [{
+      id: `shared-${categoryId}`,
+      name: "Cloud III",
+      partSkus: [{ id: `sku-${categoryId}`, code: "A1AAA" }],
+      ascm: { key: "shared-legacy-key", basePartNumbers: ["A1AAA"] },
+    }] },
+  })),
+};
+const sharedAudioBefore = JSON.stringify(sharedAudioPortfolio);
+for (const categoryId of ["pc-gaming-audio", "console-gaming-audio"]) {
+  const report = { ...cloud, categoryId, basePns: ["A1AAA"], ascmKey: "different-key" };
+  const matchingCategory = sharedAudioPortfolio.categories.find((category) => category.id === categoryId);
+  const otherCategory = sharedAudioPortfolio.categories.find((category) => category.id !== categoryId);
+  const skuMatch = importer.matchProductGroup(report, sharedAudioPortfolio);
+  assert.equal(skuMatch.status, "matched", "intentional PC and Console copies must not make the report ambiguous");
+  assert.equal(skuMatch.method, "base-pn");
+  assert.equal(skuMatch.product.id, matchingCategory.board.products[0].id, "an HP SKU match must stay inside the report's portfolio");
+  assert.equal(skuMatch.categoryId, categoryId);
+  const savedKeyMatch = importer.matchProductGroup({ ...report, ascmKey: "shared-legacy-key" }, sharedAudioPortfolio);
+  assert.equal(savedKeyMatch.status, "matched", "a copied saved ASCM key in the other audio portfolio is legitimate");
+  assert.equal(savedKeyMatch.method, "ascm-key");
+  assert.equal(savedKeyMatch.product.id, matchingCategory.board.products[0].id);
+
+  const siblingOnly = { categories: [structuredClone(otherCategory)] };
+  assert.equal(importer.matchProductGroup(report, siblingOnly).status, "unmatched", "a new audio listing must not relocate its sibling from the other portfolio");
+  assert.equal(importer.matchProductGroup({ ...report, ascmKey: "shared-legacy-key" }, siblingOnly).status, "unmatched", "a saved key must not move a PC listing into Console or a Console listing into PC");
+
+  const localNameOnly = structuredClone(sharedAudioPortfolio);
+  const localNameProduct = localNameOnly.categories.find((category) => category.id === categoryId).board.products[0];
+  localNameProduct.partSkus = [];
+  localNameProduct.ascm = {};
+  const nameMatch = importer.matchProductGroup({ ...report, ascmKey: "shared-legacy-key" }, localNameOnly);
+  assert.equal(nameMatch.method, "normalized-name", "the mapped portfolio's name match takes priority over the other audio portfolio's exact key or SKU");
+  assert.equal(nameMatch.product.id, localNameProduct.id);
+
+  const genuineDuplicate = structuredClone(sharedAudioPortfolio);
+  const localProducts = genuineDuplicate.categories.find((category) => category.id === categoryId).board.products;
+  localProducts.push({ ...structuredClone(localProducts[0]), id: `duplicate-${categoryId}` });
+  const ambiguousSku = importer.matchProductGroup(report, genuineDuplicate);
+  assert.equal(ambiguousSku.status, "ambiguous", "multiple products sharing the HP SKU inside one portfolio still need review");
+  assert.equal(ambiguousSku.reason, "base-pns-match-multiple-products");
+  assert.equal(ambiguousSku.candidates.length, 2);
+  assert.ok(ambiguousSku.candidates.every((candidate) => candidate.categoryId === categoryId), "review candidates must exclude intentional copies in the other portfolio");
+  const ambiguousKey = importer.matchProductGroup({ ...report, ascmKey: "shared-legacy-key" }, genuineDuplicate);
+  assert.equal(ambiguousKey.reason, "duplicate-ascm-key", "saved-key ambiguity inside one portfolio remains visible");
+  localProducts[0].partSkus = [{ id: "unrelated-sku", code: "OTHER123" }];
+  localProducts[0].ascm.basePartNumbers = ["OTHER123"];
+  localProducts[1].ascm.key = "other-saved-key";
+  const conflictingExact = importer.matchProductGroup({ ...report, ascmKey: "shared-legacy-key" }, genuineDuplicate);
+  assert.equal(conflictingExact.reason, "ascm-key-and-base-pn-disagree", "different saved-key and SKU assignments inside the same portfolio still require a choice");
+  assert.equal(conflictingExact.candidates.length, 2);
+}
+assert.equal(JSON.stringify(sharedAudioPortfolio), sharedAudioBefore, "category-aware matching must not mutate either audio listing");
 
 const consolePortfolio = {
   categories: [{
@@ -638,4 +733,4 @@ const editedThenRemoved = integration.state().categories[0].board.products[0].sp
 assert.equal(editedThenRemoved.length, normalizedOriginalProduct.specs.length - 1);
 assert.equal(editedThenRemoved[0].value, "Edited before removal", "removing another specification must retain current edits");
 
-console.log("ASCM importer checks passed: grouping, matching, additive updates, preserved specs/prices/images, partial reports, idempotence, app normalization/category moves, new-product category/lane baseline specs, and specification editing.");
+console.log("ASCM importer checks passed: workbook portfolio-scoped SKU retention, grouping, category-aware audio matches, genuine same-portfolio ambiguity, additive updates, preserved specs/prices/images, partial reports, idempotence, app normalization/category moves, new-product category/lane baseline specs, and specification editing.");
