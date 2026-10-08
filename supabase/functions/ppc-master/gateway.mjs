@@ -1,5 +1,6 @@
 import './shared/package-codec.js';
 import './shared/master-model.js';
+import './shared/product-merge.js';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -9,7 +10,7 @@ const MAX_RPC_BYTES = 9 * 1024 * 1024;
 const SESSION_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
-const PUBLIC_OPERATIONS = new Set(['latest', 'save', 'presence']);
+const PUBLIC_OPERATIONS = new Set(['latest', 'save', 'presence', 'review']);
 const PRIVATE_OPERATIONS = new Set(['bootstrap', 'export', 'ack', 'failure']);
 const record = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -143,10 +144,7 @@ function requireState(state) {
 
 export function publicSnapshot(state) {
   requireState(state);
-  const masterSync = record(state.manifest.masterSync) ? clone(state.manifest.masterSync) : null;
-  if (record(masterSync?.products)) for (const metadata of Object.values(masterSync.products)) {
-    if (record(metadata)) delete metadata.archivedProduct;
-  }
+  const masterSync = model.publicMetadata(state.manifest);
   return {
     ...model.snapshot(state.manifest), revision: `supabase:${state.storageRevision}`,
     storageRevision: Number(state.storageRevision), packageInfo: codec.normalizePackageInfo(state.manifest.packageInfo),
@@ -286,6 +284,16 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       await enforceRate(request, 'latest', true, SESSION_PATTERN.test(body.sessionId || '') ? body.sessionId : '');
       return { snapshot: publicSnapshot(await database('read', {})) };
     }
+    if (operation === 'review') {
+      if (![body.productId, body.sourceProductId].every((value) => typeof value === 'string' && value.length > 0 && value.length <= 180 && !/[\u0000-\u001f]/.test(value) && !['__proto__', 'constructor', 'prototype'].includes(value)) || body.productId === body.sourceProductId) throw problem(400, 'INVALID_REQUEST', 'Choose two different products to review.');
+      await enforceRate(request, 'review', true, SESSION_PATTERN.test(body.sessionId || '') ? body.sessionId : '');
+      const state = requireState(await database('read', {}));
+      const entries = model.entriesFromManifest(state.manifest);
+      const selected = [body.productId, body.sourceProductId].map((productId) => entries.find((entry) => entry.productId === productId));
+      const available = selected.filter(Boolean);
+      if (!available.length || (available.length === 2 && available[0].categoryId !== available[1].categoryId)) throw problem(409, 'MERGE_REVIEW_REQUIRED', 'These products changed. Review the current products before combining them.');
+      return { snapshot: publicSnapshot(state), products: available.map((entry) => ({ product: entry.product, categoryId: entry.categoryId })) };
+    }
     const sessionId = String(body.sessionId || '');
     if (!SESSION_PATTERN.test(sessionId) || (body.displayName !== undefined && typeof body.displayName !== 'string') ||
         (body.productId !== undefined && typeof body.productId !== 'string') ||
@@ -369,6 +377,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
         ? ['key', 'editorToken', 'sessionId', 'displayName', 'actor', 'team', 'requestId', 'changes', 'reason']
         : operation === 'presence' ? ['key', 'editorToken', 'sessionId', 'displayName', 'categoryId', 'productId', 'editing', 'leave']
         : operation === 'latest' ? ['key', 'editorToken', 'sessionId', 'displayName']
+        : operation === 'review' ? ['key', 'editorToken', 'sessionId', 'productId', 'sourceProductId']
         : operation === 'bootstrap' ? ['publisherSecret', 'manifest', 'sourceSha', 'githubSha']
         : operation === 'export' ? ['publisherSecret']
         : operation === 'ack' ? ['publisherSecret', 'storageRevision', 'revision', 'githubSha']

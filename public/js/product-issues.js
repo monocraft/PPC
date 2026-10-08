@@ -172,6 +172,7 @@
       <div class="product-issue-heading"><span class="product-issue-severity">${issue.kind === "possible-name" ? "Possible match" : issue.severity === "error" ? "Needs correction" : "Review assignment"}</span><h3>${escapeHtml(issue.title)}</h3></div>
       <p>${escapeHtml(issue.description)}</p><p class="product-issue-guidance">${escapeHtml(issue.guidance)}</p>
       <ul class="product-issue-locations">${array(issue.members).map((location, memberIndex) => `<li><div><strong>${escapeHtml(location.productName)}</strong><span>${escapeHtml(location.categoryName)} · ${escapeHtml(location.laneName)}</span>${location.detail ? `<small>${escapeHtml(location.detail)}</small>` : ""}</div><button type="button" class="small-button" data-open-product-issue="${issueIndex}" data-issue-member="${memberIndex}" aria-label="${escapeHtml(`Open ${location.productName} in ${location.categoryName}${location.detail ? `, ${location.detail}` : ""}`)}">Open product<span aria-hidden="true"> ↗</span></button></li>`).join("")}</ul>
+      ${["possible-name", "hp-sku", "ascm-match"].includes(issue.kind) && new Set(array(issue.members).map((location) => location.locator.productId)).size >= 2 ? `<button type="button" class="small-button" data-merge-product-issue="${issueIndex}">Compare and merge</button>` : ""}
     </article>`).join("");
   }
 
@@ -226,10 +227,18 @@
       if (dialog || !doc?.createElement || !doc.body) return dialog;
       dialog = doc.createElement("dialog"); dialog.id = "productIssuesDialog"; dialog.className = "product-issues-dialog";
       dialog.setAttribute("aria-labelledby", "productIssuesTitle"); dialog.setAttribute("aria-describedby", "productIssuesSummary");
-      dialog.innerHTML = '<div class="product-issues-header"><div><span class="eyebrow">Portfolio health</span><h2 id="productIssuesTitle">Review products <span class="product-issues-count" data-product-issues-count></span></h2></div><button type="button" class="icon-button" data-close-product-issues aria-label="Close product review">×</button></div><p id="productIssuesSummary" class="product-issues-summary" data-product-issues-summary></p><p class="product-issues-feedback" data-product-issues-feedback role="status" aria-live="polite"></p><div class="product-issues-list" data-product-issues-list></div><div class="product-issues-footer"><span>Changes stay in your draft until you save to master.</span><button type="button" class="small-button" data-refresh-product-issues>Check again</button><button type="button" class="primary-button" data-close-product-issues>Done</button></div>';
+      dialog.innerHTML = '<div class="product-issues-header"><div><span class="eyebrow">Portfolio health</span><h2 id="productIssuesTitle">Review products <span class="product-issues-count" data-product-issues-count></span></h2></div><button type="button" class="icon-button" data-close-product-issues aria-label="Close product review">×</button></div><p id="productIssuesSummary" class="product-issues-summary" data-product-issues-summary></p><p class="product-issues-feedback" data-product-issues-feedback role="status" aria-live="polite"></p><div class="product-issues-list" data-product-issues-list></div><div class="product-issues-footer"><span>Review your draft, then save changes when ready.</span><button type="button" class="small-button" data-refresh-product-issues>Check again</button><button type="button" class="primary-button" data-close-product-issues>Done</button></div>';
       dialog.addEventListener("click", async (event) => {
         if (event.target.closest("[data-close-product-issues]")) { close(); return; }
         if (event.target.closest("[data-refresh-product-issues]")) { refresh({ force: true }); dialog.querySelector("[data-product-issues-feedback]").textContent = "Checked the current portfolio."; return; }
+        const mergeButton = event.target.closest("[data-merge-product-issue]");
+        if (mergeButton) {
+          const issue = displayedIssues[Number(mergeButton.dataset.mergeProductIssue)];
+          const unique = array(issue?.members).filter((location, index, members) => members.findIndex((member) => member.locator.productId === location.locator.productId) === index);
+          if (unique.length >= 2 && unique.every((location) => navigationFor(adapter?.getPortfolio?.(), location))) { close(); adapter?.mergeProducts?.(unique); }
+          else { refresh({ force: true }); dialog.querySelector("[data-product-issues-feedback]").textContent = "These products changed. Check the refreshed list."; }
+          return;
+        }
         const button = event.target.closest("[data-open-product-issue]");
         if (!button) return;
         const issue = displayedIssues[Number(button.dataset.openProductIssue)], location = issue?.members[Number(button.dataset.issueMember)];

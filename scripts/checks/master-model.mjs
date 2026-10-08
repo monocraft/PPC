@@ -283,7 +283,7 @@ assert.throws(() => model.mergeChanges(manifest, [createProduct("new-product", b
 assert.throws(() => model.mergeChanges(manifest, [createProduct("new-product", { ...base, imageAssetId: "private-image" })]), /Unsupported shared field/);
 assert.throws(() => model.mergeChanges(manifest, [createProduct("new-product", { ...base, generalAvailabilityDate: "2026-02-31" })]), /real calendar date/);
 assert.throws(() => model.mergeChanges(manifest, [createProduct(), createProduct()]), /only once/);
-assert.throws(() => model.mergeChanges(manifest, [{ ...change({ name: "Unknown mode" }), kind: "replace" }]), /update, create, or delete/);
+assert.throws(() => model.mergeChanges(manifest, [{ ...change({ name: "Unknown mode" }), kind: "replace" }]), /update, create, delete, or merge/);
 
 const twoPortfolios = copy(manifest);
 twoPortfolios.categories.push({ id: "console", board: { products: [], lanes: [{ id: "console-lane" }] } });

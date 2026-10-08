@@ -489,9 +489,18 @@
     for (const [productId, metadata] of Object.entries(manifest.masterSync?.products || {})) {
       if (!object(metadata) || !metadata.deleted || known.has(productId)) continue;
       identity(productId, "Product");
-      tombstones.push({ productId, categoryId: String(metadata.categoryId || ""), laneId: String(metadata.laneId || ""), productName: String(metadata.productName || "Removed product"), revisions: safeRevisions(metadata.revisions) });
+      tombstones.push({ productId, categoryId: String(metadata.categoryId || ""), laneId: String(metadata.laneId || ""), productName: String(metadata.productName || "Removed product"), revisions: safeRevisions(metadata.revisions), ...(metadata.mergedIntoProductId ? { mergedIntoProductId: identity(metadata.mergedIntoProductId, "Kept product"), mergeChoices: clone(metadata.mergeChoices || {}) } : {}) });
     }
     return { version: 1, products, tombstones };
+  }
+
+  function publicMetadata(manifest) {
+    const metadata = object(manifest?.masterSync) ? clone(manifest.masterSync) : null;
+    if (object(metadata?.products)) for (const record of Object.values(metadata.products)) if (object(record)) {
+      delete record.archivedProduct;
+      delete record.archivedKeeperProduct;
+    }
+    return metadata;
   }
 
   function boundedHistory(entries) {
@@ -542,11 +551,138 @@
     return [...keys].some((key) => (base[key] || 0) !== (master[key] || 0));
   }
 
+  function mergeChoices(value) {
+    if (!object(value) || Object.keys(value).length > 4000) throw new TypeError("The merge decisions are invalid. Review the products again.");
+    const choices = dictionary();
+    for (const [path, choice] of Object.entries(value)) {
+      if (!path || path.length > 4096 || ["__proto__", "constructor", "prototype"].includes(path) || !["keeper", "source"].includes(choice)) throw new TypeError("The merge decisions are invalid. Review the products again.");
+      choices[path] = choice;
+    }
+    return choices;
+  }
+
+  function newMergeProduct(value, productId, categoryId, laneId, manifest) {
+    if (!object(value) || value.id !== productId || JSON.stringify(value).length > 1024 * 1024) throw new TypeError("The imported product is incomplete or too large to merge.");
+    if ((value.categoryId !== undefined && value.categoryId !== categoryId) || (value.laneId !== undefined && value.laneId !== laneId)) throw new TypeError("The reviewed product belongs to a different category or product lane.");
+    boardForPlacement(manifest, categoryId, laneId);
+    // The planner validates plain JSON, row IDs, nesting, and property names.
+    const prepared = root.PortfolioProductMerge.cloneProduct(value);
+    root.PortfolioProductMerge.plan(prepared, { id: productId === "merge-validation" ? "merge-validation-other" : "merge-validation", specs: [], partSkus: [], variantGroups: [] });
+    const assets = new Set((manifest.imageAssets || []).map((asset) => asset.id));
+    const checkImages = (node) => {
+      if (Array.isArray(node)) { node.forEach(checkImages); return; }
+      if (!object(node)) return;
+      if (node.imageAssetId && !assets.has(node.imageAssetId)) throw new TypeError("This imported product has an image that has not been uploaded. Keep the draft and add the image after the products are combined.");
+      Object.values(node).forEach(checkImages);
+    };
+    checkImages(prepared);
+    delete prepared.categoryId;
+    return { ...prepared, id: productId, laneId };
+  }
+
+  // A reviewed local record may contain an unsaved import. Retain omitted
+  // accepted details while carrying its deliberate populated local additions.
+  // Cross-product disagreements are still handled by the explicit merge plan.
+  function buildSupplement(original, reviewed, reviewMetadata = false) {
+    if (!object(original) || !object(reviewed) || original.id !== reviewed.id || !root.PortfolioProductMerge) throw new TypeError("The reviewed product is invalid.");
+    const otherId = original.id === "supplement-validation" ? "supplement-validation-other" : "supplement-validation";
+    const safe = (value) => { const copied = root.PortfolioProductMerge.cloneProduct(value); root.PortfolioProductMerge.plan(copied, { id: otherId, specs: [], partSkus: [], variantGroups: [] }); return copied; };
+    const accepted = safe(original), supplied = safe(reviewed), conflicts = [];
+    const blank = root.PortfolioProductMerge.isBlank;
+    const rowKey = (row) => !object(row) ? "" : row.id ? `id:${row.id}` : row.basePartNumber || row.basePn || row.basePN ? `part:${root.PortfolioProductMerge.normalizeSku(row.basePartNumber || row.basePn || row.basePN)}` : "";
+    const canonical = {
+      product: new Set([...DATE_FIELDS, ...PRODUCT_FIELDS, "id", "laneId", "order", "categoryId"]),
+      roadmap: new Set([...Object.values(ROADMAP_FIELDS), "launchMonth"]),
+      spec: new Set(["id", ...SPEC_FIELDS]), part: new Set(["id", ...PART_FIELDS]),
+      group: new Set(["id", "label", "type"]), variant: new Set(["id", ...VARIANT_FIELDS]),
+    };
+    const listContexts = { specs: "spec", partSkus: "part", variantGroups: "group", items: "variant" };
+    const pretty = (field) => LABELS[field] || String(field).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").replace(/^./, (letter) => letter.toUpperCase());
+    const complete = (before, incoming, context = "custom", path = [], target = [], description = "") => {
+      if (incoming === undefined || blank(incoming) && !blank(before)) return clone(before);
+      if (object(incoming) && (object(before) || before === undefined)) {
+        const previous = object(before) ? before : {}, result = clone(previous);
+        for (const [field, value] of Object.entries(incoming)) {
+          if (reviewMetadata && canonical[context]?.has(field)) continue;
+          const childContext = context === "product" && field === "roadmap" ? "roadmap" :
+            (context === "product" && own(listContexts, field) || context === "group" && field === "items") ? `${listContexts[field]}-list` : "custom";
+          result[field] = complete(previous[field], value, childContext, [...path, field], [...target, field], description);
+        }
+        return result;
+      }
+      if (Array.isArray(before) && Array.isArray(incoming)) {
+        const keyed = new Map(before.map((row) => [rowKey(row), row]).filter(([key]) => key));
+        const rowContext = context.endsWith("-list") ? context.slice(0, -5) : "custom";
+        const result = incoming.map((row, index) => {
+          const key = rowKey(row), rowPath = key.startsWith("id:") ? key.slice(3) : key.startsWith("part:") ? key.slice(5) : String(index);
+          const rowDescription = rowContext === "spec" ? `Specification · ${row.label || keyed.get(key)?.label || "Untitled"}` :
+            rowContext === "part" ? `HP SKU · ${row.code || keyed.get(key)?.code || "Untitled"}` :
+            rowContext === "variant" ? `Variant · ${row.code || row.label || keyed.get(key)?.code || "Untitled"}` :
+            rowContext === "group" ? `Variant group · ${row.label || row.type || "Untitled"}` : description;
+          return key && keyed.has(key) ? complete(keyed.get(key), row, rowContext, [...path, rowPath], [...target, index], rowDescription) : clone(row);
+        });
+        const keys = new Set(result.map(rowKey).filter(Boolean));
+        for (const row of before) { const key = rowKey(row); if (key ? !keys.has(key) : !result.some((saved) => equal(saved, row))) { result.push(clone(row)); if (key) keys.add(key); } }
+        return result;
+      }
+      if (reviewMetadata && !blank(before) && !blank(incoming) && !equal(before, incoming)) {
+        const field = path[path.length - 1] || "Details", image = field === "imageAssetId";
+        const conflictPath = `@metadata/${path.map(segment).join("/")}`;
+        conflicts.push({ productId: original.id, productName: original.name || reviewed.name || "Untitled product", path: conflictPath, field: conflictPath,
+          label: `${description ? `${description} · ` : ""}${image ? "Image" : pretty(field)}`, master: clone(before), mine: clone(incoming), masterExists: true, mineExists: true,
+          masterText: image ? "Latest product image" : describeNode(before), mineText: image ? "Image selected in your draft" : describeNode(incoming),
+          ...(image ? { masterImageId: before, mineImageId: incoming } : {}), target: clone(target) });
+        return clone(before);
+      }
+      return clone(incoming);
+    };
+    const completed = complete(accepted, supplied, "product");
+    completed.id = original.id;
+    for (const field of ["laneId", "order", "categoryId"]) { if (own(original, field)) completed[field] = clone(original[field]); else delete completed[field]; }
+    return { product: reviewMetadata ? root.PortfolioProductMerge.cloneProduct(completed) : safe(completed), conflicts };
+  }
+
+  function supplementProduct(original, reviewed) {
+    return buildSupplement(original, reviewed).product;
+  }
+
+  // Canonical dates/specification/SKU facts are reviewed separately. These
+  // choices cover their extra source details and other full-record metadata.
+  function supplementReview(original, reviewed) {
+    return buildSupplement(original, reviewed, true);
+  }
+
+  function resolveSupplementReview(review, choices = {}) {
+    if (!object(review) || !object(review.product) || !Array.isArray(review.conflicts) || !object(choices) || !root.PortfolioProductMerge) throw new TypeError("The product details review is invalid.");
+    const product = root.PortfolioProductMerge.cloneProduct(review.product);
+    for (const conflict of review.conflicts) {
+      if (!object(conflict) || conflict.productId !== product.id || typeof conflict.path !== "string" || !conflict.path.startsWith("@metadata/") || !Array.isArray(conflict.target) || !conflict.target.length || conflict.target.length > 32) throw new TypeError("The product details review is invalid.");
+      const choice = choices[conflict.path] ?? choices[JSON.stringify([product.id, conflict.path])];
+      if (!["mine", "master"].includes(choice)) throw new RangeError("Choose which product details to keep for each difference.");
+      let parent = product;
+      for (const field of conflict.target.slice(0, -1)) {
+        if (!["string", "number"].includes(typeof field) || ["__proto__", "prototype", "constructor"].includes(field) || !own(parent, field) || !parent[field] || typeof parent[field] !== "object") throw new TypeError("The product details review is invalid.");
+        parent = parent[field];
+      }
+      const field = conflict.target[conflict.target.length - 1];
+      if (!["string", "number"].includes(typeof field) || ["__proto__", "prototype", "constructor"].includes(field) || !own(parent, field)) throw new TypeError("The product details review is invalid.");
+      parent[field] = root.PortfolioProductMerge.cloneProduct(choice === "mine" ? conflict.mine : conflict.master);
+    }
+    return root.PortfolioProductMerge.cloneProduct(product);
+  }
+
+  function mergeProductConflict(change, remote, sourceRemote, reason) {
+    return { productId: change.productId, sourceProductId: change.sourceProductId, productName: remote?.productName || change.mine?.name || "Product", kind: "merge", path: "@merge", field: "@merge", label: "Review the merge again", reason,
+      baseText: "Products before the merge", mineText: "Combined product", masterText: "One of these products has changed", requiresMergeReview: true,
+      masterProductVersion: remote?.productVersion || "", sourceMasterProductVersion: sourceRemote?.productVersion || "" };
+  }
+
   function mergeChanges(manifest, changes, context = {}) {
     if (!Array.isArray(changes) || changes.length > 500) throw new TypeError("Submit at most 500 changed products at a time.");
     const currentSnapshot = snapshot(manifest);
     const known = new Map(currentSnapshot.products.map((entry) => [entry.productId, entry]));
     const removed = new Map(currentSnapshot.tombstones.map((entry) => [entry.productId, entry]));
+    const fullProducts = new Map(entriesFromManifest(manifest).map((entry) => [entry.productId, entry.product]));
     const seen = new Set();
     const plans = [];
     const conflicts = [];
@@ -557,7 +693,39 @@
       seen.add(productId);
       const remote = known.get(productId);
       const kind = change.kind || "update";
-      if (!["update", "create", "delete"].includes(kind)) throw new TypeError("A product change must be an update, create, or delete.");
+      if (!["update", "create", "delete", "merge"].includes(kind)) throw new TypeError("A product change must be an update, create, delete, or merge.");
+      if (kind === "merge") {
+        if (!root.PortfolioProductMerge) throw new TypeError("Product merging is unavailable. Your draft is safe.");
+        const sourceProductId = identity(change.sourceProductId, "Other product");
+        if (sourceProductId === productId || seen.has(sourceProductId)) throw new TypeError("Each product can be included in only one change or merge at a time.");
+        seen.add(sourceProductId);
+        const sourceRemote = known.get(sourceProductId), choices = mergeChoices(change.choices || {});
+        const mine = validateValues(change.mine);
+        const sourceMetadata = manifest.masterSync?.products?.[sourceProductId];
+        if (!sourceRemote && remote && context.requestId && sourceMetadata?.mergeRequestId === context.requestId && sourceMetadata.mergedIntoProductId === productId && equal(remote.values, mine)) continue;
+        let changed = false;
+        for (const [entry, baseRecord, version, category, lane] of [[remote, change.base, change.baseProductVersion, change.categoryId, change.laneId], [sourceRemote, change.sourceBase, change.sourceBaseProductVersion, change.sourceCategoryId, change.sourceLaneId]]) {
+          if (baseRecord) {
+            if (!entry || !/^[a-f0-9]{64}$/.test(String(version || "")) || entry.productVersion !== version || !equal(canonicalValues(baseRecord.values || baseRecord), entry.values) || allRevisionsChanged(safeRevisions(baseRecord.revisions || (entry === remote ? change.baseRevisions : change.sourceBaseRevisions)), entry.revisions) || category !== entry.categoryId || lane !== entry.laneId) changed = true;
+          } else if (entry) changed = true;
+        }
+        if ((!remote && removed.has(productId)) || (!sourceRemote && removed.has(sourceProductId))) changed = true;
+        if (changed) { conflicts.push(mergeProductConflict(change, remote, sourceRemote, "products-changed-before-merge")); continue; }
+        const categoryId = remote?.categoryId ?? string(change.categoryId, "Product portfolio", 180), laneId = remote?.laneId ?? identity(change.laneId, "Product lane");
+        const sourceCategoryId = sourceRemote?.categoryId ?? string(change.sourceCategoryId, "Other portfolio", 180), sourceLaneId = sourceRemote?.laneId ?? identity(change.sourceLaneId, "Other product lane");
+        if (categoryId !== sourceCategoryId) throw new RangeError("Choose products from the same category. Listings in different categories stay separate.");
+        const originalKeeper = remote ? fullProducts.get(productId) : newMergeProduct(change.keeperProduct, productId, categoryId, laneId, manifest);
+        const originalSource = sourceRemote ? fullProducts.get(sourceProductId) : newMergeProduct(change.sourceProduct, sourceProductId, sourceCategoryId, sourceLaneId, manifest);
+        const keeper = remote && change.keeperProduct ? supplementProduct(originalKeeper, newMergeProduct(change.keeperProduct, productId, categoryId, laneId, manifest)) : originalKeeper;
+        const source = sourceRemote && change.sourceProduct ? supplementProduct(originalSource, newMergeProduct(change.sourceProduct, sourceProductId, sourceCategoryId, sourceLaneId, manifest)) : originalSource;
+        const planned = root.PortfolioProductMerge.plan(keeper, source);
+        if (planned.conflicts.some((item) => !own(choices, item.key))) { conflicts.push(mergeProductConflict(change, remote, sourceRemote, "additional-details-need-review")); continue; }
+        // Shared fact edits made after the review remain an explicit overlay.
+        // Supplemental complete records preserve unsaved imported source data.
+        const completed = applyProductValues(root.PortfolioProductMerge.resolve(planned, choices), mine);
+        plans.push({ productId, sourceProductId, kind, categoryId, laneId, sourceCategoryId, sourceLaneId, remote, sourceRemote, choices, fullProduct: completed, keeperProduct: clone(originalKeeper), sourceProduct: clone(originalSource), values: mine });
+        continue;
+      }
       if (kind === "create") {
         const categoryId = string(change.categoryId, "Product portfolio", 180), laneId = identity(change.laneId, "Product lane");
         boardForPlacement(manifest, categoryId, laneId);
@@ -596,7 +764,7 @@
       plans.push({ productId, remote, plan });
     }
     if (conflicts.length) return { manifest, conflicts, savedFields: 0, savedProducts: 0, history: [] };
-    const updates = plans.map((entry) => entry.kind === "create" ? { ...entry, operations: [{ path: "@product", label: "Create product", base: null, value: entry.values, baseExists: false, valueExists: true }] } : entry.kind === "delete" ? { ...entry, operations: [{ path: "@product", label: "Delete product", base: entry.remote.values, value: null, baseExists: true, valueExists: false }] } : { productId: entry.productId, kind: "update", values: validateValues(entry.plan.values), operations: diffOperations(entry.remote.values, entry.plan.values) }).filter((entry) => entry.operations.length);
+    const updates = plans.map((entry) => entry.kind === "merge" ? { ...entry, operations: [{ path: "@product", label: "Merge products", base: entry.remote?.values || null, value: entry.values, baseExists: Boolean(entry.remote), valueExists: true }, ...diffOperations(entry.remote?.values || canonicalValues({}), entry.values)] } : entry.kind === "create" ? { ...entry, operations: [{ path: "@product", label: "Create product", base: null, value: entry.values, baseExists: false, valueExists: true }] } : entry.kind === "delete" ? { ...entry, operations: [{ path: "@product", label: "Delete product", base: entry.remote.values, value: null, baseExists: true, valueExists: false }] } : { productId: entry.productId, kind: "update", values: validateValues(entry.plan.values), operations: diffOperations(entry.remote.values, entry.plan.values) }).filter((entry) => entry.operations.length);
     if (!updates.length) return { manifest, conflicts: [], savedFields: 0, savedProducts: 0, history: [] };
     const nextManifest = clone(manifest);
     const nextEntries = new Map(entriesFromManifest(nextManifest).map((entry) => [entry.productId, entry]));
@@ -610,14 +778,34 @@
       metadata.products[entry.productId] = { ...(metadata.products[entry.productId] || {}), revisions: safeRevisions(entry.revisions) };
       for (const revision of Object.values(entry.revisions)) metadata.revision = Math.max(metadata.revision, revision);
     }
-    if (metadata.revision > Number.MAX_SAFE_INTEGER - updates.reduce((sum, entry) => sum + entry.operations.length, 0)) throw new RangeError("The master's change counter needs to be reset by the portfolio owner before another save.");
+    if (metadata.revision > Number.MAX_SAFE_INTEGER - updates.reduce((sum, entry) => sum + entry.operations.length + (entry.kind === "merge" ? 1 + (nextEntries.size + updates.length) * 2 : 0), 0)) throw new RangeError("The change counter needs attention from the portfolio owner before another save.");
     const now = typeof context.now === "string" ? context.now : new Date().toISOString();
     const history = [];
     let savedFields = 0;
     for (const update of updates) {
       const entry = nextEntries.get(update.productId);
       let nextProduct;
-      if (update.kind === "create") {
+      if (update.kind === "merge") {
+        const board = boardForPlacement(nextManifest, update.categoryId, update.laneId);
+        nextProduct = clone(update.fullProduct);
+        if (entry) Object.assign(entry.product, nextProduct);
+        else {
+          nextProduct.order = board.products.filter((product) => product.laneId === update.laneId).reduce((maximum, product) => Number.isFinite(product.order) ? Math.max(maximum, product.order) : maximum, -1) + 1;
+          board.products.push(nextProduct);
+          nextEntries.set(update.productId, { product: nextProduct, categoryId: update.categoryId, laneId: update.laneId, productName: nextProduct.name });
+        }
+        metadata.products[update.productId] = { ...(metadata.products[update.productId] || {}), revisions: safeRevisions(metadata.products[update.productId]?.revisions), deleted: false, categoryId: update.categoryId, laneId: update.laneId, productName: nextProduct.name };
+        delete metadata.products[update.productId].archivedProduct;
+        const donor = nextEntries.get(update.sourceProductId);
+        if (donor) {
+          const donorBoard = boardForPlacement(nextManifest, donor.categoryId, donor.laneId);
+          donorBoard.products.splice(donorBoard.products.findIndex((product) => product.id === update.sourceProductId), 1);
+        }
+        metadata.revision += 1;
+        metadata.products[update.sourceProductId] = { ...(metadata.products[update.sourceProductId] || {}), revisions: { ...safeRevisions(metadata.products[update.sourceProductId]?.revisions), "@product": metadata.revision }, deleted: true, categoryId: update.sourceCategoryId, laneId: update.sourceLaneId, productName: update.sourceRemote?.productName || update.sourceProduct.name || "Merged product", archivedProduct: clone(donor?.product || update.sourceProduct), archivedKeeperProduct: clone(update.keeperProduct), mergedIntoProductId: update.productId, mergeChoices: clone(update.choices), mergeRequestId: String(context.requestId || "").slice(0, 180) };
+        history.push({ productId: update.sourceProductId, productName: update.sourceRemote?.productName || "Merged product", kind: "merge", path: "@product", label: "Merged into another product", before: update.sourceRemote?.values || null, after: null, beforeExists: Boolean(update.sourceRemote), afterExists: false, revision: metadata.revision, at: now, actor: String(context.actor || "Team member").slice(0, 160), requestId: String(context.requestId || "").slice(0, 180) });
+        savedFields += 1;
+      } else if (update.kind === "create") {
         const board = boardForPlacement(nextManifest, update.categoryId, update.laneId);
         const laneProducts = board.products.filter((product) => product.laneId === update.laneId);
         const order = laneProducts.reduce((maximum, product) => Number.isFinite(product.order) ? Math.max(maximum, product.order) : maximum, -1) + 1;
@@ -626,11 +814,17 @@
         board.products.push(nextProduct);
         metadata.products[update.productId] = { ...(metadata.products[update.productId] || {}), revisions: safeRevisions(metadata.products[update.productId]?.revisions), deleted: false, categoryId: update.categoryId, laneId: update.laneId, productName: nextProduct.name, creationRequestId: String(context.requestId || "").slice(0, 180) };
         delete metadata.products[update.productId].archivedProduct;
+        delete metadata.products[update.productId].mergedIntoProductId;
+        delete metadata.products[update.productId].mergeChoices;
+        delete metadata.products[update.productId].mergeRequestId;
       } else if (update.kind === "delete") {
         const board = boardForPlacement(nextManifest, entry.categoryId, entry.laneId);
         board.products.splice(board.products.findIndex((product) => product.id === update.productId), 1);
         nextProduct = entry.product;
         Object.assign(metadata.products[update.productId], { deleted: true, categoryId: entry.categoryId, laneId: entry.laneId, productName: entry.productName, archivedProduct: clone(entry.product) });
+        delete metadata.products[update.productId].mergedIntoProductId;
+        delete metadata.products[update.productId].mergeChoices;
+        delete metadata.products[update.productId].mergeRequestId;
       } else {
         nextProduct = applyProductValues(entry.product, update.values);
         Object.assign(entry.product, nextProduct);
@@ -644,10 +838,21 @@
         savedFields += 1;
       }
     }
+    const redirects = new Map(updates.filter((update) => update.kind === "merge").map((update) => [update.sourceProductId, update.productId]));
+    if (redirects.size) for (const related of entriesFromManifest(nextManifest)) for (const [field, property] of [["roadmapPredecessorId", "predecessorId"], ["roadmapSuccessorId", "successorId"]]) {
+      const before = related.product.roadmap?.[property];
+      if (!redirects.has(before)) continue;
+      const target = redirects.get(before), after = target === related.productId ? "" : target;
+      related.product.roadmap[property] = after;
+      metadata.revision += 1;
+      metadata.products[related.productId].revisions[field] = metadata.revision;
+      history.push({ productId: related.productId, productName: related.productName, kind: "update", path: field, label: LABELS[field], before, after, beforeExists: true, afterExists: true, revision: metadata.revision, at: now, actor: String(context.actor || "Team member").slice(0, 160), requestId: String(context.requestId || "").slice(0, 180) });
+      savedFields += 1;
+    }
     metadata.history = boundedHistory([...metadata.history, ...history]);
     nextManifest.masterSync = metadata;
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: updates.length, history };
   }
 
-  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, mergeChanges });
+  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
 })(globalThis);

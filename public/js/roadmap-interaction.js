@@ -12,6 +12,26 @@
   };
   const familyOf = (product) => product?.roadmap?.family || product?.family || "Other";
 
+  function labelLines(value, width, measure, maxLines = 2) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text || !(width > 0) || typeof measure !== "function") return [];
+    let rest = text;
+    const lines = [];
+    while (rest && lines.length < maxLines) {
+      if (measure(rest) <= width) { lines.push(rest); break; }
+      const finalLine = lines.length === maxLines - 1;
+      let count = rest.length;
+      while (count > 0 && measure(rest.slice(0, count) + (finalLine ? "…" : "")) > width) count -= 1;
+      if (!count) { lines.push(measure("…") <= width ? "…" : ""); break; }
+      if (finalLine) { lines.push(`${rest.slice(0, count).trimEnd()}…`); break; }
+      const boundary = rest.lastIndexOf(" ", count);
+      if (boundary > 0) count = boundary;
+      lines.push(rest.slice(0, count).trimEnd());
+      rest = rest.slice(count).trimStart();
+    }
+    return lines;
+  }
+
   function sortProducts(products) {
     return products.slice().sort((left, right) => {
       const leftOrder = explicitOrder(left);
@@ -112,5 +132,5 @@
     throw new RangeError(`Unknown roadmap drag mode: ${mode}`);
   }
 
-  root.RoadmapInteraction = Object.freeze({ sortProducts, dropTarget, reorderProducts, draftDates });
+  root.RoadmapInteraction = Object.freeze({ sortProducts, dropTarget, reorderProducts, draftDates, labelLines });
 })(globalThis);

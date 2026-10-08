@@ -3,7 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const shared = ['master-model.js', 'package-codec.js'];
+const shared = ['master-model.js', 'product-merge.js', 'package-codec.js'];
 export async function buildSupabaseMaster({ check = false } = {}) {
   const targetDirectory = resolve(projectRoot, 'supabase/functions/ppc-master/shared');
   if (!check) await mkdir(targetDirectory, { recursive: true });

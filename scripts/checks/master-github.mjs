@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 await import('../../public/js/package-codec.js');
 await import('../../public/js/portfolio-model.js');
 await import('../../public/js/master-model.js');
+await import('../../public/js/product-merge.js');
 await import('../../public/js/master-github.js');
 
 const codec = globalThis.PortfolioPackage;

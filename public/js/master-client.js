@@ -49,7 +49,8 @@
       const productId = idOf(item);
       if (!validId(productId) || ids.has(productId) || (item.categoryId !== undefined && (typeof item.categoryId !== "string" || item.categoryId.length > 180)) || (item.laneId !== undefined && item.laneId !== "" && !validId(item.laneId))) invalid();
       ids.add(productId);
-      return { productId, categoryId: String(item.categoryId || ""), laneId: String(item.laneId || ""), productName: String(item.productName || ""), revisions: revisionsOf(item.revisions) };
+      if (item.mergedIntoProductId !== undefined && (!validId(item.mergedIntoProductId) || item.mergedIntoProductId === productId || !item.mergeChoices || typeof item.mergeChoices !== "object" || Array.isArray(item.mergeChoices) || Object.keys(item.mergeChoices).length > 4000 || Object.entries(item.mergeChoices).some(([path, choice]) => !path || path.length > 4096 || ["__proto__", "constructor", "prototype"].includes(path) || !["keeper", "source"].includes(choice)))) invalid();
+      return { productId, categoryId: String(item.categoryId || ""), laneId: String(item.laneId || ""), productName: String(item.productName || ""), revisions: revisionsOf(item.revisions), ...(item.mergedIntoProductId ? { mergedIntoProductId: item.mergedIntoProductId, mergeChoices: clone(item.mergeChoices) } : {}) };
     });
     if (snapshot.masterSync !== undefined && snapshot.masterSync !== null && (typeof snapshot.masterSync !== "object" || Array.isArray(snapshot.masterSync))) invalid();
     if (snapshot.packageInfo && root.PortfolioPackage?.normalizePackageInfo) root.PortfolioPackage.normalizePackageInfo(snapshot.packageInfo);
@@ -76,7 +77,7 @@
   }
 
   async function performRequest({ endpoint, operation, key, editorToken, team = false, fetchImpl = root.fetch, signal, keepalive = false, ...payload }) {
-    if (!["latest", "save", "presence"].includes(operation)) throw new Error("The master action is invalid.");
+    if (!["latest", "save", "presence", "review"].includes(operation)) throw new Error("The update action is invalid.");
     const url = `${normalizeEndpoint(endpoint)}/${operation}`;
     let normalizedKey;
     try { normalizedKey = root.PortfolioPackage?.normalizeKey ? root.PortfolioPackage.normalizeKey(key) : String(key || "").trim(); }
@@ -140,6 +141,7 @@
     let editorName = "", editorSessionId = root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     try { editorName = String(root.localStorage?.getItem("portfolio.sharedDisplayName") || "").trim().slice(0, 60); } catch {}
     let baseline = new Map(), tombstones = new Map(), snapshot = null, key = "", editorToken = "", githubToken = "", githubTransport = null, identity = null, connected = false, busy = false, generation = 0, accessVersion = 0, pendingRequest = null;
+    const pendingHydration = new Map(), completedHydration = new Map();
     function normalizedAccessKey(value) {
       const text = String(value || "").trim();
       if (!text) return "";
@@ -192,6 +194,7 @@
     function seed(products) {
       generation += 1;
       baseline = new Map(); snapshot = null; pendingRequest = null;
+      pendingHydration.clear(); completedHydration.clear();
       tombstones = new Map((adapter.getMasterTombstones?.() || []).map((item) => [idOf(item), clone(item)]));
       for (const product of products || []) {
         const productId = idOf(product);
@@ -203,10 +206,23 @@
     function track() {
       const pending = [];
       const currentIds = new Set();
-      for (const product of adapter.getProducts()) {
+      const products = adapter.getProducts(), byId = new Map(products.map((product) => [idOf(product), product]));
+      const mergedIds = new Set(), intents = clone(adapter.getMergeIntents?.() || []);
+      let captured = false;
+      for (const intent of intents) {
+        const productId = String(intent.productId || ""), sourceProductId = String(intent.sourceProductId || ""), product = byId.get(productId);
+        if (!product || !sourceProductId || productId === sourceProductId || byId.has(sourceProductId) || mergedIds.has(productId) || mergedIds.has(sourceProductId)) throw new Error("A product merge needs review. Open the combined product and review its merge again.");
+        mergedIds.add(productId); mergedIds.add(sourceProductId);
+        if (!Object.hasOwn(intent, "base")) { intent.base = clone(baseline.get(productId) || null); captured = true; }
+        if (!Object.hasOwn(intent, "sourceBase")) { intent.sourceBase = clone(baseline.get(sourceProductId) || null); captured = true; }
+        pending.push({ ...intent, kind: "merge", productId, sourceProductId, productName: String(product.name || productId), categoryId: String(intent.base?.categoryId ?? product.categoryId ?? intent.keeperProduct?.categoryId ?? ""), laneId: String(intent.base?.laneId ?? product.laneId ?? intent.keeperProduct?.laneId ?? ""), sourceCategoryId: String(intent.sourceBase?.categoryId ?? intent.sourceProduct?.categoryId ?? ""), sourceLaneId: String(intent.sourceBase?.laneId ?? intent.sourceProduct?.laneId ?? ""), baseProductVersion: intent.base?.productVersion, sourceBaseProductVersion: intent.sourceBase?.productVersion, mine: valuesOf(product) });
+      }
+      if (captured) adapter.setMergeIntents?.(intents);
+      for (const product of products) {
         const productId = idOf(product), base = baseline.get(productId);
         if (!productId || currentIds.has(productId)) throw new Error("Repeated product IDs need review before saving to master.");
         currentIds.add(productId);
+        if (mergedIds.has(productId)) continue;
         if (!base) {
           const mine = valuesOf(product);
           pending.push({ kind: "create", productId, productName: String(product.name || product.productName || productId), categoryId: String(product.categoryId || ""), laneId: String(product.laneId || ""), base: null, baseRevisions: clone(tombstones.get(productId)?.revisions || {}), mine });
@@ -215,20 +231,95 @@
         const mine = valuesOf(product), patch = model().diffValues(base.values, mine);
         if (Object.keys(patch).length) pending.push({ productId, productName: String(product.name || product.productName || productId), categoryId: String(base.categoryId || product.categoryId || ""), laneId: String(base.laneId || product.laneId || ""), base: clone(base.values), baseRevisions: clone(base.revisions), mine, patch });
       }
-      for (const [productId, base] of baseline) if (!currentIds.has(productId)) pending.push({ kind: "delete", productId, productName: String(base.productName || base.values.name || productId), categoryId: String(base.categoryId || ""), laneId: String(base.laneId || ""), base: clone(base.values), baseRevisions: clone(base.revisions), baseProductVersion: base.productVersion, mine: null });
+      for (const [productId, base] of baseline) if (!currentIds.has(productId) && !mergedIds.has(productId)) pending.push({ kind: "delete", productId, productName: String(base.productName || base.values.name || productId), categoryId: String(base.categoryId || ""), laneId: String(base.laneId || ""), base: clone(base.values), baseRevisions: clone(base.revisions), baseProductVersion: base.productVersion, mine: null });
       return pending;
     }
 
     function persistBaseline() { adapter.setBaselineProducts?.([...baseline.values()].map(clone)); }
 
-    function applySnapshot(incoming, accepted) {
+    function localVersion(product) { return product ? model().productVersion(product) : "missing"; }
+
+    function validateReviewResult(result, requestedIds) {
+      const invalid = () => { throw errorOf("These products could not be reviewed. Your draft is safe.", "INVALID_RESPONSE"); };
+      if (!Array.isArray(result?.products) || !result.products.length || result.products.length > 2) invalid();
+      const incoming = normalizeSnapshot(result.snapshot), seen = new Set();
+      for (const entry of result.products) {
+        const productId = entry?.product?.id;
+        if (!requestedIds.includes(productId) || seen.has(productId)) invalid();
+        seen.add(productId);
+        const saved = incoming.products.find((item) => item.productId === productId);
+        if (!saved || saved.categoryId !== entry.categoryId) invalid();
+        try {
+          if (!root.PortfolioProductMerge) invalid();
+          root.PortfolioProductMerge.plan(entry.product, { id: productId === "review-validation" ? "review-validation-other" : "review-validation", specs: [], partSkus: [], variantGroups: [] });
+          if (saved.productVersion !== model().productVersion(entry.product)) invalid();
+          if (Object.keys(model().diffValues(saved.values, model().productValues(entry.product))).length) invalid();
+        } catch { invalid(); }
+      }
+      return { ...result, snapshot: incoming, products: clone(result.products) };
+    }
+
+    async function hydrateRemoteMerges(incoming, operationGeneration, operationVersion) {
+      const products = new Map(), guards = new Map(), stamps = new Map();
+      if (mode !== "service" || !root.PortfolioProductMerge) return { products, guards, stamps };
+      const latestMerges = new Map();
+      for (const removed of incoming.tombstones || []) {
+        if (!removed.mergedIntoProductId) continue;
+        const previous = latestMerges.get(removed.mergedIntoProductId);
+        if (previous && (previous.revisions["@product"] || 0) >= (removed.revisions["@product"] || 0)) continue;
+        latestMerges.set(removed.mergedIntoProductId, removed);
+      }
+      for (const removed of latestMerges.values()) {
+        const stamp = JSON.stringify([removed.productId, removed.mergedIntoProductId, removed.revisions, removed.mergeChoices]);
+        if (completedHydration.get(removed.mergedIntoProductId) !== stamp) pendingHydration.set(removed.mergedIntoProductId, { sourceProductId: removed.productId, stamp });
+        else pendingHydration.delete(removed.mergedIntoProductId);
+      }
+      const protectedIds = new Set((adapter.getMergeIntents?.() || []).flatMap((intent) => [intent.productId, intent.sourceProductId]));
+      let attempts = 0;
+      for (const [productId, queued] of pendingHydration) {
+        const remote = incoming.products.find((item) => item.productId === productId);
+        if (!remote) { pendingHydration.delete(productId); continue; }
+        if (protectedIds.has(productId) || protectedIds.has(queued.sourceProductId)) continue;
+        const current = adapter.getProducts().find((product) => idOf(product) === productId), old = baseline.get(productId);
+        if (current && (!old || Object.keys(model().diffValues(old.values, valuesOf(current))).length) || !current && old) continue;
+        const fingerprint = localVersion(current);
+        if (attempts++ >= 10) break;
+        try {
+          const reviewed = validateReviewResult(await send("review", { productId, sourceProductId: queued.sourceProductId, sessionId: editorSessionId }), [productId, queued.sourceProductId]);
+          if (generation !== operationGeneration || accessVersion !== operationVersion) break;
+          const selected = reviewed.products.find((entry) => entry.product.id === productId), reviewedSnapshot = reviewed.snapshot.products.find((entry) => entry.productId === productId);
+          if (!selected || reviewedSnapshot?.productVersion !== remote.productVersion || selected.categoryId !== remote.categoryId) continue;
+          if (localVersion(adapter.getProducts().find((product) => idOf(product) === productId)) !== fingerprint) continue;
+          products.set(productId, clone(selected.product)); guards.set(productId, fingerprint); stamps.set(productId, queued.stamp);
+        } catch (error) { if (error.code === "INVALID_KEY") throw error; }
+      }
+      return { products, guards, stamps };
+    }
+
+    function applySnapshot(incoming, accepted, fullProducts = new Map(), hydrationGuards = new Map(), hydrationStamps = new Map()) {
       incoming = normalizeSnapshot(incoming);
       const current = new Map(adapter.getProducts().map((product) => [idOf(product), product]));
       const nextBaseline = new Map(baseline);
       const nextTombstones = new Map(incoming.tombstones.map((item) => [item.productId, clone(item)]));
       const updates = [];
+      const waitingMerges = adapter.getMergeIntents?.() || [], protectedMergeIds = new Set();
+      for (const intent of waitingMerges) if (accepted?.get(intent.productId)?.kind !== "merge") { protectedMergeIds.add(intent.productId); protectedMergeIds.add(intent.sourceProductId); }
       const remoteIds = new Set(incoming.products.map((item) => item.productId));
+      const hydratedIds = new Set();
+      const hydrated = (productId, product, old) => {
+        if (!fullProducts.has(productId) || protectedMergeIds.has(productId) || hydrationGuards.get(productId) !== localVersion(product)) return null;
+        if (product && (!old || Object.keys(model().diffValues(old.values, valuesOf(product))).length) || !product && old) return null;
+        return clone(fullProducts.get(productId));
+      };
+      for (const removed of incoming.tombstones) {
+        if (!removed.mergedIntoProductId || protectedMergeIds.has(removed.productId) || protectedMergeIds.has(removed.mergedIntoProductId)) continue;
+        const donor = current.get(removed.productId), oldDonor = baseline.get(removed.productId), keeper = incoming.products.find((item) => item.productId === removed.mergedIntoProductId);
+        const currentKeeper = current.get(removed.mergedIntoProductId), oldKeeper = baseline.get(removed.mergedIntoProductId);
+        const cleanKeeper = currentKeeper && oldKeeper && !Object.keys(model().diffValues(oldKeeper.values, valuesOf(currentKeeper))).length;
+        if (donor && oldDonor && keeper && cleanKeeper && !hydrated(keeper.productId, currentKeeper, oldKeeper) && !Object.keys(model().diffValues(oldDonor.values, valuesOf(donor))).length) updates.push({ kind: "merge", productId: removed.mergedIntoProductId, sourceProductId: removed.productId, choices: clone(removed.mergeChoices), values: clone(keeper.values), categoryId: keeper.categoryId, laneId: keeper.laneId });
+      }
       for (const remote of incoming.products) {
+        if (protectedMergeIds.has(remote.productId)) continue;
         const product = current.get(remote.productId), old = baseline.get(remote.productId), submitted = accepted?.get(remote.productId);
         if (!product) {
           if (submitted && submitted.kind !== "delete" && submitted.disposition !== "master") {
@@ -236,7 +327,9 @@
             continue;
           }
           if (!old || submitted) {
-            updates.push({ kind: "create", productId: remote.productId, categoryId: remote.categoryId, laneId: remote.laneId, values: remote.values });
+            const fullProduct = hydrated(remote.productId, product, old);
+            updates.push({ kind: "create", productId: remote.productId, categoryId: remote.categoryId, laneId: remote.laneId, values: remote.values, ...(fullProduct ? { fullProduct } : {}) });
+            if (fullProduct) hydratedIds.add(remote.productId);
             nextBaseline.set(remote.productId, clone(remote));
           }
           continue;
@@ -253,13 +346,16 @@
         const baseRevisions = submitted ? remote.revisions : old?.revisions || {};
         const plan = model().planMerge(base, mine, remote.values, baseRevisions, remote.revisions);
         const localValues = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, "mine"])));
-        updates.push({ productId: remote.productId, values: localValues, patch: localValues });
+        const fullProduct = hydrated(remote.productId, product, old);
+        updates.push({ productId: remote.productId, values: localValues, patch: localValues, ...(fullProduct ? { fullProduct } : {}) });
+        if (fullProduct) hydratedIds.add(remote.productId);
         nextBaseline.set(remote.productId, { ...remote,
           values: model().draftBaseline(base, mine, remote.values),
           revisions: model().draftRevisions(base, mine, baseRevisions, remote.revisions),
         });
       }
       for (const [productId, old] of baseline) if (!remoteIds.has(productId)) {
+        if (protectedMergeIds.has(productId)) continue;
         const product = current.get(productId), submitted = accepted?.get(productId);
         if (product && submitted?.kind === "delete" && submitted.disposition !== "master") { nextBaseline.delete(productId); continue; }
         const clean = !product || !Object.keys(model().diffValues(submitted?.mine || old.values, valuesOf(product))).length;
@@ -274,6 +370,8 @@
         if (product && submitted.mine && !Object.keys(model().diffValues(submitted.mine, valuesOf(product))).length) updates.push({ kind: "delete", productId });
       }
       (adapter.applyProductValues || adapter.applyPatches).call(adapter, updates);
+      for (const productId of hydratedIds) { completedHydration.set(productId, hydrationStamps.get(productId)); pendingHydration.delete(productId); }
+      if (accepted) adapter.setMergeIntents?.(waitingMerges.filter((intent) => accepted.get(intent.productId)?.kind !== "merge"));
       baseline = nextBaseline; snapshot = incoming;
       tombstones = nextTombstones;
       if (mode === "github" && githubToken && incoming.identity) identity = clone(incoming.identity);
@@ -292,7 +390,10 @@
         const result = await send("latest");
         if (generation !== operationGeneration) throw new Error("The workspace changed while the master was loading. Your current workspace was kept; connect again to refresh it.");
         if (accessVersion !== operationVersion) throw errorOf("The master connection changed while data was loading. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
-        const applied = applySnapshot(result.snapshot);
+        const hydration = await hydrateRemoteMerges(result.snapshot, operationGeneration, operationVersion);
+        if (generation !== operationGeneration) throw new Error("The workspace changed while product details were loading. Your current workspace was kept.");
+        if (accessVersion !== operationVersion) throw errorOf("The connection changed while product details were loading. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
+        const applied = applySnapshot(result.snapshot, undefined, hydration.products, hydration.guards, hydration.stamps);
         connected = true; rememberTeamAccess(key); return applied;
       } catch (error) {
         if (accessVersion === operationVersion) {
@@ -357,6 +458,12 @@
           if (generation !== operationGeneration) throw new Error("The workspace changed while the master was updating. Your current workspace was kept; reconnect to check the saved master.");
           if (accessVersion !== operationVersion) throw errorOf("The master connection changed while saving. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
           if (result.code !== "MASTER_CONFLICT") { applySnapshot(result.snapshot, originals); connected = true; rememberTeamAccess(key); pendingRequest = null; return { ...result, saved: true }; }
+          if (result.conflicts.some((conflict) => conflict.kind === "merge" || conflict.requiresMergeReview || conflict.path === "@merge")) {
+            const error = errorOf("One of the products changed while you were combining them. Your draft is safe. Review the merge again before saving.", "MERGE_REVIEW_REQUIRED", 409);
+            error.conflicts = clone(result.conflicts); error.snapshot = clone(result.snapshot);
+            adapter.onMergeReviewRequired?.(error);
+            throw error;
+          }
           const localPlans = new Map(), remoteProducts = new Map(result.snapshot.products.map((product) => [product.productId, product]));
           for (const change of changes) {
             const remote = remoteProducts.get(change.productId);
@@ -412,6 +519,7 @@
     }
 
     function toChange(item) {
+      if (item.kind === "merge") return { kind: "merge", productId: item.productId, sourceProductId: item.sourceProductId, categoryId: item.categoryId, laneId: item.laneId, sourceCategoryId: item.sourceCategoryId, sourceLaneId: item.sourceLaneId, choices: clone(item.choices || {}), base: clone(item.base), sourceBase: clone(item.sourceBase), ...(item.base ? { baseProductVersion: item.baseProductVersion } : {}), ...(item.sourceBase ? { sourceBaseProductVersion: item.sourceBaseProductVersion } : {}), keeperProduct: adapter.serializeNewProduct?.(item.keeperProduct) || clone(item.keeperProduct), sourceProduct: adapter.serializeNewProduct?.(item.sourceProduct) || clone(item.sourceProduct), mine: clone(item.mine) };
       if (item.kind === "create") return { kind: "create", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, mine: clone(item.mine), baseRevisions: clone(item.baseRevisions) };
       if (item.kind === "delete") return { kind: "delete", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, base: clone(item.base), baseRevisions: clone(item.baseRevisions), baseProductVersion: item.baseProductVersion };
       return { productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, base: clone(item.base), baseRevisions: clone(item.baseRevisions), patch: clone(item.patch) };
@@ -464,6 +572,23 @@
         }
       },
       disconnect() { clearAccess(); },
+      rebaseMergeReview(result) {
+        if (busy || !Array.isArray(result?.products)) throw errorOf("Wait for the current update to finish.", "MERGE_REVIEW_REQUIRED");
+        const incoming = normalizeSnapshot(result.snapshot);
+        for (const entry of result.products) {
+          const saved = incoming.products.find((item) => item.productId === entry.product.id);
+          if (saved) baseline.set(saved.productId, clone(saved));
+        }
+        generation += 1; pendingRequest = null;
+        adapter.setBaselineProducts?.([...baseline.values()]);
+      },
+      async reviewMerge(productId, sourceProductId) {
+        if (mode !== "service" || !key || busy) throw errorOf("Wait for the current update to finish before reviewing these products.", "MERGE_REVIEW_REQUIRED");
+        const version = accessVersion;
+        const result = await send("review", { productId, sourceProductId, sessionId: editorSessionId });
+        if (version !== accessVersion) throw errorOf("These products could not be reviewed. Your draft is safe.", "INVALID_RESPONSE");
+        return validateReviewResult(result, [productId, sourceProductId]);
+      },
       getState() { return { mode, team, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, editorProfile: { sessionId: editorSessionId, displayName: editorName }, busy, accessVersion, snapshot, pending: track() }; },
     });
   }

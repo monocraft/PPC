@@ -176,7 +176,6 @@ const roadmapView = $("#roadmapView");
 const splitView = $("#splitView");
 const productControls = $("#productControls");
 const roadmapControls = $("#roadmapControls");
-const linkedViewButton = $("#linkedView");
 const roadmapCanvas = $("#roadmapCanvas");
 const roadmapScroll = $("#roadmapScroll");
 const roadmapNavigator = $("#roadmapNavigator");
@@ -253,6 +252,7 @@ let roadmapRowRegions = new Map();
 let roadmapHoveredProductId = null;
 let roadmapDragState = null;
 let roadmapPanState = null;
+let roadmapInteractionMode = "pan";
 let roadmapDraft = null;
 let initialVerticalFitPending = true;
 let productLayoutEditing = false;
@@ -2675,7 +2675,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         }
 
         const handleWidth = Math.min(14, barWidth / 2);
-        const editingThisSlot = includeSelection && !exportMode && (selected || roadmapHoveredProductId === product.id);
+        const editingThisSlot = includeSelection && !exportMode && roadmapInteractionMode === "dates" && (selected || roadmapHoveredProductId === product.id);
         const startVisible = monthIndex(roadmap.startMonth) >= range.start;
         const endVisible = monthIndex(roadmap.endMonth) <= range.end;
 
@@ -2766,14 +2766,18 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
           context.fillStyle = "rgba(174,198,181,.09)";
           context.fillRect(stickyX + 48, y, ROADMAP_LEFT_WIDTH - 48, ROADMAP_ROW_HEIGHT);
         }
-        context.fillStyle = product.id === selectedId ? UI_PALETTE.silver : UI_PALETTE.midGrey;
-        for (let column = 0; column < 2; column += 1) {
-          for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 59 + column * 4, y + 13 + dot * 5, 2, 2);
+        const activeRow = product.id === selectedId || product.id === roadmapHoveredProductId;
+        context.fillStyle = activeRow ? "rgba(195,200,197,.55)" : "rgba(149,155,151,.22)";
+        for (let column = 0; roadmapInteractionMode === "dates" && column < 2; column += 1) {
+          for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 54 + column * 3.5, y + 14 + dot * 4.5, 1.4, 1.4);
         }
         context.font = "10px Arial";
         context.textAlign = "left";
         context.textBaseline = "middle";
-        context.fillText(truncate(product.name, 18), stickyX + 74, y + ROADMAP_ROW_HEIGHT / 2, ROADMAP_LEFT_WIDTH - 82);
+        context.fillStyle = activeRow ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
+        const nameWidth = ROADMAP_LEFT_WIDTH - 73;
+        const nameLines = RoadmapInteraction.labelLines(product.name, nameWidth, (text) => context.measureText(text).width);
+        nameLines.forEach((line, lineIndex) => context.fillText(line, stickyX + 65, y + ROADMAP_ROW_HEIGHT / 2 + (lineIndex - (nameLines.length - 1) / 2) * 12));
       });
     }
     rowY += groupHeight;
@@ -3086,6 +3090,7 @@ function announceRoadmapEdit(message) {
 }
 
 function moveSelectedRoadmapRow(direction) {
+  if (roadmapInteractionMode !== "dates") return;
   const group = roadmapGroups().find((item) => item.products.some((product) => product.id === selectedId));
   if (!group) return;
   const index = group.products.findIndex((product) => product.id === selectedId);
@@ -3102,6 +3107,26 @@ function moveSelectedRoadmapRow(direction) {
 
 function roadmapSnapIncrement() {
   return { month: 1, quarter: 3, half: 6 }[board.settings.roadmap.snap] || 1;
+}
+
+function syncRoadmapInteractionMode() {
+  const adjusting = roadmapInteractionMode === "dates";
+  $("#roadmapModePan")?.setAttribute("aria-pressed", String(!adjusting));
+  $("#roadmapModeDates")?.setAttribute("aria-pressed", String(adjusting));
+  for (const target of [roadmapCanvas, splitRoadmapCanvas]) target?.classList.toggle("is-adjusting-dates", adjusting);
+  const hint = roadmapControls?.querySelector(".roadmap-interaction-hint");
+  if (hint) hint.textContent = adjusting ? "Drag bars to move dates · drag edges to resize · drag names to reorder" : "Drag to move the view · double-click a product for details";
+  roadmapControls?.querySelector(".roadmap-edit-controls")?.classList.toggle("is-adjusting-dates", adjusting);
+}
+
+function setRoadmapInteractionMode(mode) {
+  if (!["pan", "dates"].includes(mode)) return;
+  roadmapDragState?.cancel?.();
+  roadmapPanState?.cancel?.();
+  roadmapInteractionMode = mode;
+  syncRoadmapInteractionMode();
+  renderRoadmaps();
+  announceRoadmapEdit(mode === "dates" ? "Adjust dates is on. Drag product bars or their edges to change dates. Press Escape to return to Move view." : "Move view is on. Drag anywhere on the timeline to navigate.");
 }
 
 function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
@@ -3178,11 +3203,12 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     if (frame == null) frame = requestAnimationFrame(tickInteraction);
   }
 
-  function beginRoadmapPan(event) {
+  function beginRoadmapPan(event, productId = null) {
     roadmapPanState = {
       targetCanvas, targetScroll, pointerId: event.pointerId,
       startX: event.clientX, startY: event.clientY,
-      scrollLeft: targetScroll.scrollLeft, scrollTop: targetScroll.scrollTop, moved: false,
+      scrollLeft: targetScroll.scrollLeft, scrollTop: targetScroll.scrollTop, moved: false, productId,
+      cancel: () => finishRoadmapPointer(null, true),
     };
     targetCanvas.setPointerCapture(event.pointerId);
     targetScroll.classList.add("is-panning");
@@ -3194,6 +3220,12 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     const point = roadmapPoint(event, targetCanvas);
     const row = hitRoadmapRow(targetCanvas, point);
     const hit = hitRoadmapBar(targetCanvas, point);
+    if (roadmapInteractionMode !== "dates") {
+      event.preventDefault();
+      targetCanvas.focus({ preventScroll: true });
+      beginRoadmapPan(event, hit?.productId || row?.productId || null);
+      return;
+    }
     const rail = row && point.x >= targetScroll.scrollLeft + 48 && point.x < targetScroll.scrollLeft + ROADMAP_LEFT_WIDTH;
     if (!hit && !rail) { beginRoadmapPan(event); return; }
     event.preventDefault();
@@ -3225,6 +3257,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
       const dx = event.clientX - roadmapPanState.startX;
       const dy = event.clientY - roadmapPanState.startY;
       if (Math.hypot(dx, dy) >= 5) roadmapPanState.moved = true;
+      if (!roadmapPanState.moved) return;
       targetScroll.scrollLeft = roadmapPanState.scrollLeft - dx;
       targetScroll.scrollTop = roadmapPanState.scrollTop - dy;
       return;
@@ -3246,8 +3279,9 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     const hit = hitRoadmapBar(targetCanvas, point);
     const row = hitRoadmapRow(targetCanvas, point);
     const hoveredId = hit?.productId || row?.productId || null;
+    targetCanvas.title = hoveredId ? board.products.find((product) => product.id === hoveredId)?.name || "" : "";
     const within = (handle) => handle && point.x >= handle.x && point.x < handle.x + handle.width;
-    targetCanvas.style.cursor = hit && (within(hit.leftHandle) || within(hit.rightHandle)) ? "ew-resize" : "grab";
+    targetCanvas.style.cursor = roadmapInteractionMode === "dates" && hit && (within(hit.leftHandle) || within(hit.rightHandle)) ? "ew-resize" : "grab";
     if (roadmapHoveredProductId !== hoveredId) {
       roadmapHoveredProductId = hoveredId;
       paintInteraction();
@@ -3261,7 +3295,16 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
       roadmapPanState = null;
       targetScroll.classList.remove("is-panning");
       if (targetCanvas.hasPointerCapture(pan.pointerId)) targetCanvas.releasePointerCapture(pan.pointerId);
-      if (!cancelled && !pan.moved) clearSelection();
+      if (!cancelled && !pan.moved) {
+        if (pan.productId && board.products.some((product) => product.id === pan.productId)) {
+          stopRoadmapSlotEditing();
+          selectedId = pan.productId;
+          renderInspector();
+          renderSplitProduct();
+          renderRoadmaps();
+          renderStatus();
+        } else clearSelection();
+      }
       targetCanvas.style.cursor = "grab";
       return;
     }
@@ -3299,10 +3342,10 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     paintInteraction();
   });
   targetCanvas.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && roadmapDragState?.targetCanvas === targetCanvas) {
+    if (event.key === "Escape" && (roadmapInteractionMode === "dates" || roadmapDragState || roadmapPanState)) {
       event.preventDefault();
       event.stopPropagation();
-      finishRoadmapPointer(null, true);
+      setRoadmapInteractionMode("pan");
       return;
     }
     if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
@@ -3429,9 +3472,6 @@ function renderSplitProduct() {
 }
 function updateLinkedViewButton() {
   const hasSelection = Boolean(selectedProduct());
-  linkedViewButton.disabled = !hasSelection;
-  if (activeView === "products") linkedViewButton.textContent = "View on roadmap";
-  else linkedViewButton.textContent = "View product card";
 }
 
 function updateDataEditIndicator() {
@@ -3455,19 +3495,13 @@ function updateProductLayoutEditControls() {
 }
 
 function updateRoadmapEditControls() {
+  syncRoadmapInteractionMode();
   const product = selectedProduct();
   const group = roadmapGroups().find((item) => item.products.some((item) => item.id === product?.id));
   const index = group?.products.findIndex((item) => item.id === product?.id) ?? -1;
-  $("#roadmapMoveUp").disabled = index <= 0;
-  $("#roadmapMoveDown").disabled = index < 0 || index >= group.products.length - 1;
+  $("#roadmapMoveUp").disabled = roadmapInteractionMode !== "dates" || index <= 0;
+  $("#roadmapMoveDown").disabled = roadmapInteractionMode !== "dates" || index < 0 || index >= group.products.length - 1;
   $("#roadmapEditSelection").textContent = product?.name || "Select a product";
-  for (const [selector, field] of [["#roadmapSelectedStart", "startMonth"], ["#roadmapSelectedEnd", "endMonth"]]) {
-    const input = $(selector);
-    input.disabled = !product;
-    input.value = product?.roadmap?.[field] || "";
-    if (field === "endMonth") input.min = product?.roadmap?.startMonth || "";
-    else input.max = product?.roadmap?.endMonth || "";
-  }
   if (roadmapMenuButton) {
     roadmapMenuButton.classList.remove("is-active");
     roadmapMenuButton.innerHTML = 'Timeline <span aria-hidden="true">▾</span>';
@@ -3484,6 +3518,8 @@ function stopRoadmapSlotEditing() {
 
 function setView(view, { focusSelected = false } = {}) {
   closePopupMenus();
+  roadmapPanState?.cancel?.();
+  roadmapInteractionMode = "pan";
   if (view === "split") roadmapDetailsOpen = true;
   activeView = view === "products" ? "products" : ["roadmap", "split"].includes(view) ? (roadmapDetailsOpen ? "split" : "roadmap") : "products";
   if (activeView === "products") stopRoadmapSlotEditing();
@@ -4228,6 +4264,7 @@ function renderInspector() {
     <div class="inspector-heading">
       <div><span class="eyebrow">Selected product</span><h2>${escapeHtml(product.name)}</h2></div>
       <div class="inspector-actions">
+        <button id="mergeProduct" type="button" title="Combine information from another product">Merge</button>
         <button id="deleteProduct" class="danger-button">Delete</button>
         <button id="closeInspector" class="icon-button" aria-label="Close editor">×</button>
       </div>
@@ -4373,10 +4410,6 @@ function renderInspector() {
         </select></label>
       </div>
       <button id="editProductDates" type="button" class="secondary-button">Edit dates in Details</button>
-      <div class="roadmap-link-actions">
-        <button id="inspectRoadmapView">View on roadmap</button>
-        <button id="inspectSplitView">Show product details</button>
-      </div>
       <p class="roadmap-inline-note">Manage launch and manufacturing end dates in Details. Date edits also update the roadmap; dragging its bar updates any known exact dates. Products with TBD dates keep their planned months.</p>
     </section>
     <section id="specificationsSection" class="panel-section">
@@ -4398,6 +4431,7 @@ function renderInspector() {
   setupEditorNavigation();
 
   $("#deleteProduct").onclick = deleteSelected;
+  $("#mergeProduct").onclick = () => globalThis.PortfolioProductMergeUI?.open({ productId: product.id });
   $("#closeInspector").onclick = closeInspector;
   bindValue("#fieldName", "input", (value) => updateProduct(product.id, { name: value }, false));
   bindValue("#fieldPrice", "input", (value) => updateProduct(product.id, { price: value === "" ? null : Number(value) }, false));
@@ -4514,8 +4548,6 @@ function renderInspector() {
   bindValue("#fieldRoadmapConfidence", "change", (value) => updateRoadmap(product.id, { confidence: value }));
   bindValue("#fieldRoadmapPredecessor", "change", (value) => updateRoadmap(product.id, { predecessorId: value }));
   bindValue("#fieldRoadmapSuccessor", "change", (value) => updateRoadmap(product.id, { successorId: value }));
-  $("#inspectRoadmapView").onclick = () => { closeInspector(); setView("roadmap", { focusSelected: true }); };
-  $("#inspectSplitView").onclick = () => { closeInspector(); setView("split", { focusSelected: true }); };
   $("#fieldImageUpload").onchange = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -5241,6 +5273,8 @@ async function buildProjectPackageBytes(packageInfo) {
   delete manifest.masterLocalBaseline;
   delete manifest.masterLocalTombstones;
   delete manifest.masterLocalRemovedProducts;
+  delete manifest.masterLocalMerges;
+  delete manifest.masterLocalAssetIds;
   manifest.packageInfo = packageInfo === undefined ? codec.createPackageInfo() : codec.normalizePackageInfo(packageInfo);
   if (!manifest.packageInfo) throw new Error("The package update information is invalid.");
   validatePackageManifest(manifest);
@@ -5337,6 +5371,7 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
         }
       }
     }
+    draft.masterLocalAssetIds = Object.fromEntries(replacements);
     await imageStoreWriteBatch(stagedImages);
     staged = true;
     const result = await commitPackageDraft(draft, expectedCurrent);
@@ -6710,10 +6745,6 @@ $("#toggleRoadmapDetails").onclick = () => {
   roadmapDetailsOpen = !roadmapDetailsOpen;
   setView("roadmap", { focusSelected: true });
 };
-linkedViewButton.onclick = () => {
-  if (activeView === "products") setView("roadmap", { focusSelected: true });
-  else setView("products", { focusSelected: true });
-};
 
 $("#roadmapSearch").oninput = (event) => {
   roadmapSearchQuery = event.target.value;
@@ -6752,18 +6783,10 @@ $("#roadmapZoomOut").onclick = () => setRoadmapZoom(roadmapMonthWidth - ROADMAP_
 $("#roadmapZoomReset").onclick = () => setRoadmapZoom(ROADMAP_DEFAULT_MONTH_WIDTH);
 $("#roadmapZoomIn").onclick = () => setRoadmapZoom(roadmapMonthWidth + ROADMAP_DEFAULT_MONTH_WIDTH * .1);
 $("#roadmapShowSelected").onclick = () => { closePopupMenus(); scrollRoadmapSelected(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
+$("#roadmapModePan").onclick = () => setRoadmapInteractionMode("pan");
+$("#roadmapModeDates").onclick = () => setRoadmapInteractionMode("dates");
 $("#roadmapMoveUp").onclick = () => moveSelectedRoadmapRow(-1);
 $("#roadmapMoveDown").onclick = () => moveSelectedRoadmapRow(1);
-for (const [selector, field] of [["#roadmapSelectedStart", "startMonth"], ["#roadmapSelectedEnd", "endMonth"]]) {
-  $(selector).onchange = (event) => {
-    const product = selectedProduct();
-    const value = normalizeMonth(event.target.value, "");
-    if (!product || !value) { updateRoadmapEditControls(); return; }
-    roadmapGroupsForProducts(board.products).forEach((group) => group.products.forEach((item, order) => { item.roadmap.order = order; }));
-    updateRoadmap(product.id, { [field]: value }, true);
-    announceRoadmapEdit("Roadmap dates updated.");
-  };
-}
 
 function bindRoadmapNavigatorControls(targetScroll, refs) {
   refs.range.addEventListener("input", () => { targetScroll.scrollLeft = Number(refs.range.value); });
@@ -6821,9 +6844,8 @@ window.addEventListener("keydown", (event) => {
     renderBoard();
     return;
   }
-  if (roadmapDragState) {
-    stopRoadmapSlotEditing();
-    renderRoadmaps();
+  if (roadmapInteractionMode === "dates" || roadmapDragState || roadmapPanState) {
+    setRoadmapInteractionMode("pan");
     return;
   }
   if (inspectorOpen) {
@@ -6835,11 +6857,197 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("resize", () => { closeVariantPopover({ force: true }); renderActiveView(); });
 window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
-// The shared master updates product facts without replacing local images or layouts.
+// Draft actions keep complete records and images until the user saves or discards.
+const discardedDrafts = new Map();
+function localizeSharedProduct(record) {
+  const product = JSON.parse(JSON.stringify(record));
+  const aliases = portfolio.masterLocalAssetIds || {};
+  product.imageAssetId = aliases[product.imageAssetId] || product.imageAssetId;
+  for (const group of product.variantGroups || []) for (const row of group.items || []) row.imageAssetId = aliases[row.imageAssetId] || row.imageAssetId;
+  delete product.categoryId;
+  return product;
+}
+function mergeProductEntries() {
+  return portfolio.categories.flatMap((category) => category.board.products.map((product) => ({
+    product: JSON.parse(JSON.stringify(product)), categoryId: category.id, categoryName: category.name,
+    laneName: category.board.lanes.find((lane) => lane.id === product.laneId)?.label || "",
+  })));
+}
+function canMergeProducts(productId, sourceProductId) {
+  if (packageOperationInProgress || globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) return { allowed: false, message: "Wait for the current update to finish." };
+  const entries = mergeProductEntries();
+  const keepers = entries.filter((entry) => entry.product.id === productId), sources = entries.filter((entry) => entry.product.id === sourceProductId);
+  if (keepers.length !== 1 || sources.length !== 1 || productId === sourceProductId) return { allowed: false, message: "Choose two different products." };
+  if (keepers[0].categoryId !== sources[0].categoryId) return { allowed: false, message: "Choose products from the same portfolio. Listings in different portfolios stay separate." };
+  if ((portfolio.masterLocalMerges || []).some((merge) => [merge.productId, merge.sourceProductId].some((value) => value === productId || value === sourceProductId))) return { allowed: false, message: "Save or undo the previous merge before combining this product again." };
+  return { allowed: true };
+}
+function updateDraftViews(categoryId = activeCategoryId, productId = selectedId) {
+  activateCategory(categoryId, { render: false });
+  selectedId = board.products.some((product) => product.id === productId) ? productId : null;
+  scheduleSave(); syncControls(); renderInspector(); renderActiveView();
+}
+function applyProductMergeDraft(payload) {
+  const allowed = canMergeProducts(payload.productId, payload.sourceProductId);
+  if (!allowed.allowed) throw new Error(allowed.message);
+  const next = clonePortfolioData();
+  const keeper = findPortfolioProductLocation(next, payload.productId), source = findPortfolioProductLocation(next, payload.sourceProductId);
+  for (const [original, current] of [[payload.keeperOriginal, keeper.product], [payload.sourceOriginal, source.product]]) {
+    if (original && globalThis.PortfolioMasterModel.productVersion(original) !== globalThis.PortfolioMasterModel.productVersion(current)) throw new Error("These products changed while you were reviewing. Open the merge again to see their latest details.");
+  }
+  // Resolve again against the actual records; never trust a stale preview or edited payload.
+  const merged = globalThis.PortfolioProductMerge.resolve(globalThis.PortfolioProductMerge.plan(keeper.product, source.product), payload.choices || {});
+  const references = [];
+  for (const category of next.categories) for (const product of category.board.products) {
+    if ([payload.productId, payload.sourceProductId].includes(product.id)) continue;
+    const before = JSON.parse(JSON.stringify(product.roadmap || {}));
+    let changed = false;
+    for (const field of ["predecessorId", "successorId"]) if (product.roadmap?.[field] === payload.sourceProductId) { product.roadmap[field] = payload.productId; changed = true; }
+    if (changed) references.push({ productId: product.id, before, after: JSON.parse(JSON.stringify(product.roadmap)) });
+  }
+  const undoId = id();
+  const intent = { undoId, productId: payload.productId, sourceProductId: payload.sourceProductId,
+    choices: JSON.parse(JSON.stringify(payload.choices || {})),
+    keeperProduct: { ...JSON.parse(JSON.stringify(keeper.product)), categoryId: keeper.category.id },
+    sourceProduct: { ...JSON.parse(JSON.stringify(source.product)), categoryId: source.category.id },
+    base: JSON.parse(JSON.stringify((next.masterLocalBaseline || []).find((item) => item.productId === payload.productId) || null)),
+    sourceBase: JSON.parse(JSON.stringify((next.masterLocalBaseline || []).find((item) => item.productId === payload.sourceProductId) || null)),
+    references, mergedVersion: globalThis.PortfolioMasterModel.productVersion(merged) };
+  next.masterLocalMerges = [...(next.masterLocalMerges || []), intent];
+  next.masterLocalRemovedProducts ||= {};
+  next.masterLocalRemovedProducts[payload.sourceProductId] = JSON.parse(JSON.stringify(source.product));
+  keeper.category.board.products[keeper.index] = merged;
+  source.category.board.products.splice(source.index, 1);
+  portfolio = next;
+  updateDraftViews(keeper.category.id, payload.productId);
+  return { undoId };
+}
+function restoreMergeDraft(target, intent) {
+  const keeper = findPortfolioProductLocation(target, intent.productId);
+  if (!keeper || findPortfolioProductLocation(target, intent.sourceProductId)) return false;
+  const sourceCategory = target.categories.find((category) => category.id === intent.sourceProduct.categoryId);
+  if (!sourceCategory) return false;
+  const keeperProduct = JSON.parse(JSON.stringify(intent.keeperProduct)), sourceProduct = JSON.parse(JSON.stringify(intent.sourceProduct));
+  delete keeperProduct.categoryId; delete sourceProduct.categoryId;
+  keeper.category.board.products[keeper.index] = keeperProduct;
+  sourceCategory.board.products.push(sourceProduct);
+  for (const reference of intent.references || []) {
+    const location = findPortfolioProductLocation(target, reference.productId);
+    if (location) for (const field of ["predecessorId", "successorId"]) {
+      if (reference.before[field] !== reference.after[field] && location.product.roadmap?.[field] === reference.after[field]) {
+        if (Object.prototype.hasOwnProperty.call(reference.before, field)) location.product.roadmap[field] = reference.before[field];
+        else delete location.product.roadmap[field];
+      }
+    }
+  }
+  target.masterLocalMerges = (target.masterLocalMerges || []).filter((merge) => merge.undoId !== intent.undoId);
+  return true;
+}
+function undoProductMergeDraft(undoId) {
+  if (packageOperationInProgress || globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) return false;
+  const intent = (portfolio.masterLocalMerges || []).find((merge) => merge.undoId === undoId);
+  const keeper = intent && findPortfolioProductLocation(portfolio, intent.productId);
+  if (!keeper || globalThis.PortfolioMasterModel.productVersion(keeper.product) !== intent.mergedVersion) return false;
+  const next = clonePortfolioData();
+  if (!restoreMergeDraft(next, intent)) return false;
+  portfolio = next; updateDraftViews(keeper.category.id, intent.productId); return true;
+}
+function discardProductDrafts(productIds) {
+  if (packageOperationInProgress || globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the current update to finish.");
+  const ids = new Set(productIds), next = clonePortfolioData(), previous = clonePortfolioData();
+  for (const intent of [...(next.masterLocalMerges || [])]) if (ids.has(intent.productId) || ids.has(intent.sourceProductId)) {
+    if (!restoreMergeDraft(next, intent)) throw new Error("This merge needs review before it can be discarded.");
+    ids.add(intent.productId); ids.add(intent.sourceProductId);
+  }
+  const baseline = new Map((next.masterLocalBaseline || []).map((item) => [item.productId, item]));
+  for (const productId of ids) {
+    const location = findPortfolioProductLocation(next, productId), saved = baseline.get(productId);
+    if (!saved) { if (location) location.category.board.products.splice(location.index, 1); continue; }
+    if (location) location.category.board.products[location.index] = globalThis.PortfolioMasterModel.applyProductValues(location.product, saved.values);
+    else {
+      const original = next.masterLocalRemovedProducts?.[productId];
+      const category = next.categories.find((item) => item.id === saved.categoryId);
+      if (!original || !category) throw new Error("The original product is unavailable. Your changes have been kept.");
+      category.board.products.push(globalThis.PortfolioMasterModel.applyProductValues(original, saved.values));
+    }
+  }
+  portfolio = next; updateDraftViews();
+  const undoId = id();
+  discardedDrafts.clear(); discardedDrafts.set(undoId, { previous, after: JSON.stringify(portfolio) });
+  return { discarded: productIds.length, undoId };
+}
+function undoDiscardedDraft(undoId) {
+  const record = discardedDrafts.get(undoId);
+  if (!record || packageOperationInProgress || globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy || JSON.stringify(portfolio) !== record.after) return false;
+  portfolio = record.previous; discardedDrafts.delete(undoId); updateDraftViews(); return true;
+}
+globalThis.PortfolioProductMergeAdapter = Object.freeze({
+  getProducts: mergeProductEntries, getSelectedProductId: () => selectedId || "", canMerge: canMergeProducts,
+  getImageSource: (assetId) => imageAssetSource(assetId, ""),
+  applyMerge: applyProductMergeDraft, undoMerge: undoProductMergeDraft,
+  openProduct: (productId) => { const entry = globalThis.PortfolioProductIssues.products(portfolio).find((item) => item.product.id === productId); if (entry) return openProductIssue(entry); },
+  saveChanges: () => globalThis.PortfolioMasterUI?.save?.(),
+});
+
+// Shared facts update complete local records without replacing layouts or images.
 globalThis.PortfolioMasterAdapter = Object.freeze({
   getProducts: () => portfolio.categories.flatMap((category) => category.board.products.map((product) => ({ ...product, categoryId: category.id }))),
   getBaselineProducts: () => portfolio.masterLocalBaseline || [],
   getMasterTombstones: () => portfolio.masterLocalTombstones || [],
+  getMergeIntents: () => portfolio.masterLocalMerges || [],
+  setMergeIntents: (intents) => { portfolio.masterLocalMerges = JSON.parse(JSON.stringify(intents)); scheduleSave(); },
+  serializeNewProduct: (product) => {
+    const copy = JSON.parse(JSON.stringify(product));
+    const aliases = new Map(Object.entries(portfolio.masterLocalAssetIds || {}).map(([original, local]) => [local, original]));
+    copy.imageAssetId = aliases.get(copy.imageAssetId) || copy.imageAssetId;
+    for (const group of copy.variantGroups || []) for (const row of group.items || []) row.imageAssetId = aliases.get(row.imageAssetId) || row.imageAssetId;
+    return copy;
+  },
+  discardChanges: discardProductDrafts, undoDiscard: undoDiscardedDraft,
+  onMergeReviewRequired: (error) => {
+    const conflict = error.conflicts?.find((item) => item.kind === "merge");
+    const intent = conflict && (portfolio.masterLocalMerges || []).find((item) => item.productId === conflict.productId);
+    if (!intent) return;
+    globalThis.PortfolioNotifications?.publish({ id: "product-merge-review", severity: "warning", title: "Review this merge again", message: "Someone updated these products while you were editing. Your draft is safe.", dismissible: false, toast: true,
+      actions: [{ label: "Review merge", onClick: async () => {
+        const session = globalThis.PortfolioMasterUI?.getSession?.();
+        let latest;
+        try { latest = await session.reviewMerge(intent.productId, intent.sourceProductId); }
+        catch (_) { await showWorkspaceNotice("The latest details are unavailable. Your draft is safe; try reviewing again shortly."); return; }
+        if ((intent.base && !latest.products.some((entry) => entry.product.id === intent.productId)) || (intent.sourceBase && !latest.products.some((entry) => entry.product.id === intent.sourceProductId))) { await showWorkspaceNotice("One of these products was removed. Discard this merge and review the current products."); return; }
+        const model = globalThis.PortfolioMasterModel;
+        const reviewedProducts = [], conflicts = [];
+        for (const entry of latest.products) {
+          const previous = entry.product.id === intent.productId ? intent.keeperProduct : intent.sourceProduct;
+          const previousBase = entry.product.id === intent.productId ? intent.base : intent.sourceBase;
+          const product = localizeSharedProduct(entry.product);
+          const latestBase = latest.snapshot.products.find((item) => item.productId === entry.product.id);
+          const plan = previousBase ? model.planMerge(previousBase.values, model.productValues(previous), latestBase.values, previousBase.revisions, latestBase.revisions) : null;
+          const metadataReview = model.supplementReview(product, previous);
+          for (const conflict of [...(plan?.conflicts || []), ...metadataReview.conflicts]) conflicts.push({ ...conflict, key: JSON.stringify([entry.product.id, conflict.path]), productName: product.name });
+          reviewedProducts.push({ entry, product, plan, metadataReview });
+        }
+        const choices = conflicts.length ? await globalThis.PortfolioMasterUI?.reviewConflicts?.(conflicts) : {};
+        if (!choices) return;
+        const completedProducts = reviewedProducts.map(({ entry, product, plan, metadataReview }) => {
+          const selected = Object.fromEntries((plan?.conflicts || []).map((conflict) => [conflict.path, choices[JSON.stringify([entry.product.id, conflict.path])]]));
+          const values = plan ? model.resolveConflicts(plan, selected) : model.productValues(product);
+          return { entry, product: model.applyProductValues(model.resolveSupplementReview(metadataReview, choices), values) };
+        });
+        if (!undoProductMergeDraft(intent.undoId)) { await showWorkspaceNotice("Save or discard edits to the combined product before reviewing the merge again."); return; }
+        for (const { entry, product } of completedProducts) {
+          const location = findPortfolioProductLocation(portfolio, entry.product.id);
+          if (!location) continue;
+          location.category.board.products[location.index] = product;
+        }
+        const pair = new Set([intent.productId, intent.sourceProductId]);
+        portfolio.masterLocalBaseline = [...(portfolio.masterLocalBaseline || []).filter((item) => !pair.has(item.productId)), ...latest.snapshot.products.filter((item) => pair.has(item.productId))];
+        session.rebaseMergeReview(latest);
+        updateDraftViews();
+        globalThis.PortfolioNotifications?.resolve("product-merge-review");
+        globalThis.PortfolioProductMergeUI?.open({ productId: intent.productId, sourceProductId: intent.sourceProductId });
+      } }] });
+  },
   setBaselineProducts: (products) => {
     portfolio.masterLocalBaseline = JSON.parse(JSON.stringify(products));
     scheduleSave();
@@ -6865,14 +7073,28 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
     if (packageOperationInProgress) throw new Error("Finish loading the package before saving shared changes.");
     const nextProducts = new Map(portfolio.categories.map((category) => [category.id, category.board.products.slice()]));
     for (const change of changes) {
+      if (change.kind === "merge") {
+        const all = [...nextProducts.values()].flat();
+        const keeper = all.find((product) => product.id === change.productId), source = all.find((product) => product.id === change.sourceProductId);
+        if (keeper && source) {
+          const completed = globalThis.PortfolioProductMerge.resolve(globalThis.PortfolioProductMerge.plan(keeper, source), change.choices || {});
+          for (const products of nextProducts.values()) {
+            const keeperIndex = products.findIndex((product) => product.id === change.productId);
+            if (keeperIndex >= 0) products[keeperIndex] = globalThis.PortfolioMasterModel.applyProductValues(completed, change.values);
+            const sourceIndex = products.findIndex((product) => product.id === change.sourceProductId);
+            if (sourceIndex >= 0) products.splice(sourceIndex, 1);
+          }
+        }
+        continue;
+      }
       if (change.kind === "create") {
         const target = portfolio.categories.find((category) => category.id === change.categoryId);
-        if (!target || !target.board.lanes.some((lane) => lane.id === change.laneId)) throw new Error("This product's portfolio or lane has changed. Pull the latest master package before trying again.");
-        if ([...nextProducts.values()].some((products) => products.some((product) => product.id === change.productId))) throw new Error("A repeated product ID needs review before applying the master update.");
+        if (!target || !target.board.lanes.some((lane) => lane.id === change.laneId)) throw new Error("This product's portfolio or lane has changed. Refresh its details before trying again.");
+        if ([...nextProducts.values()].some((products) => products.some((product) => product.id === change.productId))) throw new Error("A repeated product ID needs review before applying the update.");
         const products = nextProducts.get(target.id);
         const order = products.filter((product) => product.laneId === change.laneId).reduce((maximum, product) => Math.max(maximum, Number(product.order) || 0), -1) + 1;
         const archived = portfolio.masterLocalRemovedProducts?.[change.productId];
-        const product = archived || makeProduct(change.productId, change.values.name, change.values.price, change.laneId, order);
+        const product = change.fullProduct ? localizeSharedProduct(change.fullProduct) : archived || makeProduct(change.productId, change.values.name, change.values.price, change.laneId, order);
         products.push(globalThis.PortfolioMasterModel.applyProductValues({ ...product, laneId: change.laneId }, change.values));
         continue;
       }
@@ -6883,7 +7105,8 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
         const current = products[index];
         if (change.kind === "delete") { products.splice(index, 1); break; }
         const values = change.values || change.patch;
-        products[index] = globalThis.PortfolioMasterModel.applyProductValues(current, values);
+        const original = change.fullProduct ? { ...localizeSharedProduct(change.fullProduct), order: current.order, laneId: current.laneId } : current;
+        products[index] = globalThis.PortfolioMasterModel.applyProductValues(original, values);
         break;
       }
     }
@@ -6913,6 +7136,7 @@ globalThis.PortfolioProductIssues?.mount({
   adapter: {
     getPortfolio: () => portfolio,
     openProduct: openProductIssue,
+    mergeProducts: (members) => globalThis.PortfolioProductMergeUI?.open({ productId: members[0]?.locator.productId, sourceProductId: members[1]?.locator.productId }),
     rebuildAscmPlan: (plan) => buildAscmImportPlan(plan.dataset),
     onIssuesChanged: () => {
       if (!workspaceValidationPending) return;
