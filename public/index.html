@@ -39,11 +39,13 @@
         <section id="productControls" class="controlbar view-controls" aria-label="Product controls">
           <label class="search-shell"><span aria-hidden="true">⌕</span><input id="searchInput" class="search-input" type="search" aria-label="Search products" placeholder="Find a product or SKU in any category"></label>
           <details class="workspace-tool-menu workspace-sort-menu"><summary aria-label="Product sorting options">Sort</summary><div class="workspace-tool-menu-panel"><label class="inline-field"><span>Product order</span><select id="sortMode"><option value="custom">Custom order</option><option value="name-asc">Name A–Z</option><option value="price-asc">Price low–high</option><option value="price-desc">Price high–low</option><option value="status">Status</option><option value="sku-count">Most SKUs</option></select></label><button id="applySort" class="quiet-button">Apply order</button></div></details>
+          <button id="productLayoutEditToggle" class="compact-button card-reorder-start" type="button" aria-expanded="false" aria-controls="productReorderActions" title="Drag product cards to change their order or lane">Reorder cards</button>
+          <div id="productReorderActions" class="card-reorder-actions hidden" role="group" aria-label="Card reordering"><span role="status" title="Drag cards to reorder; use Alt and arrow keys on a selected card for keyboard moves">Drag cards to reorder</span><button id="productReorderDone" class="compact-button" type="button" title="Finish reordering and keep these changes">Done</button><button id="productReorderCancel" class="compact-button" type="button" title="Undo the card moves from this session">Cancel</button></div>
           <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Product view controls">
             <div class="zoom-control" role="group" aria-label="Product zoom"><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset" class="zoom-reset" aria-label="Reset zoom to 100%" title="Reset product zoom to 100%">100%</button><button id="zoomIn" aria-label="Zoom in">+</button></div>
             <button id="fitProducts" class="view-tool" title="Fit products to the available width while keeping cards readable">Fit</button>
           </div></div>
-          <details class="workspace-tool-menu workspace-view-menu"><summary>View options</summary><div class="workspace-tool-menu-panel"><button id="resetLayout" class="quiet-button" title="Restore automatic lane layout and 100% zoom while keeping the current product order">Reset layout</button></div></details>
+          <button id="resetLayout" class="quiet-button workspace-direct-tool" type="button" title="Restore automatic lane layout and 100% zoom while keeping the current product order">Reset layout</button>
         </section>
         <section id="roadmapControls" class="controlbar view-controls hidden" aria-label="Roadmap controls">
           <label class="search-shell"><span aria-hidden="true">⌕</span><input id="roadmapSearch" class="search-input" type="search" aria-label="Search roadmap" placeholder="Find a product or SKU in any category"></label>
@@ -51,12 +53,14 @@
             <button id="roadmapModePan" type="button" aria-pressed="true" title="Browse the timeline without changing products">View Mode</button>
             <button id="roadmapModeDates" type="button" aria-pressed="false" title="Adjust product dates and row order">Edit Mode</button>
           </div>
+          <div class="roadmap-edit-controls" role="group" aria-label="Edit selected roadmap product"><button id="roadmapMoveUp" class="compact-button" title="Move selected product up in its family (Alt + Up on timeline)" aria-label="Move selected roadmap product up" disabled>↑ Move up</button><button id="roadmapMoveDown" class="compact-button" title="Move selected product down in its family (Alt + Down on timeline)" aria-label="Move selected roadmap product down" disabled>↓ Move down</button></div>
+          <button id="quickTimelineSettings" class="quiet-button workspace-direct-tool" type="button" title="Choose the date range shown on the roadmap">Date range <span id="timelineRangeSummary"></span></button>
+          <button id="toggleRoadmapDetails" class="quiet-button workspace-direct-tool" type="button" aria-pressed="false" aria-controls="splitView">Show details</button>
           <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Timeline view controls">
             <div class="zoom-control" role="group" aria-label="Timeline zoom"><button id="roadmapZoomOut" aria-label="Zoom timeline out">−</button><button id="roadmapZoomReset" class="zoom-reset" aria-label="Reset timeline zoom to 100%" title="Reset timeline zoom to 100%">100%</button><button id="roadmapZoomIn" aria-label="Zoom timeline in">+</button></div>
             <button id="roadmapFit" class="view-tool" title="Fit the timeline while keeping dates readable">Fit</button>
             <button id="roadmapToday" class="view-tool" title="Center the current month">Today</button>
           </div></div>
-          <details class="workspace-tool-menu workspace-view-menu"><summary>View options</summary><div class="workspace-tool-menu-panel"><button id="quickTimelineSettings" class="quiet-button">Timeline range <span id="timelineRangeSummary"></span><span aria-hidden="true">↗</span></button><button id="toggleRoadmapDetails" class="quiet-button" aria-pressed="false" aria-controls="splitView">Product details</button><button id="roadmapShowSelected" class="quiet-button" title="Center the selected product on the timeline" disabled>Show selected</button><div class="roadmap-edit-controls" role="group" aria-label="Edit selected roadmap product"><button id="roadmapMoveUp" class="compact-button" title="Move selected product up in its family (Alt + Up on timeline)" aria-label="Move selected roadmap product up" disabled>↑ Move up</button><button id="roadmapMoveDown" class="compact-button" title="Move selected product down in its family (Alt + Down on timeline)" aria-label="Move selected roadmap product down" disabled>↓ Move down</button></div></div></details>
           <span id="roadmapEditAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
         </section>
         <div class="selection-bar"><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button></div></div>
@@ -78,7 +82,7 @@
           <button id="navLeft" class="nav-step" aria-label="Scroll board left">‹</button>
           <input id="navRange" class="nav-range" type="range" min="0" max="0" value="0" aria-label="Horizontal board position">
           <button id="navRight" class="nav-step" aria-label="Scroll board right">›</button>
-          <button id="navSelected" class="nav-selected">Show selected</button>
+
           <span id="navPosition" class="nav-position">0%</span>
         </nav>
       </section>
@@ -91,7 +95,7 @@
           <button id="roadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
           <input id="roadmapNavRange" class="nav-range" type="range" min="0" max="0" value="0" aria-label="Roadmap horizontal position">
           <button id="roadmapNavRight" class="nav-step" aria-label="Scroll roadmap right">›</button>
-          <button id="roadmapNavSelected" class="nav-selected">Show selected</button>
+
           <span id="roadmapNavPosition" class="nav-position">0%</span>
         </nav>
       </section>
@@ -106,7 +110,7 @@
             <button id="splitRoadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
             <input id="splitRoadmapNavRange" class="nav-range" type="range" min="0" max="0" value="0" aria-label="Roadmap horizontal position">
             <button id="splitRoadmapNavRight" class="nav-step" aria-label="Scroll roadmap right">›</button>
-            <button id="splitRoadmapNavSelected" class="nav-selected">Show selected</button>
+
             <span id="splitRoadmapNavPosition" class="nav-position">0%</span>
           </nav>
         </div>
@@ -161,7 +165,6 @@
           </details></div></section>
           <section id="settingsCategoryPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabCategory" data-settings-panel="category"><div class="settings-section-heading"><h3 id="settingsActiveCategory">Active category</h3><span class="scope-badge">Active category</span></div><p class="settings-note">Admin tools for category labels, lanes, and product editing.</p><div class="popup-menu settings-action-list" aria-label="Category actions"><button id="addProduct" class="menu-primary"><span>Add product</span><small>Admin action: create and edit a product in this category</small></button>
             <button id="editSelected" disabled><span>Edit selected product</span><small>Open the protected product editor</small></button>
-            <button id="productLayoutEditToggle" class="layout-edit-toggle"><span>Reorder product cards</span><small>Enable protected drag-and-drop lane editing</small></button>
             <button id="categorySettings"><span>Category settings</span><small>Edit protected titles, labels, and lanes</small></button></div></section>
           <section id="settingsDataPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabData" data-settings-panel="data">
             <div class="settings-section-heading"><h3>Data & export</h3><span class="scope-badge">Entire portfolio</span></div>

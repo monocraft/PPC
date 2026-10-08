@@ -125,7 +125,7 @@ function harness({ view = "products", transform } = {}) {
     scheduleSave() { counts.navigationSaves++; },
     updateBoard() { counts.boardWrites++; throw new Error("Search navigation cannot write product facts"); },
     requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; }, cancelAnimationFrame(id) { frames.delete(id); },
-    closeInspector() {}, updateProductLayoutEditControls() {}, closeVariantPopover() {}, syncControls() {}, renderInspector() {}, closePopupMenus() {}, updateLinkedViewButton() {}, updateRoadmapEditControls() {},
+    closeInspector() {}, updateProductLayoutEditControls() {}, finishProductReorder() {}, closeVariantPopover() {}, syncControls() {}, renderInspector() {}, closePopupMenus() {}, updateLinkedViewButton() {}, updateRoadmapEditControls() {},
     renderBoard() {}, positionViewerInfo() {},
     animateViewerInfo(progress, onComplete) { context.viewerInfoProgress = progress; onComplete?.(); },
     revealViewerInfoBesideProduct() { counts.viewerReveals++; },

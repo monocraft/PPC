@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 await import("../../public/js/pptx-pagination.js");
 await import("../../public/js/pptx-editable.js");
+await import("../../public/js/portfolio-model.js");
 
 const {
   MAX_PRODUCTS_PER_SLIDE,
@@ -111,6 +112,7 @@ const recordingContext = new Proxy({
 const activeBoard = { id: "active", settings: { roadmap: { categoryLabel: "Active category" } } };
 const rendererSandbox = {
   console, Date, Math,
+  PortfolioModel: globalThis.PortfolioModel,
   ROADMAP_LEFT_WIDTH: 190, ROADMAP_HEADER_HEIGHT: 88, ROADMAP_GROUP_HEADER_HEIGHT: 28,
   ROADMAP_ROW_HEIGHT: 38, ROADMAP_MIN_MONTH_WIDTH: 8, roadmapMonthWidth: 20,
   activeCategoryId: "active", board: activeBoard, selectedId: "selected",
@@ -193,6 +195,8 @@ assert.deepEqual(Array.from(renderedRoadmap.products, (product) => product.label
 assert.equal(renderedRoadmap.products[1].concept, true);
 assert.equal(renderedRoadmap.products[1].lineColor, "#999999");
 assert.equal(renderedRoadmap.products[2].lineColor, "#E85270", "embargo outline colors remain distinct");
+assert.equal(renderedRoadmap.products[2].textColor, "#ffffff", "The editable roadmap export preserves white embargo labels.");
+assert.equal(renderedRoadmap.products[0].textColor, "#171717", "Ordinary product labels keep their existing contrast choice.");
 assert.equal(renderedRoadmap.products[0].y, 121);
 assert.equal(renderedRoadmap.products[2].y, 235, "out-of-range rows retain their place in the background layout");
 assert.equal(JSON.stringify(renderCategory), categoryBeforeRender, "export normalization leaves the saved category untouched");

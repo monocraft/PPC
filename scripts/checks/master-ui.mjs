@@ -12,7 +12,7 @@ const byTag = (node, tag) => all(node).filter((entry) => entry.tagName === tag.t
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
 
 function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" } } = {}) {
-  const listeners = new Map(), notices = new Map(), calls = { saves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [] };
+  const listeners = new Map(), notices = new Map(), calls = { saves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [], beforeSaves: 0 };
   const document = { activeElement: null, visibilityState: "visible", addEventListener() {} };
   document.createElement = (tag) => {
     const handlers = new Map(), attributes = new Map(), classes = new Set();
@@ -42,6 +42,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
     disconnect() { calls.disconnects += 1; state.hasKey = false; },
   };
   const adapter = { getProducts() {}, canRefresh: () => true,
+    beforeSave() { calls.beforeSaves += 1; assert.equal(document.getElementById("masterDialog").open, false, "finish temporary layout mode before showing the save review"); },
     async discardChanges(productIds) {
       calls.discards.push(productIds); if (discardFailure) throw new Error("Private implementation details should stay hidden");
       discardedPending = state.pending.filter((product) => productIds.includes(product.productId));
@@ -77,6 +78,7 @@ assert.equal(ui.button.textContent, "Save changes");
 assert.equal(ui.notices.has("master-publication"), false, "accepted changes pending follow-up do not show distracting publication messages");
 assert.equal(typeof ui.publicApi.save, "function", "product actions can open the public save review");
 const flow = ui.publicApi.save();
+assert.equal(ui.calls.beforeSaves, 1, "API saves finish the reorder session before review");
 assert.equal(ui.dialog.open, true);
 assert.equal(byClass(ui.dialog, "master-product-changes").length, 8);
 assert.ok(byClass(ui.dialog, "master-product-changes").every((item) => item.tagName === "DETAILS" && item.open === false), "each product starts as a keyboard-accessible collapsed disclosure");
@@ -183,6 +185,8 @@ savingReview.setSave(() => new Promise((resolve) => { finishSaving = resolve; })
 const savingReviewFlow = savingReview.api.save(); savingReview.submit(); await flush();
 assert.equal(savingReview.publicApi.reviewConflicts(reviewConflicts), null);
 assert.match(text(savingReview.dialog), /Saving changes/, "a standalone conflict review cannot replace an active save progress dialog");
+await savingReview.api.save();
+assert.equal(savingReview.calls.beforeSaves, 1, "a busy save does not restart the layout settlement hook");
 finishSaving({ saved: true }); await savingReviewFlow;
 
 const unavailable = createUi([edited], { configured: false, publication: { status: "error" } });
