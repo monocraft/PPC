@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-08 — development and sunsetting presets
+
+- Add In development and Sunsetting to the product Status dropdown with fixed blue `#7aa2cc` and amber `#d4a56a` accents. Render IN-DEVELOPMENT and SUNSETTING banners with readable dark text.
+- Share the selected accent with variant badges, Roadmap fills/details and exported cards. Preserve embargo precedence, explicit lifecycle dates/stage and duplicate-label suppression.
+- Retain the new status values through product creation, saved-data reload, imports and the existing shared save/conflict flow.
+
 ## 2026-10-08 — integrated discard segment
 
 - Make each product's Discard action a flush end segment in Review changes, with a full-height click target, left divider and inset keyboard focus.

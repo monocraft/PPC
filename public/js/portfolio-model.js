@@ -7,7 +7,7 @@
     "in-development": "#526564",
     "in-planning": "#64615a",
   });
-  const THEME_ACCENTS = Object.freeze({ newProduct: "#5fd6c1", embargo: "#ef5b5b" });
+  const THEME_ACCENTS = Object.freeze({ newProduct: "#5fd6c1", embargo: "#ef5b5b", inDevelopment: "#7aa2cc", sunsetting: "#d4a56a" });
   const LIFECYCLE_TONES = Object.freeze({ ...DEFAULT_STAGE_COLORS, embargo: THEME_ACCENTS.embargo, "end-of-life": "#504b50" });
 
   function lifecycleTone(stage) {
@@ -17,6 +17,8 @@
   function productTone(product) {
     if (product.statusType === "embargo" || product.roadmap?.status === "embargo") return THEME_ACCENTS.embargo;
     if (product.statusType === "new") return THEME_ACCENTS.newProduct;
+    if (product.statusType === "in-development") return THEME_ACCENTS.inDevelopment;
+    if (product.statusType === "sunsetting") return THEME_ACCENTS.sunsetting;
     return lifecycleTone(product.roadmap?.status);
   }
 

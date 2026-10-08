@@ -141,6 +141,8 @@ const STANDARD_CARD_STATUSES = {
   none: { label: "", color: UI_PALETTE.carbon },
   new: { label: "NEW PRODUCT", color: PortfolioModel.THEME_ACCENTS.newProduct },
   embargo: { label: "UPCOMING UNDER EMBARGO", color: PortfolioModel.THEME_ACCENTS.embargo },
+  "in-development": { label: "IN-DEVELOPMENT", color: PortfolioModel.THEME_ACCENTS.inDevelopment },
+  sunsetting: { label: "SUNSETTING", color: PortfolioModel.THEME_ACCENTS.sunsetting },
 };
 
 const PRODUCT_TIER_OPTIONS = ["", "Core", "Core+", "Hero", "Star", "Star+"];
@@ -1123,7 +1125,7 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
       product.variantColor = product.variantColor || product.highlightColor || UI_PALETTE.steelTeal;
       product.statusType = "none";
     }
-    product.statusType = ["new", "embargo"].includes(product.statusType) ? product.statusType : "none";
+    product.statusType = normalizeCardStatusType(product.statusType);
     product.statusLabel = standardizedStatus(product.statusType).label;
     product.variantLabel = String(product.variantLabel || "");
     product.variantColor = String(product.variantColor || product.highlightColor || UI_PALETTE.steelTeal);
@@ -1161,7 +1163,7 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
 }
 
 function makeProduct(productId, name, price, laneId, order, options = {}) {
-  const statusType = ["new", "embargo"].includes(options.statusType) ? options.statusType : "none";
+  const statusType = normalizeCardStatusType(options.statusType);
   return {
     id: productId,
     name,
@@ -1200,8 +1202,13 @@ function catalogCategory(categoryId = activeCategoryId) {
   return CATALOG.categories.find((item) => item.id === categoryId) || CATALOG.categories[0] || null;
 }
 
+function normalizeCardStatusType(type) {
+  const normalized = String(type || "").trim().toLowerCase();
+  return Object.hasOwn(STANDARD_CARD_STATUSES, normalized) ? normalized : "none";
+}
+
 function standardizedStatus(type) {
-  return STANDARD_CARD_STATUSES[type] || STANDARD_CARD_STATUSES.none;
+  return STANDARD_CARD_STATUSES[normalizeCardStatusType(type)];
 }
 
 function catalogImageAssetId(categoryId, productId) {
@@ -1242,7 +1249,7 @@ function variantGroupFromBlueprint(group) {
 }
 
 function productFromBlueprint(blueprint, definition, index) {
-  const status = ["new", "embargo"].includes(blueprint.statusType) ? blueprint.statusType : "none";
+  const status = normalizeCardStatusType(blueprint.statusType);
   const launchMonth = normalizeMonth(blueprint.launchMonth, monthStringFromDate());
   const endMonth = normalizeMonth(blueprint.endMonth, addMonths(launchMonth, 24));
   return makeProduct(blueprint.id, blueprint.name, blueprint.price, blueprint.laneId, blueprint.order ?? index, {
@@ -4692,8 +4699,10 @@ function renderInspector() {
         <option value="none" ${product.statusType === "none" ? "selected" : ""}>None</option>
         <option value="new" ${product.statusType === "new" ? "selected" : ""}>New product</option>
         <option value="embargo" ${product.statusType === "embargo" ? "selected" : ""}>Upcoming under embargo</option>
+        <option value="in-development" ${product.statusType === "in-development" ? "selected" : ""}>In development</option>
+        <option value="sunsetting" ${product.statusType === "sunsetting" ? "selected" : ""}>Sunsetting</option>
       </select></label>
-      <p class="standard-status-note">New Product uses teal and Upcoming Under Embargo uses red. These theme accents are shared with the timeline.</p>
+      <p class="standard-status-note">Status colors are shared across product cards and the roadmap.</p>
       <label class="checkbox-label"><input id="fieldVariantEnabled" type="checkbox" ${product.variantLabel ? "checked" : ""}>Show a platform or variant label</label>
       <div id="variantBannerFields" class="${product.variantLabel ? "" : "is-disabled"}">
         <label>Variant label<input id="fieldVariantLabel" value="${escapeHtml(product.variantLabel || "")}" placeholder="PLAYSTATION, XBOX, SUNSETTING…"></label>
@@ -4846,7 +4855,7 @@ function renderInspector() {
     await setProductImageAsset(product.id, imageAssetId);
   });
   bindValue("#fieldStatus", "change", (value) => updateProduct(product.id, {
-    statusType: ["new", "embargo"].includes(value) ? value : "none",
+    statusType: normalizeCardStatusType(value),
     statusLabel: standardizedStatus(value).label,
   }, true));
   $("#fieldVariantEnabled").onchange = (event) => updateProduct(product.id, {
