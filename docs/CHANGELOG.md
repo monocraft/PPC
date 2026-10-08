@@ -1,5 +1,10 @@
 # Change Log
 
+## 2026-10-08 — clear product editor heading
+
+- Label the editable information section Product information and dates, removing the misleading Viewer details and Read-only pane labels.
+- Keep product information, all six dates and HP SKUs available through the existing editing and save flow.
+
 ## 2026-10-08 — aligned headset specification icons
 
 - Align compact specification icons with the first line of their value, including headset connection, microphone, driver, audio, cushion, frame and control rows.
