@@ -132,15 +132,17 @@ assert(!('manifest' in latest.data), 'full export requires private publisher cre
 
 const baseline = values(); database.raceNextReads();
 const independent = await Promise.all([
-  save('save-date-001', [change(baseline, { generalAvailabilityDate: '2027-02-01' })]),
-  save('save-spec-001', [change(baseline, { specs: [{ id: 'spec-one', label: 'Driver', value: '53 mm' }] })], 'session-two'),
+  save('save-date-001', [change(baseline, { generalAvailabilityDate: '2027-02-01' })], 'session-one', { reason: 'Launch date updated.' }),
+  save('save-spec-001', [change(baseline, { specs: [{ id: 'spec-one', label: 'Driver', value: '53 mm' }] })], 'session-two', { reason: 'Driver specification checked.' }),
 ]);
 assert(independent.every((result) => result.status === 200), 'independent concurrent changes both save after storage CAS retry');
 assert.equal(values().values.generalAvailabilityDate, '2027-02-01'); assert.equal(values().values.specs[0].value, '53 mm');
 assert.equal(database.committed, 2); assert.equal(database.inspect().storageRevision, 3);
 assert.deepEqual(database.inspect().manifest.customLayout, seed.customLayout); assert.deepEqual(database.inspect().manifest.imageAssets, seed.imageAssets);
 assert.equal(database.inspect().manifest.categories[0].board.products[0].imageAssetId, 'image-1');
-assert.equal(database.inspect().manifest.packageInfo.comments, 'Preserve comment');
+assert.equal(database.inspect().manifest.packageInfo.comments, database.inspect().manifest.masterSync.history.at(-1).reason, 'the last accepted concurrent save supplies the footer note');
+assert.equal(database.inspect().manifest.packageInfo.updatedAt, database.inspect().manifest.masterSync.history.at(-1).at);
+assert.deepEqual((await call('latest', { key })).data.snapshot.packageInfo, database.inspect().manifest.packageInfo, 'a peer refresh receives the latest accepted metadata');
 
 const sameBase = values(); database.raceNextReads();
 const collision = await Promise.all([
@@ -150,11 +152,17 @@ const collision = await Promise.all([
 assert.deepEqual(collision.map((result) => result.status).sort(), [200, 409]);
 const conflict = collision.find((result) => result.status === 409);
 assert.equal(conflict.data.code, 'MASTER_CONFLICT'); assert(conflict.data.conflicts.some((item) => item.path === 'name'));
+assert.deepEqual(conflict.data.snapshot.packageInfo, database.inspect().manifest.packageInfo, 'a rejected concurrent save reports the winner\'s accepted metadata');
 const winner = values().values.name; assert(['Name A', 'Name B'].includes(winner));
 const acceptedCount = database.committed;
 const winnerIndex = collision.findIndex((result) => result.status === 200);
 const replay = await save(winnerIndex === 0 ? 'save-name-001' : 'save-name-002', [change(sameBase, { name: winner })], winnerIndex === 0 ? 'session-one' : 'session-two');
 assert.equal(replay.status, 200); assert.equal(replay.data.alreadySaved, true); assert.equal(database.committed, acceptedCount);
+assert.deepEqual(replay.data.snapshot.packageInfo, database.inspect().manifest.packageInfo, 'a receipt replay does not advance update information');
+const beforeNoOp = clone(database.inspect().manifest.packageInfo);
+const noOp = await save('save-noop-metadata', [change(values(), { name: winner })], 'session-three', { reason: 'No business change.' });
+assert.equal(noOp.status, 200); assert.equal(noOp.data.savedFields, 0);
+assert.deepEqual(database.inspect().manifest.packageInfo, beforeNoOp, 'an accepted no-op receipt leaves the last real update information unchanged');
 const renamedReplay = await save(winnerIndex === 0 ? 'save-name-001' : 'save-name-002', [change(sameBase, { name: winner })], winnerIndex === 0 ? 'session-one' : 'session-two', { displayName: 'Updated optional name' });
 assert.equal(renamedReplay.status, 200); assert.equal(renamedReplay.data.alreadySaved, true, 'changing optional display name cannot invalidate an accepted retry');
 const mismatch = await save(winnerIndex === 0 ? 'save-name-001' : 'save-name-002', [change(sameBase, { name: 'Changed request' })], winnerIndex === 0 ? 'session-one' : 'session-two');
@@ -299,6 +307,21 @@ assert.equal(mergedGatewayProduct.ascm.records[0].privateProcurement, 'Original 
 assert(!JSON.stringify(mergedGateway.data).includes('privateProcurement'), 'merge responses expose only safe source descriptors, not archived original metadata');
 assert(!('archivedProduct' in mergedGateway.data.snapshot.masterSync.products['product-two']));
 assert.equal(mergedGateway.data.snapshot.tombstones[0].mergedIntoProductId, 'product-one');
+
+const legacyDatabase = inMemoryRpc(), legacy = clone(seed);
+const legacyAccepted = model.mergeChanges(legacy, [change(model.snapshot(legacy).products[0], { codename: 'Accepted before this update' })],
+  { reason: 'Factory dates checked.', now: '2026-10-08T01:02:03.000Z', requestId: 'legacy-save-one' }).manifest;
+legacyAccepted.packageInfo = { ...seed.packageInfo, updatedAt: '2026-10-08T01:02:03.001Z' };
+await legacyDatabase.call('bootstrap', { manifest: legacyAccepted, sourceSha, fingerprint: 'legacy-fixture' });
+const legacyGateway = createMasterGateway({ env, rpc: (operation, payload) => legacyDatabase.call(operation, payload) });
+const legacyResponse = await legacyGateway(new Request('https://example.supabase.co/functions/v1/ppc-master/api/master/latest', {
+  method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://monocraft.github.io' }, body: JSON.stringify({ key }),
+}));
+assert.equal(legacyResponse.status, 200);
+const legacySnapshot = (await legacyResponse.json()).snapshot;
+assert.deepEqual(legacySnapshot.packageInfo, { version: 1, updatedAt: '2026-10-08T01:02:03.000Z', comments: 'Factory dates checked.' }, 'existing hosted business data shows the last accepted note immediately');
+assert.equal(legacyDatabase.inspect().manifest.packageInfo.comments, seed.packageInfo.comments, 'correcting the read-only footer needs neither a database rewrite nor an artificial business save');
+assert.equal(legacyDatabase.committed, 0);
 
 const sql = await readFile(resolve('supabase/migrations/202610080001_private_master.sql'), 'utf8');
 for (const operation of ['read', 'bootstrap', 'commit', 'rate', 'presence', 'ack', 'failure']) {

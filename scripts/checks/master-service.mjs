@@ -111,6 +111,8 @@ try {
 
   const launchSave = await save(base, original, { generalAvailabilityDate: '2026-07-15' });
   assert.equal(launchSave.response.status, 200);
+  assert.equal(launchSave.data.snapshot.packageInfo.comments, 'Fixture update');
+  assert.equal(launchSave.data.snapshot.packageInfo.updatedAt, launchSave.data.snapshot.masterSync.history.at(-1).at, 'accepted business updates and their footer use the same save timestamp');
   assert.equal(product(launchSave.data.snapshot).values.startMonth, '2026-07', 'exact launch changes derive roadmap months');
   const ffsSave = await save(base, original, { ffsDate: '2026-05-20' });
   assert.equal(ffsSave.response.status, 200, 'another team can merge an unrelated date from its stale snapshot');
@@ -184,7 +186,7 @@ try {
   assert.equal(persistedProduct.specs[0].icon, 'Preserve icon');
   assert.equal(persistedProduct.partSkus[0].source, 'Preserve source');
   assert.equal(persistedProduct.variantGroups[0].items[0].privateItem, true);
-  assert.equal(persisted.packageInfo.comments, fixture.packageInfo.comments, 'automatic updates preserve existing master comments');
+  assert.equal(persisted.packageInfo.comments, 'Fixture update', 'accepted updates replace the initial comments with the saved note');
   assert.ok(persisted.packageInfo.updatedAt > fixture.packageInfo.updatedAt);
   const restarted = await start();
   assert.deepEqual(product(await latest(restarted)).values, product(cleanBase).values, 'a new server instance reads the durable saved master');
@@ -317,6 +319,14 @@ try {
   const implementation = await readFile(new URL('../../server/master-service.mjs', import.meta.url), 'utf8');
   assert.ok(!implementation.includes('console.'), 'master requests and credentials are never logged');
   assert.match(implementation, /plaintext\?\.fill\(0\)/);
+  const legacy = structuredClone(persisted);
+  legacy.packageInfo = { ...fixture.packageInfo, updatedAt: new Date(Date.parse(legacy.masterSync.history.at(-1).at) + 1).toISOString() };
+  const legacyBytes = await sealed(legacy);
+  await writeFile(filename, legacyBytes);
+  const legacySnapshot = await latest(await start());
+  assert.equal(legacySnapshot.packageInfo.comments, 'Fixture update', 'legacy service reads recover the last accepted note even when the old save stamp reused initial comments');
+  assert.equal(legacySnapshot.packageInfo.updatedAt, legacy.masterSync.history.at(-1).at);
+  assert.deepEqual(new Uint8Array(await readFile(filename)), legacyBytes, 'reading corrected legacy information leaves the encrypted master untouched');
   console.log('Master service checks passed: encrypted persistence, team merges, conflict decisions, races, preserved images, auth, local trial, and authenticated viewer presence with expiry.');
 } finally {
   await Promise.all(servers.map(server => new Promise(resolveClosed => { server.closeAllConnections(); server.close(resolveClosed); })));

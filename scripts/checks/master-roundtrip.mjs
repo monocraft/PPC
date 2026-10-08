@@ -34,11 +34,12 @@ try {
   await once(server, "listening");
   const endpoint = `http://127.0.0.1:${server.address().port}/api/master`;
   function workspace() {
-    let products = [clone(initialProduct)], baseline = model.snapshot(clone(manifest)).products;
+    let products = [clone(initialProduct)], baseline = model.snapshot(clone(manifest)).products, packageInfo = clone(manifest.packageInfo);
     const adapter = {
       getProducts: () => products,
       getBaselineProducts: () => baseline,
       setBaselineProducts: (next) => { baseline = clone(next); },
+      setPackageInfo: (info) => { packageInfo = clone(info); },
       applyPatches: (changes) => {
         products = products.map((product) => {
           const change = changes.find((item) => item.productId === product.id);
@@ -47,7 +48,7 @@ try {
       },
     };
     const session = client.createSession({ endpoint, adapter, fetchImpl: (url, options) => fetch(url, { ...options, headers: { ...options.headers, Origin: origin } }) });
-    return { session, get product() { return products[0]; }, edit(patch) { products[0] = model.applyProductValues(products[0], { ...model.values(products[0]), ...patch }); }, reload() { return client.createSession({ endpoint, adapter, fetchImpl: (url, options) => fetch(url, { ...options, headers: { ...options.headers, Origin: origin } }) }); } };
+    return { session, get product() { return products[0]; }, get packageInfo() { return packageInfo; }, edit(patch) { products[0] = model.applyProductValues(products[0], { ...model.values(products[0]), ...patch }); }, reload() { return client.createSession({ endpoint, adapter, fetchImpl: (url, options) => fetch(url, { ...options, headers: { ...options.headers, Origin: origin } }) }); } };
   }
   const a = workspace(), b = workspace();
   await Promise.all([a.session.connect({ key, editorToken }), b.session.connect({ key, editorToken })]);
@@ -59,6 +60,8 @@ try {
   assert.equal(a.product.ffsDate, "2027-02-22");
   assert.equal(b.product.generalAvailabilityDate, "2027-04-03");
   assert.equal(a.product.roadmap.startMonth, "2027-04");
+  assert.deepEqual(a.packageInfo, b.packageInfo, "two refreshed workspaces receive the same accepted footer information");
+  assert.equal(a.packageInfo.comments, "1 product updated.");
 
   a.edit({ specs: a.product.specs.map((item) => item.id === "battery" ? { ...item, value: "50 hours" } : item) });
   b.edit({ specs: b.product.specs.map((item) => item.id === "connection" ? { ...item, value: "USB + wireless" } : item) });
@@ -69,25 +72,32 @@ try {
 
   a.edit({ specs: a.product.specs.map((item) => item.id === "battery" ? { ...item, value: "60 hours" } : item) });
   b.edit({ specs: b.product.specs.map((item) => item.id === "battery" ? { ...item, value: "70 hours" } : item) });
-  await a.session.save();
+  await a.session.save({ reason: "Updated battery duration.\nChecked with the team." });
+  await a.session.refresh();
+  assert.equal(a.packageInfo.comments, "Updated battery duration.\nChecked with the team.");
   let conflictsSeen = 0;
-  await b.session.save({ resolveConflicts: (conflicts) => {
+  await b.session.save({ reason: "Approved final battery duration.", resolveConflicts: (conflicts) => {
     conflictsSeen += conflicts.length;
     return Object.fromEntries(conflicts.map((item) => [item.key, "mine"]));
   } });
   assert.ok(conflictsSeen > 0);
   assert.equal(b.product.specs.find((item) => item.id === "battery").value, "70 hours");
   assert.equal(b.session.getState().pending.length, 0, "an accepted resolution clears the Save to master state");
+  assert.equal(b.packageInfo.comments, "Approved final battery duration.");
 
   await a.session.refresh();
   a.edit({ ffsDate: "2027-02-24" });
   b.edit({ ffsDate: "2027-02-25" });
   await a.session.save();
-  const cancelled = await b.session.save({ resolveConflicts: () => null });
+  const acceptedInfo = clone(a.packageInfo);
+  const beforeCancelledInfo = clone(b.packageInfo);
+  const cancelled = await b.session.save({ reason: "Cancelled note must not be published.", resolveConflicts: () => null });
   assert.equal(cancelled.cancelled, true);
   assert.equal(b.product.ffsDate, "2027-02-25");
+  assert.deepEqual(b.packageInfo, beforeCancelledInfo, "cancelling a conflict leaves the workspace's accepted metadata intact");
   const reloaded = b.reload();
   await reloaded.connect({ key, editorToken });
+  assert.deepEqual(b.packageInfo, acceptedInfo, "reconnecting receives the latest accepted note without publishing the cancelled note");
   assert.equal(b.product.ffsDate, "2027-02-25", "refresh and reload preserve an unsent draft");
   await reloaded.save({ resolveConflicts: (conflicts) => Object.fromEntries(conflicts.map((item) => [item.key, "master"])) });
   assert.equal(b.product.ffsDate, "2027-02-24");

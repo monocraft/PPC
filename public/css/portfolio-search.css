@@ -1,0 +1,31 @@
+/* Search suggestions sit above the board without taking up toolbar space. */
+.portfolio-search-shell { position: relative; flex: 0 1 auto; width: min(310px, 32vw); min-width: 160px; max-width: 100%; }
+.portfolio-search-shell > .search-shell { width: 100%; min-width: 0; }
+.portfolio-search-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 55; width: max(100%, 380px); max-width: calc(100vw - 40px); max-height: min(320px, var(--portfolio-search-height, 320px)); padding: 0 0 5px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid #465451; border-radius: 7px; background: #1b1e1c; box-shadow: 0 10px 28px #0008; color: var(--color-text, #eeeeec); }
+.portfolio-search-panel[hidden], .portfolio-search-panel [hidden] { display: none; }
+.portfolio-search-header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 9px 11px; border-bottom: 1px solid #343b36; background: #212622; font-size: 10px; line-height: 1.4; }
+.portfolio-search-heading { color: #d1dbd3; font-weight: 600; }
+.portfolio-search-summary { flex: 0 0 auto; color: #9aaba0; font-size: 9px; }
+.portfolio-search-results { margin: 0; padding: 3px 4px; list-style: none; }
+.portfolio-search-option { display: grid; gap: 3px; min-width: 0; padding: 8px 7px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; line-height: 1.4; overflow-wrap: anywhere; scroll-margin-top: 36px; }
+.portfolio-search-option + .portfolio-search-option { margin-top: 2px; }
+.portfolio-search-option:hover { background: #29312b; }
+.portfolio-search-option[aria-selected="true"] { border-color: #7e9486; background: #303b34; }
+.portfolio-search-product-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 8px; min-width: 0; }
+.portfolio-search-product-name { flex: 1 1 auto; min-width: 0; font-size: 11px; font-weight: 600; color: #edf1ed; }
+.portfolio-search-current { flex: 0 0 auto; color: #a2afa6; font-size: 8px; }
+.portfolio-search-sku { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 7px; font-size: 10px; }
+.portfolio-search-sku-label { color: #a4b8aa; font-size: 9px; }
+.portfolio-search-sku-code { min-width: 0; color: #d5e5d8; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.portfolio-search-variant, .portfolio-search-location { min-width: 0; color: #a7b2a9; font-size: 10px; }
+.portfolio-search-feedback, .portfolio-search-bound { margin: 0; padding: 10px 11px; color: #bcc9bf; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.portfolio-search-more { display: block; width: calc(100% - 16px); min-height: 29px; margin: 3px 8px; padding: 5px 8px; border-color: #414e44; background: #252e28; color: #d0ddd4; font-size: 10px; }
+.portfolio-search-more:focus-visible { outline-offset: -3px; }
+@media (max-width: 700px) {
+  .portfolio-search-shell { flex: 1 1 135px; width: auto; min-width: 135px; }
+  .portfolio-search-panel { width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
+}
+@media (max-width: 480px) {
+  .portfolio-search-shell { flex-basis: 110px; min-width: 110px; }
+  .portfolio-search-current { font-size: 8px; }
+}

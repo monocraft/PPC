@@ -23,6 +23,27 @@
     return `${name}:${tone(color.colorHex).toLowerCase()}:${tone(color.colorHex2 || color.colorHex).toLowerCase()}`;
   }
 
+  function focusMatch(model, { surface = "split", sku = "", variant = "" } = {}) {
+    const state = stateFor(surface === "viewer" ? "viewer" : "split", model.id);
+    state.tab = "overview";
+    state.pages = {};
+    const code = (value) => String(value || "").normalize("NFKC").toUpperCase().replace(/[^\p{L}\p{N}]/gu, "");
+    if (sku) {
+      const index = (model.skus || []).findIndex((item) => code(item.code) === code(sku));
+      if (index >= 0) { state.tab = "skus"; state.pages.SKUs = Math.floor(index / 6); return; }
+      const sourceIndex = (model.source?.records || []).findIndex((item) => code(item.code) === code(sku));
+      if (sourceIndex >= 0) { state.tab = "more"; state.more = "source"; state.pages["source records"] = Math.floor(sourceIndex / 2); return; }
+    }
+    if (variant) {
+      const assignedIndex = (model.skus || []).findIndex((item) => (item.colors || []).some((color) => code(color.code) === code(variant)));
+      if (assignedIndex >= 0) { state.tab = "skus"; state.pages.SKUs = Math.floor(assignedIndex / 6); return; }
+      const assignedColors = new Set((model.skus || []).flatMap((item) => (item.colors || []).map(colorIdentity)));
+      const options = (model.variants || []).filter((item) => !item.colors?.length || item.colors.some((color) => !assignedColors.has(colorIdentity(color))));
+      const index = options.findIndex((item) => code(item.code) === code(variant));
+      if (index >= 0) { state.tab = "skus"; state.pages.options = Math.floor(index / 8); }
+    }
+  }
+
   function swatchHtml(color) {
     return `<i class="hp-sku-swatch ${color.colorHex2 ? "is-dual" : ""}" style="--sku-primary:${tone(color.colorHex)};--sku-secondary:${tone(color.colorHex2 || color.colorHex)}" aria-hidden="true"></i>`;
   }
@@ -143,5 +164,5 @@
     container.querySelector("[data-detail-close]")?.addEventListener("click", () => onClose?.());
   }
 
-  root.PortfolioDetails = Object.freeze({ render, bind });
+  root.PortfolioDetails = Object.freeze({ render, bind, focusMatch });
 })(globalThis);

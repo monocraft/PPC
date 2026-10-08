@@ -433,7 +433,7 @@ export function createMasterHandler(options = {}) {
     return {
       ...model.snapshot(source.manifest),
       revision: source.revision,
-      packageInfo: codec.normalizePackageInfo(source.manifest.packageInfo),
+      packageInfo: model.latestPackageInfo(source.manifest),
       masterSync: model.publicMetadata(source.manifest),
       canWrite: writable,
       requiresEditorToken,
@@ -528,8 +528,6 @@ export function createMasterHandler(options = {}) {
                 return;
               }
               if (result.savedFields) {
-                const previousInfo = codec.normalizePackageInfo(source.manifest.packageInfo);
-                result.manifest.packageInfo = codec.createPackageInfo({ comments: previousInfo?.comments || '' });
                 const revision = await persistPackage(filename, source, result.manifest, key, maxFileBytes);
                 if (revision === null) continue;
                 source.manifest = result.manifest;

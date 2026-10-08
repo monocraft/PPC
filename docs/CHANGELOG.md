@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-08 — portfolio-wide search and clearer roadmap status
+
+- Search product names, HP SKUs, variant codes, specifications and imported base part numbers across every category. Rank exact SKU matches first, display each result's category and lane, and open its product details directly on the matching SKU or variant page. Preserve legitimate listings in multiple portfolios and unsaved drafts.
+- Use View Mode and Edit Mode for timeline navigation and deliberate date adjustments. Remove the drag instruction row and repeated selected-product name; retain one selection label and compact row-order actions only in Edit Mode.
+- Close the roadmap details pane when the selection is cleared or filtered out. Keep the user's details preference and reopen it when another visible product is selected. Stabilize clipped year labels at calendar boundaries while panning.
+- Show the latest accepted update's date and comment in the footer, including automatic team refresh. Use a short product-count summary when no comment is supplied; cancelled, rejected and unchanged submissions retain the prior accepted status. Repair legacy generated save stamps without replacing a later explicit export comment.
+
 ## 2026-10-08 — guided product consolidation and safer editing
 
 - Compare two products within one portfolio and combine complementary details, specifications, HP SKUs, variants, images, and source records. Require an explicit choice for every conflicting populated value; keep the surviving product's identity and redirect related roadmap references.

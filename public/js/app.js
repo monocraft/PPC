@@ -1452,24 +1452,30 @@ function sortedLanes() {
 }
 
 function visibleProducts() {
-  const query = searchQuery.trim().toLowerCase();
+  const query = searchQuery.trim();
   if (!query) return board.products;
-  return board.products.filter((product) => {
-    const variantTerms = productVariantGroups(product)
-      .flatMap((group) => [group.label, ...group.items.flatMap((item) => [item.code, item.label, item.colorName, item.colorName2])]);
-    const hpSkuTerms = productPartSkus(product).map((item) => item.code);
-    const haystack = [
-      product.name,
-      product.codename,
-      product.tier,
-      product.statusLabel,
-      product.variantLabel,
-      ...hpSkuTerms,
-      ...variantTerms,
-      ...product.specs.flatMap((item) => [item.label, item.value]),
-    ].join(" ").toLowerCase();
-    return haystack.includes(query);
-  });
+  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query)));
+}
+
+function openPortfolioSearchResult(result) {
+  if (packageOperationInProgress || !result || typeof result.productId !== "string" || typeof result.categoryId !== "string") return false;
+  const locations = portfolio.categories.flatMap((category) => (category.board?.products || []).filter((product) => product.id === result.productId).map((product) => ({ category, product })));
+  if (locations.length !== 1 || locations[0].category.id !== result.categoryId) return false;
+  const { category, product } = locations[0];
+  const nextView = activeView === "products" ? "products" : "split";
+  activateCategory(category.id, { render: false, fitVertical: true });
+  selectedId = product.id;
+  globalThis.PortfolioDetails.focusMatch(productDetailsModel(product), { surface: nextView === "products" ? "viewer" : "split", sku: result.matchedSku || "", variant: result.matchedVariant || "" });
+  setView(nextView, { focusSelected: true });
+  const focusResult = () => {
+    if (activeView !== nextView || selectedId !== product.id || activeCategoryId !== category.id) return;
+    const target = nextView === "products" ? viewerInfo : splitProduct;
+    const matchingCopy = result.matchedSku && [...target.querySelectorAll("[data-detail-copy]")].find((element) => element.dataset.detailCopy === result.matchedSku);
+    (matchingCopy || target.querySelector('[role="tab"][aria-selected="true"]'))?.focus({ preventScroll: true });
+  };
+  if (nextView === "products") openViewerInfo(product.id, { onReady: focusResult });
+  else requestAnimationFrame(focusResult);
+  return true;
 }
 
 function normalizedSpecLabel(label) {
@@ -2342,27 +2348,9 @@ function roadmapRange() {
 }
 
 function visibleRoadmapProducts() {
-  const query = roadmapSearchQuery.trim().toLowerCase();
+  const query = roadmapSearchQuery.trim();
   if (!query) return board.products;
-  return board.products.filter((product) => {
-    const roadmap = product.roadmap || {};
-    const variantTerms = productVariantGroups(product)
-      .flatMap((group) => [group.label, ...group.items.flatMap((item) => [item.code, item.label, item.colorName, item.colorName2])]);
-    const hpSkuTerms = productPartSkus(product).map((item) => item.code);
-    const haystack = [
-      product.name,
-      product.codename,
-      product.tier,
-      roadmap.family,
-      roadmap.status,
-      roadmap.confidence,
-      product.statusLabel,
-      product.variantLabel,
-      ...hpSkuTerms,
-      ...variantTerms,
-    ].join(" ").toLowerCase();
-    return haystack.includes(query);
-  });
+  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query)));
 }
 
 function roadmapFamilyOrder(family, targetBoard = board, definition = categoryDefinition()) {
@@ -2844,9 +2832,12 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   // One neutral calendar surface: typography, sparse ticks, and year seams.
   context.fillStyle = UI_PALETTE.inkBlack;
   context.fillRect(timelineX, stickyY, timelineWidth, ROADMAP_HEADER_HEIGHT);
+  const calendarRight = timelineX + timelineWidth;
+  const visibleCalendarLeft = Math.min(calendarRight, Math.max(timelineX, stickyX + timelineX));
+  const visibleCalendarRight = exportMode ? calendarRight : Math.min(calendarRight, stickyX + (targetScroll.clientWidth || width));
   context.save();
   context.beginPath();
-  context.rect(timelineX, stickyY, timelineWidth, ROADMAP_HEADER_HEIGHT);
+  context.rect(visibleCalendarLeft, stickyY, Math.max(0, visibleCalendarRight - visibleCalendarLeft), ROADMAP_HEADER_HEIGHT);
   context.clip();
   context.textBaseline = "alphabetic";
 
@@ -2856,13 +2847,20 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const yearEnd = Math.min(range.end, year * 12 + 11);
     const x = timelineX + (cursor - range.start) * roadmapMonthWidth;
     const yearRight = timelineX + (yearEnd - range.start + 1) * roadmapMonthWidth;
-    context.fillStyle = UI_PALETTE.whiteSmoke;
-    context.font = "800 26px Arial";
-    context.textAlign = "left";
-    const labelWidth = context.measureText(String(year)).width;
-    // A partly scrolled year keeps its title beside the sticky family rail.
-    const labelX = Math.min(Math.max(x + 10, stickyX + timelineX + 10), Math.max(x + 4, yearRight - labelWidth - 8));
-    context.fillText(String(year), labelX, stickyY + 31);
+    const visibleYearLeft = Math.max(x, visibleCalendarLeft);
+    const visibleYearRight = Math.min(yearRight, visibleCalendarRight);
+    if (visibleYearRight > visibleYearLeft) {
+      // Keep the outgoing title pinned; its year seam clips it as the next title arrives.
+      context.save();
+      context.beginPath();
+      context.rect(visibleYearLeft, stickyY, visibleYearRight - visibleYearLeft, 38);
+      context.clip();
+      context.fillStyle = UI_PALETTE.whiteSmoke;
+      context.font = "800 26px Arial";
+      context.textAlign = "left";
+      context.fillText(String(year), visibleYearLeft + 10, stickyY + 31);
+      context.restore();
+    }
     cursor = yearEnd + 1;
   }
 
@@ -2953,6 +2951,8 @@ function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
 }
 
 function renderRoadmaps() {
+  const previousView = activeView;
+  syncRoadmapDetailsVisibility();
   syncViewZoomControls();
   updateRoadmapEditControls();
   if (activeView === "roadmap") renderRoadmapFor(roadmapCanvas, roadmapScroll, roadmapNavigatorRefs());
@@ -2961,6 +2961,7 @@ function renderRoadmaps() {
     renderRoadmapFor(splitRoadmapCanvas, splitRoadmapScroll, splitRoadmapNavigatorRefs());
   }
   roadmapFilterScrollResetPending = false;
+  if (activeView !== previousView) renderStatus();
 }
 
 function roadmapNavigatorRefs() {
@@ -3114,8 +3115,6 @@ function syncRoadmapInteractionMode() {
   $("#roadmapModePan")?.setAttribute("aria-pressed", String(!adjusting));
   $("#roadmapModeDates")?.setAttribute("aria-pressed", String(adjusting));
   for (const target of [roadmapCanvas, splitRoadmapCanvas]) target?.classList.toggle("is-adjusting-dates", adjusting);
-  const hint = roadmapControls?.querySelector(".roadmap-interaction-hint");
-  if (hint) hint.textContent = adjusting ? "Drag bars to move dates · drag edges to resize · drag names to reorder" : "Drag to move the view · double-click a product for details";
   roadmapControls?.querySelector(".roadmap-edit-controls")?.classList.toggle("is-adjusting-dates", adjusting);
 }
 
@@ -3126,7 +3125,7 @@ function setRoadmapInteractionMode(mode) {
   roadmapInteractionMode = mode;
   syncRoadmapInteractionMode();
   renderRoadmaps();
-  announceRoadmapEdit(mode === "dates" ? "Adjust dates is on. Drag product bars or their edges to change dates. Press Escape to return to Move view." : "Move view is on. Drag anywhere on the timeline to navigate.");
+  announceRoadmapEdit(mode === "dates" ? "Edit Mode is on. Drag product bars or their edges to change dates, or drag names to reorder. Press Escape to return to View Mode." : "View Mode is on. Drag anywhere on the timeline to browse.");
 }
 
 function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
@@ -3455,7 +3454,7 @@ function renderSplitProduct() {
   if (!splitProduct) return;
   const product = selectedProduct();
   if (!product) {
-    splitProduct.innerHTML = '<div class="split-empty"><h2>No product selected</h2><p>Select a roadmap bar to review key dates and product details.</p></div>';
+    splitProduct.replaceChildren();
     return;
   }
   const presentation = productPresentation(product);
@@ -3501,7 +3500,6 @@ function updateRoadmapEditControls() {
   const index = group?.products.findIndex((item) => item.id === product?.id) ?? -1;
   $("#roadmapMoveUp").disabled = roadmapInteractionMode !== "dates" || index <= 0;
   $("#roadmapMoveDown").disabled = roadmapInteractionMode !== "dates" || index < 0 || index >= group.products.length - 1;
-  $("#roadmapEditSelection").textContent = product?.name || "Select a product";
   if (roadmapMenuButton) {
     roadmapMenuButton.classList.remove("is-active");
     roadmapMenuButton.innerHTML = 'Timeline <span aria-hidden="true">▾</span>';
@@ -3514,6 +3512,20 @@ function stopRoadmapSlotEditing() {
   roadmapDragState = null;
   roadmapDraft = null;
   updateRoadmapEditControls();
+}
+
+function syncRoadmapDetailsVisibility() {
+  const hasSelection = Boolean(selectedProduct()) && visibleRoadmapProducts().some((product) => product.id === selectedId);
+  const showing = activeView !== "products" && roadmapDetailsOpen && hasSelection;
+  if (activeView !== "products") activeView = showing ? "split" : "roadmap";
+  roadmapView.classList.toggle("hidden", activeView !== "roadmap");
+  splitView.classList.toggle("hidden", activeView !== "split");
+  const toggle = $("#toggleRoadmapDetails");
+  toggle.classList.toggle("hidden", activeView === "products");
+  toggle.disabled = !hasSelection;
+  toggle.textContent = showing ? "Hide product details" : "Show product details";
+  toggle.setAttribute("aria-expanded", String(showing));
+  toggle.setAttribute("aria-pressed", String(showing));
 }
 
 function setView(view, { focusSelected = false } = {}) {
@@ -3530,6 +3542,7 @@ function setView(view, { focusSelected = false } = {}) {
   productView.classList.toggle("hidden", activeView !== "products");
   roadmapView.classList.toggle("hidden", activeView !== "roadmap");
   splitView.classList.toggle("hidden", activeView !== "split");
+  syncRoadmapDetailsVisibility();
   productControls.classList.toggle("hidden", activeView !== "products");
   roadmapControls.classList.toggle("hidden", activeView === "products");
   document.querySelectorAll(".view-tab").forEach((button) => {
@@ -3537,11 +3550,6 @@ function setView(view, { focusSelected = false } = {}) {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
   });
-  const detailsToggle = $("#toggleRoadmapDetails");
-  detailsToggle.classList.toggle("hidden", activeView === "products");
-  detailsToggle.textContent = roadmapDetailsOpen ? "Hide product details" : "Show product details";
-  detailsToggle.setAttribute("aria-expanded", String(roadmapDetailsOpen));
-  detailsToggle.setAttribute("aria-pressed", String(roadmapDetailsOpen));
   updateLinkedViewButton();
   updateRoadmapEditControls();
   updateProductLayoutEditControls();
@@ -3841,7 +3849,7 @@ function animateViewerInfo(targetProgress, onComplete) {
   viewerInfoAnimationFrame = requestAnimationFrame(step);
 }
 
-function openViewerInfo(productId = selectedId) {
+function openViewerInfo(productId = selectedId, { onReady } = {}) {
   if (!productId) return;
 
   if (viewerInfoOpen && viewerInfoProductId === productId) {
@@ -3857,7 +3865,7 @@ function openViewerInfo(productId = selectedId) {
   renderBoard();
 
   requestAnimationFrame(() => {
-    animateViewerInfo(1, () => requestAnimationFrame(revealViewerInfoBesideProduct));
+    animateViewerInfo(1, () => requestAnimationFrame(() => { revealViewerInfoBesideProduct(); onReady?.(); }));
   });
 }
 
@@ -6981,6 +6989,13 @@ function undoDiscardedDraft(undoId) {
   if (!record || packageOperationInProgress || globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy || JSON.stringify(portfolio) !== record.after) return false;
   portfolio = record.previous; discardedDrafts.delete(undoId); updateDraftViews(); return true;
 }
+globalThis.PortfolioSearchAdapter = Object.freeze({
+  getPortfolio: () => portfolio,
+  getActiveCategoryId: () => activeCategoryId,
+  getActiveView: () => activeView,
+  openResult: openPortfolioSearchResult,
+});
+
 globalThis.PortfolioProductMergeAdapter = Object.freeze({
   getProducts: mergeProductEntries, getSelectedProductId: () => selectedId || "", canMerge: canMergeProducts,
   getImageSource: (assetId) => imageAssetSource(assetId, ""),

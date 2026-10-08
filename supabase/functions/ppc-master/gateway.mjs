@@ -147,7 +147,7 @@ export function publicSnapshot(state) {
   const masterSync = model.publicMetadata(state.manifest);
   return {
     ...model.snapshot(state.manifest), revision: `supabase:${state.storageRevision}`,
-    storageRevision: Number(state.storageRevision), packageInfo: codec.normalizePackageInfo(state.manifest.packageInfo),
+    storageRevision: Number(state.storageRevision), packageInfo: model.latestPackageInfo(state.manifest),
     masterSync,
     source: 'service', connectionMode: 'team', backend: 'supabase',
     canWrite: true, requiresEditorToken: false, requiresGitHubToken: false, namesAreSelfReported: true,
@@ -251,8 +251,6 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
         conflicts: merged.conflicts, snapshot: publicSnapshot(state), requestId: body.requestId };
       const changed = merged.savedFields > 0;
       if (changed) {
-        const previousInfo = codec.normalizePackageInfo(state.manifest.packageInfo);
-        merged.manifest.packageInfo = codec.normalizePackageInfo({ version: 1, comments: previousInfo?.comments || '', updatedAt: now() });
         for (const entry of merged.history) entry.actorSource = 'self-reported';
       }
       if (encodedSize(merged.manifest) > MAX_MANIFEST_BYTES) throw problem(413, 'MASTER_TOO_LARGE', 'The updated master exceeds its data limit.');
