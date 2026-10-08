@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-08 — compact key date rows
+
+- Halve inline product date tiles from about 59 px to 28 px by placing full labels beside right-aligned values, retaining two columns and the existing date accents.
+- Give the calendar more horizontal room in a 720 px pane while keeping specifications readable in one column. Preserve the exact parent-card height, independent overflow, lane positions, More identity cards and the narrower Roadmap details.
+- Let the wider pane scroll fully into view on opening; hover redraws no longer interrupt that smooth reveal.
+
 ## 2026-10-08 — fluid product reordering
 
 - Rename the toolbar action to Reorder products and use product wording in the active Done/Cancel controls.

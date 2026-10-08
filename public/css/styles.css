@@ -595,7 +595,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .variant-popover-item.has-hero { position: relative; padding-right: 17px; border-color: #658e75; cursor: pointer; }
 .variant-popover-item.is-active-hero { border-color: #a0bfa9; }
 .hero-image-badge { position: absolute; top: 6px; right: 6px; color: #9abaac; font-size: 7px; line-height: 1; }
-.viewer-info { position: absolute; z-index: 11; left: 0; top: 0; width: var(--viewer-info-width, 540px); height: var(--viewer-info-height, 0px); max-height: var(--viewer-info-height, 0px); min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; opacity: 1; transform: none; transform-origin: left center; clip-path: inset(0 100% 0 0); will-change: clip-path; border: 1px solid var(--palette-gunmetal); border-radius: 7px; background: var(--color-surface); box-shadow: 0 12px 24px #0006; }
+.viewer-info { position: absolute; z-index: 11; left: 0; top: 0; width: var(--viewer-info-width, 720px); height: var(--viewer-info-height, 0px); max-height: var(--viewer-info-height, 0px); min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; opacity: 1; transform: none; transform-origin: left center; clip-path: inset(0 100% 0 0); will-change: clip-path; border: 1px solid var(--palette-gunmetal); border-radius: 7px; background: var(--color-surface); box-shadow: 0 12px 24px #0006; }
 .viewer-info.is-open { visibility: visible; }
 .viewer-info-outline { display: none; }
 .viewer-info-body { display: grid; grid-template-columns: minmax(0, 1fr) 228px 26px; grid-template-rows: auto minmax(0, 1fr); gap: 12px 8px; height: 100%; min-height: 0; overflow: hidden; padding: 12px; background: var(--color-surface); }
@@ -680,14 +680,19 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .product-detail-specs dt { color: var(--color-text-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .product-detail-specs dd { min-width: 0; margin: 0; color: var(--color-text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .viewer-info [data-detail-panel="overview"] { overflow: hidden; }
-.viewer-info .product-detail-overview-grid { grid-template-columns: 206px minmax(0, 1fr); height: 100%; min-height: 0; gap: 14px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+.viewer-info .product-detail-overview-grid { grid-template-columns: 390px minmax(0, 1fr); height: 100%; min-height: 0; gap: 14px; padding-top: 12px; border-top: 1px solid var(--color-border); }
 .viewer-info .product-detail-calendar { padding-right: 10px; border-right: 1px solid var(--color-border); overflow: auto; scrollbar-width: thin; scrollbar-color: var(--color-emphasis-deep) transparent; }
+.viewer-info .product-detail-dates { gap: 4px; }
+.viewer-info .product-detail-dates .product-detail-date { grid-template-columns: minmax(0, 1fr) auto; align-items: center; align-content: center; min-height: 28px; padding: 5px 7px; gap: 6px; }
+.viewer-info .product-detail-dates .product-detail-date > span { min-block-size: 0; }
+.viewer-info .product-detail-dates .product-detail-date > strong { text-align: right; }
 .viewer-info .product-detail-spec-scroll { overflow: auto; scrollbar-width: thin; scrollbar-color: var(--color-emphasis-deep) transparent; }
 .viewer-info[data-detail-columns="2"] .product-detail-specs { display: block; column-count: 2; column-gap: 16px; }
 .viewer-info[data-detail-columns="2"] .product-detail-specs > div { grid-template-columns: minmax(0, 86px) minmax(0, 1fr); }
 .viewer-info[data-compact-height="true"] .product-detail-overview-grid { padding-top: 5px; gap: 12px; }
 .viewer-info[data-compact-height="true"] .product-detail-calendar { gap: 6px; }
 .viewer-info[data-compact-height="true"] .product-detail-date { padding: 5px 7px; gap: 2px; }
+.viewer-info[data-compact-height="true"] .product-detail-dates .product-detail-date { padding: 4px 7px; gap: 6px; }
 .viewer-info[data-compact-height="true"] .product-detail-specs > div { padding-block: 5px; }
 .viewer-info[data-compact-height="true"] .product-detail-all-specs { grid-template-rows: minmax(0, 1fr); gap: 0; }
 .viewer-info[data-compact-height="true"] .product-detail-all-specs > .product-detail-section-title, .viewer-info[data-compact-height="true"] .product-detail-calendar > .product-detail-section-title { display: none; }

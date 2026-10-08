@@ -1584,9 +1584,8 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
   };
 }
 
-function viewerInfoVisualWidth(height = viewerInfoVisualHeight()) {
-  if (height <= 180) return 720;
-  return height <= 280 ? 680 : 540;
+function viewerInfoVisualWidth() {
+  return 720;
 }
 
 function viewerInfoVisualHeight() {
@@ -1594,13 +1593,10 @@ function viewerInfoVisualHeight() {
 }
 
 function setViewerInfoSize(width, height) {
-  const product = infoProduct();
-  const specifications = Array.isArray(product?.specs) ? product.specs : [];
-  const hasLongValues = specifications.some((item) => String(item.value ?? "").replace(/\s+/g, " ").trim().length > 80);
   viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
   viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
   viewerInfo.dataset.compactHeight = String(height <= 180);
-  viewerInfo.dataset.detailColumns = String(height <= 280 && !hasLongValues ? 2 : 1);
+  viewerInfo.dataset.detailColumns = "1";
 }
 
 function viewerInfoReserveLogical() {
@@ -3957,8 +3953,9 @@ function renderBoard() {
   if (productCardMotion) productCardMotion.dimensions = dimensions;
   drawBoardTo(context, dimensions, true);
   renderLaneRail(dimensions);
-  canvasScroll.scrollLeft = previousLeft;
-  canvasScroll.scrollTop = previousTop;
+  // Equal-value assignments would interrupt a native smooth panel reveal.
+  if (canvasScroll.scrollLeft !== previousLeft) canvasScroll.scrollLeft = previousLeft;
+  if (canvasScroll.scrollTop !== previousTop) canvasScroll.scrollTop = previousTop;
   syncViewZoomControls();
   renderStatus();
   positionViewerInfo();
