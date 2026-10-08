@@ -290,7 +290,9 @@ for (const [statusType, label, color] of [["new", "NEW PRODUCT", "#5fd6c1"], ["e
       assert.equal(consoleTextColors[0], statusType === "embargo" ? "#ffffff" : "#111111", "Compact, detailed, and exported card rendering use white embargo text and keep teal text dark.");
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
-        assert.equal(consoleShapes[2][6], "#222222", "the platform badge uses charcoal, rather than a second status accent");
+        assert.equal(consoleShapes[2][6], color, "the variant badge matches the status banner color");
+        assert.equal(consoleShapes[2][7], color, "the variant badge border matches its fill");
+        assert.equal(consoleTextColors[1], consoleTextColors[0], "status and variant labels share readable text contrast");
         assert.ok(consoleShapes[2][1] + consoleShapes[2][3] < 246 - 54 - 8, "the platform badge leaves room for Details");
       }
     }
@@ -298,6 +300,7 @@ for (const [statusType, label, color] of [["new", "NEW PRODUCT", "#5fd6c1"], ["e
     assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`>${label}</div>`), "roadmap details retain the same primary status");
     assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#ffffff" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
     assert.equal(presentationSandbox.splitProduct.innerHTML.includes('class="split-platform-label"'), Boolean(presentation.secondaryLabel));
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${color};--product-label-color:${statusType === "embargo" ? "#ffffff" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
     assert.equal(JSON.stringify(consoleProduct), before, "presentation never changes the saved manual status or platform label");
   }
 }

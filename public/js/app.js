@@ -2386,6 +2386,8 @@ function drawProductInfoButton(context, product, x, y, layout) {
 
 function drawCard(context, product, x, y, selected, layout = productCardLayout(), interactive = true) {
   const presentation = productPresentation(product);
+  const labelColor = presentation.primaryLabel
+    ? PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)) : UI_PALETTE.silver;
   const cardHeight = layout.cardHeight;
   context.save();
   context.shadowColor = "rgba(0,0,0,.28)";
@@ -2396,7 +2398,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   if (presentation.primaryLabel) {
     roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
-    context.fillStyle = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
+    context.fillStyle = labelColor;
     context.font = "700 10px Arial";
     context.textAlign = "center";
     context.fillText(presentation.primaryLabel.toUpperCase(), x + CARD_WIDTH / 2, y + 16);
@@ -2409,8 +2411,8 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     const label = presentation.secondaryLabel.toUpperCase();
     context.font = "700 8px Arial";
     const badgeWidth = Math.min(CARD_WIDTH - INFO_BUTTON_WIDTH - 32, Math.max(74, context.measureText(label).width + 18));
-    roundRect(context, x + 8, y + STATUS_BANNER_HEIGHT + 5, badgeWidth, 18, 4, UI_PALETTE.charcoal700, UI_PALETTE.charcoal500, .75);
-    context.fillStyle = UI_PALETTE.silver;
+    roundRect(context, x + 8, y + STATUS_BANNER_HEIGHT + 5, badgeWidth, 18, 4, presentation.primaryColor, presentation.primaryColor, .75);
+    context.fillStyle = labelColor;
     context.textAlign = "center";
     context.fillText(label, x + 8 + badgeWidth / 2, y + STATUS_BANNER_HEIGHT + 17, badgeWidth - 12);
   }
@@ -3665,9 +3667,10 @@ function renderSplitProduct() {
     return;
   }
   const presentation = productPresentation(product);
+  const labelColor = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
   splitProduct.innerHTML = `
-    <article class="split-product-card split-product-card--detail" style="--product-highlight:${escapeHtml(presentation.outlineColor)}">
-      ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)))}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
+    <article class="split-product-card split-product-card--detail" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)}">
+      ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(labelColor)}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
       <div class="split-product-hero">
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
         <div class="split-product-title"><span class="eyebrow">${escapeHtml(product.roadmap?.family || 'Portfolio product')}</span><h2>${escapeHtml(product.name)}</h2>${presentation.secondaryLabel ? `<span class="split-platform-label">${escapeHtml(presentation.secondaryLabel)}</span>` : ''}${portfolio.settings?.showRoadmapMsrp && productPriceText(product) ? `<div class="split-price">${escapeHtml(productPriceText(product))}</div>` : ''}</div>
@@ -4694,7 +4697,7 @@ function renderInspector() {
       <label class="checkbox-label"><input id="fieldVariantEnabled" type="checkbox" ${product.variantLabel ? "checked" : ""}>Show a platform or variant label</label>
       <div id="variantBannerFields" class="${product.variantLabel ? "" : "is-disabled"}">
         <label>Variant label<input id="fieldVariantLabel" value="${escapeHtml(product.variantLabel || "")}" placeholder="PLAYSTATION, XBOX, SUNSETTING…"></label>
-        <p class="standard-status-note">Status uses the main banner. Platform or variant labels appear as a subtle secondary badge when a status is set.</p>
+        <p class="standard-status-note">Variant labels match the status color.</p>
       </div>
     </section>
     <section id="roadmapSection" class="panel-section">

@@ -523,7 +523,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .split-product-image { display: block; width: 80px; height: 80px; padding: 3px; object-fit: contain; }
 .split-product-title { min-width: 0; }
 .split-product-title h2 { margin: 4px 0 0; font-size: 16px; font-weight: 650; letter-spacing: -.025em; line-height: 1.2; overflow-wrap: anywhere; }
-.split-platform-label { display: inline-block; width: fit-content; margin: 6px 0 0; padding: 3px 6px; border: 1px solid #3b3b3b; border-radius: 4px; background: #242424; color: #b8bebc; font-size: 9px; font-weight: 500; line-height: 1.2; }
+.split-platform-label { display: inline-block; width: fit-content; margin: 6px 0 0; padding: 3px 6px; border: 1px solid var(--product-highlight, #3b3b3b); border-radius: 4px; background: var(--product-highlight, #242424); color: var(--product-label-color, #b8bebc); font-size: 9px; font-weight: 700; line-height: 1.2; }
 .split-product-body { padding: 11px; }
 .split-product-card--detail > .split-product-body { display: flex; flex: 0 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow: hidden; padding: 10px; }
 .split-product-card--detail .product-details { height: auto; }

@@ -1,5 +1,10 @@
 # Change Log
 
+## 2026-10-08 — consistent variant label colors
+
+- Match variant/platform badges to the product status banner in both product cards and Roadmap details, including white text on embargo red and dark text on new-product teal.
+- Retain the compact badge position, space for Details, duplicate-label suppression and shared export rendering; update the editor's help text to describe the matching colors.
+
 ## 2026-10-08 — clear product editor heading
 
 - Label the editable information section Product information and dates, removing the misleading Viewer details and Read-only pane labels.
