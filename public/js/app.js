@@ -217,6 +217,7 @@ let categorySettingsDraftLanes = [];
 let pendingAscmImport = null;
 
 let portfolio = null;
+let workspaceValidationPending = false;
 let board = null;
 let activeCategoryId = null;
 let selectedId = null;
@@ -3630,6 +3631,44 @@ function selectedProduct() {
   return board.products.find((product) => product.id === selectedId) || null;
 }
 
+function showWorkspaceNotice(message, { id = "workspace-operation", title = "Notice", severity = "error", actions = [] } = {}) {
+  if (!globalThis.PortfolioNotifications) return PortfolioDialogs.alert(message, { title });
+  globalThis.PortfolioNotifications.publish({ id, title, severity, message: String(message), actions, revision: Date.now(), toast: severity === "success" });
+  if (severity === "error") globalThis.PortfolioNotifications.show(id);
+  return Promise.resolve();
+}
+
+function openProductIssue(located, { focus = {} } = {}) {
+  if (packageOperationInProgress) throw new Error("Finish loading the package before opening a product.");
+  const { category, product } = located;
+  if (!portfolio.categories.includes(category) || !category.board.products.includes(product)) {
+    throw new Error("This product has changed. Review duplicates again to get its current location.");
+  }
+  const sameId = portfolio.categories.flatMap((item) => item.board.products).filter((item) => item.id === product.id);
+  if (sameId.length !== 1) {
+    throw new Error(`The package repeats the internal ID for “${product.name}”. Correct the IDs in the source package and re-import it before editing these records. The duplicate list shows each record's category and lane.`);
+  }
+  closeAscmImportDialog({ retainIssues: true });
+  activateCategory(category.id, { render: false });
+  selectedId = product.id;
+  setView("products", { focusSelected: true });
+  openInspector(focus.section === "variantGroups" ? "variantsSection" : "productInformationSection");
+  requestAnimationFrame(() => {
+    let field = inspector.querySelector("#fieldName");
+    if (focus.section === "partSkus") {
+      field = inspector.querySelectorAll(".part-sku-row")[focus.rowIndex]?.querySelector("[data-part-sku-code]");
+    } else if (focus.section === "variantGroups") {
+      const group = inspector.querySelectorAll("[data-variant-group-id]")[focus.groupIndex];
+      field = group?.querySelectorAll("[data-variant-item-id]")[focus.rowIndex]?.querySelector('[data-variant-field="code"]');
+    }
+    if (!field) return;
+    field.scrollIntoView({ block: "center", behavior: "smooth" });
+    field.focus({ preventScroll: true });
+    field.classList.add("product-issue-target");
+    setTimeout(() => field.classList.remove("product-issue-target"), 5000);
+  });
+}
+
 function infoProduct() {
   return board.products.find((product) => product.id === viewerInfoProductId) || selectedProduct();
 }
@@ -5062,8 +5101,8 @@ function getCurrentPackageInfo() {
 
 function validatePackageManifest(manifest) {
   const isRecord = (value) => value && typeof value === "object" && !Array.isArray(value);
-  const productIds = new Set();
-  const validateBoard = (target) => {
+  const productIds = new Map();
+  const validateBoard = (target, categoryName = "Product portfolio") => {
     if (!isRecord(target) || !Array.isArray(target.products) || !Array.isArray(target.lanes)) {
       throw new Error("The package contains an invalid product board.");
     }
@@ -5075,10 +5114,15 @@ function validatePackageManifest(manifest) {
       laneIds.add(lane.id);
     }
     for (const product of target.products) {
-      if (!isRecord(product) || typeof product.id !== "string" || !product.id || productIds.has(product.id) || typeof product.name !== "string") {
-        throw new Error("The package contains an invalid or repeated product.");
+      if (!isRecord(product) || typeof product.id !== "string" || !product.id || typeof product.name !== "string") {
+        throw new Error("The package contains an invalid product record.");
       }
-      productIds.add(product.id);
+      const laneName = target.lanes.find((lane) => lane.id === product.laneId)?.label || product.laneId || "Unassigned lane";
+      const location = `“${product.name || "Unnamed product"}” in ${categoryName} / ${laneName}`;
+      if (productIds.has(product.id)) {
+        throw new Error(`The package repeats product ID “${product.id}”: ${productIds.get(product.id)} and ${location}. Assign distinct IDs in the source package, then import it again.`);
+      }
+      productIds.set(product.id, location);
       if (product.variantGroups !== undefined && !Array.isArray(product.variantGroups)) throw new Error("The package contains invalid product variants.");
       for (const group of product.variantGroups || []) {
         if (!isRecord(group) || !Array.isArray(group.items) || group.items.some((item) => !isRecord(item))) {
@@ -5097,7 +5141,7 @@ function validatePackageManifest(manifest) {
         throw new Error("The package contains an unsupported or repeated category.");
       }
       categoryIds.add(category.id);
-      validateBoard(category.board);
+      validateBoard(category.board, category.name || category.id);
     }
   } else if (manifest.version === 1 && Array.isArray(manifest.products) && Array.isArray(manifest.lanes)) {
     validateBoard(manifest);
@@ -5161,6 +5205,8 @@ async function commitPackageDraft(draft, expectedCurrent) {
     try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
     throw error;
   }
+  globalThis.PortfolioProductIssues?.clearAscmIssues();
+  globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
   // A successful replacement no longer retains a previous workspace. Also
   // collect valid legacy snapshot images, protecting every current image ID.
   let obsoleteRecovery = null;
@@ -6135,6 +6181,8 @@ function importJson(file) {
       const parsed = parsePortfolioImportText(reader.result);
       if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading new data.");
       portfolio = normalizeImportedPortfolio(parsed);
+      globalThis.PortfolioProductIssues?.clearAscmIssues();
+      globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
       if (globalThis.PortfolioMasterModel) portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products;
       globalThis.PortfolioMasterUI?.disconnect();
       globalThis.PortfolioMasterUI?.markImported(portfolio.masterLocalBaseline || []);
@@ -6269,7 +6317,8 @@ function renderAscmImportPreview(plan) {
   $("#ascmImportSource").innerHTML = `<strong>${escapeHtml(metadata.fileName || "ASCM report.xlsx")}</strong> · ${escapeHtml(metadata.sheetName || "ASCM Report")} · header row ${escapeHtml(metadata.headerRow || "?")}${exported}`;
 
   const previewLimit = 250;
-  $("#ascmImportPreview").innerHTML = plan.items.slice(0, previewLimit).map((item) => {
+  $("#ascmImportPreview").innerHTML = plan.items.slice(0, previewLimit).map((item, index) => {
+    const canReviewMatch = item.action === "ambiguous" && Boolean(item.matchedProductId || item.match?.product?.id || item.match?.candidates?.length);
     const descriptions = [...new Set((item.group.records || []).map((record) => String(record.description || "").trim()).filter(Boolean))];
     const descriptionSummary = descriptions.length > 1 ? `${descriptions[0]} (+${descriptions.length - 1})` : descriptions[0] || item.group.displayName;
     const productName = item.matchedProductName
@@ -6278,7 +6327,7 @@ function renderAscmImportPreview(plan) {
     const basePns = ascmGroupBasePartNumbers(item.group);
     const basePnSummary = basePns.length > 1 ? `${basePns[0]} +${basePns.length - 1}` : basePns[0] || "—";
     return `<tr>
-      <td><span class="ascm-import-action is-${escapeHtml(item.action)}">${escapeHtml(ascmActionLabel(item))}</span></td>
+      <td><span class="ascm-import-action is-${escapeHtml(item.action)}">${escapeHtml(ascmActionLabel(item))}</span>${canReviewMatch ? `<button type="button" class="small-button" data-review-ascm-match="${index}">Review matches</button>` : ""}</td>
       <td>${escapeHtml(portfolioCategoryName(item.group.categoryId))}</td>
       <td>${productName}</td>
       <td class="ascm-import-pns" title="${escapeHtml(basePns.join(", "))}">${escapeHtml(basePnSummary)}</td>
@@ -6286,6 +6335,10 @@ function renderAscmImportPreview(plan) {
       <td>${escapeHtml(item.group.emDate || "TBD")}</td>
     </tr>`;
   }).join("");
+  $("#ascmImportPreview").querySelectorAll("[data-review-ascm-match]").forEach((button) => {
+    button.addEventListener("click", () => globalThis.PortfolioProductIssues?.reviewDuplicateIssues({ ascmPlan: plan, ascmIndex: Number(button.dataset.reviewAscmMatch) }));
+  });
+  globalThis.PortfolioProductIssues?.setAscmPlan(plan);
 
   const notes = [];
   const localized = Number(metadata.localizedRowsFiltered || 0);
@@ -6303,8 +6356,10 @@ function renderAscmImportPreview(plan) {
   $("#ascmImportNote").textContent = notes.join(" ");
 }
 
-function closeAscmImportDialog() {
+function closeAscmImportDialog({ retainIssues = false } = {}) {
+  const hadPendingPreview = Boolean(pendingAscmImport);
   pendingAscmImport = null;
+  if (!retainIssues && hadPendingPreview) globalThis.PortfolioProductIssues?.clearAscmIssues();
   ascmImportDialog?.classList.add("hidden");
   if (confirmAscmImportButton) {
     confirmAscmImportButton.disabled = false;
@@ -6531,12 +6586,14 @@ ascmImportForm.addEventListener("submit", (event) => {
   confirmAscmImportButton.disabled = true;
   confirmAscmImportButton.textContent = "Applying…";
   try {
+    const dataset = pendingAscmImport.dataset;
     const result = applyAscmImportPlan(pendingAscmImport, {
       updateMatched: $("#ascmApplyUpdates").checked,
       addNew: $("#ascmAddProducts").checked,
     });
     closeAscmImportDialog();
-    void PortfolioDialogs.alert(`${result.added} product(s) added, ${result.updated} updated, ${result.unchanged} already current, and ${result.skipped} skipped.`, { title: "ASCM update complete", buttonLabel: "Done" });
+    globalThis.PortfolioProductIssues?.setAscmPlan(buildAscmImportPlan(dataset));
+    void showWorkspaceNotice(`${result.added} product(s) added, ${result.updated} updated, ${result.unchanged} already current, and ${result.skipped} skipped.`, { id: "ascm-result", title: "ASCM update complete", severity: "success" });
   } catch (error) {
     console.error("ASCM update failed:", error);
     confirmAscmImportButton.disabled = false;
@@ -6745,6 +6802,7 @@ document.addEventListener("pointerdown", (event) => {
 });
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (document.querySelector("dialog[open]")) return;
   closePopupMenus();
   closeVariantPopover({ force: true });
   closeAscmImportDialog();
@@ -6813,9 +6871,31 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
 });
 
 portfolio = loadPortfolio();
-if (globalThis.PortfolioMasterModel && !portfolio.masterLocalBaseline) portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products;
+if (globalThis.PortfolioMasterModel && !portfolio.masterLocalBaseline) {
+  try { portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products; }
+  catch (error) {
+    workspaceValidationPending = true;
+    void showWorkspaceNotice(error.message || "Some product records need review before saving to master.", { id: "workspace-product-validation", title: "Product records need review", severity: "warning", actions: [{ label: "Review duplicates", onClick: () => globalThis.PortfolioProductIssues?.reviewDuplicateIssues() }] });
+  }
+}
 activateCategory(portfolio.activeCategoryId, { render: false, fitVertical: true });
 syncControls();
 renderInspector();
 setView("products");
 flushPendingLegacyImages();
+globalThis.PortfolioProductIssues?.mount({
+  adapter: {
+    getPortfolio: () => portfolio,
+    openProduct: openProductIssue,
+    rebuildAscmPlan: (plan) => buildAscmImportPlan(plan.dataset),
+    onIssuesChanged: () => {
+      if (!workspaceValidationPending) return;
+      try {
+        globalThis.PortfolioMasterModel.snapshot(portfolio);
+        workspaceValidationPending = false;
+        globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
+      } catch (_) {}
+    },
+  },
+  notifications: globalThis.PortfolioNotifications,
+});

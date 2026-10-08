@@ -26,14 +26,12 @@
     // Browser users never receive the private backend's repository credential.
     const session = root.PortfolioMasterClient.createSession({ endpoint, source: { ...source, mode: "service", team: teamMode }, adapter, fetchImpl });
     const configured = session.getState().configured;
-    const status = element("span", "master-status");
-    status.id = "masterSyncStatus"; status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
-    button.insertAdjacentElement("afterend", status);
+    const notices = root.PortfolioNotifications;
     const dialog = element("dialog", "master-dialog");
     dialog.id = "masterDialog";
     dialog.setAttribute("aria-labelledby", "masterDialogTitle"); dialog.setAttribute("aria-describedby", "masterDialogDescription");
     document.body.append(dialog);
-    let running = false, modalResolve = null, modalCancel = null, savedMessage = "", lastError = "";
+    let running = false, modalResolve = null, modalCancel = null, lastError = "";
 
     function updateStatus() {
       const state = session.getState(), count = state.pending.length;
@@ -41,9 +39,12 @@
       button.disabled = running || Boolean(adapter.hasPendingPackageOperation?.());
       button.title = count ? `Review and save changes for ${count} ${count === 1 ? "product" : "products"} to the shared master` : "Load the shared portfolio with your package key";
       button.classList.toggle("master-has-changes", count > 0);
-      status.className = `master-status${lastError ? " master-status-error" : count ? " master-status-pending" : savedMessage ? " master-status-saved" : ""}`;
-      status.textContent = running ? "Updating the shared master…" : lastError || (count ? `${count} ${count === 1 ? "product has" : "products have"} changes on this device${configured ? "" : " · team saving is not connected yet"}` : savedMessage || (state.connected ? "Master is up to date" : ""));
-      status.title = status.textContent;
+      if (count) notices?.publish({ id: "master-pending", severity: "info", title: running ? "Saving changes to master" : "Changes ready to share", message: `${count} ${count === 1 ? "product has" : "products have"} changes saved on this device.${running ? " Your teams will receive accepted changes when they next check the master." : " Review your changes before sharing them with your teams."}`, toast: false, dismissible: false, actions: running ? [] : [{ label: "Review changes", onClick: saveFlow }] });
+      else notices?.resolve("master-pending");
+      if (count && !configured) notices?.publish({ id: "master-saving-unavailable", severity: "warning", title: "Team saving is not connected", message: "Your portfolio owner needs to finish connecting the private saving service. You can keep editing; your changes remain saved on this device.", toast: false });
+      else notices?.resolve("master-saving-unavailable");
+      if (lastError) notices?.publish({ id: "master-sync-error", severity: "error", title: "Master connection needs attention", message: lastError, toast: false, actions: [...(/duplicate|repeated.*(?:product|sku)/i.test(lastError) ? [{ label: "Review duplicates", onClick: () => root.PortfolioProductIssues?.reviewDuplicateIssues?.() }] : []), { label: count ? "Review and try again" : "Pull latest data", onClick: () => count ? saveFlow() : root.PortfolioPackageUI?.open("pull") }] });
+      else notices?.resolve("master-sync-error");
       root.dispatchEvent(new CustomEvent("portfolio:master-status", { detail: { connected: state.connected, hasKey: state.hasKey } }));
     }
 
@@ -144,7 +145,7 @@
 
     async function saveFlow() {
       if (running) return;
-      lastError = ""; savedMessage = "";
+      lastError = "";
       const reviewed = await review();
       if (!reviewed) { updateStatus(); return; }
       running = true; updateStatus();
@@ -176,11 +177,11 @@
             session.setEditorToken(token);
           }
         }
-        if (result.saved) savedMessage = result.keptMaster ? "Master choices kept · changes synced" : "Saved to master · changes synced";
+        if (result.saved) notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Master choices kept" : "Saved to master", message: "Your changes are synced. Other teams will receive the accepted values when they next check the master.", revision: String(Date.now()), toast: true });
       } catch (error) {
         if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
         close(null); lastError = error.message || "Could not save to master. Your local changes are safe.";
-        await show("Your changes are still on this device", lastError, ({ footer, form, finish }) => { const done = addSubmit(footer, "Done"); done.setAttribute("autofocus", ""); form.addEventListener("submit", (event) => { event.preventDefault(); finish(true); }); });
+        updateStatus(); notices?.show("master-sync-error");
       } finally { running = false; updateStatus(); }
     }
 
@@ -202,9 +203,9 @@
     const timer = root.setInterval(refreshQuietly, 45000);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "hidden") refreshQuietly(); });
     active = Object.freeze({ session, updateStatus, refresh: () => refreshQuietly({ force: true }), save: saveFlow,
-      markImported(products, key) { session.markImported(products, key); savedMessage = ""; lastError = ""; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
-      disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); savedMessage = ""; lastError = ""; updateStatus(); },
-      destroy() { root.clearInterval(timer); session.disconnect(); status.remove(); dialog.remove(); },
+      markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); lastError = ""; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
+      disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); lastError = ""; updateStatus(); },
+      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result"]) notices?.resolve(id); dialog.remove(); },
     });
     updateStatus();
     if (source?.demo === true && source.demoKey && ["localhost", "127.0.0.1", "[::1]"].includes(String(root.location?.hostname || "").toLowerCase())) {
