@@ -178,7 +178,10 @@
             session.setEditorToken(token);
           }
         }
-        if (result.saved) notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Master choices kept" : "Saved to master", message: "Your changes are synced. Other teams will receive the accepted values when they next check the master.", revision: String(Date.now()), toast: true });
+        if (result.saved) {
+          lastError = "";
+          notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Master choices kept" : "Saved to master", message: "Your changes are synced. Other teams will receive the accepted values when they next check the master.", revision: String(Date.now()), toast: true });
+        }
       } catch (error) {
         if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
         close(null); lastError = error.message || "Could not save to master. Your local changes are safe.";
