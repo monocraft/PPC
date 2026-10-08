@@ -43,13 +43,15 @@
     return users.sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || a.label.localeCompare(b.label));
   }
 
-  function createController({ sessionProvider, getSelectedProductId = () => "", onChange = () => {}, sessionId = root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, displayName = "" } = {}) {
+  function createController({ sessionProvider, getSelectedProductId = () => "", onChange = () => {}, sessionId = sessionProvider?.()?.getState?.()?.editorProfile?.sessionId || root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, displayName = "" } = {}) {
     let users = [], mode = "service", configured = false, connected = false, unavailable = false, hasKey = false, hasGitHubToken = false, inFlight = null;
     let generation = 0, observedSession = null, observedAccessVersion, observedHasKey = false;
     let name = String(displayName).trim().slice(0, 60);
     function state() { return { users: users.map((user) => ({ ...user })), mode, onlineCount: mode === "github" ? 0 : users.length, configured, connected, unavailable, hasKey, hasGitHubToken, sessionId, displayName: name }; }
     function observeAccess() {
-      const session = sessionProvider?.(), sessionState = session?.getState();
+      const session = sessionProvider?.();
+      session?.setEditorProfile?.({ sessionId, displayName: name });
+      const sessionState = session?.getState();
       mode = sessionState?.mode === "github" ? "github" : "service";
       hasGitHubToken = Boolean(sessionState?.hasGitHubToken);
       configured = Boolean(session && sessionState?.configured !== false);
@@ -91,7 +93,7 @@
       return state();
     }
     return Object.freeze({ heartbeat, getState: state,
-      setDisplayName(value) { name = String(value || "").trim().slice(0, 60); return heartbeat(); },
+      setDisplayName(value) { const next = String(value || "").trim().slice(0, 60); if (next !== name) generation += 1; name = next; return heartbeat(); },
       leave() { return heartbeat({ leave: true }); },
     });
   }
@@ -112,9 +114,8 @@
     let storedName = ""; try { storedName = root.localStorage.getItem(displayNameKey) || ""; } catch {}
     nameInput.value = storedName.slice(0, 60); nameLabel.append(nameInput);
     const nameSave = make("button", "quiet-button", "Apply"); nameSave.type = "submit"; nameForm.append(nameLabel, nameSave);
-    const note = make("p", "master-presence-note", "Each circle is a connected browser session. A name is optional.");
-    const githubConnect = make("button", "quiet-button", "Connect GitHub"); githubConnect.type = "button"; githubConnect.hidden = true; githubConnect.addEventListener("click", () => root.PortfolioMasterUI?.connectGitHub());
-    popover.append(heading, connection, rows, nameForm, githubConnect, note); shell.append(trigger, popover); brand.append(shell);
+    const note = make("p", "master-presence-note", "Each circle is a connected browser session. Names are optional and shown as entered.");
+    popover.append(heading, connection, rows, nameForm, note); shell.append(trigger, popover); brand.append(shell);
     let open = false, debounceTimer = null;
     function setOpen(value) { open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value)); if (value) controller.heartbeat(); else trigger.focus({ preventScroll: true }); }
     function avatar(user, extraClass = user.editing ? "is-editing" : "") { const circle = make("span", `master-presence-avatar master-presence-tone-${avatarTone(user.sessionId)}${extraClass ? ` ${extraClass}` : ""}`, avatarText(user.displayName, user.sessionId)); circle.setAttribute("aria-hidden", "true"); circle.title = user.label; return circle; }
@@ -122,10 +123,7 @@
       trigger.replaceChildren(); rows.replaceChildren();
       title.textContent = state.mode === "github" ? "Recent editors" : "Connected now";
       close.setAttribute("aria-label", state.mode === "github" ? "Close recent editors" : "Close connected sessions");
-      note.textContent = state.mode === "github" ? "People who last saved accepted changes to this GitHub master. Live viewing status is unavailable." : "Each circle is a connected browser session. A name is optional.";
-      nameForm.hidden = state.mode === "github"; nameForm.style.display = state.mode === "github" ? "none" : "";
-      githubConnect.hidden = state.mode !== "github"; githubConnect.style.display = state.mode === "github" ? "" : "none"; githubConnect.disabled = !state.hasKey;
-      githubConnect.textContent = state.hasGitHubToken ? "Change GitHub account" : "Connect GitHub";
+      note.textContent = state.mode === "github" ? "People who last saved accepted changes. Live viewing status is unavailable." : "Each circle is a connected browser session. Names are optional and shown as entered.";
       if (state.users.length) {
         for (const user of state.users.slice(0, 3)) trigger.append(avatar(user));
         if (state.users.length > 3) { const overflow = make("span", "master-presence-avatar master-presence-overflow", `+${state.users.length - 3}`); overflow.setAttribute("aria-hidden", "true"); trigger.append(overflow); }
@@ -142,7 +140,7 @@
         const activity = state.mode === "github" ? `Updated master${date && Number.isFinite(date.getTime()) ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)}` : ""}` : user.editing ? `Editing${user.productName ? ` ${user.productName}` : " a product"}` : `Viewing${user.productName ? ` ${user.productName}` : " the portfolio"}`;
         text.append(label, make("span", "master-presence-activity", activity)); row.append(avatar(user), text); rows.append(row);
       }
-      nameSave.disabled = state.mode === "github" || !state.configured || !state.hasKey;
+      nameSave.disabled = false;
     }
     const controller = createController({ sessionProvider, getSelectedProductId: () => adapter?.getSelectedProductId?.() || "", displayName: storedName, onChange: render });
     function soon() { root.clearTimeout(debounceTimer); debounceTimer = root.setTimeout(() => controller.heartbeat(), 500); }

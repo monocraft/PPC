@@ -19,7 +19,7 @@ const manifestOf = (product) => ({ version: 4, categories: [{ id: "headsets", na
 const initial = () => ({ ...model.snapshot(manifestOf(fixture)), revision: "initial", canWrite: true });
 const key = "private-master-key";
 
-function harness({ local = fixture, master = initial() } = {}) {
+function harness({ local = fixture, master = initial(), source } = {}) {
   let products = [clone(local)], baseline = clone(initial().products), remote = clone(master), sequence = 0;
   const calls = [];
   const adapter = {
@@ -57,7 +57,7 @@ function harness({ local = fixture, master = initial() } = {}) {
     remote.revision = `master-${++sequence}`;
     return Response.json({ snapshot: remote, savedFields: plans.length });
   };
-  const session = client.createSession({ endpoint, adapter, fetchImpl });
+  const session = client.createSession({ endpoint, source, adapter, fetchImpl });
   return { session, adapter, calls,
     get products() { return products; }, get baseline() { return baseline; }, get remote() { return remote; },
     edit(patch) { products = products.map((product) => model.applyProductValues(product, { ...model.productValues(product), ...patch })); },
@@ -236,6 +236,41 @@ for (const finalMasterDate of ["2027-01-05", fixture.generalAvailabilityDate]) {
   h.session.disconnect(); assert.equal(h.session.getState().hasKey, false);
 }
 
+{
+  const h = harness({ source: { mode: "service", team: true } });
+  h.session.setEditorProfile({ sessionId: "team-session-1234", displayName: "  Alex Smith  " });
+  h.session.setEditorToken("user-token-must-not-be-sent");
+  await h.session.connect({ key, editorToken: "another-user-token-must-not-be-sent" });
+  h.edit({ ffsDate: "2026-10-01" });
+  h.remoteEdit({ ffsDate: "2026-10-02" });
+  h.onSave(() => h.session.setEditorProfile({ displayName: "Name changed while saving" }));
+  await h.session.save({ resolveConflicts: async (conflicts) => Object.fromEntries(conflicts.map((conflict) => [conflict.key, "mine"])) });
+  const saves = h.calls.filter((call) => call.url.endsWith("/save")).map((call) => JSON.parse(call.options.body));
+  assert.equal(saves.length, 2, "central saves retain the ordinary conflict review");
+  for (const body of saves) {
+    assert.equal(body.sessionId, "team-session-1234"); assert.equal(body.editorName, "Alex Smith", "one save keeps its captured name during conflict retries");
+    assert.equal(Object.hasOwn(body, "editorToken"), false);
+  }
+  assert.equal(h.calls.some((call) => call.options.body.includes("user-token-must-not-be-sent")), false, "team mode sends only the package key and optional profile, never user repository credentials");
+  assert.equal(h.session.getState().editorProfile.displayName, "Name changed while saving");
+  h.session.setEditorProfile({ displayName: "" }); h.edit({ ffsDate: "2026-10-04" }); await h.session.save();
+  const anonymousSave = JSON.parse(h.calls.at(-1).options.body);
+  assert.equal(Object.hasOwn(anonymousSave, "editorName"), false, "a display name is never required to save");
+  assert.equal(anonymousSave.sessionId, "team-session-1234");
+  assert.throws(() => h.session.setEditorProfile({ sessionId: "invalid id" }), /session is invalid/);
+  h.session.setEditorProfile({ displayName: "x".repeat(100) }); assert.equal(h.session.getState().editorProfile.displayName.length, 60);
+}
+{
+  let calls = 0;
+  const local = clone(fixture), shared = initial();
+  const session = client.createSession({ source: { mode: "service", team: true }, endpoint: "", adapter: { getProducts: () => [local], getBaselineProducts: () => shared.products, applyPatches() {} }, fetchImpl: async () => { calls += 1; throw new Error("No backend is configured"); } });
+  session.markImported(shared.products, key); local.ffsDate = "2026-10-01";
+  await assert.rejects(session.save(), { code: "TEAM_SETUP_REQUIRED" });
+  assert.equal(session.track().length, 1, "missing owner setup keeps local drafts"); assert.equal(calls, 0, "missing backend never falls back to direct GitHub saving");
+}
+for (const upstreamCode of ["EDITOR_KEY_REQUIRED", "GITHUB_TOKEN_REQUIRED", "GITHUB_PERMISSION_DENIED", "WRITES_DISABLED"]) {
+  await assert.rejects(client.request({ endpoint, operation: "save", key, team: true, fetchImpl: async () => Response.json({ code: upstreamCode, error: "private upstream credential" }, { status: 403 }) }), (error) => error.code === "TEAM_SETUP_REQUIRED" && /portfolio owner/.test(error.message) && !error.message.includes("credential"));
+}
 for (const [status, body, code] of [[401, { error: "private key details" }, "INVALID_KEY"], [403, { code: "EDITOR_KEY_REQUIRED" }, "EDITOR_KEY_REQUIRED"], [403, { code: "WRITES_DISABLED" }, "WRITES_DISABLED"], [500, { error: "private upstream" }, "UNAVAILABLE"]]) {
   await assert.rejects(client.request({ endpoint, operation: "save", key, fetchImpl: async () => Response.json(body, { status }) }), (error) => error.code === code && !error.message.includes("private"));
 }

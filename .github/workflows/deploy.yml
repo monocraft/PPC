@@ -58,6 +58,10 @@ jobs:
           test ! -e _site/artifacts
           test ! -e _site/scripts
           test ! -e _site/server
+          test ! -e _site/Dockerfile.master
+          test ! -e _site/.dockerignore
+          test ! -e _site/.env.example
+          test ! -e _site/.env
           test -f _site/data/master_ppc.pkg
 
       - name: Configure Pages
