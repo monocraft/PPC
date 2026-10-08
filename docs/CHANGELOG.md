@@ -1,5 +1,10 @@
 # Change Log
 
+## 2026-10-08 — aligned headset specification icons
+
+- Align compact specification icons with the first line of their value, including headset connection, microphone, driver, audio, cushion, frame and control rows.
+- Center asymmetrical icon shapes consistently while preserving text wrapping, row spacing and card sizes. Use the same alignment in exported product cards.
+
 ## 2026-10-08 — compact key date rows
 
 - Halve inline product date tiles from about 59 px to 28 px by placing full labels beside right-aligned values, retaining two columns and the existing date accents.

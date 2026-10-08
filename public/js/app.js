@@ -2154,8 +2154,10 @@ function specIconKind(label) {
 
 function drawSpecIcon(context, label, centerX, centerY) {
   const kind = specIconKind(label);
+  // Center the visible shape, including the microphone stand and earcups.
+  const verticalOffset = { microphone: 1.5, audio: 1, cushion: .5, frame: -.5 }[kind] || 0;
   context.save();
-  context.translate(centerX, centerY);
+  context.translate(centerX, centerY - verticalOffset);
   context.strokeStyle = UI_PALETTE.greyOlive;
   context.fillStyle = UI_PALETTE.greyOlive;
   context.lineWidth = 1.25;
@@ -2448,7 +2450,8 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     const visibleSpecs = product.specs.slice(0, visibleSpecCount);
     visibleSpecs.forEach((item, index) => {
       const rowY = rowsTop + index * rowHeight;
-      drawSpecIcon(context, item.label, x + 22, rowY + 11);
+      // Align with the first line's visual center, retaining room for a second line.
+      drawSpecIcon(context, item.label, x + 22, rowY + 6);
       context.fillStyle = UI_PALETTE.silver;
       context.font = "11.5px Arial";
       context.textAlign = "left";
