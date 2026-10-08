@@ -11,8 +11,12 @@ const source = await readFile(new URL("../../public/js/package-ui.js", import.me
 const loadedInfo = { version: 1, updatedAt: "2026-10-07T09:30:00.000Z", comments: "Previous package notes" };
 const incomingInfo = { version: 1, updatedAt: "2026-10-08T01:15:00.000Z", comments: "Prices updated.\n<svg onload=alert(1)> stays plain text." };
 const formatDate = (info) => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(info.updatedAt));
+const assertSimpleCopy = (ui) => {
+  const generatedCopy = ["packageKeyHelp", "sharedPackageStatus", "packagePublisherHelp", "packageStatus", "packageTitle", "packageDescription"].map((id) => ui.elements.get(id).textContent).join("\n");
+  assert.doesNotMatch(generatedCopy, /GitHub|Supabase|master(?:\s+(?:file|package|copy))?|public\/data|master_ppc\.pkg|https?:\/\//i, "normal package messages must not reveal providers or internal file locations");
+};
 
-function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg", endpoint: "" }) {
+function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg", endpoint: "" }, masterSource = null) {
   const listeners = new Map();
   const elements = new Map();
   const calls = { downloads: [], imports: [], exports: [], generated: 0 };
@@ -59,6 +63,7 @@ function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg"
     window: { addEventListener: (name, handler) => listeners.set(`window:${name}`, handler) },
     Blob, DOMException, AbortController, setTimeout, clearTimeout,
     PPC_PACKAGE_SOURCE: config,
+    PPC_MASTER_SOURCE: masterSource,
     PortfolioPackage: { ...codec, generateKey: () => { calls.generated += 1; return codec.generateKey(); } },
     PortfolioPackageClient: {
       normalizePackageUrl(value = "./data/master_ppc.pkg") {
@@ -94,8 +99,9 @@ function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg"
 const staticUi = createUi();
 staticUi.ui.open("pull");
 assert.equal(staticUi.elements.get("confirmPackage").disabled, false);
-assert.match(staticUi.elements.get("packageKeyHelp").textContent, /never sent to GitHub/);
-assert.match(staticUi.elements.get("sharedPackageStatus").textContent, /latest master/);
+assert.match(staticUi.elements.get("packageKeyHelp").textContent, /access key supplied/);
+assert.match(staticUi.elements.get("sharedPackageStatus").textContent, /Open your portfolio/);
+assertSimpleCopy(staticUi);
 assert.equal(staticUi.elements.get("sharedPackageUpdated").textContent, formatDate(loadedInfo));
 assert.equal(staticUi.elements.get("sharedPackageUpdated").title, new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" }).format(new Date(loadedInfo.updatedAt)));
 assert.equal(staticUi.elements.get("sharedPackageComments").textContent, loadedInfo.comments);
@@ -134,6 +140,7 @@ await staticUi.submit();
 assert.equal(staticUi.calls.downloads.length, 1, "wrong-key retry should reuse encrypted bytes for this dialog only");
 assert.equal(staticUi.calls.imports.at(-1).requireEncrypted, true);
 assert.match(staticUi.elements.get("packageStatus").textContent, /198 products across 11 categories/);
+assertSimpleCopy(staticUi);
 assert.equal(staticUi.elements.get("packageKey").value, "");
 assert.equal(staticUi.elements.get("confirmPackage").textContent, "Done");
 assert.equal(staticUi.elements.get("sharedPackageUpdated").textContent, formatDate(incomingInfo));
@@ -181,15 +188,28 @@ assert.match(invalidSource.elements.get("packageError").textContent, /this site/
 
 const relayUi = createUi({ mode: "relay", endpoint: "https://package.example/api/package/latest", packageUrl: "" });
 relayUi.ui.open("pull");
+assertSimpleCopy(relayUi);
 relayUi.elements.get("packageKey").value = key;
 await relayUi.submit();
 assert.equal(relayUi.calls.downloads[0].key, key, "the optional existing relay must retain its key authentication");
 assert.equal(Object.hasOwn(relayUi.calls.downloads[0], "packageUrl"), false);
 
+const teamUi = createUi(undefined, { mode: "service", team: true, endpoint: "https://private.example/api/master" });
+teamUi.ui.open("pull");
+assert.match(teamUi.elements.get("packageKeyHelp").textContent, /browser tab reconnects automatically/);
+assertSimpleCopy(teamUi);
+teamUi.ui.close();
+teamUi.ui.open("import", { name: "Imported portfolio.pkg", encrypted: true, file: new Blob([encrypted]) });
+assertSimpleCopy(teamUi);
+teamUi.elements.get("packageKey").value = key; await teamUi.submit();
+assert.equal(teamUi.calls.imports[0].key, key, "encrypted local imports retain their normal key protection");
+assert.equal(teamUi.calls.downloads.length, 0, "a local import does not transmit the key or request a download");
+assertSimpleCopy(teamUi);
+
 const publisherUi = createUi();
 publisherUi.ui.open("export");
-assert.match(publisherUi.elements.get("packagePublisherHelp").textContent, /Reuse the current package key/);
-assert.match(publisherUi.elements.get("packagePublisherHelp").textContent, /public\/data\/master_ppc\.pkg/);
+assert.match(publisherUi.elements.get("packagePublisherHelp").textContent, /Keep your access key in a safe place/);
+assertSimpleCopy(publisherUi);
 publisherUi.elements.get("packageKey").value = key;
 publisherUi.elements.get("packageUpdateComments").value = "Updated launch dates.\nNew headset specifications.";
 await publisherUi.submit();
@@ -197,7 +217,8 @@ assert.equal(publisherUi.calls.exports[0].key, key, "building an update must reu
 assert.equal(publisherUi.calls.exports[0].comments, "Updated launch dates.\nNew headset specifications.");
 assert.equal(publisherUi.calls.generated, 0, "updates must not silently rotate the key");
 assert.equal(publisherUi.elements.get("packageKey").value, key, "the publisher can copy the existing key before closing");
-assert.match(publisherUi.elements.get("packageStatus").textContent, /GitHub on the main branch/);
+assert.match(publisherUi.elements.get("packageStatus").textContent, /portfolio export is ready/);
+assertSimpleCopy(publisherUi);
 assert.equal(publisherUi.elements.get("packageResultComments").textContent, publisherUi.calls.exports[0].comments);
 assert.equal(publisherUi.elements.get("packageResultUpdated").dateTime, "2026-10-09T08:00:00.000Z");
 assert.equal(publisherUi.elements.get("sharedPackageComments").textContent, loadedInfo.comments, "a new export must not replace the metadata of the loaded workspace");
@@ -261,4 +282,4 @@ assert.match(html, /<textarea[^>]*id="packageUpdateComments"[^>]*maxlength="2000
 assert.match(html, /<label for="packageUpdateComments">/);
 assert.match(html, /update date is set automatically/);
 
-console.log("Package UI checks passed: local-only static keys, wrong-key retry, fresh/cancelled pulls, publisher key reuse, automatic package dates and updater comments, safe footer disclosures with keyboard support, legacy metadata, failed-build preservation, and textarea focus and busy controls.");
+console.log("Package UI checks passed: local-only static keys, wrong-key retry, fresh/cancelled pulls, protected export key reuse, simple private-friendly messages, automatic package dates and updater comments, safe footer disclosures, legacy metadata, failed-build preservation, and textarea focus and busy controls.");

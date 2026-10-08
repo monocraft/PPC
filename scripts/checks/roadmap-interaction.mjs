@@ -76,3 +76,14 @@ assert.throws(() => interaction.draftDates({ ...drag, originalStart: NaN }, 10, 
 assert.throws(() => interaction.draftDates({ ...drag, mode: "unknown" }, 10, 100, 1), RangeError);
 
 console.log("Roadmap interaction checks passed: saved ordering, row and family drop targets, preserved filtered products and portfolio positions, cross-family moves, and snapped endpoint resizing.");
+
+const measureLabel = (text) => [...text].length * 6;
+for (const name of ["Cloud Alpha", "Cloud Jet Wireless Headset", "VeryLongUnbrokenProductIdentifierForFit", "  Long   product  name  "]) {
+  const lines = interaction.labelLines(name, 117, measureLabel);
+  assert.ok(lines.length > 0 && lines.length <= 2);
+  assert.ok(lines.every((line) => measureLabel(line) <= 117), "names never overlap the timeline");
+}
+assert.deepEqual(interaction.labelLines("Cloud Jet Wireless",117,measureLabel), ["Cloud Jet Wireless"]);
+assert.deepEqual(interaction.labelLines("Cloud Jet Wireless Headset",117,measureLabel), ["Cloud Jet Wireless", "Headset"]);
+assert.deepEqual(interaction.labelLines("",117,measureLabel), []);
+assert.deepEqual(interaction.labelLines("Cloud",0,measureLabel), []);

@@ -263,6 +263,43 @@ assert.equal(archivedRestore.status, 200);
 const restoredOriginal = database.inspect().manifest.categories[0].board.products.find((entry) => entry.id === 'product-one');
 assert.equal(restoredOriginal.imageAssetId, 'image-1'); assert.deepEqual(restoredOriginal.customOptions, privateArchive.customOptions, 'explicit restore preserves image references and custom fields');
 
+// A combined product and its removed source share one SQL compare-and-swap.
+// Concurrent source edits must win safely or force the merge to be reviewed.
+database = inMemoryRpc();
+const mergeSeed = clone(seed);
+Object.assign(mergeSeed.categories[0].board.products[1], { specs: [{ id: 'source-spec', label: 'Battery', value: '80 hours', sourceNote: 'Preserve donor row metadata' }],
+  customFactory: { inherited: true }, ascm: { records: [{ basePartNumber: 'HP-TWO', privateProcurement: 'Original full source' }] } });
+await call('bootstrap', { manifest: mergeSeed, sourceSha }, { publisher: true });
+function mergeOperation() {
+  const manifest = database.inspect().manifest, [keeper, source] = manifest.categories[0].board.products;
+  const baseline = model.snapshot(manifest), planned = globalThis.PortfolioProductMerge.plan(keeper, source);
+  const choices = Object.fromEntries(planned.conflicts.map((item) => [item.key, 'keeper']));
+  const base = baseline.products.find((item) => item.productId === keeper.id), sourceBase = baseline.products.find((item) => item.productId === source.id);
+  return { kind: 'merge', productId: keeper.id, sourceProductId: source.id, categoryId: base.categoryId, laneId: base.laneId, sourceCategoryId: sourceBase.categoryId, sourceLaneId: sourceBase.laneId,
+    base, sourceBase, baseProductVersion: base.productVersion, sourceBaseProductVersion: sourceBase.productVersion, choices,
+    mine: model.productValues(globalThis.PortfolioProductMerge.resolve(planned, choices)) };
+}
+const mergeRaceRequest = mergeOperation(), donorRaceBase = values(undefined, 'product-two');
+database.raceNextReads();
+const mergeRace = await Promise.all([
+  save('save-merge-race', [mergeRaceRequest], 'merge-session'),
+  save('save-source-race', [change(donorRaceBase, { codename: 'Concurrent source update' })], 'source-session'),
+]);
+assert.deepEqual(mergeRace.map((result) => result.status).sort(), [200, 409], 'a concurrent full merge/source edit never partially deletes or overwrites a changed source');
+let mergedGateway = mergeRace[0];
+if (mergedGateway.status === 409) {
+  assert(mergedGateway.data.conflicts.some((item) => item.kind === 'merge' && item.requiresMergeReview));
+  mergedGateway = await save('save-merge-reviewed', [mergeOperation()], 'merge-session');
+}
+assert.equal(mergedGateway.status, 200);
+assert.equal(database.inspect().manifest.categories[0].board.products.length, 1);
+const mergedGatewayProduct = database.inspect().manifest.categories[0].board.products[0];
+assert.equal(mergedGatewayProduct.specs.find((row) => row.id === 'source-spec').sourceNote, 'Preserve donor row metadata');
+assert.equal(mergedGatewayProduct.ascm.records[0].privateProcurement, 'Original full source');
+assert(!JSON.stringify(mergedGateway.data).includes('privateProcurement'), 'merge responses expose only safe source descriptors, not archived original metadata');
+assert(!('archivedProduct' in mergedGateway.data.snapshot.masterSync.products['product-two']));
+assert.equal(mergedGateway.data.snapshot.tombstones[0].mergedIntoProductId, 'product-one');
+
 const sql = await readFile(resolve('supabase/migrations/202610080001_private_master.sql'), 'utf8');
 for (const operation of ['read', 'bootstrap', 'commit', 'rate', 'presence', 'ack', 'failure']) {
   assert(sql.includes(`revoke all on function public.ppc_master_${operation}(jsonb) from public, anon, authenticated`));

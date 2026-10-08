@@ -101,9 +101,9 @@
     showFooterPackageInfo(info);
     try {
       const source = pullSource();
-      get("sharedPackageStatus").textContent = source.github ? "Load the current GitHub master. Your package key unlocks it on this device." : source.packageUrl ? "Pull the latest master package. Your key unlocks Products and Roadmap on this device." : "Load the shared master into Products and Roadmap with your package key.";
+      get("sharedPackageStatus").textContent = "Open your portfolio with your access key. Products and Roadmap update together.";
     } catch {
-      get("sharedPackageStatus").textContent = "The shared master location needs to be configured. Local package import and export are available.";
+      get("sharedPackageStatus").textContent = "Team updates need to be connected. You can still import or export a portfolio.";
     }
   }
 
@@ -115,8 +115,8 @@
     get("packageGenerateKey").classList.toggle("hidden", mode !== "export" || completed);
     get("packagePublisherHelp").classList.toggle("hidden", mode !== "export" || !needsKey);
     const teamUnlock = globalThis.PPC_MASTER_SOURCE?.team === true && (mode === "pull" || (mode === "import" && selectedFile?.encrypted));
-    get("packageKeyHelp").textContent = teamUnlock ? "Your key unlocks the portfolio and reconnects this browser tab automatically." : mode === "pull" && !usesRelay() ? "Your key unlocks the downloaded package on this device. It is never sent to GitHub or saved." : "The key is used for this request and is not saved on this device.";
-    get("packagePublisherHelp").textContent = "Reuse the current package key, build master_ppc.pkg, then replace public/data/master_ppc.pkg in GitHub on the main branch. Wait for the site update to finish. Keep the key separate from the package.";
+    get("packageKeyHelp").textContent = teamUnlock ? "Your key opens the portfolio. This browser tab reconnects automatically." : "Use the access key supplied with this portfolio.";
+    get("packagePublisherHelp").textContent = "Keep your access key in a safe place, separate from the exported portfolio.";
     keyInput.type = get("packageShowKey").checked ? "text" : "password";
   }
 
@@ -158,7 +158,7 @@
     keyInput.value = ""; get("packageShowKey").checked = false; get("packageEncrypt").checked = true;
     get("cancelPackage").classList.remove("hidden");
     error.textContent = ""; status.textContent = "";
-    const titles = { pull: "Pull latest data", export: "Build master package", import: "Import project package" };
+    const titles = { pull: "Open portfolio", export: "Export portfolio", import: "Import portfolio" };
     get("packageTitle").textContent = titles[mode];
     get("packageDescription").textContent = mode === "export" ? "One file contains every category, Products, Roadmap, settings, variants and available image files." : "Replace Products, Roadmap, settings and images with one complete package.";
     get("packageExportOptions").classList.toggle("hidden", mode !== "export");
@@ -199,7 +199,7 @@
         if (!bytes) {
           controller = new AbortController();
           const timeout = setTimeout(() => controller?.abort(), 60000);
-          status.textContent = "Fetching the latest master package…";
+          status.textContent = "Loading your portfolio…";
           try {
             bytes = await globalThis.PortfolioPackageClient.downloadLatest({ ...source, ...(source.endpoint ? { key } : {}), signal: controller.signal,
               onProgress: (size, total) => { status.textContent = `Downloading ${Math.round(size / 1048576)}${total ? ` of ${Math.ceil(total / 1048576)}` : ""} MB…`; },
@@ -217,7 +217,7 @@
       completed = true;
       downloadedBytes = null;
       if (mode === "export") keyInput.value = key;
-      status.textContent = mode === "export" ? (key ? "master_ppc.pkg is ready. Replace public/data/master_ppc.pkg in GitHub on the main branch, then wait for the site update to finish. Keep the same key for future updates." : "Private backup package created.") : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
+      status.textContent = mode === "export" ? "Your portfolio export is ready. Keep it and your access key in a safe place." : `${result.productCount} products across ${result.categoryCount} categories loaded. Products and Roadmap are updated together.`;
       get("packageTitle").textContent = mode === "export" ? "Package built" : "Data updated";
       showPackageInfo(mode === "export" ? result : result.packageInfo, "packageResultUpdated", "packageResultComments");
       get("packageResultInfo").classList.remove("hidden");

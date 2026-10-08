@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import '../public/js/package-codec.js';
 import '../public/js/portfolio-model.js';
 import '../public/js/master-model.js';
+import '../public/js/product-merge.js';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -433,7 +434,7 @@ export function createMasterHandler(options = {}) {
       ...model.snapshot(source.manifest),
       revision: source.revision,
       packageInfo: codec.normalizePackageInfo(source.manifest.packageInfo),
-      masterSync: isRecord(source.manifest.masterSync) ? JSON.parse(JSON.stringify(source.manifest.masterSync)) : null,
+      masterSync: model.publicMetadata(source.manifest),
       canWrite: writable,
       requiresEditorToken,
     };

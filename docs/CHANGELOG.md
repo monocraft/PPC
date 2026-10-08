@@ -1,5 +1,14 @@
 # Change Log
 
+## 2026-10-08 — guided product consolidation and safer editing
+
+- Compare two products within one portfolio and combine complementary details, specifications, HP SKUs, variants, images, and source records. Require an explicit choice for every conflicting populated value; keep the surviving product's identity and redirect related roadmap references.
+- Submit a product consolidation as one atomic operation. Check both reviewed records and their full metadata before acceptance, retain both original records privately, and require a fresh review after concurrent changes. Hydrate complete merged details for other connected sessions.
+- Group save review into collapsed product summaries with expandable fields, long-value disclosures, and search for larger batches. Add per-product and whole-draft discard, confirmation, and guarded Undo. Remove the disconnect control from normal settings.
+- Keep routine update messages brief and neutral. Place longer warnings and actions in Messages; remove storage and publishing details from the everyday interface.
+- Default roadmap gestures to Move view, panning horizontally and vertically across products, labels, calendar, and empty space. Enable date changes and row reordering only in Adjust dates; Escape cancels the gesture and restores Move view.
+- Remove ambiguous Start/End month inputs and reciprocal view buttons. Keep lifecycle dates in product Details, soften row grips, and wrap product labels to improve readability.
+
 ## 2026-10-08 — automatic team sessions
 
 - Remove instructional footer text and manual-pull prompts from the connected sessions panel. Keep the session count, viewing/editing context, and optional display name.

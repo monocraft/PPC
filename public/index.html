@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/workspace-notifications.css">
   <link rel="stylesheet" href="css/product-issues.css">
+  <link rel="stylesheet" href="css/product-merge.css">
 </head>
 <body>
   <main class="app-shell">
@@ -48,6 +49,10 @@
           <label class="search-shell"><span aria-hidden="true">⌕</span><input id="roadmapSearch" class="search-input" type="search" aria-label="Search roadmap" placeholder="Search product, family, or SKU"></label>
           <button id="quickTimelineSettings" class="quiet-button">Timeline range <span id="timelineRangeSummary"></span><span aria-hidden="true">↗</span></button>
           <button id="toggleRoadmapDetails" class="quiet-button" aria-pressed="false" aria-controls="splitView">Product details</button>
+          <div class="roadmap-interaction-mode" role="group" aria-label="Timeline drag behavior">
+            <button id="roadmapModePan" type="button" aria-pressed="true" title="Drag anywhere on the timeline to move the view">Move view</button>
+            <button id="roadmapModeDates" type="button" aria-pressed="false" title="Enable dragging product bars, dates, and row order">Adjust dates</button>
+          </div>
           <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Timeline view controls">
             <div class="zoom-control" role="group" aria-label="Timeline zoom"><button id="roadmapZoomOut" aria-label="Zoom timeline out">−</button><button id="roadmapZoomReset" class="zoom-reset" aria-label="Reset timeline zoom to 100%" title="Reset timeline zoom to 100%">100%</button><button id="roadmapZoomIn" aria-label="Zoom timeline in">+</button></div>
             <button id="roadmapFit" class="view-tool" title="Fit the selected timeline range to the available width">Fit</button>
@@ -55,16 +60,14 @@
             <button id="roadmapShowSelected" class="view-tool" title="Center the selected product on the timeline" disabled>Show selected</button>
           </div></div>
           <div class="roadmap-edit-controls" role="group" aria-label="Edit selected roadmap product">
-            <span class="roadmap-interaction-hint">Drag rows to reorder · drag edges to change dates</span>
+            <span class="roadmap-interaction-hint">Drag to move the view · double-click a product for details</span>
             <span id="roadmapEditSelection" class="roadmap-edit-selection">Select a product</span>
             <button id="roadmapMoveUp" class="compact-button" title="Move selected product up in its family (Alt + Up on timeline)" aria-label="Move selected roadmap product up" disabled>↑ Move up</button>
             <button id="roadmapMoveDown" class="compact-button" title="Move selected product down in its family (Alt + Down on timeline)" aria-label="Move selected roadmap product down" disabled>↓ Move down</button>
-            <label>Start <input id="roadmapSelectedStart" type="month" aria-label="Selected product start month" disabled></label>
-            <label>End <input id="roadmapSelectedEnd" type="month" aria-label="Selected product end month" disabled></label>
             <span id="roadmapEditAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
           </div>
         </section>
-        <div class="selection-bar"><span id="workspaceSummary">Loading portfolio…</span><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button><button id="linkedView" class="compact-button" disabled>View on roadmap</button></div></div>
+        <div class="selection-bar"><span id="workspaceSummary">Loading portfolio…</span><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button></div></div>
       </div>
     <section class="workspace">
       <section id="productView" class="view-pane product-view">
@@ -90,7 +93,7 @@
 
       <section id="roadmapView" class="view-pane roadmap-view hidden">
         <div id="roadmapScroll" class="canvas-scroll roadmap-scroll">
-          <canvas id="roadmapCanvas" tabindex="0" aria-label="Roadmap. Drag a product row to reorder it. Drag either edge of a product bar to change its start or end date; the date is shown while dragging. Select a product bar or double-click it for details. Drag empty space horizontally to navigate."></canvas>
+          <canvas id="roadmapCanvas" tabindex="0" aria-label="Roadmap. Drag anywhere to move the view horizontally or vertically. Select a product or double-click for details. Choose Adjust dates to drag product dates and row order; Escape returns to Move view."></canvas>
         </div>
         <nav id="roadmapNavigator" class="board-navigator hidden" aria-label="Horizontal roadmap navigation">
           <button id="roadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
@@ -105,7 +108,7 @@
         <aside id="splitProduct" class="split-product"></aside>
         <div class="split-roadmap-shell">
           <div id="splitRoadmapScroll" class="canvas-scroll roadmap-scroll">
-            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap with product details. Drag a product row to reorder it. Drag either edge of a product bar to change its start or end date; the date is shown while dragging. Select a product bar to review its details. Drag empty space horizontally to navigate."></canvas>
+            <canvas id="splitRoadmapCanvas" tabindex="0" aria-label="Roadmap with product details. Drag anywhere to move the view horizontally or vertically. Select a product to review its details. Choose Adjust dates to drag product dates and row order; Escape returns to Move view."></canvas>
           </div>
           <nav id="splitRoadmapNavigator" class="board-navigator hidden" aria-label="Roadmap navigation">
             <button id="splitRoadmapNavLeft" class="nav-step" aria-label="Scroll roadmap left">‹</button>
@@ -171,7 +174,7 @@
           <section id="settingsDataPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabData" data-settings-panel="data">
             <div class="settings-section-heading"><h3>Data & export</h3><span class="scope-badge">Entire portfolio</span></div>
             <p class="settings-note">ASCM adds and updates products. Package and data imports replace the workspace.</p>
-            <div class="shared-package-settings"><div><h4>Shared master package</h4><p id="sharedPackageStatus" class="settings-note"></p></div><button id="settingsPullLatestData" type="button">Pull latest data</button></div>
+            <div class="shared-package-settings"><div><h4>Portfolio access</h4><p id="sharedPackageStatus" class="settings-note"></p></div><button id="settingsPullLatestData" type="button">Open portfolio</button></div>
             <section class="package-info" aria-label="Loaded package information"><dl><dt>Package updated</dt><dd><time id="sharedPackageUpdated"></time></dd><dt>Updater comments</dt><dd id="sharedPackageComments" class="package-info-comments"></dd></dl></section>
             <div id="dataMenu" class="popup-menu settings-action-list data-action-menu" aria-label="Import and export">
               <div class="data-direction-grid">
@@ -183,7 +186,7 @@
                 </section>
                 <section class="data-direction-panel data-export-panel" aria-labelledby="dataExportTitle">
                   <div class="data-direction-heading"><svg class="data-direction-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><div><h4 id="dataExportTitle">Export</h4><p>Save copies to your device.</p></div></div>
-                  <button id="exportPackage" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Build master package</strong><small>Create one package for Products, Roadmap, settings, and images.</small></span></button>
+                  <button id="exportPackage" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Export portfolio</strong><small>Create one package for Products, Roadmap, settings, and images.</small></span></button>
                   <button id="exportJson" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Export data file</strong><small>Save lightweight .data with image references, without image files.</small></span></button>
                   <button id="exportPng" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Export PNG</strong><small>Save this category’s active view as a PNG image.</small></span></button>
                 </section>
@@ -204,13 +207,13 @@
       <div class="settings-dialog-heading"><div><span class="eyebrow">Unified portfolio package</span><h2 id="packageTitle">Pull latest data</h2></div><button id="closePackage" class="icon-button" type="button" aria-label="Close package dialog">×</button></div>
       <p id="packageDescription" class="package-description"></p>
       <p id="packageFileName" class="package-file-name hidden"></p>
-      <div id="packageExportOptions" class="hidden"><label class="checkbox-label"><input id="packageEncrypt" type="checkbox" checked>Protect the package with a key</label><p class="settings-note">Use protection for the shared master. Turn it off only for a private local backup.</p><div class="package-comment-field"><label for="packageUpdateComments">Updater comments <span>(optional)</span></label><textarea id="packageUpdateComments" rows="3" maxlength="2000" placeholder="Describe what changed in this update…" aria-describedby="packageUpdateCommentsHelp"></textarea><p id="packageUpdateCommentsHelp" class="settings-note">The update date is set automatically when you build. In a protected master, comments are encrypted and shown after unlocking.</p></div></div>
+      <div id="packageExportOptions" class="hidden"><label class="checkbox-label"><input id="packageEncrypt" type="checkbox" checked>Protect the package with a key</label><p class="settings-note">Protect your export when sharing it.</p><div class="package-comment-field"><label for="packageUpdateComments">Updater comments <span>(optional)</span></label><textarea id="packageUpdateComments" rows="3" maxlength="2000" placeholder="Describe what changed in this update…" aria-describedby="packageUpdateCommentsHelp"></textarea><p id="packageUpdateCommentsHelp" class="settings-note">The update date is set automatically. Comments are included with your export.</p></div></div>
       <section id="packageKeySection" class="package-key-section">
         <label for="packageKey">Package key</label>
         <input id="packageKey" type="password" placeholder="PPC-…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="packageKeyHelp">
         <div class="package-key-actions"><label class="checkbox-label"><input id="packageShowKey" type="checkbox">Show key</label><button id="packageGenerateKey" type="button">Create new key</button><button id="packageCopyKey" type="button">Copy key</button></div>
         <p id="packageKeyHelp" class="settings-note">The key unlocks the package in your browser and is not saved on this device.</p>
-        <p id="packagePublisherHelp" class="settings-note hidden">Reuse the current key, build master_ppc.pkg, then replace public/data/master_ppc.pkg in GitHub on the main branch. Wait for the site update to finish. Keep the key separate from GitHub and the package.</p>
+        <p id="packagePublisherHelp" class="settings-note hidden">Keep your access key separate from the exported portfolio.</p>
       </section>
       <section id="packageResultInfo" class="package-info hidden" aria-label="Package information"><dl><dt>Package updated</dt><dd><time id="packageResultUpdated"></time></dd><dt>Updater comments</dt><dd id="packageResultComments" class="package-info-comments"></dd></dl></section>
       <p id="packageStatus" class="package-status" role="status" aria-live="polite"></p>
@@ -353,6 +356,7 @@
   <script src="js/pptx-editable.js"></script>
   <script src="js/portfolio-model.js"></script>
   <script src="js/master-model.js"></script>
+  <script src="js/product-merge.js"></script>
   <script src="js/roadmap-interaction.js"></script>
   <script src="js/product-details.js"></script>
   <script src="js/package-codec.js"></script>
@@ -368,5 +372,6 @@
   <script src="js/master-client.js"></script>
   <script src="js/master-ui.js"></script>
   <script src="js/master-presence.js"></script>
+  <script src="js/product-merge-ui.js"></script>
 </body>
 </html>

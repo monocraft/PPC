@@ -316,7 +316,7 @@
     function snapshot(source, account) {
       return {
         ...model().snapshot(source.manifest), revision: source.sha, packageInfo: codec().normalizePackageInfo(source.manifest.packageInfo),
-        masterSync: object(source.manifest.masterSync) ? clone(source.manifest.masterSync) : null,
+        masterSync: model().publicMetadata(source.manifest),
         source: "github", identity: account ? clone(account) : null, recentEditors: recentEditors(source.manifest),
         canWrite: Boolean(account), requiresGitHubToken: !account, requiresEditorToken: false,
       };
