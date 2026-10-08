@@ -4831,6 +4831,11 @@ async function deleteSelected() {
   const deletingBoard = board;
   if (!deleting || !await PortfolioDialogs.confirm(`Delete "${deleting.name}" from this category?`, { title: "Delete product?", confirmLabel: "Delete product", danger: true })) return;
   if (board !== deletingBoard || !board.products.some((item) => item.id === deleting.id)) return;
+  const sharedRecord = portfolio.masterLocalBaseline?.some((item) => item.productId === deleting.id);
+  if (sharedRecord) {
+    portfolio.masterLocalRemovedProducts ||= {};
+    portfolio.masterLocalRemovedProducts[deleting.id] = JSON.parse(JSON.stringify(deleting));
+  }
   const imageAssetIds = new Set([deleting?.imageAssetId, ...productColorVariants(deleting).map((item) => item.imageAssetId)].filter(Boolean));
   updateBoard((current) => {
     const product = current.products.find((item) => item.id === deleting.id);
@@ -4839,7 +4844,7 @@ async function deleteSelected() {
   });
   selectedId = board.products[0]?.id ?? null;
   pinnedHeroVariantByProduct.delete(deleting?.id);
-  imageAssetIds.forEach((assetId) => { void removeImageAssetIfUnused(assetId); });
+  if (!sharedRecord) imageAssetIds.forEach((assetId) => { void removeImageAssetIfUnused(assetId); });
   renderInspector();
   renderActiveView();
 }
@@ -5234,6 +5239,8 @@ async function buildProjectPackageBytes(packageInfo) {
   const expectedCurrent = JSON.stringify(portfolio);
   const manifest = JSON.parse(expectedCurrent);
   delete manifest.masterLocalBaseline;
+  delete manifest.masterLocalTombstones;
+  delete manifest.masterLocalRemovedProducts;
   manifest.packageInfo = packageInfo === undefined ? codec.createPackageInfo() : codec.normalizePackageInfo(packageInfo);
   if (!manifest.packageInfo) throw new Error("The package update information is invalid.");
   validatePackageManifest(manifest);
@@ -6830,20 +6837,23 @@ window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
 // The shared master updates product facts without replacing local images or layouts.
 globalThis.PortfolioMasterAdapter = Object.freeze({
-  getProducts: () => portfolio.categories.flatMap((category) => category.board.products),
+  getProducts: () => portfolio.categories.flatMap((category) => category.board.products.map((product) => ({ ...product, categoryId: category.id }))),
   getBaselineProducts: () => portfolio.masterLocalBaseline || [],
+  getMasterTombstones: () => portfolio.masterLocalTombstones || [],
   setBaselineProducts: (products) => {
     portfolio.masterLocalBaseline = JSON.parse(JSON.stringify(products));
     scheduleSave();
   },
   getPackageInfo: () => getCurrentPackageInfo(),
   getSelectedProductId: () => selectedId || "",
+  getSelectedCategoryId: () => activeCategoryId || "",
   hasPendingPackageOperation: () => packageOperationInProgress,
   setPackageInfo: (info) => {
     portfolio.packageInfo = packageCodec().normalizePackageInfo(info);
     scheduleSave();
   },
   setMasterSnapshot: (snapshot) => {
+    portfolio.masterLocalTombstones = JSON.parse(JSON.stringify(snapshot.tombstones || []));
     if (Object.prototype.hasOwnProperty.call(snapshot, "masterSync")) {
       if (snapshot.masterSync) portfolio.masterSync = JSON.parse(JSON.stringify(snapshot.masterSync));
       else delete portfolio.masterSync;
@@ -6853,16 +6863,32 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   canRefresh: () => !packageOperationInProgress && !roadmapDragState && !document.querySelector('.modal-backdrop:not(.hidden), dialog[open]') && !document.activeElement?.closest('#inspector'),
   applyPatches: (changes) => {
     if (packageOperationInProgress) throw new Error("Finish loading the package before saving shared changes.");
+    const nextProducts = new Map(portfolio.categories.map((category) => [category.id, category.board.products.slice()]));
     for (const change of changes) {
+      if (change.kind === "create") {
+        const target = portfolio.categories.find((category) => category.id === change.categoryId);
+        if (!target || !target.board.lanes.some((lane) => lane.id === change.laneId)) throw new Error("This product's portfolio or lane has changed. Pull the latest master package before trying again.");
+        if ([...nextProducts.values()].some((products) => products.some((product) => product.id === change.productId))) throw new Error("A repeated product ID needs review before applying the master update.");
+        const products = nextProducts.get(target.id);
+        const order = products.filter((product) => product.laneId === change.laneId).reduce((maximum, product) => Math.max(maximum, Number(product.order) || 0), -1) + 1;
+        const archived = portfolio.masterLocalRemovedProducts?.[change.productId];
+        const product = archived || makeProduct(change.productId, change.values.name, change.values.price, change.laneId, order);
+        products.push(globalThis.PortfolioMasterModel.applyProductValues({ ...product, laneId: change.laneId }, change.values));
+        continue;
+      }
       for (const category of portfolio.categories) {
-        const index = category.board.products.findIndex((product) => product.id === change.productId);
+        const products = nextProducts.get(category.id);
+        const index = products.findIndex((product) => product.id === change.productId);
         if (index < 0) continue;
-        const current = category.board.products[index];
+        const current = products[index];
+        if (change.kind === "delete") { products.splice(index, 1); break; }
         const values = change.values || change.patch;
-        category.board.products[index] = globalThis.PortfolioMasterModel.applyProductValues(current, values);
+        products[index] = globalThis.PortfolioMasterModel.applyProductValues(current, values);
         break;
       }
     }
+    for (const category of portfolio.categories) category.board.products = nextProducts.get(category.id);
+    if (selectedId && !board.products.some((product) => product.id === selectedId)) selectedId = board.products[0]?.id || null;
     scheduleSave();
     syncControls();
     renderInspector();

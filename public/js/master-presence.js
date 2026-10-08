@@ -11,6 +11,7 @@
   };
   const avatarTone = (sessionId) => [...String(sessionId)].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) % 5, 0);
   const sessionSummary = (count) => `${count} connected ${count === 1 ? "session" : "sessions"}`;
+  const activityText = (user) => `${user.editing ? "Editing" : "Viewing"} ${user.productName || user.categoryName || "the portfolio"}${user.productName && user.categoryName ? ` · ${user.categoryName}` : ""}`;
   const connectionSummary = (state) => !state.configured ? "Team sharing is not connected" : state.mode === "github" ? state.connected ? `${state.users.length} recent ${state.users.length === 1 ? "editor" : "editors"}` : "Pull latest data to see recent editors." : state.unavailable ? "Shared connection unavailable" : state.connected ? sessionSummary(state.onlineCount) : state.hasKey ? "Connecting to the shared portfolio…" : "Pull latest data to connect.";
 
   function normalizeRecentEditors(snapshot, identity) {
@@ -36,6 +37,7 @@
       const displayName = typeof item.displayName === "string" ? item.displayName.trim().slice(0, 60) : "";
       users.push({ sessionId, displayName, label: displayName || anonymousName(sessionId), editing: item.editing === true,
         productId: String(item.productId || ""), productName: String(item.productName || "").slice(0, 240),
+        categoryId: String(item.categoryId || ""), categoryName: String(item.categoryName || "").slice(0, 180),
         isSelf: sessionId === ownSessionId, lastSeenAt: item.lastSeenAt || item.lastSeen || "",
       });
       if (users.length >= 1000) break;
@@ -43,13 +45,15 @@
     return users.sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || a.label.localeCompare(b.label));
   }
 
-  function createController({ sessionProvider, getSelectedProductId = () => "", onChange = () => {}, sessionId = root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, displayName = "" } = {}) {
+  function createController({ sessionProvider, getSelectedProductId = () => "", getSelectedCategoryId = () => "", onChange = () => {}, sessionId = sessionProvider?.()?.getState?.()?.editorProfile?.sessionId || root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, displayName = "" } = {}) {
     let users = [], mode = "service", configured = false, connected = false, unavailable = false, hasKey = false, hasGitHubToken = false, inFlight = null;
     let generation = 0, observedSession = null, observedAccessVersion, observedHasKey = false;
     let name = String(displayName).trim().slice(0, 60);
     function state() { return { users: users.map((user) => ({ ...user })), mode, onlineCount: mode === "github" ? 0 : users.length, configured, connected, unavailable, hasKey, hasGitHubToken, sessionId, displayName: name }; }
     function observeAccess() {
-      const session = sessionProvider?.(), sessionState = session?.getState();
+      const session = sessionProvider?.();
+      session?.setEditorProfile?.({ sessionId, displayName: name });
+      const sessionState = session?.getState();
       mode = sessionState?.mode === "github" ? "github" : "service";
       hasGitHubToken = Boolean(sessionState?.hasGitHubToken);
       configured = Boolean(session && sessionState?.configured !== false);
@@ -78,8 +82,8 @@
       const operation = { generation, session }; inFlight = operation;
       try {
         const selected = String(getSelectedProductId() || ""), pending = sessionState.pending || [];
-        const draft = pending.find((product) => product.productId === selected) || pending[0];
-        const response = await session.presence({ sessionId, displayName: name, editing: Boolean(draft), productId: draft?.productId || selected, leave });
+        const draft = pending.find((product) => product.productId === selected);
+        const response = await session.presence({ sessionId, displayName: name, editing: Boolean(draft), productId: selected, categoryId: String(getSelectedCategoryId() || ""), leave });
         const current = observeAccess();
         if (current.generation !== operation.generation || current.session !== operation.session || !hasKey) return state();
         if (response && !leave) { users = normalizeRoster(response, sessionId); connected = true; unavailable = false; }
@@ -91,7 +95,7 @@
       return state();
     }
     return Object.freeze({ heartbeat, getState: state,
-      setDisplayName(value) { name = String(value || "").trim().slice(0, 60); return heartbeat(); },
+      setDisplayName(value) { const next = String(value || "").trim().slice(0, 60); if (next !== name) generation += 1; name = next; return heartbeat(); },
       leave() { return heartbeat({ leave: true }); },
     });
   }
@@ -117,7 +121,7 @@
     popover.append(heading, connection, rows, nameForm, githubConnect, note); shell.append(trigger, popover); brand.append(shell);
     let open = false, debounceTimer = null;
     function setOpen(value) { open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value)); if (value) controller.heartbeat(); else trigger.focus({ preventScroll: true }); }
-    function avatar(user, extraClass = user.editing ? "is-editing" : "") { const circle = make("span", `master-presence-avatar master-presence-tone-${avatarTone(user.sessionId)}${extraClass ? ` ${extraClass}` : ""}`, avatarText(user.displayName, user.sessionId)); circle.setAttribute("aria-hidden", "true"); circle.title = user.label; return circle; }
+    function avatar(user, extraClass = user.editing ? "is-editing" : "") { const circle = make("span", `master-presence-avatar master-presence-tone-${avatarTone(user.sessionId)}${extraClass ? ` ${extraClass}` : ""}`, avatarText(user.displayName, user.sessionId)); circle.setAttribute("aria-hidden", "true"); circle.title = `${user.label}${user.categoryName || user.productName ? ` · ${activityText(user)}` : ""}`; return circle; }
     function render(state) {
       trigger.replaceChildren(); rows.replaceChildren();
       title.textContent = state.mode === "github" ? "Recent editors" : "Connected now";
@@ -139,12 +143,12 @@
         const row = make("div", "master-presence-row"), text = make("div", "master-presence-person");
         const label = make("strong", "", user.label + (user.isSelf ? " (you)" : ""));
         const date = user.at ? new Date(user.at) : null;
-        const activity = state.mode === "github" ? `Updated master${date && Number.isFinite(date.getTime()) ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)}` : ""}` : user.editing ? `Editing${user.productName ? ` ${user.productName}` : " a product"}` : `Viewing${user.productName ? ` ${user.productName}` : " the portfolio"}`;
+        const activity = state.mode === "github" ? `Updated master${date && Number.isFinite(date.getTime()) ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)}` : ""}` : activityText(user);
         text.append(label, make("span", "master-presence-activity", activity)); row.append(avatar(user), text); rows.append(row);
       }
       nameSave.disabled = state.mode === "github" || !state.configured || !state.hasKey;
     }
-    const controller = createController({ sessionProvider, getSelectedProductId: () => adapter?.getSelectedProductId?.() || "", displayName: storedName, onChange: render });
+    const controller = createController({ sessionProvider, getSelectedProductId: () => adapter?.getSelectedProductId?.() || "", getSelectedCategoryId: () => adapter?.getSelectedCategoryId?.() || "", displayName: storedName, onChange: render });
     function soon() { root.clearTimeout(debounceTimer); debounceTimer = root.setTimeout(() => controller.heartbeat(), 500); }
     trigger.addEventListener("click", () => setOpen(!open)); close.addEventListener("click", () => setOpen(false));
     document.addEventListener("pointerdown", (event) => { if (open && !shell.contains(event.target)) { open = false; popover.hidden = true; trigger.setAttribute("aria-expanded", "false"); } });
@@ -158,6 +162,6 @@
     active = Object.freeze({ controller, refresh: () => controller.heartbeat(), close: () => setOpen(false), destroy() { root.clearInterval(timer); root.clearTimeout(debounceTimer); controller.leave(); shell.remove(); } });
     return active;
   }
-  root.PortfolioMasterPresence = Object.freeze({ anonymousName, avatarText, avatarTone, sessionSummary, connectionSummary, normalizeRoster, normalizeRecentEditors, createController, initialize, close() { active?.close(); }, leave() { return active?.controller.leave(); } });
+  root.PortfolioMasterPresence = Object.freeze({ anonymousName, avatarText, avatarTone, sessionSummary, connectionSummary, activityText, normalizeRoster, normalizeRecentEditors, createController, initialize, close() { active?.close(); }, leave() { return active?.controller.leave(); } });
   if (typeof document !== "undefined" && root.PortfolioMasterUI) initialize();
 })(globalThis);

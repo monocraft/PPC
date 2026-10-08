@@ -37,7 +37,7 @@ jobs:
       - name: Prepare static site
         env:
           PPC_PACKAGE_ENDPOINT: ${{ vars.PPC_PACKAGE_ENDPOINT }}
-          PPC_MASTER_ENDPOINT: ${{ vars.PPC_MASTER_ENDPOINT }}
+          PPC_MASTER_ENDPOINT: ${{ vars.PPC_MASTER_MODE == 'service' && vars.PPC_MASTER_ENDPOINT || '' }}
           PPC_MASTER_MODE: ${{ vars.PPC_MASTER_MODE }}
         run: |
           mkdir -p _site/css _site/js _site/data

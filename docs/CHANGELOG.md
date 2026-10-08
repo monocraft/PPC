@@ -1,5 +1,15 @@
 # Change Log
 
+## 2026-10-08 — private team master and complete colorway checks
+
+- Add a private Supabase saving function and restricted database for shared products, specifications, SKUs and all lifecycle dates. Reuse the existing package key and optional browser display name; team mode never requests personal GitHub tokens or a second editing password.
+- Accept independent concurrent edits atomically, ask for final values on overlaps, and retain drafts through cancelled conflicts, connection failures, refreshes and lost accepted replies.
+- Share new products and deletions with explicit identity/deletion conflicts. Preserve privately archived images and custom metadata when a deleted product is deliberately restored.
+- Show each connected browser's current category and selected product as Viewing or Editing. An unrelated unsaved draft does not change the displayed viewing location.
+- Publish the full encrypted GitHub package through one serialized Actions workflow. Preserve archive entries, detect unexpected master replacements, prevent revision regression, and show accepted team saves separately from pending or failed GitHub publication.
+- Allow distinct single and dual colorways to share an abbreviation: Black, Red, Black/Red and Red/Black are different variants. Flag identical normalized codes with the same complete color combination, while retaining layout and HP SKU protections.
+- Add meaningful model/client/actual database/gateway/publisher checks and private owner setup documentation.
+
 ## 2026-10-08 — portfolio-specific duplicate checks
 
 - Allow matching product names and HP SKUs in different product portfolios, including PC Gaming Audio and Console Gaming Audio. Review repeated assignments within a portfolio with exact product and row locations.

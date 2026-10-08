@@ -8,6 +8,22 @@
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
   const normalizeSku = (value) => text(value).normalize("NFKC").toUpperCase();
   const normalizeName = (value) => text(value).replace(/[®™©]/g, "").normalize("NFKC").replace(/\s+/g, " ").toLowerCase();
+  function variantSkuIdentity(row, type) {
+    if (root.PortfolioMasterModel?.variantSkuIdentity) return root.PortfolioMasterModel.variantSkuIdentity(row, type);
+    const normalize = (value) => text(value).normalize("NFKC").replace(/\s+/g, " ").toUpperCase();
+    const code = normalize(row?.code);
+    if (!code || type !== "color") return code;
+    const tone = (suffix) => {
+      let hex = normalize(row?.[`colorHex${suffix}`]);
+      if (/^#[0-9A-F]{3}$/.test(hex)) hex = `#${[...hex.slice(1)].map((digit) => digit.repeat(2)).join("")}`;
+      if (hex) return `hex:${hex}`;
+      const key = normalize(row?.[`colorKey${suffix}`]);
+      if (key && key !== "CUSTOM") return `key:${key}`;
+      const name = normalize(row?.[`colorName${suffix}`]);
+      return name ? `name:${name}` : "";
+    };
+    return JSON.stringify([code, tone(""), tone("2")]);
+  }
   const array = (value) => Array.isArray(value) ? value : [];
   const issueKey = (kind, value, suffix = "") => `${kind}:${encodeURIComponent(value)}${suffix ? `:${suffix}` : ""}`;
   const portfolioIssueKey = (kind, value, entry) => issueKey(kind, value, entry.locator.categoryId
@@ -70,21 +86,23 @@
         guidance: "Open each assignment to compare the products and update the HP SKU or remove an unintended duplicate row. Matching HP SKUs in different product portfolios are allowed.",
         members: matches.map((row) => ({ ...member(row.entry, { section: "partSkus", rowIndex: row.rowIndex, rowId: row.rowId }), detail: `HP SKU row ${row.rowIndex + 1}` })) });
     }
-    // Color/locale abbreviations belong to each product. Repeating BK on two products is valid.
+    // Color codes belong to a complete colorway. BK single-tone and BK with
+    // a red secondary color are distinct; layouts still use their full code.
     for (const entry of entries) {
       const rows = [];
       array(entry.product.variantGroups).forEach((group, groupIndex) => {
         array(group?.items).forEach((row, rowIndex) => {
           const code = normalizeSku(row?.code);
-          if (code) rows.push({ code, type: text(group?.type) || "color", groupIndex, groupId: text(group?.id), rowIndex, rowId: text(row?.id) });
+          const type = text(group?.type) || "color";
+          if (code) rows.push({ code, type, identity: variantSkuIdentity(row, type), colorLabel: [text(row?.colorName || row?.colorKey || row?.colorHex), text(row?.colorName2 || row?.colorKey2 || row?.colorHex2)].filter(Boolean).join(" / "), groupIndex, groupId: text(group?.id), rowIndex, rowId: text(row?.id) });
         });
       });
-      for (const [key, matches] of buckets(rows, (row) => `${row.type}\u0000${row.code}`)) {
+      for (const [key, matches] of buckets(rows, (row) => `${row.type}\u0000${row.identity}`)) {
         const code = matches[0].code, type = matches[0].type;
         issues.push({ id: issueKey("variant-sku", key, `${entry.locator.categoryIndex}-${entry.locator.productIndex}`), kind: "variant-sku", severity: "error", code,
-          title: `Repeated ${type === "layout" ? "layout" : "color"} code · ${code}`, description: `The same ${type} code appears on ${matches.length} variant rows of ${entry.productName}.`,
-          guidance: "Check the highlighted variant rows. Codes must be unique within each variant type on this product.",
-          members: matches.map((row) => ({ ...member(entry, { section: "variantGroups", groupIndex: row.groupIndex, groupId: row.groupId, rowIndex: row.rowIndex, rowId: row.rowId }), detail: `${type === "layout" ? "Layout" : "Color"} variant row ${row.rowIndex + 1}` })) });
+          title: `Repeated ${type === "layout" ? "layout code" : "colorway"} · ${code}`, description: type === "layout" ? `The same layout code appears on ${matches.length} variant rows of ${entry.productName}.` : `The same code and primary/secondary color combination appears on ${matches.length} variant rows of ${entry.productName}.`,
+          guidance: type === "layout" ? "Check the highlighted variant rows. Layout codes must be unique on this product." : "Check the highlighted color rows and remove an unintended repeated colorway. Different primary/secondary color combinations may share the same code.",
+          members: matches.map((row) => ({ ...member(entry, { section: "variantGroups", groupIndex: row.groupIndex, groupId: row.groupId, rowIndex: row.rowIndex, rowId: row.rowId }), detail: `${type === "layout" ? "Layout" : "Color"} variant row ${row.rowIndex + 1}${type === "color" && row.colorLabel ? ` · ${row.colorLabel}` : ""}` })) });
       }
     }
     for (const [, matches] of buckets(entries, (entry) => {

@@ -1,5 +1,7 @@
 # Shared master editing
 
+The recommended team connection is now the private [Supabase shared master setup](SUPABASE-SETUP.md). Teammates use the existing package unlock key and an optional name, without personal GitHub tokens or another login. It supports product creation/removal, specifications, SKU/colorway updates, every shared lifecycle date, live category/product presence, and explicit concurrent conflict choices. Accepted updates are immediately available to connected teammates; the encrypted GitHub package is published automatically with separate pending/error status. The direct GitHub and local service instructions below remain available as fallbacks.
+
 PPC saves supported product edits directly to the encrypted `public/data/master_ppc.pkg` in `monocraft/PPC`, on `main`. GitHub stores the master and accepts updates; a separate server is not required. The checked-in app and Pages configuration select this GitHub mode by default.
 
 ## The user flow

@@ -22,7 +22,7 @@
   const own = (value, key) => Object.hasOwn(value || {}, key);
   const dictionary = () => Object.create(null);
   const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  const segment = (value) => ["@launch", "@end", "@lifecycle"].includes(value) ? value : encodeURIComponent(value);
+  const segment = (value) => ["@launch", "@end", "@lifecycle", "@product"].includes(value) ? value : encodeURIComponent(value);
   const parts = (path) => path ? path.split("/").map(decodeURIComponent) : [];
 
   function identity(value, label = "Record") {
@@ -99,7 +99,8 @@
   function validateValues(values, { checkDuplicates = true, checkDateOrder = true } = {}) {
     const result = canonicalValues(values);
     if (checkDateOrder && !validDateOrder(result)) throw new RangeError("End of manufacturing and the planned end month must be on or after launch.");
-    if (checkDuplicates && duplicateSkus(toTree(result)).length) throw new RangeError("The same SKU code cannot be assigned to different rows. Remove the duplicate or use a different code.");
+    const duplicate = checkDuplicates && duplicateSkus(toTree(result))[0];
+    if (duplicate) throw new RangeError(duplicate.type === "color" ? "The same colorway code and primary/secondary color combination cannot be assigned to different rows. Remove the repeated colorway row." : "The same SKU code cannot be assigned to different rows. Remove the duplicate or use a different code.");
     return result;
   }
 
@@ -207,7 +208,7 @@
     if (path === "@end") return `${value.endManufacturingDate || "TBD"} (planned ${value.endMonth || "TBD"})`;
     if (path === "@lifecycle") return `${describeNode(value.launch, "@launch")} → ${describeNode(value.end, "@end")}`;
     if (own(value, "label") && own(value, "value")) return `${value.label || "Specification"}: ${value.value || "Not set"}`;
-    if (own(value, "code")) return [value.code || "Blank SKU", value.label, value.colorName, value.variantId ? `Color ${value.variantId}` : ""].filter(Boolean).join(" · ");
+    if (own(value, "code")) return [value.code || "Blank SKU", value.label, [value.colorName, value.colorName2].filter(Boolean).join(" / "), value.variantId ? `Color ${value.variantId}` : ""].filter(Boolean).join(" · ");
     if (own(value, "type")) return `${value.label || value.type} (${Object.keys(value.items || {}).length} SKUs)`;
     return Object.values(value).map((entry) => describeNode(entry)).join("; ");
   }
@@ -257,7 +258,7 @@
   }
 
   function revisionKeys(path, structural, revisions) {
-    const keys = new Set([path]);
+    const keys = new Set([path, "@product"]);
     const pathParts = path.split("/");
     for (let index = 1; index < pathParts.length; index += 1) keys.add(pathParts.slice(0, index).join("/"));
     if (structural) for (const key of Object.keys(revisions || {})) if (key.startsWith(`${path}/`)) keys.add(key);
@@ -278,6 +279,24 @@
     return "";
   }
 
+  function variantSkuIdentity(row, type) {
+    const normalize = (value) => String(value ?? "").trim().normalize("NFKC").replace(/\s+/g, " ").toUpperCase();
+    const code = normalize(row?.code);
+    if (!code || type !== "color") return code;
+    const tone = (suffix) => {
+      let hex = normalize(row?.[`colorHex${suffix}`]);
+      if (/^#[0-9A-F]{3}$/.test(hex)) hex = `#${[...hex.slice(1)].map((digit) => digit.repeat(2)).join("")}`;
+      if (hex) return `hex:${hex}`;
+      const key = normalize(row?.[`colorKey${suffix}`]);
+      if (key && key !== "CUSTOM") return `key:${key}`;
+      const name = normalize(row?.[`colorName${suffix}`]);
+      return name ? `name:${name}` : "";
+    };
+    // Primary and secondary have distinct roles. Single black, black/red,
+    // and red/black remain different even when their display code is BK.
+    return JSON.stringify([code, tone(""), tone("2")]);
+  }
+
   function duplicateSkus(tree) {
     const buckets = [{ prefix: "partSkus", records: Object.entries(tree.partSkus || {}).map(([id, row]) => ({ path: `partSkus/${segment(id)}`, row })) }];
     const variantBuckets = new Map();
@@ -285,15 +304,16 @@
       if (!variantBuckets.has(group.type)) variantBuckets.set(group.type, []);
       for (const [id, row] of Object.entries(group.items || {})) variantBuckets.get(group.type).push({ path: `variantGroups/${segment(groupId)}/items/${segment(id)}`, row });
     }
-    for (const [type, rows] of variantBuckets) buckets.push({ prefix: `variantGroups:${type}`, records: rows });
+    for (const [type, rows] of variantBuckets) buckets.push({ prefix: `variantGroups:${type}`, type, records: rows });
     const issues = [];
     for (const bucket of buckets) {
       const codes = new Map();
       for (const item of bucket.records) {
-        const code = item.row.code?.trim().toUpperCase();
-        if (!code) continue;
-        if (codes.has(code)) issues.push({ code, a: codes.get(code), b: item, prefix: bucket.prefix });
-        else codes.set(code, item);
+        const code = String(item.row.code || "").trim().normalize("NFKC").toUpperCase();
+        const key = bucket.type ? variantSkuIdentity(item.row, bucket.type) : code;
+        if (!key) continue;
+        if (codes.has(key)) issues.push({ code, a: codes.get(key), b: item, prefix: bucket.prefix, type: bucket.type });
+        else codes.set(key, item);
       }
     }
     return issues;
@@ -328,7 +348,7 @@
       const changedCode = (item) => {
         const old = getNode(baseTree, item.path);
         const local = getNode(mineTree, item.path);
-        return local.exists && (!old.exists || local.value.code !== old.value.code);
+        return local.exists && (!old.exists || (issue.type ? variantSkuIdentity(local.value, issue.type) !== variantSkuIdentity(old.value, issue.type) : local.value.code !== old.value.code));
       };
       const mineItem = changedCode(issue.a) ? issue.a : issue.b;
       const masterItem = mineItem === issue.a ? issue.b : issue.a;
@@ -336,7 +356,7 @@
       // A SKU collision is one decision, even when a prior operation also
       // conflicts with deletion or editing of the other record.
       for (let index = conflicts.length - 1; index >= 0; index -= 1) if (conflicts[index].path === masterItem.path || conflicts[index].path.startsWith(`${masterItem.path}/`)) conflicts.splice(index, 1);
-      conflicts.push(conflict(mineItem.path, baseTree, mineTree, masterTree, { reason: "duplicate-sku", label: `Duplicate SKU code ${issue.code} — choose the final SKU`, conflictingPath: masterItem.path, master: clone(masterItem.row), masterExists: true, masterText: describeNode(masterItem.row), duplicateCode: issue.code }));
+      conflicts.push(conflict(mineItem.path, baseTree, mineTree, masterTree, { reason: "duplicate-sku", label: `Duplicate ${issue.type === "color" ? "colorway" : "SKU code"} ${issue.code} — choose the final variant`, conflictingPath: masterItem.path, master: clone(masterItem.row), masterExists: true, masterText: describeNode(masterItem.row), duplicateCode: issue.code }));
       setNode(mergedTree, mineItem.path, getNode(masterTree, mineItem.path), masterTree);
     }
     const mergedValues = fromTree(mergedTree);
@@ -416,7 +436,7 @@
       const productId = identity(product.id, "Product");
       if (ids.has(productId)) throw new TypeError("The master contains duplicate product IDs. Product identities must be unique.");
       ids.add(productId);
-      entries.push({ product, productId, productName: String(product.name || "Untitled product"), categoryId: String(category.id || "") });
+      entries.push({ product, productId, productName: String(product.name || "Untitled product"), categoryId: String(category.id || ""), laneId: String(product.laneId || "") });
     }
     return entries;
   }
@@ -429,8 +449,49 @@
     return result;
   }
 
+  // This fingerprint covers every stored product property, including references
+  // and notes outside the shared field set. It lets a deletion notice those
+  // changes without copying the full record into a browser's save request.
+  function productVersion(product) {
+    const stable = (value) => Array.isArray(value) ? value.map(stable) : object(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])])) : value;
+    const bytes = new TextEncoder().encode(JSON.stringify(stable(product)));
+    const padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64);
+    padded.set(bytes);
+    padded[bytes.length] = 128;
+    const view = new DataView(padded.buffer);
+    view.setUint32(padded.length - 8, Math.floor(bytes.length / 0x20000000));
+    view.setUint32(padded.length - 4, bytes.length * 8);
+    const constants = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+    const hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    const words = new Uint32Array(64);
+    const rotate = (value, count) => (value >>> count) | (value << (32 - count));
+    for (let offset = 0; offset < padded.length; offset += 64) {
+      for (let index = 0; index < 16; index += 1) words[index] = view.getUint32(offset + index * 4);
+      for (let index = 16; index < 64; index += 1) {
+        const left = words[index - 15], right = words[index - 2];
+        words[index] = words[index - 16] + (rotate(left, 7) ^ rotate(left, 18) ^ (left >>> 3)) + words[index - 7] + (rotate(right, 17) ^ rotate(right, 19) ^ (right >>> 10));
+      }
+      let [a, b, c, d, e, f, g, h] = hash;
+      for (let index = 0; index < 64; index += 1) {
+        const first = (h + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)) + ((e & f) ^ (~e & g)) + constants[index] + words[index]) | 0;
+        const second = ((rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        [h, g, f, e, d, c, b, a] = [g, f, e, (d + first) | 0, c, b, a, (first + second) | 0];
+      }
+      for (const [index, value] of [a, b, c, d, e, f, g, h].entries()) hash[index] = (hash[index] + value) >>> 0;
+    }
+    return hash.map((value) => value.toString(16).padStart(8, "0")).join("");
+  }
+
   function snapshot(manifest) {
-    return { version: 1, products: entriesFromManifest(manifest).map((entry) => ({ productId: entry.productId, productName: entry.productName, categoryId: entry.categoryId, values: productValues(entry.product), revisions: safeRevisions(manifest.masterSync?.products?.[entry.productId]?.revisions) })) };
+    const products = entriesFromManifest(manifest).map((entry) => ({ productId: entry.productId, productName: entry.productName, categoryId: entry.categoryId, laneId: entry.laneId, productVersion: productVersion(entry.product), values: productValues(entry.product), revisions: safeRevisions(manifest.masterSync?.products?.[entry.productId]?.revisions) }));
+    const known = new Set(products.map((entry) => entry.productId));
+    const tombstones = [];
+    for (const [productId, metadata] of Object.entries(manifest.masterSync?.products || {})) {
+      if (!object(metadata) || !metadata.deleted || known.has(productId)) continue;
+      identity(productId, "Product");
+      tombstones.push({ productId, categoryId: String(metadata.categoryId || ""), laneId: String(metadata.laneId || ""), productName: String(metadata.productName || "Removed product"), revisions: safeRevisions(metadata.revisions) });
+    }
+    return { version: 1, products, tombstones };
   }
 
   function boundedHistory(entries) {
@@ -451,10 +512,41 @@
     return kept;
   }
 
+  function boardForPlacement(manifest, categoryId, laneId) {
+    if (typeof categoryId !== "string" || typeof laneId !== "string") throw new TypeError("A new product needs its portfolio and product lane.");
+    const categories = Array.isArray(manifest.categories) ? manifest.categories : [{ id: "", board: manifest.board || manifest }];
+    const matches = categories.filter((category) => String(category.id || "") === categoryId);
+    if (matches.length !== 1 || !object(matches[0].board)) throw new RangeError("The product portfolio is no longer available. Pull the latest master and choose an existing portfolio.");
+    const board = matches[0].board;
+    if (!Array.isArray(board.lanes) || board.lanes.filter((lane) => lane.id === laneId).length !== 1) throw new RangeError("The product lane is no longer available. Pull the latest master and choose an existing lane.");
+    if (!Array.isArray(board.products)) throw new TypeError("The product portfolio has an invalid product list.");
+    return board;
+  }
+
+  function lifecycleConflict(change, remote, base, mine, reason, tombstone) {
+    const name = remote?.productName || mine?.name || base?.name || tombstone?.productName || "Untitled product";
+    const describe = (values, categoryId, laneId) => values ? `${values.name || "Untitled product"} (${categoryId || "portfolio"} / ${laneId || "lane"})` : "Removed product";
+    return {
+      productId: change.productId, productName: name, kind: change.kind || "update", path: "@product", field: "@product", label: change.kind === "delete" ? "Delete product" : "Product existence / identity", reason,
+      base: clone(base), mine: clone(mine), master: clone(remote?.values || null), baseExists: Boolean(base), mineExists: Boolean(mine), masterExists: Boolean(remote),
+      categoryId: change.categoryId ?? remote?.categoryId ?? tombstone?.categoryId ?? "", laneId: change.laneId ?? remote?.laneId ?? tombstone?.laneId ?? "",
+      baseCategoryId: change.categoryId ?? remote?.categoryId ?? tombstone?.categoryId ?? "", baseLaneId: change.laneId ?? remote?.laneId ?? tombstone?.laneId ?? "",
+      masterCategoryId: remote?.categoryId ?? tombstone?.categoryId ?? "", masterLaneId: remote?.laneId ?? tombstone?.laneId ?? "", masterProductVersion: remote?.productVersion || "",
+      masterRevisions: clone(remote?.revisions || tombstone?.revisions || {}),
+      baseText: base ? describe(base, change.categoryId, change.laneId) : "New product", mineText: describe(mine, change.categoryId, change.laneId), masterText: describe(remote?.values, remote?.categoryId, remote?.laneId),
+    };
+  }
+
+  function allRevisionsChanged(base, master) {
+    const keys = new Set([...Object.keys(base), ...Object.keys(master)]);
+    return [...keys].some((key) => (base[key] || 0) !== (master[key] || 0));
+  }
+
   function mergeChanges(manifest, changes, context = {}) {
     if (!Array.isArray(changes) || changes.length > 500) throw new TypeError("Submit at most 500 changed products at a time.");
     const currentSnapshot = snapshot(manifest);
     const known = new Map(currentSnapshot.products.map((entry) => [entry.productId, entry]));
+    const removed = new Map(currentSnapshot.tombstones.map((entry) => [entry.productId, entry]));
     const seen = new Set();
     const plans = [];
     const conflicts = [];
@@ -464,23 +556,58 @@
       if (seen.has(productId)) throw new TypeError("A product can appear only once in a save request.");
       seen.add(productId);
       const remote = known.get(productId);
-      if (!remote) throw new RangeError("A changed product is no longer in the master. Pull the master and select an existing product.");
+      const kind = change.kind || "update";
+      if (!["update", "create", "delete"].includes(kind)) throw new TypeError("A product change must be an update, create, or delete.");
+      if (kind === "create") {
+        const categoryId = string(change.categoryId, "Product portfolio", 180), laneId = identity(change.laneId, "Product lane");
+        boardForPlacement(manifest, categoryId, laneId);
+        if (!object(change.mine)) throw new TypeError("A new product needs its complete shared values.");
+        for (const field of Object.keys(change.mine)) if (!SHARED_FIELDS.includes(field)) throw new TypeError(`Unsupported shared field: ${field}.`);
+        const mine = validateValues(change.mine);
+        const tombstone = removed.get(productId);
+        if (remote) {
+          // The transport also keeps request receipts. This local replay check
+          // protects transports that restore only the manifest after a restart.
+          const receipt = manifest.masterSync?.products?.[productId]?.creationRequestId;
+          if (context.requestId && receipt === context.requestId && equal(remote.values, mine) && remote.categoryId === categoryId && remote.laneId === laneId) continue;
+          conflicts.push(lifecycleConflict(change, remote, null, mine, "product-id-exists"));
+        } else if (tombstone && allRevisionsChanged(safeRevisions(change.baseRevisions), tombstone.revisions)) conflicts.push(lifecycleConflict(change, null, null, mine, "product-removed", tombstone));
+        else plans.push({ productId, kind, categoryId, laneId, values: mine });
+        continue;
+      }
       if (!object(change.base)) throw new TypeError("Every product change needs its original master values.");
-      const base = canonicalValues({ ...remote.values, ...change.base });
+      const base = canonicalValues({ ...(remote?.values || {}), ...change.base });
+      if (kind === "delete") {
+        if (typeof change.baseProductVersion !== "string" || !/^[a-f0-9]{64}$/.test(change.baseProductVersion)) throw new TypeError("Deleting a product needs its original master product version. Pull the latest master before deleting it.");
+        if (!remote) continue;
+        const placementChanged = (change.categoryId !== undefined && change.categoryId !== remote.categoryId) || (change.laneId !== undefined && change.laneId !== remote.laneId);
+        const versionChanged = change.baseProductVersion !== remote.productVersion;
+        if (!equal(base, remote.values) || allRevisionsChanged(safeRevisions(change.baseRevisions), remote.revisions) || placementChanged || versionChanged) conflicts.push(lifecycleConflict(change, remote, base, null, "product-changed-before-delete"));
+        else plans.push({ productId, kind, remote });
+        continue;
+      }
       const mine = patchValues(base, change.patch || {});
+      if (!remote) {
+        conflicts.push(lifecycleConflict(change, null, base, mine, "product-removed", removed.get(productId)));
+        continue;
+      }
       const plan = planMerge(base, mine, remote.values, safeRevisions(change.baseRevisions), remote.revisions);
       conflicts.push(...plan.conflicts.map((item) => ({ productId, productName: remote.productName, ...item })));
       plans.push({ productId, remote, plan });
     }
     if (conflicts.length) return { manifest, conflicts, savedFields: 0, savedProducts: 0, history: [] };
-    const updates = plans.map(({ productId, remote, plan }) => ({ productId, values: validateValues(plan.values), operations: diffOperations(remote.values, plan.values) })).filter((entry) => entry.operations.length);
+    const updates = plans.map((entry) => entry.kind === "create" ? { ...entry, operations: [{ path: "@product", label: "Create product", base: null, value: entry.values, baseExists: false, valueExists: true }] } : entry.kind === "delete" ? { ...entry, operations: [{ path: "@product", label: "Delete product", base: entry.remote.values, value: null, baseExists: true, valueExists: false }] } : { productId: entry.productId, kind: "update", values: validateValues(entry.plan.values), operations: diffOperations(entry.remote.values, entry.plan.values) }).filter((entry) => entry.operations.length);
     if (!updates.length) return { manifest, conflicts: [], savedFields: 0, savedProducts: 0, history: [] };
     const nextManifest = clone(manifest);
     const nextEntries = new Map(entriesFromManifest(nextManifest).map((entry) => [entry.productId, entry]));
     const previousMeta = object(nextManifest.masterSync) ? nextManifest.masterSync : {};
     const metadata = { ...previousMeta, version: 1, revision: Number.isSafeInteger(previousMeta.revision) && previousMeta.revision >= 0 ? previousMeta.revision : 0, products: dictionary(), history: Array.isArray(previousMeta.history) ? previousMeta.history.slice(-1000) : [] };
-    for (const entry of currentSnapshot.products) {
-      metadata.products[entry.productId] = { revisions: safeRevisions(entry.revisions) };
+    for (const [productId, previous] of Object.entries(previousMeta.products || {})) {
+      identity(productId, "Product");
+      if (object(previous)) metadata.products[productId] = { ...clone(previous), revisions: safeRevisions(previous.revisions) };
+    }
+    for (const entry of [...currentSnapshot.products, ...currentSnapshot.tombstones]) {
+      metadata.products[entry.productId] = { ...(metadata.products[entry.productId] || {}), revisions: safeRevisions(entry.revisions) };
       for (const revision of Object.values(entry.revisions)) metadata.revision = Math.max(metadata.revision, revision);
     }
     if (metadata.revision > Number.MAX_SAFE_INTEGER - updates.reduce((sum, entry) => sum + entry.operations.length, 0)) throw new RangeError("The master's change counter needs to be reset by the portfolio owner before another save.");
@@ -489,13 +616,30 @@
     let savedFields = 0;
     for (const update of updates) {
       const entry = nextEntries.get(update.productId);
-      const nextProduct = applyProductValues(entry.product, update.values);
-      Object.assign(entry.product, nextProduct);
+      let nextProduct;
+      if (update.kind === "create") {
+        const board = boardForPlacement(nextManifest, update.categoryId, update.laneId);
+        const laneProducts = board.products.filter((product) => product.laneId === update.laneId);
+        const order = laneProducts.reduce((maximum, product) => Number.isFinite(product.order) ? Math.max(maximum, product.order) : maximum, -1) + 1;
+        const previousProduct = metadata.products[update.productId]?.deleted && object(metadata.products[update.productId]?.archivedProduct) ? clone(metadata.products[update.productId].archivedProduct) : {};
+        nextProduct = applyProductValues({ ...previousProduct, id: update.productId, laneId: update.laneId, order }, update.values);
+        board.products.push(nextProduct);
+        metadata.products[update.productId] = { ...(metadata.products[update.productId] || {}), revisions: safeRevisions(metadata.products[update.productId]?.revisions), deleted: false, categoryId: update.categoryId, laneId: update.laneId, productName: nextProduct.name, creationRequestId: String(context.requestId || "").slice(0, 180) };
+        delete metadata.products[update.productId].archivedProduct;
+      } else if (update.kind === "delete") {
+        const board = boardForPlacement(nextManifest, entry.categoryId, entry.laneId);
+        board.products.splice(board.products.findIndex((product) => product.id === update.productId), 1);
+        nextProduct = entry.product;
+        Object.assign(metadata.products[update.productId], { deleted: true, categoryId: entry.categoryId, laneId: entry.laneId, productName: entry.productName, archivedProduct: clone(entry.product) });
+      } else {
+        nextProduct = applyProductValues(entry.product, update.values);
+        Object.assign(entry.product, nextProduct);
+      }
       const revisions = metadata.products[update.productId].revisions;
       for (const op of update.operations) {
         metadata.revision += 1;
         revisions[op.path] = metadata.revision;
-        const record = { productId: update.productId, productName: nextProduct.name || entry.productName, path: op.path, field: op.path, label: op.label, before: clone(op.base), after: clone(op.value), beforeExists: op.baseExists, afterExists: op.valueExists, revision: metadata.revision, at: now, actor: String(context.actor || "Team member").slice(0, 160), team: String(context.team || "").slice(0, 160), reason: String(context.reason || "").slice(0, 2000), requestId: String(context.requestId || "").slice(0, 180) };
+        const record = { productId: update.productId, productName: nextProduct.name || entry?.productName || "Untitled product", kind: update.kind, path: op.path, field: op.path, label: op.label, before: clone(op.base), after: clone(op.value), beforeExists: op.baseExists, afterExists: op.valueExists, revision: metadata.revision, at: now, actor: String(context.actor || "Team member").slice(0, 160), team: String(context.team || "").slice(0, 160), reason: String(context.reason || "").slice(0, 2000), requestId: String(context.requestId || "").slice(0, 180) };
         history.push(record);
         savedFields += 1;
       }
@@ -505,5 +649,5 @@
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: updates.length, history };
   }
 
-  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, mergeChanges });
+  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, mergeChanges });
 })(globalThis);
