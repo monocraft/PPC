@@ -7,6 +7,8 @@
   <meta name="description" content="A compact product portfolio workspace with synchronized product cards, shared roadmap timelines, and safe ASCM updates.">
   <title>Product Portfolio</title>
   <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/workspace-notifications.css">
+  <link rel="stylesheet" href="css/product-issues.css">
 </head>
 <body>
   <main class="app-shell">
@@ -19,6 +21,7 @@
         </div>
         <div class="view-switch" role="tablist" aria-label="Portfolio view">
           <button class="view-tab is-active" data-view="products" role="tab" aria-selected="true">Products</button>
+          <span class="view-switch-separator" aria-hidden="true"></span>
           <button class="view-tab" data-view="roadmap" role="tab" aria-selected="false">Roadmap</button>
         </div>
         <div class="toolbar-actions">
@@ -357,6 +360,8 @@
   <script src="js/package-source.js"></script>
   <script src="js/package-client.js"></script>
   <script src="js/app-dialogs.js"></script>
+  <script src="js/workspace-notifications.js"></script>
+  <script src="js/product-issues.js"></script>
   <script src="js/app.js"></script>
   <script src="js/package-ui.js"></script>
   <script src="js/workspace-ui.js"></script>
