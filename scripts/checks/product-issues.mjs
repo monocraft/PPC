@@ -101,6 +101,36 @@ assert.equal(variant.members.length, 2, "duplicates span same-type groups but no
 assert.equal(variant.members[1].focus.groupIndex, 1);
 assert.equal(variant.members[1].focus.rowId, "other-black");
 
+const blackRed = { id: "dual-bk", code: "BK", colorKey: "black", colorName: "Black", colorHex: "#111111", colorKey2: "red", colorName2: "Red", colorHex2: "#b72f3d" };
+const blackOnly = { id: "single-bk", code: "BK", colorKey: "black", colorName: "Black", colorHex: "#111111" };
+const redOnly = { id: "single-rd", code: "RD", colorKey: "red", colorName: "Red", colorHex: "#b72f3d" };
+const redBlack = { id: "dual-reversed", code: "BK", colorKey: "red", colorName: "Red", colorHex: "#b72f3d", colorKey2: "black", colorName2: "Black", colorHex2: "#111111" };
+const colorwayProduct = product("colorways", "Distinct headset colorways", "COLORWAY-HP", { variantGroups: [{ id: "colorway-group", type: "color", items: [blackRed, blackOnly, redOnly, redBlack, { ...blackRed, id: "explicit-code", code: "BK/RD" }] }] });
+const colorwayPortfolio = { categories: [category("audio", "PC Audio", [colorwayProduct])] };
+assert.equal(integrity.scan(colorwayPortfolio).length, 0, "BK Black/Red, BK Black, RD Red, reversed Red/Black and BK/RD rows are legitimate distinct colorways");
+colorwayProduct.variantGroups[0].items.push({ ...blackRed, id: "real-duplicate", code: " bk ", colorName: "Renamed display label" });
+const exactColorway = integrity.scan(colorwayPortfolio).find((issue) => issue.kind === "variant-sku");
+assert.equal(exactColorway.severity, "error"); assert.equal(exactColorway.members.length, 2, "only rows with the same code and full color combination are flagged");
+assert.deepEqual(exactColorway.members.map((location) => location.focus.rowIndex), [0, 5]);
+assert.ok(exactColorway.description.includes("primary/secondary"));
+assert.ok(exactColorway.guidance.includes("may share the same code"), "the warning explains valid repeated abbreviations instead of demanding unique color codes");
+assert.match(exactColorway.members[0].detail, /Black \/ Red/, "duplicate reviews show both colors to help distinguish the actual affected rows");
+colorwayProduct.variantGroups[0].items.pop();
+colorwayProduct.variantGroups.push({ id: "custom-colors", type: "color", items: [
+  { id: "custom-a", code: "CUSTOM", colorKey: "custom", colorName: "Special finish", colorHex: "#123456" },
+  { id: "custom-b", code: "CUSTOM", colorKey: "custom", colorName: "Special finish", colorHex: "#654321" },
+] });
+assert.equal(integrity.scan(colorwayPortfolio).length, 0, "custom colorways with different actual colors remain distinct despite shared code and label");
+colorwayProduct.variantGroups.push({ id: "layouts-one", type: "layout", items: [{ id: "us-one", code: "US", label: "United States" }] }, { id: "layouts-two", type: "layout", items: [{ id: "us-two", code: " us ", label: "Alternate label" }] });
+const trueLayout = integrity.scan(colorwayPortfolio).find((issue) => issue.kind === "variant-sku");
+assert.equal(trueLayout.members.length, 2, "layout codes remain unique across layout groups regardless of their labels");
+assert.match(trueLayout.title, /layout code/);
+colorwayProduct.variantGroups.pop(); colorwayProduct.variantGroups.pop();
+const standaloneColorwayScan = integrity.scan(colorwayPortfolio);
+await import("../../public/js/master-model.js");
+assert.deepEqual(integrity.scan(colorwayPortfolio), standaloneColorwayScan, "the review's standalone colorway rules agree with the shared saving model");
+assert.doesNotThrow(() => globalThis.PortfolioMasterModel.validateValues(globalThis.PortfolioMasterModel.values(colorwayProduct)), "valid colorway combinations must pass the same validation used when saving to master");
+
 const plan = { items: [{ action: "ambiguous", group: { displayName: "ASCM Cloud" }, match: { status: "ambiguous", candidates: [
   { categoryId: "pc", productId: "a", productName: first.name }, { categoryId: "console", productId: "b", productName: other.name },
   { categoryId: "console", productId: "b", productName: other.name } ] } },
@@ -198,4 +228,4 @@ assert.equal(prevented && stopped, true, "native cancellation also owns its even
 assert.equal(mountedDialog.open, false);
 keyboard.destroy();
 
-console.log("Product issue checks passed: legitimate PC/Console copies, portfolio-scoped SKU/name reviews, stable scoped issue IDs, repeated-row protections, global internal IDs, exact locators, hidden-filter navigation, stale-record protection, refreshed ASCM candidate locations, escaped review markup, persistent notification resolution, and modal keyboard isolation.");
+console.log("Product issue checks passed: legitimate PC/Console copies and distinct single/dual colorways, exact repeated colorway/layout protections consistent with master saving, portfolio-scoped SKU/name reviews, stable scoped issue IDs, repeated-row protections, global internal IDs, exact locators, hidden-filter navigation, stale-record protection, refreshed ASCM candidate locations, escaped review markup, persistent notification resolution, and modal keyboard isolation.");

@@ -1,0 +1,6 @@
+project_id = "PPCDB"
+
+[functions.ppc-master]
+verify_jwt = false
+entrypoint = "./functions/ppc-master/index.ts"
+

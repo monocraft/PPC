@@ -33,7 +33,7 @@ export function renderPackageSource(value = "", masterValue = "", options = {}) 
   const source = endpoint
     ? { mode: "relay", packageUrl: "", endpoint, label: "Shared portfolio" }
     : { mode: "static", packageUrl: "./data/master_ppc.pkg", endpoint: "", label: "Master portfolio" };
-  return `/* Encrypted master location. Never put a package key in this file. */\nglobalThis.PPC_PACKAGE_SOURCE = Object.freeze(${JSON.stringify(source)});\nglobalThis.PPC_MASTER_SOURCE = Object.freeze(${JSON.stringify({ mode: "service", endpoint: masterEndpoint, label: "Master portfolio" })});\n`;
+  return `/* Public connection addresses only. Package and publisher credentials stay private. */\nglobalThis.PPC_PACKAGE_SOURCE = Object.freeze(${JSON.stringify(source)});\nglobalThis.PPC_MASTER_SOURCE = Object.freeze(${JSON.stringify({ mode: "service", endpoint: masterEndpoint, team: Boolean(masterEndpoint && /\/functions\/v1\/ppc-master\/api\/master$/.test(new URL(masterEndpoint).pathname)), label: "Master portfolio" })});\n`;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -43,5 +43,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const output = path.join(projectRoot, relativeOutput);
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, renderPackageSource(process.env.PPC_PACKAGE_ENDPOINT, process.env.PPC_MASTER_ENDPOINT, { mode: process.env.PPC_MASTER_MODE || undefined }), "utf8");
-  console.log(process.env.PPC_PACKAGE_ENDPOINT ? "Shared package service configured." : process.env.PPC_MASTER_MODE === "static" ? "Static encrypted master configured." : "GitHub encrypted master sharing configured.");
+  console.log(process.env.PPC_MASTER_ENDPOINT ? "Private team saving and encrypted package configured." : process.env.PPC_PACKAGE_ENDPOINT ? "Shared package service configured." : process.env.PPC_MASTER_MODE === "static" ? "Static encrypted master configured." : "GitHub encrypted master sharing configured.");
 }

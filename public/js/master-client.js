@@ -25,17 +25,39 @@
 
   function normalizeSnapshot(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.products) || snapshot.products.length > 30000) throw new Error("The master returned an incomplete response. Your local changes are safe.");
+    const invalid = () => { throw new Error("The master returned invalid product details. Your local changes are safe."); };
+    const validId = (id) => typeof id === "string" && id.length > 0 && id.length <= 180 && !["__proto__", "prototype", "constructor"].includes(id);
+    const revisionsOf = (value) => {
+      if (value === undefined) return {};
+      if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+      for (const [path, counter] of Object.entries(value)) if (!path || path.length > 4096 || !Number.isSafeInteger(counter) || counter < 0) invalid();
+      return clone(value);
+    };
     const ids = new Set();
     const products = snapshot.products.map((product) => {
       const productId = idOf(product);
-      if (!productId || ids.has(productId) || !product.values || typeof product.values !== "object" || Array.isArray(product.values)) throw new Error("The master returned an incomplete response. Your local changes are safe.");
+      if (!validId(productId) || ids.has(productId) || !product.values || typeof product.values !== "object" || Array.isArray(product.values)) throw new Error("The master returned an incomplete response. Your local changes are safe.");
+      if ((product.categoryId !== undefined && (typeof product.categoryId !== "string" || product.categoryId.length > 180)) || (product.laneId !== undefined && product.laneId !== "" && !validId(product.laneId)) || (product.productVersion !== undefined && !/^[a-f0-9]{64}$/.test(product.productVersion))) invalid();
       ids.add(productId);
       let values;
       try { values = model().validateValues(product.values, { checkDuplicates: false, checkDateOrder: false }); }
       catch { throw new Error("The master returned invalid product details. Your local changes are safe."); }
-      return { ...product, productId, productName: String(product.productName || ""), categoryId: String(product.categoryId || ""), values, revisions: clone(product.revisions || {}) };
+      return { ...product, productId, productName: String(product.productName || ""), categoryId: String(product.categoryId || ""), laneId: String(product.laneId || ""), values, revisions: revisionsOf(product.revisions) };
     });
-    return { ...snapshot, products };
+    if (snapshot.tombstones !== undefined && (!Array.isArray(snapshot.tombstones) || snapshot.tombstones.length > 30000)) invalid();
+    const tombstones = (snapshot.tombstones || []).map((item) => {
+      const productId = idOf(item);
+      if (!validId(productId) || ids.has(productId) || (item.categoryId !== undefined && (typeof item.categoryId !== "string" || item.categoryId.length > 180)) || (item.laneId !== undefined && item.laneId !== "" && !validId(item.laneId))) invalid();
+      ids.add(productId);
+      return { productId, categoryId: String(item.categoryId || ""), laneId: String(item.laneId || ""), productName: String(item.productName || ""), revisions: revisionsOf(item.revisions) };
+    });
+    if (snapshot.masterSync !== undefined && snapshot.masterSync !== null && (typeof snapshot.masterSync !== "object" || Array.isArray(snapshot.masterSync))) invalid();
+    if (snapshot.packageInfo && root.PortfolioPackage?.normalizePackageInfo) root.PortfolioPackage.normalizePackageInfo(snapshot.packageInfo);
+    if (snapshot.publication) {
+      const value = snapshot.publication;
+      if (!["current", "pending", "error"].includes(value.status) || !Number.isSafeInteger(value.requestedRevision) || !Number.isSafeInteger(value.publishedRevision) || value.publishedRevision < 0 || value.requestedRevision < value.publishedRevision) invalid();
+    }
+    return { ...snapshot, products, tombstones };
   }
 
   function errorOf(message, code, status) { const error = new Error(message); error.code = code; error.status = status; return error; }
@@ -53,7 +75,7 @@
     finally { reader.releaseLock(); }
   }
 
-  async function performRequest({ endpoint, operation, key, editorToken, fetchImpl = root.fetch, signal, keepalive = false, ...payload }) {
+  async function performRequest({ endpoint, operation, key, editorToken, team = false, fetchImpl = root.fetch, signal, keepalive = false, ...payload }) {
     if (!["latest", "save", "presence"].includes(operation)) throw new Error("The master action is invalid.");
     const url = `${normalizeEndpoint(endpoint)}/${operation}`;
     let normalizedKey;
@@ -65,7 +87,7 @@
       response = await fetchImpl(url, {
         method: "POST", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal, keepalive: Boolean(keepalive && operation === "presence"),
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ key: normalizedKey, ...(editorToken ? { editorToken } : {}), ...payload }),
+        body: JSON.stringify({ key: normalizedKey, ...(!team && editorToken ? { editorToken } : {}), ...payload }),
       });
     } catch (error) {
       if (error?.name === "AbortError") throw error;
@@ -78,6 +100,7 @@
     try { data = await readJson(response); }
     catch { throw errorOf("The master response could not be read. Your local changes are safe.", "INVALID_RESPONSE", response.status); }
     if (response.status === 403) {
+      if (team) throw errorOf("Team saving needs to be connected by the portfolio owner. Your changes remain on this device.", "TEAM_SETUP_REQUIRED", 403);
       const disabled = data.code === "WRITES_DISABLED";
       throw errorOf(disabled ? "Saving to master is not enabled yet. Ask the portfolio owner to enable sharing. Your changes remain on this device." : "Enter the team editing key to save changes to the master.", disabled ? "WRITES_DISABLED" : "EDITOR_KEY_REQUIRED", 403);
     }
@@ -107,8 +130,11 @@
   function createSession({ endpoint, source, adapter, fetchImpl = root.fetch } = {}) {
     if (!model() || !adapter?.getProducts || !(adapter.applyProductValues || adapter.applyPatches)) throw new Error("A master model and portfolio adapter are required.");
     const mode = source?.mode === "github" ? "github" : "service";
+    const team = source?.team === true;
     const configured = mode === "github" || Boolean(String(endpoint || "").trim());
-    let baseline = new Map(), snapshot = null, key = "", editorToken = "", githubToken = "", githubTransport = null, identity = null, connected = false, busy = false, generation = 0, accessVersion = 0;
+    let editorName = "", editorSessionId = root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    try { editorName = String(root.localStorage?.getItem("portfolio.sharedDisplayName") || "").trim().slice(0, 60); } catch {}
+    let baseline = new Map(), tombstones = new Map(), snapshot = null, key = "", editorToken = "", githubToken = "", githubTransport = null, identity = null, connected = false, busy = false, generation = 0, accessVersion = 0, pendingRequest = null;
     function resetGitHubAccess() { githubTransport?.disconnect?.(); githubTransport = null; githubToken = ""; identity = null; }
     function clearAccess() {
       if (key || editorToken || githubToken || connected) accessVersion += 1;
@@ -129,28 +155,37 @@
       finally { root.clearTimeout(timer); }
     }
     async function send(operation, payload = {}) {
-      if (mode !== "github") return request({ endpoint, operation, key, editorToken, fetchImpl, ...payload });
+      if (mode !== "github") return request({ endpoint, operation, key, editorToken, team, fetchImpl, ...payload });
       const result = await githubCall((signal) => transport().request({ operation, key, signal, ...payload }));
       return { ...result, snapshot: normalizeSnapshot(result.snapshot || result) };
     }
     function seed(products) {
       generation += 1;
-      baseline = new Map(); snapshot = null;
+      baseline = new Map(); snapshot = null; pendingRequest = null;
+      tombstones = new Map((adapter.getMasterTombstones?.() || []).map((item) => [idOf(item), clone(item)]));
       for (const product of products || []) {
         const productId = idOf(product);
-        if (productId) baseline.set(productId, { productId, values: valuesOf(product), revisions: clone(product.revisions || product.masterSync?.revisions || product.dateMaster?.revisions || {}) });
+        if (productId) baseline.set(productId, { ...clone(product), productId, values: valuesOf(product), revisions: clone(product.revisions || product.masterSync?.revisions || product.dateMaster?.revisions || {}) });
       }
     }
     seed(adapter.getBaselineProducts?.() || adapter.getProducts());
 
     function track() {
       const pending = [];
+      const currentIds = new Set();
       for (const product of adapter.getProducts()) {
         const productId = idOf(product), base = baseline.get(productId);
-        if (!base) continue;
+        if (!productId || currentIds.has(productId)) throw new Error("Repeated product IDs need review before saving to master.");
+        currentIds.add(productId);
+        if (!base) {
+          const mine = valuesOf(product);
+          pending.push({ kind: "create", productId, productName: String(product.name || product.productName || productId), categoryId: String(product.categoryId || ""), laneId: String(product.laneId || ""), base: null, baseRevisions: clone(tombstones.get(productId)?.revisions || {}), mine });
+          continue;
+        }
         const mine = valuesOf(product), patch = model().diffValues(base.values, mine);
-        if (Object.keys(patch).length) pending.push({ productId, productName: String(product.name || product.productName || productId), base: clone(base.values), baseRevisions: clone(base.revisions), mine, patch });
+        if (Object.keys(patch).length) pending.push({ productId, productName: String(product.name || product.productName || productId), categoryId: String(base.categoryId || product.categoryId || ""), laneId: String(base.laneId || product.laneId || ""), base: clone(base.values), baseRevisions: clone(base.revisions), mine, patch });
       }
+      for (const [productId, base] of baseline) if (!currentIds.has(productId)) pending.push({ kind: "delete", productId, productName: String(base.productName || base.values.name || productId), categoryId: String(base.categoryId || ""), laneId: String(base.laneId || ""), base: clone(base.values), baseRevisions: clone(base.revisions), baseProductVersion: base.productVersion, mine: null });
       return pending;
     }
 
@@ -160,11 +195,31 @@
       incoming = normalizeSnapshot(incoming);
       const current = new Map(adapter.getProducts().map((product) => [idOf(product), product]));
       const nextBaseline = new Map(baseline);
+      const nextTombstones = new Map(incoming.tombstones.map((item) => [item.productId, clone(item)]));
       const updates = [];
+      const remoteIds = new Set(incoming.products.map((item) => item.productId));
       for (const remote of incoming.products) {
         const product = current.get(remote.productId), old = baseline.get(remote.productId), submitted = accepted?.get(remote.productId);
-        if (!product) { nextBaseline.set(remote.productId, clone(remote)); continue; }
+        if (!product) {
+          if (submitted && submitted.kind !== "delete" && submitted.disposition !== "master") {
+            nextBaseline.set(remote.productId, clone(remote));
+            continue;
+          }
+          if (!old || submitted) {
+            updates.push({ kind: "create", productId: remote.productId, categoryId: remote.categoryId, laneId: remote.laneId, values: remote.values });
+            nextBaseline.set(remote.productId, clone(remote));
+          }
+          continue;
+        }
+        // A local new record must remain an explicit creation until the user
+        // resolves an identity collision; refreshing cannot silently adopt it.
+        if (!old && !submitted) continue;
         const mine = valuesOf(product), base = submitted ? submitted.mine : old?.values || mine;
+        if (submitted?.kind === "delete") {
+          updates.push({ productId: remote.productId, values: mine, patch: mine });
+          nextBaseline.set(remote.productId, clone(remote));
+          continue;
+        }
         const baseRevisions = submitted ? remote.revisions : old?.revisions || {};
         const plan = model().planMerge(base, mine, remote.values, baseRevisions, remote.revisions);
         const localValues = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, "mine"])));
@@ -174,8 +229,23 @@
           revisions: model().draftRevisions(base, mine, baseRevisions, remote.revisions),
         });
       }
+      for (const [productId, old] of baseline) if (!remoteIds.has(productId)) {
+        const product = current.get(productId), submitted = accepted?.get(productId);
+        if (product && submitted?.kind === "delete" && submitted.disposition !== "master") { nextBaseline.delete(productId); continue; }
+        const clean = !product || !Object.keys(model().diffValues(submitted?.mine || old.values, valuesOf(product))).length;
+        if (clean) {
+          if (product) updates.push({ kind: "delete", productId });
+          nextBaseline.delete(productId);
+        } else if (submitted) nextBaseline.delete(productId);
+      }
+      // A creation discarded in conflict review may never have had a baseline.
+      for (const [productId, submitted] of accepted || []) if (!remoteIds.has(productId) && !baseline.has(productId)) {
+        const product = current.get(productId);
+        if (product && submitted.mine && !Object.keys(model().diffValues(submitted.mine, valuesOf(product))).length) updates.push({ kind: "delete", productId });
+      }
       (adapter.applyProductValues || adapter.applyPatches).call(adapter, updates);
       baseline = nextBaseline; snapshot = incoming;
+      tombstones = nextTombstones;
       if (mode === "github" && githubToken && incoming.identity) identity = clone(incoming.identity);
       adapter.setMasterSnapshot?.(incoming);
       if (incoming.packageInfo) adapter.setPackageInfo?.(incoming.packageInfo);
@@ -210,10 +280,11 @@
 
     async function save({ reason = "", resolveConflicts, requestId } = {}) {
       if (busy) throw new Error("The master is already updating. Please wait.");
+      if (!configured) throw errorOf("Team saving has not been connected by the portfolio owner yet. Your changes remain on this device.", "TEAM_SETUP_REQUIRED");
       if (!key) throw errorOf("Connect to the master before saving.", "INVALID_KEY", 401);
       const originals = new Map(track().map((item) => [item.productId, item]));
       if (!originals.size) return { saved: false, snapshot };
-      let changes = [...originals.values()].map(({ productId, base, baseRevisions, patch }) => ({ productId, base, baseRevisions, patch }));
+      let changes = [...originals.values()].map(toChange);
       let rebase = null, attempt = 0, keptFences = [], recheckChanges = [];
       const operationGeneration = generation;
       busy = true;
@@ -228,6 +299,7 @@
             const overlap = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
             const changed = keptFences.some((conflict) => {
               const before = priorProducts.get(String(conflict.productId)), after = latestProducts.get(String(conflict.productId));
+              if (conflict.path === "@product") return JSON.stringify(before || null) !== JSON.stringify(after || null) || JSON.stringify((rebase.tombstones || []).find((item) => item.productId === conflict.productId) || null) !== JSON.stringify((latest.tombstones || []).find((item) => item.productId === conflict.productId) || null);
               if (!before || !after) return true;
               const paths = conflict.path === "@lifecycle" ? ["@launch", "@end"] : [conflict.path, conflict.conflictingPath].filter(Boolean);
               if (model().diffOperations(before.values, after.values).some((operation) => paths.some((path) => overlap(operation.path, path)))) return true;
@@ -236,16 +308,18 @@
             if (changed) { changes = recheckChanges; rebase = null; continue; }
             applySnapshot(latest, originals); return { saved: true, snapshot: latest, keptMaster: true };
           }
+          const intent = JSON.stringify({ changes, reason: String(reason).trim(), editorSessionId });
+          if (!pendingRequest || pendingRequest.intent !== intent || (attempt === 0 && requestId && pendingRequest.id !== requestId)) pendingRequest = { intent, id: attempt === 0 && requestId ? requestId : root.crypto?.randomUUID?.() || `master-${Date.now()}-${Math.random().toString(36).slice(2)}` };
           const result = await send("save", {
-            requestId: attempt === 0 && requestId ? requestId : root.crypto?.randomUUID?.() || `master-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            reason: String(reason).trim(), changes,
+            requestId: pendingRequest.id,
+            reason: String(reason).trim(), changes, ...(mode === "service" ? team ? { sessionId: editorSessionId, ...(editorName ? { displayName: editorName } : {}) } : editorName ? { actor: editorName } : {} : {}),
           });
           if (generation !== operationGeneration) throw new Error("The workspace changed while the master was updating. Your current workspace was kept; reconnect to check the saved master.");
-          if (result.code !== "MASTER_CONFLICT") { connected = true; applySnapshot(result.snapshot, originals); return { ...result, saved: true }; }
+          if (result.code !== "MASTER_CONFLICT") { connected = true; applySnapshot(result.snapshot, originals); pendingRequest = null; return { ...result, saved: true }; }
           const localPlans = new Map(), remoteProducts = new Map(result.snapshot.products.map((product) => [product.productId, product]));
           for (const change of changes) {
             const remote = remoteProducts.get(change.productId);
-            if (!remote) throw new Error("A product is no longer in the master. Your local changes are safe; pull the latest portfolio before trying again.");
+            if (change.kind === "create" || change.kind === "delete" || !remote) { localPlans.set(change.productId, null); continue; }
             localPlans.set(change.productId, model().planMerge(change.base, { ...change.base, ...change.patch }, remote.values, change.baseRevisions, remote.revisions));
           }
           const conflicts = result.conflicts.map((conflict) => {
@@ -255,17 +329,27 @@
           });
           if (!conflicts.length) throw new Error("The master changed again. Your local changes are safe; try saving again.");
           for (const [productId, plan] of localPlans) {
+            if (!plan) continue;
             for (const conflict of plan.conflicts) if (!conflicts.some((item) => String(item.productId) === productId && item.path === conflict.path)) throw new Error("The master returned an incomplete conflict review. Your local changes are safe.");
           }
           const selected = await resolveConflicts?.(conflicts, result.snapshot);
           if (!selected) return { saved: false, cancelled: true, snapshot };
           for (const conflict of conflicts) if (!["mine", "master"].includes(selected instanceof Map ? selected.get(conflict.key) : selected[conflict.key])) throw new Error("Choose a final value for every conflict.");
+          for (const conflict of conflicts) if (conflict.path === "@product") originals.get(conflict.productId).disposition = selected instanceof Map ? selected.get(conflict.key) : selected[conflict.key];
           const nextChanges = [];
           recheckChanges = [];
           keptFences = conflicts.filter((conflict) => (selected instanceof Map ? selected.get(conflict.key) : selected[conflict.key]) === "master");
           for (const change of changes) {
             const remote = remoteProducts.get(change.productId), plan = localPlans.get(change.productId);
             const choices = Object.fromEntries(conflicts.filter((conflict) => String(conflict.productId) === change.productId).map((conflict) => [conflict.path, selected instanceof Map ? selected.get(conflict.key) : selected[conflict.key]]));
+            if (!plan) {
+              const lifecycle = conflicts.find((item) => item.productId === change.productId && item.path === "@product");
+              const choice = lifecycle ? choices["@product"] : "mine";
+              const rebased = rebaseLifecycle(change, remote, result.snapshot);
+              if (rebased) recheckChanges.push(rebased);
+              if (choice === "mine" && rebased) nextChanges.push(rebased);
+              continue;
+            }
             const resolved = model().resolveConflicts(plan, choices), patch = model().diffValues(remote.values, resolved);
             const mineResolved = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, "mine"])));
             const minePatch = model().diffValues(remote.values, mineResolved);
@@ -282,6 +366,22 @@
       } finally { busy = false; }
     }
 
+    function toChange(item) {
+      if (item.kind === "create") return { kind: "create", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, mine: clone(item.mine), baseRevisions: clone(item.baseRevisions) };
+      if (item.kind === "delete") return { kind: "delete", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, base: clone(item.base), baseRevisions: clone(item.baseRevisions), baseProductVersion: item.baseProductVersion };
+      return { productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, base: clone(item.base), baseRevisions: clone(item.baseRevisions), patch: clone(item.patch) };
+    }
+
+    function rebaseLifecycle(change, remote, latest) {
+      if (change.kind === "delete") return remote ? { ...change, categoryId: remote.categoryId, laneId: remote.laneId, base: clone(remote.values), baseRevisions: clone(remote.revisions), baseProductVersion: remote.productVersion } : null;
+      const mine = change.kind === "create" ? change.mine : model().patchValues(change.base, change.patch);
+      if (remote) {
+        const patch = model().diffValues(remote.values, mine);
+        return Object.keys(patch).length ? { productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch } : null;
+      }
+      return { kind: "create", productId: change.productId, categoryId: change.categoryId, laneId: change.laneId, mine: clone(mine), baseRevisions: clone((latest.tombstones || []).find((item) => item.productId === change.productId)?.revisions || {}) };
+    }
+
     function markImported(products, importedKey) {
       seed(products || adapter.getBaselineProducts?.() || adapter.getProducts()); connected = false;
       accessVersion += 1;
@@ -291,11 +391,17 @@
       persistBaseline();
     }
     return Object.freeze({ connect, refresh, save, applySnapshot, track, markImported,
-      async presence({ sessionId, displayName, editing, productId, leave = false } = {}) {
+      async presence({ sessionId, displayName, editing, productId, categoryId, leave = false } = {}) {
         if (mode === "github" || !configured || !key) return null;
-        return request({ endpoint, operation: "presence", key, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, leave: Boolean(leave) });
+        return request({ endpoint, operation: "presence", key, team, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, ...(categoryId ? { categoryId } : {}), leave: Boolean(leave) });
       },
-      setEditorToken(value) { editorToken = String(value || "").trim(); },
+      setEditorProfile({ sessionId, displayName, editorName: suppliedName } = {}) {
+        const id = String(sessionId || "");
+        if (id && !/^[-_a-z0-9]{8,128}$/i.test(id)) throw new Error("The browser editing session is invalid.");
+        if (id) editorSessionId = id;
+        if (displayName !== undefined || suppliedName !== undefined) editorName = String(displayName ?? suppliedName ?? "").trim().slice(0, 60);
+      },
+      setEditorToken(value) { if (!team) editorToken = String(value || "").trim(); },
       async setGitHubToken(value) {
         resetGitHubAccess(); githubToken = String(value || "").trim(); accessVersion += 1;
         const operationVersion = accessVersion, selectedTransport = transport();
@@ -309,7 +415,7 @@
         }
       },
       disconnect() { clearAccess(); },
-      getState() { return { mode, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, busy, accessVersion, snapshot, pending: track() }; },
+      getState() { return { mode, team, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, editorProfile: { sessionId: editorSessionId, displayName: editorName }, busy, accessVersion, snapshot, pending: track() }; },
     });
   }
   root.PortfolioMasterClient = Object.freeze({ conflictKey, normalizeEndpoint, normalizeSnapshot, request, createSession });

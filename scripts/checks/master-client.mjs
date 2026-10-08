@@ -299,4 +299,309 @@ await assert.rejects(client.request({ endpoint, operation: "latest", key, fetchI
 await assert.rejects(client.request({ endpoint, operation: "latest", key, fetchImpl: async () => new Response("<html>Sign in</html>") }), /could not be read/);
 await assert.rejects(client.request({ endpoint, operation: "latest", key, fetchImpl: async () => new Response("{}", { headers: { "Content-Length": String(13 * 1024 * 1024) } }) }), /could not be read/);
 await assert.rejects(client.request({ endpoint, operation: "latest", key, fetchImpl: async () => Response.json({ snapshot: { products: [{ productId: "bad", values: { generalAvailabilityDate: "2026-02-31" } }] } }) }), /invalid product details/);
-console.log("Master client checks passed: narrow authenticated updates, stale draft preservation, unrelated date/spec merging, explicit conflict choices, repeat conflicts, cancellation/reload safety, concurrent local edits, disconnect and sanitized errors.");
+
+// These requests use the real model, rather than a field-only mock, so the
+// client must submit genuine create/delete preconditions and process real
+// lifecycle conflicts, placement, full-record versions, and tombstones.
+function lifecycleHarness() {
+  const baseProduct = { ...clone(fixture), laneId: "wireless", imageAssetId: "existing-product-image", customNote: "Preserve existing package metadata" };
+  let remoteManifest = { version: 4, categories: [{ id: "pc-audio", board: { lanes: [{ id: "wireless" }], products: [clone(baseProduct)] } }, { id: "console-audio", board: { lanes: [{ id: "console-wireless" }], products: [] } }], imageAssets: [{ id: "existing-product-image", path: "images/product.webp" }] };
+  let products = [{ ...clone(baseProduct), categoryId: "pc-audio" }], baseline = model.snapshot(remoteManifest).products, storedSnapshot = model.snapshot(remoteManifest), sequence = 0, beforeSave = null, latestOverride = null, loseSaveReply = false;
+  const calls = [], receipts = new Map();
+  const snapshot = () => ({ ...model.snapshot(remoteManifest), source: "service", connectionMode: "team", canWrite: true, revision: String(remoteManifest.masterSync?.revision || 0) });
+  const adapter = {
+    getProducts: () => products,
+    getBaselineProducts: () => baseline,
+    setBaselineProducts: (items) => { baseline = clone(items); },
+    getMasterTombstones: () => storedSnapshot.tombstones || [],
+    setMasterSnapshot: (incoming) => { storedSnapshot = clone(incoming); },
+    applyProductValues: (changes) => {
+      for (const change of changes) {
+        const index = products.findIndex((item) => item.id === change.productId);
+        if (change.kind === "delete") {
+          if (index >= 0) products.splice(index, 1);
+        } else if (change.kind === "create") {
+          assert.ok(remoteManifest.categories.some((category) => category.id === change.categoryId && category.board.lanes.some((lane) => lane.id === change.laneId)), "remote creations need a usable portfolio and lane");
+          if (index >= 0) throw new Error("The adapter cannot create a repeated product identity.");
+          products.push({ ...model.applyProductValues({ id: change.productId, laneId: change.laneId }, change.values), categoryId: change.categoryId });
+        } else {
+          assert.ok(index >= 0, "field updates need an existing local product");
+          products[index] = model.applyProductValues(products[index], change.values);
+        }
+      }
+    },
+  };
+  const fetchImpl = async (url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.key, key);
+    assert.equal(Object.hasOwn(body, "editorToken"), false, "team mode must not require a second editing credential");
+    calls.push({ url, body: clone(body) });
+    if (url.endsWith("/latest")) return Response.json({ snapshot: latestOverride || snapshot() });
+    const receiptId = JSON.stringify([body.sessionId, body.requestId]);
+    const receipt = receipts.get(receiptId);
+    if (receipt) {
+      assert.equal(receipt.intent, JSON.stringify(body), "a repeated receipt is valid only for the original complete save intent");
+      return Response.json({ snapshot: snapshot(), savedFields: receipt.savedFields, savedProducts: receipt.savedProducts, alreadySaved: true, requestId: body.requestId });
+    }
+    await beforeSave?.(body);
+    const merged = model.mergeChanges(remoteManifest, body.changes, { requestId: body.requestId, actor: body.displayName || "Team member", reason: body.reason });
+    if (merged.conflicts.length) return Response.json({ code: "MASTER_CONFLICT", conflicts: merged.conflicts, snapshot: snapshot() }, { status: 409 });
+    remoteManifest = merged.manifest;
+    receipts.set(receiptId, { intent: JSON.stringify(body), savedFields: merged.savedFields, savedProducts: merged.savedProducts });
+    if (loseSaveReply) { loseSaveReply = false; throw new TypeError("The accepted response was lost"); }
+    return Response.json({ snapshot: snapshot(), savedFields: merged.savedFields, savedProducts: merged.savedProducts });
+  };
+  const source = { mode: "service", team: true };
+  const session = client.createSession({ endpoint, source, adapter, fetchImpl });
+  const remoteEntry = (id) => snapshot().products.find((entry) => entry.productId === id);
+  const remoteChange = (changes) => {
+    const merged = model.mergeChanges(remoteManifest, changes, { requestId: `other-team-${++sequence}`, actor: "Other team" });
+    assert.equal(merged.conflicts.length, 0, "test setup's independent remote save must succeed");
+    remoteManifest = merged.manifest;
+  };
+  return { session, adapter, calls,
+    get products() { return products; }, get baseline() { return baseline; }, get remoteManifest() { return remoteManifest; }, get snapshot() { return snapshot(); },
+    reload: () => client.createSession({ endpoint, source, adapter, fetchImpl }),
+    add(id = "local-new", patch = {}, placement = {}) { products.push({ ...model.applyProductValues({ id, laneId: placement.laneId || "wireless" }, { ...model.productValues(fixture), name: "New product", ...patch }), categoryId: placement.categoryId || "pc-audio" }); },
+    remove(id = fixture.id) { products = products.filter((item) => item.id !== id); },
+    edit(patch, id = fixture.id) { products = products.map((item) => item.id === id ? model.applyProductValues(item, { ...model.productValues(item), ...patch }) : item); },
+    remoteAdd(id = "remote-new", patch = {}, placement = {}) { remoteChange([{ kind: "create", productId: id, categoryId: placement.categoryId || "pc-audio", laneId: placement.laneId || "wireless", mine: { ...model.productValues(fixture), name: "Remote product", ...patch }, baseRevisions: snapshot().tombstones.find((item) => item.productId === id)?.revisions || {} }]); },
+    remoteEdit(patch, id = fixture.id) { const entry = remoteEntry(id); remoteChange([{ productId: id, base: entry.values, baseRevisions: entry.revisions, patch }]); },
+    remoteRemove(id = fixture.id) { const entry = remoteEntry(id); remoteChange([{ kind: "delete", productId: id, categoryId: entry.categoryId, laneId: entry.laneId, base: entry.values, baseRevisions: entry.revisions, baseProductVersion: entry.productVersion }]); },
+    onSave(callback) { beforeSave = callback; },
+    latestResponse(value) { latestOverride = value ? clone(value) : null; },
+    loseNextSaveReply() { loseSaveReply = true; },
+    get savedRequests() { return receipts.size; },
+  };
+}
+
+// A bad server response must fail before the first adapter mutation, including
+// lifecycle creations/removals and updates to unrelated accepted fields.
+const previousPackageApi = globalThis.PortfolioPackage;
+await import("../../public/js/package-codec.js");
+const validatePackageInfo = globalThis.PortfolioPackage.normalizePackageInfo;
+// Earlier transport fixtures intentionally use a simple non-package test key.
+// Use the real metadata validator without changing that request-key fixture.
+globalThis.PortfolioPackage = { normalizePackageInfo: validatePackageInfo };
+for (const corrupt of [
+  (value) => { value.tombstones = {}; },
+  (value) => { value.tombstones = [{ productId: value.products[0].productId, revisions: {} }]; },
+  (value) => { value.tombstones = [{ productId: "removed-fixture", revisions: { "@product": -1 } }]; },
+  (value) => { value.products[0].productId = "__proto__"; },
+  (value) => { value.products[0].revisions = []; },
+  (value) => { value.products[0].productVersion = "invalid-record-version"; },
+  (value) => { value.products[0].laneId = "constructor"; },
+  (value) => { value.masterSync = []; },
+  (value) => { value.publication = { status: "current", requestedRevision: 1, publishedRevision: 2 }; },
+  (value) => { value.packageInfo = { version: 1, updatedAt: "not-a-date", comments: "" }; },
+]) {
+  const h = lifecycleHarness(); await h.session.connect({ key });
+  h.edit({ ffsDate: "2026-10-01" }); h.remoteEdit({ codename: "Accepted independent team edit" }); h.remoteAdd("remote-arrival");
+  const products = clone(h.products), baseline = clone(h.baseline), pending = clone(h.session.track()), previousSnapshot = clone(h.session.getState().snapshot);
+  const invalid = clone(h.snapshot); corrupt(invalid); h.latestResponse(invalid);
+  await assert.rejects(h.session.refresh(), /invalid|incomplete/i);
+  assert.deepEqual(h.products, products, "malformed snapshot applies neither remote records nor field changes");
+  assert.deepEqual(h.baseline, baseline, "malformed snapshot cannot advance the stored comparison baseline");
+  assert.deepEqual(h.session.track(), pending, "malformed snapshot keeps the complete unsaved draft");
+  assert.deepEqual(h.session.getState().snapshot, previousSnapshot, "the last accepted snapshot survives invalid metadata");
+  h.latestResponse(null); await h.session.refresh();
+  assert.equal(h.products.find((item) => item.id === fixture.id).ffsDate, "2026-10-01");
+  assert.equal(h.products.find((item) => item.id === fixture.id).codename, "Accepted independent team edit");
+  assert.ok(h.products.some((item) => item.id === "remote-arrival"), "a later valid response can recover normally");
+}
+globalThis.PortfolioPackage = previousPackageApi;
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key });
+  h.session.setEditorProfile({ sessionId: "lost-reply-browser-session", displayName: "Planning team" });
+  h.add("created-before-disconnect", { specs: [{ id: "battery-new", label: "Battery", value: "50 h" }], partSkus: [{ id: "sku-new", code: "HP-NEW" }] });
+  h.loseNextSaveReply();
+  await assert.rejects(h.session.save({ reason: "Factory confirmation" }), { code: "UNAVAILABLE" });
+  assert.ok(h.snapshot.products.some((item) => item.productId === "created-before-disconnect"), "the server accepted the creation before the response was lost");
+  assert.equal(h.session.track()[0].kind, "create", "an unconfirmed creation remains a local draft");
+  assert.equal(h.savedRequests, 1);
+  h.remoteEdit({ codename: "Changed after the accepted creation" });
+  const result = await h.session.save({ reason: "Factory confirmation", resolveConflicts: () => { assert.fail("An accepted creation replay must not ask for an identity conflict"); } });
+  const requests = h.calls.filter((call) => call.url.endsWith("/save"));
+  assert.equal(requests.length, 2); assert.equal(requests[0].body.requestId, requests[1].body.requestId, "retries reuse the save ID for the exact original intent");
+  assert.deepEqual(requests[0].body, requests[1].body);
+  assert.equal(result.alreadySaved, true); assert.equal(h.savedRequests, 1, "retrying a lost creation response creates exactly one receipt and one product");
+  assert.equal(h.snapshot.products.filter((item) => item.productId === "created-before-disconnect").length, 1);
+  assert.equal(h.products.find((item) => item.id === fixture.id).codename, "Changed after the accepted creation", "receipt recovery applies the latest snapshot, including later team edits");
+  assert.equal(h.session.track().length, 0);
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key });
+  h.session.setEditorToken("not-needed-for-team");
+  h.session.setEditorProfile({ sessionId: "team-browser-session", displayName: "  Planning team  " });
+  h.add("local-new", { ffsDate: "2026-10-01", specs: [{ id: "created-spec", label: "Driver", value: "50 mm" }], partSkus: [{ id: "created-sku", code: "SKU-CREATED" }] });
+  assert.equal(h.session.track()[0].kind, "create");
+  const result = await h.session.save({ requestId: "local-create-request" });
+  assert.equal(result.saved, true); assert.equal(result.savedProducts, 1);
+  const accepted = h.snapshot.products.find((entry) => entry.productId === "local-new");
+  assert.equal(accepted.values.partSkus[0].code, "SKU-CREATED");
+  assert.equal(accepted.categoryId, "pc-audio"); assert.equal(accepted.laneId, "wireless");
+  assert.equal(h.products.find((item) => item.id === fixture.id).imageAssetId, "existing-product-image");
+  assert.equal(h.session.track().length, 0);
+  const request = h.calls.find((call) => call.url.endsWith("/save")).body;
+  assert.equal(request.sessionId, "team-browser-session"); assert.equal(request.displayName, "Planning team");
+  assert.equal(Object.hasOwn(request, "editorToken"), false);
+  assert.equal(Object.hasOwn(request.changes[0].mine, "imageAssetId"), false);
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.remove();
+  const pending = h.session.track()[0];
+  assert.equal(pending.kind, "delete"); assert.equal(pending.baseProductVersion, h.snapshot.products[0].productVersion);
+  await h.session.save();
+  assert.equal(h.snapshot.products.length, 0); assert.equal(h.products.length, 0); assert.equal(h.session.track().length, 0);
+  assert.equal(h.snapshot.tombstones[0].productId, fixture.id);
+  assert.equal(h.remoteManifest.imageAssets[0].id, "existing-product-image");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key });
+  h.edit({ codename: "Unsaved planning note" });
+  h.remoteAdd("remote-console", { name: fixture.name }, { categoryId: "console-audio", laneId: "console-wireless" });
+  await h.session.refresh();
+  const received = h.products.find((item) => item.id === "remote-console");
+  assert.equal(received.categoryId, "console-audio"); assert.equal(received.laneId, "console-wireless");
+  assert.equal(h.products.find((item) => item.id === fixture.id).codename, "Unsaved planning note");
+  assert.equal(h.session.track().length, 1); assert.equal(h.session.track()[0].productId, fixture.id);
+  assert.equal(h.session.track()[0].patch.codename, "Unsaved planning note");
+  h.remoteRemove("remote-console"); await h.session.refresh();
+  assert.equal(h.products.some((item) => item.id === "remote-console"), false);
+  assert.equal(h.session.track().length, 1, "accepted remote creations/removals do not become local publication drafts");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.remove();
+  const originalVersion = h.session.track()[0].baseProductVersion;
+  h.remoteEdit({ ffsDate: "2026-10-02" }); await h.session.refresh();
+  assert.equal(h.products.length, 0, "refresh must preserve a local product deletion");
+  assert.equal(h.session.track()[0].baseProductVersion, originalVersion, "refresh must retain the deletion's original concurrency guard");
+  const baseline = clone(h.baseline); let asked = 0;
+  const result = await h.session.save({ resolveConflicts: async (conflicts) => { asked += 1; assert.equal(conflicts[0].path, "@product"); assert.equal(conflicts[0].reason, "product-changed-before-delete"); return null; } });
+  assert.equal(result.cancelled, true); assert.equal(asked, 1);
+  assert.equal(h.products.length, 0); assert.deepEqual(h.baseline, baseline);
+  assert.equal(h.snapshot.products[0].values.ffsDate, "2026-10-02");
+  assert.equal(h.reload().track()[0].baseProductVersion, originalVersion, "a reload preserves a cancelled deletion's original baseline");
+}
+
+for (const choice of ["mine", "master"]) {
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.remove(); h.remoteEdit({ ffsDate: "2026-10-02" });
+  let asked = 0;
+  await h.session.save({ resolveConflicts: async (conflicts) => { asked += 1; return Object.fromEntries(conflicts.map((item) => [item.key, choice])); } });
+  assert.equal(asked, 1);
+  assert.equal(h.snapshot.products.length, choice === "mine" ? 0 : 1);
+  assert.equal(h.products.length, choice === "mine" ? 0 : 1);
+  if (choice === "master") assert.equal(h.products[0].ffsDate, "2026-10-02");
+  assert.equal(h.session.track().length, 0);
+}
+
+for (const choice of ["mine", "master"]) {
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit({ name: "My retained draft" }); h.remoteRemove(); await h.session.refresh();
+  assert.equal(h.products[0].name, "My retained draft", "a removed master record must not erase an unsaved local edit during refresh");
+  assert.equal(h.session.track()[0].kind, undefined, "an edited removed record keeps its original edit baseline until the user chooses whether to restore it");
+  let asked = 0;
+  await h.session.save({ resolveConflicts: async (conflicts) => { asked += 1; assert.equal(conflicts[0].reason, "product-removed"); return Object.fromEntries(conflicts.map((item) => [item.key, choice])); } });
+  assert.equal(asked, 1);
+  assert.equal(h.snapshot.products.length, choice === "mine" ? 1 : 0);
+  assert.equal(h.products.length, choice === "mine" ? 1 : 0);
+  if (choice === "mine") assert.equal(h.snapshot.products[0].values.name, "My retained draft");
+  assert.equal(h.session.track().length, 0);
+}
+
+for (const choice of ["mine", "master"]) {
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.add("colliding-id", { name: "My new product" });
+  h.remoteAdd("colliding-id", { name: "Their new product", price: 199 }); await h.session.refresh();
+  assert.equal(h.products.find((item) => item.id === "colliding-id").name, "My new product", "refresh cannot silently adopt a different team's colliding creation");
+  assert.equal(h.session.track()[0].kind, "create");
+  let asked = 0;
+  await h.session.save({ resolveConflicts: async (conflicts) => { asked += 1; assert.equal(conflicts[0].reason, "product-id-exists"); return Object.fromEntries(conflicts.map((item) => [item.key, choice])); } });
+  assert.equal(asked, 1);
+  assert.equal(h.snapshot.products.find((item) => item.productId === "colliding-id").values.name, choice === "mine" ? "My new product" : "Their new product");
+  assert.equal(h.products.find((item) => item.id === "colliding-id").name, choice === "mine" ? "My new product" : "Their new product");
+  assert.equal(h.session.track().length, 0);
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.add("created-in-flight");
+  h.onSave(() => h.edit({ name: "Edited while creating" }, "created-in-flight"));
+  await h.session.save();
+  assert.equal(h.snapshot.products.find((entry) => entry.productId === "created-in-flight").values.name, "New product");
+  assert.equal(h.products.find((entry) => entry.id === "created-in-flight").name, "Edited while creating");
+  assert.equal(h.session.track().length, 1); assert.equal(h.session.track()[0].patch.name, "Edited while creating");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.add("created-then-removed");
+  h.onSave(() => h.remove("created-then-removed"));
+  await h.session.save();
+  assert.equal(h.snapshot.products.some((entry) => entry.productId === "created-then-removed"), true);
+  assert.equal(h.products.some((entry) => entry.id === "created-then-removed"), false, "a product removed locally while its creation was saving must remain a removal draft");
+  assert.equal(h.session.track().length, 1); assert.equal(h.session.track()[0].kind, "delete");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit({ name: "Accepted update" });
+  h.onSave(() => h.remove());
+  await h.session.save();
+  assert.equal(h.snapshot.products[0].values.name, "Accepted update");
+  assert.equal(h.products.length, 0, "a local deletion made while an existing product update was saving must remain a draft");
+  assert.equal(h.session.track()[0].kind, "delete");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.remove();
+  h.onSave(() => h.add(fixture.id, model.productValues(fixture)));
+  await h.session.save();
+  assert.equal(h.snapshot.products.length, 0);
+  assert.equal(h.products.length, 1, "a product explicitly re-added during deletion must survive even when it has the original values");
+  assert.equal(h.session.track()[0].kind, "create");
+  assert.deepEqual(h.session.track()[0].baseRevisions, clone(h.snapshot.tombstones[0].revisions));
+}
+
+for (const choice of ["mine", "master"]) {
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.remove(); h.remoteEdit({ ffsDate: "2026-10-02" });
+  let asked = 0;
+  await h.session.save({ resolveConflicts: async (conflicts) => {
+    asked += 1;
+    if (asked === 1) h.remoteEdit({ ffsDate: fixture.ffsDate });
+    return Object.fromEntries(conflicts.map((item) => [item.key, choice]));
+  } });
+  assert.equal(asked, 2, "a changed deletion target requires a fresh decision, including an ABA return to the original field value");
+  assert.equal(h.snapshot.products.length, choice === "mine" ? 0 : 1);
+  assert.equal(h.products.length, choice === "mine" ? 0 : 1);
+  if (choice === "master") assert.equal(h.products[0].ffsDate, fixture.ffsDate);
+  assert.equal(h.session.track().length, 0);
+}
+
+for (const choice of ["mine", "master"]) {
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit({ name: "My restoration" }); h.remoteRemove();
+  let asked = 0;
+  await h.session.save({ resolveConflicts: async (conflicts) => {
+    asked += 1;
+    if (asked === 1) h.remoteAdd(fixture.id, { name: "Restored by another team" });
+    return Object.fromEntries(conflicts.map((item) => [item.key, choice]));
+  } });
+  assert.equal(asked, 2, "another team's restoration while deciding must require a fresh existence/value decision");
+  assert.equal(h.snapshot.products[0].values.name, choice === "mine" ? "My restoration" : "Restored by another team");
+  assert.equal(h.products[0].name, choice === "mine" ? "My restoration" : "Restored by another team");
+  assert.equal(h.session.track().length, 0);
+}
+
+{
+  const h = lifecycleHarness();
+  h.add("console-copy", model.productValues(fixture), { categoryId: "console-audio", laneId: "console-wireless" });
+  await h.session.connect({ key });
+  h.session.setEditorProfile({ sessionId: "anonymous-browser-session", displayName: "" });
+  await h.session.save();
+  assert.equal(h.snapshot.products.length, 2, "the same product name and business SKUs can be saved in PC and Console portfolios with separate internal identities");
+  assert.equal(h.session.track().length, 0);
+  const body = h.calls.find((call) => call.url.endsWith("/save")).body;
+  assert.equal(body.sessionId, "anonymous-browser-session"); assert.equal(Object.hasOwn(body, "displayName"), false, "a team member can save without entering a name");
+}
+
+console.log("Master client checks passed: narrow authenticated updates, real-model create/delete synchronization and conflicts, malformed-response atomic safety, lost creation reply recovery, remote lifecycle refresh, stale draft preservation, unrelated date/spec merging, repeat conflict choices, cancellation/reload safety, in-flight local changes, optional team names, disconnect and sanitized errors.");

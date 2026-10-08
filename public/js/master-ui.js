@@ -23,7 +23,7 @@
     if (!button || !adapter || !root.PortfolioMasterClient || !root.PortfolioMasterModel) return null;
     const endpoint = source?.endpoint || (root.PPC_PACKAGE_SOURCE?.mode === "relay" ? root.PPC_PACKAGE_SOURCE.endpoint : "");
     const session = root.PortfolioMasterClient.createSession({ endpoint, source, adapter, fetchImpl });
-    const githubMode = source?.mode === "github", configured = session.getState().configured;
+    const githubMode = source?.mode === "github", teamMode = source?.team === true, configured = session.getState().configured;
     const notices = root.PortfolioNotifications;
     const dialog = element("dialog", "master-dialog");
     dialog.id = "masterDialog";
@@ -44,6 +44,9 @@
       else notices?.resolve("master-saving-unavailable");
       if (lastError) notices?.publish({ id: "master-sync-error", severity: "error", title: "Master update needs attention", message: lastError, toast: false, actions: [...(duplicateAttention ? [{ label: "Review duplicates", onClick: () => root.PortfolioProductIssues?.reviewDuplicateIssues?.() }] : []), { label: count ? "Review and try again" : "Pull latest data", onClick: () => count ? saveFlow() : root.PortfolioPackageUI?.open("pull") }] });
       else notices?.resolve("master-sync-error");
+      const publication = state.snapshot?.publication;
+      if (publication && publication.status !== "current") notices?.publish({ id: "master-publication", severity: publication.status === "error" ? "warning" : "info", title: publication.status === "error" ? "GitHub copy needs attention" : "Publishing the GitHub master", message: publication.status === "error" ? "Your accepted changes are available to the team. The GitHub package could not be published yet; the automatic publisher will retry. The portfolio owner can check the publishing workflow." : "Your accepted changes are available to the team. The encrypted GitHub package is being updated automatically; publishing can take several minutes.", toast: false, dismissible: false });
+      else notices?.resolve("master-publication");
       root.dispatchEvent(new CustomEvent("portfolio:master-status", { detail: { connected: state.connected, hasKey: state.hasKey } }));
     }
 
@@ -87,7 +90,7 @@
         for (const product of pending) {
           const section = element("section", "master-product-changes");
           section.append(element("h3", "", product.productName));
-          const changes = root.PortfolioMasterModel.describeChanges?.(product.base, product.mine) || Object.entries(product.patch).map(([field, mine]) => ({ label: field, base: product.base[field], mine }));
+          const changes = product.kind === "create" ? [{ label: "New product", baseText: "Not in master", mineText: "Add this product and its specifications, SKUs and dates" }] : product.kind === "delete" ? [{ label: "Remove product", baseText: "In master", mineText: "Delete this product from the shared portfolio" }] : root.PortfolioMasterModel.describeChanges?.(product.base, product.mine) || Object.entries(product.patch).map(([field, mine]) => ({ label: field, base: product.base[field], mine }));
           for (const change of changes) {
             const row = element("div", "master-change-row");
             row.append(element("span", "master-field-label", change.label || change.path), element("span", "master-before", readable(change.baseText ?? change.base)), element("span", "master-change-arrow", "→"), element("span", "master-after", readable(change.mineText ?? change.mine ?? change.value)));
@@ -199,7 +202,7 @@
               const token = await getAccess("github", error.message); if (!token) return;
               progress(); await session.setGitHubToken(token); close(null); continue;
             }
-            if (error.code !== "EDITOR_KEY_REQUIRED") throw error;
+            if (error.code !== "EDITOR_KEY_REQUIRED" || teamMode) throw error;
             const token = await getAccess(true, session.getState().snapshot?.requiresEditorToken ? "" : error.message);
             if (!token) return;
             session.setEditorToken(token);
@@ -207,7 +210,7 @@
         }
         if (result.saved) {
           lastError = "";
-          notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Master choices kept" : "Saved to master", message: "Your changes are synced. Other teams will receive the accepted values when they next check the master.", revision: String(Date.now()), toast: true });
+          notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Master choices kept" : "Saved to master", message: result.snapshot?.publication ? result.snapshot.publication.status === "current" ? "Your team master is up to date and the encrypted GitHub package is published." : "Your changes are available to the team. The encrypted GitHub copy will be published automatically." : "Your changes are synced. Other teams will receive the accepted values when they next check the master.", revision: String(Date.now()), toast: true });
         }
       } catch (error) {
         if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
@@ -237,7 +240,7 @@
     active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow,
       markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
       disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; updateStatus(); },
-      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected"]) notices?.resolve(id); dialog.remove(); },
+      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-publication"]) notices?.resolve(id); dialog.remove(); },
     });
     updateStatus();
     if (source?.demo === true && source.demoKey && ["localhost", "127.0.0.1", "[::1]"].includes(String(root.location?.hostname || "").toLowerCase())) {

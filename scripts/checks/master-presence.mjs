@@ -36,24 +36,34 @@ assert.equal(roster[0].isSelf, true);
 assert.equal(roster[0].productName, "<img src=x onerror=alert(1)>", "names remain plain text for DOM textContent rendering");
 assert.equal(roster[1].label, "Viewer", "a supplied display name is preserved independently of anonymous labels");
 
-let calls = [], hasKey = true, fail = false, pending = [], selected = "product-viewed";
+let calls = [], hasKey = true, fail = false, pending = [], selected = "product-viewed", category = "pc-audio";
 const session = {
   getState: () => ({ hasKey, pending }),
   presence: async (body) => {
     calls.push(body);
     if (fail) throw new Error("Connection unavailable");
-    return { sessions: [{ sessionId: body.sessionId, displayName: body.displayName, editing: body.editing, productId: body.productId, productName: body.editing ? "Edited headset" : "Viewed headset" }, { sessionId: "other-tab-1234", displayName: "Another team", editing: false }], ttlSeconds: 65 };
+    return { sessions: [{ sessionId: body.sessionId, displayName: body.displayName, editing: body.editing, productId: body.productId, productName: body.productId ? body.editing ? "Edited headset" : "Viewed headset" : "", categoryId: body.categoryId, categoryName: "PC Gaming Audio" }, { sessionId: "other-tab-1234", displayName: "Another team", editing: false }], ttlSeconds: 65 };
   },
 };
 const updates = [];
-const controller = presence.createController({ sessionProvider: () => session, getSelectedProductId: () => selected, sessionId: "ab12-session-id", onChange: (state) => updates.push(state) });
+const controller = presence.createController({ sessionProvider: () => session, getSelectedProductId: () => selected, getSelectedCategoryId: () => category, sessionId: "ab12-session-id", onChange: (state) => updates.push(state) });
 await controller.heartbeat();
 assert.equal(calls[0].productId, "product-viewed"); assert.equal(calls[0].editing, false);
 assert.equal(controller.getState().onlineCount, 2); assert.equal(controller.getState().connected, true);
 pending = [{ productId: "product-edited" }];
 await controller.heartbeat();
+assert.equal(calls.at(-1).editing, false, "an unrelated unsaved draft does not imply the user is currently editing it");
+assert.equal(calls.at(-1).productId, "product-viewed");
+selected = "product-edited";
+await controller.heartbeat();
 assert.equal(calls.at(-1).editing, true);
-assert.equal(calls.at(-1).productId, "product-edited", "an editing presence describes the draft product rather than an unrelated selected product");
+assert.equal(calls.at(-1).productId, "product-edited", "editing activity follows the currently selected product");
+assert.equal(calls.at(-1).categoryId, "pc-audio");
+assert.equal(presence.activityText(controller.getState().users[0]), "Editing Edited headset · PC Gaming Audio");
+selected = "";
+await controller.heartbeat();
+assert.equal(presence.activityText(controller.getState().users[0]), "Viewing PC Gaming Audio");
+selected = "product-edited";
 await controller.setDisplayName("  Alex Smith  ");
 assert.equal(calls.at(-1).displayName, "Alex Smith");
 assert.equal(controller.getState().users[0].label, "Alex Smith");
