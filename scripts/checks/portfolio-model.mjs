@@ -239,10 +239,17 @@ for (const [statusType, expected] of [["new", "#5fd6c1"], ["embargo", "#ef5b5b"]
   assert.equal(presentationSandbox.roadmapStatusColor(item), expected, "theme accents must match between product cards and roadmap");
 }
 assert.equal(model.productTone({ statusType: "new", roadmap: { status: "embargo" } }), "#ef5b5b", "embargo remains visible when a new product is under embargo");
+for (const product of [{ statusType: "embargo" }, { statusType: "none", roadmap: { status: "embargo" } }, { statusType: "new", roadmap: { status: "embargo" } }]) {
+  assert.equal(model.productLabelColor(product, "#111111"), "#ffffff", "Every red embargo surface uses white label text.");
+}
+for (const product of [null, {}, { statusType: "new" }, { statusType: "none", roadmap: { status: "in-development" } }]) {
+  assert.equal(model.productLabelColor(product, "#111111"), "#111111", "The embargo preference leaves normal contrast choices intact.");
+}
 
 // Console platform labels are secondary to the same lifecycle banner used by
 // every category, in both the canvas card and roadmap details.
 const consoleText = [];
+const consoleTextColors = [];
 const consoleShapes = [];
 let consoleProduct;
 Object.assign(presentationSandbox, {
@@ -263,7 +270,7 @@ vm.runInContext(
   presentationSandbox,
 );
 const consoleContext = { save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
-  measureText: (text) => ({ width: text.length * 5 }), fillText: (text) => { consoleText.push(text); } };
+  measureText: (text) => ({ width: text.length * 5 }), fillText: (text) => { consoleText.push(text); consoleTextColors.push(consoleContext.fillStyle); } };
 const consoleLayout = { cardHeight: 300, imageSlotTop: 34, imageSlotHeight: 110, titleBlockTop: 150, detailsTopOffset: 65 };
 for (const [statusType, label, color] of [["new", "NEW PRODUCT", "#5fd6c1"], ["embargo", "UPCOMING UNDER EMBARGO", "#ef5b5b"]]) {
   for (const variantLabel of ["", "PLAYSTATION", "XBOX", label]) {
@@ -275,10 +282,12 @@ for (const [statusType, label, color] of [["new", "NEW PRODUCT", "#5fd6c1"], ["e
     assert.equal(presentation.secondaryLabel, variantLabel && variantLabel !== label ? variantLabel : "", "identical status/variant labels are never duplicated");
     for (const detailed of [false, true]) {
       consoleText.length = 0;
+      consoleTextColors.length = 0;
       consoleShapes.length = 0;
       presentationSandbox.drawCard(consoleContext, consoleProduct, 0, 0, false, { ...consoleLayout, detailed }, false);
       assert.equal(consoleText[0], label, "both compact and detailed cards start with the shared status label");
       assert.equal(consoleShapes[1][6], color, "the main banner uses the theme accent");
+      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#ffffff" : "#111111", "Compact, detailed, and exported card rendering use white embargo text and keep teal text dark.");
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
         assert.equal(consoleShapes[2][6], "#222222", "the platform badge uses charcoal, rather than a second status accent");
@@ -287,6 +296,7 @@ for (const [statusType, label, color] of [["new", "NEW PRODUCT", "#5fd6c1"], ["e
     }
     presentationSandbox.renderSplitProduct();
     assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`>${label}</div>`), "roadmap details retain the same primary status");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#ffffff" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
     assert.equal(presentationSandbox.splitProduct.innerHTML.includes('class="split-platform-label"'), Boolean(presentation.secondaryLabel));
     assert.equal(JSON.stringify(consoleProduct), before, "presentation never changes the saved manual status or platform label");
   }
@@ -421,8 +431,9 @@ const laneSandbox = {
   laneRailInner: { style: {}, innerHTML: "" }, UI_PALETTE: { charcoal800: "#171717" },
   roundRect: (...args) => { laneBackgrounds.push(args.slice(1, 5)); },
   drawCard: (_context, item, x, y) => { drawnLaneCards.push({ id: item.id, x, y }); },
-  escapeHtml: (value) => String(value || ""), selectedId: null, renderedCards: [], dragState: null, panState: null,
+  escapeHtml: (value) => String(value || ""), selectedId: null, renderedCards: [], dragState: null, panState: null, productLayoutEditing: true,
   canvas: { style: {}, hasPointerCapture: () => false },
+  renderBoard() {},
   reorderProduct: (productId, laneId, targetIndex) => { reorderedProducts.push({ productId, laneId, targetIndex }); },
 };
 function appSection(start, end) {
@@ -471,7 +482,7 @@ const openDimensions = laneSandbox.getCanvasDimensions();
 laneSandbox.viewerInfoProgress = .01;
 assert.equal(laneSandbox.getCanvasDimensions().height, openDimensions.height, "opening animation never reserves vertical space");
 laneSandbox.viewerInfoProgress = 1;
-laneSandbox.dragState = { productId: "p-last", position: { x: 18 + 256, y: openDimensions.laneRows[1].top + 5 } };
+laneSandbox.dragState = { productId: "p-last", moved: true, position: { x: 18 + 256, y: openDimensions.laneRows[1].top + 5 } };
 laneSandbox.finishDrag({ pointerId: 1 });
 assert.deepEqual(reorderedProducts, [{ productId: "p-last", laneId: "middle", targetIndex: 1 }], "dropping on a lane uses its unchanged position");
 for (const activeView of ["roadmap", "split"]) {
@@ -514,7 +525,7 @@ const roadmapViewToolbar = viewHtmlSection("roadmapControls");
 const viewSettingsSections = viewHtmlSection("settingsDisplayPanel") + viewHtmlSection("settingsTimelinePanel");
 for (const [toolbar, actions] of [
   [productViewToolbar, ["zoomOut", "zoomReset", "zoomIn", "fitProducts", "resetLayout"]],
-  [roadmapViewToolbar, ["roadmapZoomOut", "roadmapZoomReset", "roadmapZoomIn", "roadmapFit", "roadmapToday", "roadmapShowSelected"]],
+  [roadmapViewToolbar, ["roadmapZoomOut", "roadmapZoomReset", "roadmapZoomIn", "roadmapFit", "roadmapToday"]],
 ]) {
   for (const id of actions) {
     assert.ok(toolbar.includes(`id="${id}"`), `${id} stays available in its view toolbar`);
@@ -576,7 +587,7 @@ viewSandbox.roadmapScroll = timelineScrollAdapter(900, 500);
 viewSandbox.splitRoadmapScroll = timelineScrollAdapter(700, 320);
 vm.createContext(viewSandbox);
 vm.runInContext(
-  ["clampViewZoom", "steppedViewZoom", "syncViewZoomControls", "setProductZoom", "setRoadmapZoom", "fitRoadmapTimeline", "fitProductBoard"].map(applicationFunction).join("\n") +
+  ["clampViewZoom", "snappedViewZoom", "steppedViewZoom", "syncViewZoomControls", "setProductZoom", "setRoadmapZoom", "fitRoadmapTimeline", "fitProductBoard"].map(applicationFunction).join("\n") +
   ["zoomOut", "zoomReset", "zoomIn", "resetLayout", "fitProducts", "roadmapZoomOut", "roadmapZoomReset", "roadmapZoomIn", "roadmapFit"].map(applicationClickBinding).join("\n"),
   viewSandbox,
 );
@@ -584,10 +595,8 @@ const timelineCenterMonth = (scroll) => (scroll.scrollLeft + (scroll.clientWidth
 viewSandbox.syncViewZoomControls();
 assert.equal(viewElement("#zoomReset").textContent, "100%");
 assert.equal(viewElement("#roadmapZoomReset").textContent, "100%");
-assert.equal(viewElement("#roadmapShowSelected").disabled, true, "Show selected requires a selected product");
 viewSelectedProduct = viewBoard.products[0];
 viewSandbox.syncViewZoomControls();
-assert.equal(viewElement("#roadmapShowSelected").disabled, false, "selecting a product enables the visible timeline shortcut");
 for (const activeView of ["roadmap", "split"]) {
   viewSandbox.activeView = activeView;
   viewSandbox.roadmapMonthWidth = 82;
@@ -598,40 +607,40 @@ for (const activeView of ["roadmap", "split"]) {
   const originalMonth = timelineCenterMonth(targetScroll);
   const originalTop = targetScroll.scrollTop;
   viewElement("#roadmapZoomIn").onclick();
-  closeTo(viewSandbox.roadmapMonthWidth, 102.5, "timeline plus advances to the next familiar proportional zoom stop");
+  closeTo(viewSandbox.roadmapMonthWidth, 90.2, "timeline plus advances by ten percentage points");
   closeTo(timelineCenterMonth(targetScroll), originalMonth, "timeline zoom anchors the visible month center outside the frozen labels");
   assert.equal(targetScroll.scrollTop, originalTop, "horizontal zoom preserves vertical timeline position");
   assert.equal(otherScroll.scrollLeft, originalOtherLeft, "zoom adjusts only the visible roadmap viewport");
   assert.equal(viewSandbox.zoom, 1, "timeline zoom cannot change the product scale");
-  assert.equal(viewElement("#roadmapZoomReset").textContent, "125%");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "110%");
   viewElement("#roadmapZoomOut").onclick();
-  closeTo(viewSandbox.roadmapMonthWidth, 82, "timeline minus returns to the previous proportional zoom stop");
+  closeTo(viewSandbox.roadmapMonthWidth, 82, "timeline minus returns to the previous ten-point zoom stop");
   closeTo(timelineCenterMonth(targetScroll), originalMonth, "inverse timeline zoom retains the anchored month");
   viewSandbox.setRoadmapZoom(200);
-  assert.equal(viewSandbox.roadmapMonthWidth, 112, "timeline zoom has a safe maximum month width");
-  assert.equal(viewElement("#roadmapZoomReset").textContent, "137%");
+  closeTo(viewSandbox.roadmapMonthWidth, 106.6, "timeline zoom uses the highest ten-point stop within its safe maximum width");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "130%");
   assert.equal(viewElement("#roadmapZoomIn").disabled, true);
   viewElement("#roadmapZoomIn").onclick();
-  assert.equal(viewSandbox.roadmapMonthWidth, 112, "plus cannot exceed the timeline maximum");
+  closeTo(viewSandbox.roadmapMonthWidth, 106.6, "plus cannot exceed the timeline maximum");
   viewSandbox.setRoadmapZoom(1);
-  assert.equal(viewSandbox.roadmapMonthWidth, 8, "timeline zoom has a readable minimum month width");
+  closeTo(viewSandbox.roadmapMonthWidth, 8.2, "timeline zoom uses the lowest ten-point stop within its safe minimum width");
   assert.equal(viewElement("#roadmapZoomReset").textContent, "10%");
   assert.equal(viewElement("#roadmapZoomOut").disabled, true);
   viewElement("#roadmapZoomOut").onclick();
-  assert.equal(viewSandbox.roadmapMonthWidth, 8, "minus cannot go below the timeline minimum");
+  closeTo(viewSandbox.roadmapMonthWidth, 8.2, "minus cannot go below the timeline minimum");
   viewElement("#roadmapZoomReset").onclick();
   assert.equal(viewSandbox.roadmapMonthWidth, 82, "the timeline percentage restores the shared default scale");
   assert.equal(viewElement("#roadmapZoomReset").textContent, "100%");
   assert.equal(viewElement("#roadmapZoomOut").disabled, false);
   assert.equal(viewElement("#roadmapZoomIn").disabled, false);
   viewElement("#roadmapFit").onclick();
-  closeTo(viewSandbox.roadmapMonthWidth, Math.max(82 * .4, (targetScroll.clientWidth - 190 - 24) / 60), "Fit uses the active viewport while retaining readable month widths");
+  closeTo(viewSandbox.roadmapMonthWidth, 32.8, "Fit uses a clean 40% overview for a long timeline");
   assert.equal(viewElement("#roadmapZoomReset").textContent, `${Math.round(viewSandbox.roadmapMonthWidth / 82 * 100)}%`, "Fit updates the visible timeline percentage");
   assert.equal(viewSandbox.zoom, 1, "timeline Fit leaves the product scale unchanged");
 }
 timelineFitMonths = 3;
 viewElement("#roadmapFit").onclick();
-assert.equal(viewSandbox.roadmapMonthWidth, 112, "fitting a short timeline respects the maximum month width");
+closeTo(viewSandbox.roadmapMonthWidth, 106.6, "fitting a short timeline respects the maximum clean ten-point stop");
 timelineFitMonths = 120;
 viewElement("#roadmapFit").onclick();
 closeTo(viewSandbox.roadmapMonthWidth, 32.8, "fitting a long timeline retains a readable40% overview and allows horizontal scrolling");
@@ -642,8 +651,8 @@ timelineFitMonths = 60;
 viewSandbox.activeView = "products";
 const retainedTimelineWidth = viewSandbox.roadmapMonthWidth;
 viewElement("#zoomOut").onclick();
-assert.equal(viewSandbox.zoom, .8);
-assert.equal(viewElement("#zoomReset").textContent, "80%");
+assert.equal(viewSandbox.zoom, .9);
+assert.equal(viewElement("#zoomReset").textContent, "90%");
 viewElement("#zoomIn").onclick();
 assert.equal(viewSandbox.zoom, 1);
 viewSandbox.zoom = 1.5;
@@ -651,11 +660,11 @@ viewElement("#zoomIn").onclick();
 assert.equal(viewSandbox.zoom, 1.5, "product plus cannot exceed its maximum scale");
 assert.equal(viewElement("#zoomIn").disabled, true);
 viewElement("#fitProducts").onclick();
-assert.equal(viewSandbox.zoom, .65, "Fit products keeps a long lane readable instead of squeezing every product across the screen");
-assert.equal(viewElement("#zoomReset").textContent, "65%");
+assert.equal(viewSandbox.zoom, .7, "Fit products keeps a long lane readable at a clean percentage");
+assert.equal(viewElement("#zoomReset").textContent, "70%");
 productFitWidth = 100000;
 viewElement("#fitProducts").onclick();
-assert.equal(viewSandbox.zoom, .65, "fitting an exceptionally long lane retains the readable overview floor");
+assert.equal(viewSandbox.zoom, .7, "fitting an exceptionally long lane retains the readable overview floor");
 assert.equal(viewElement("#zoomOut").disabled, false, "the user can still zoom out manually after readable Fit");
 productFitWidth = 100;
 viewElement("#fitProducts").onclick();

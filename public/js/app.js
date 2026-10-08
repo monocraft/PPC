@@ -155,7 +155,6 @@ const boardNavigator = $("#boardNavigator");
 const navRange = $("#navRange");
 const navLeft = $("#navLeft");
 const navRight = $("#navRight");
-const navSelected = $("#navSelected");
 const navPosition = $("#navPosition");
 const inspector = $("#inspector");
 const viewerInfo = $("#viewerInfo");
@@ -182,7 +181,6 @@ const roadmapNavigator = $("#roadmapNavigator");
 const roadmapNavRange = $("#roadmapNavRange");
 const roadmapNavLeft = $("#roadmapNavLeft");
 const roadmapNavRight = $("#roadmapNavRight");
-const roadmapNavSelected = $("#roadmapNavSelected");
 const roadmapNavPosition = $("#roadmapNavPosition");
 const splitRoadmapCanvas = $("#splitRoadmapCanvas");
 const splitRoadmapScroll = $("#splitRoadmapScroll");
@@ -190,7 +188,6 @@ const splitRoadmapNavigator = $("#splitRoadmapNavigator");
 const splitRoadmapNavRange = $("#splitRoadmapNavRange");
 const splitRoadmapNavLeft = $("#splitRoadmapNavLeft");
 const splitRoadmapNavRight = $("#splitRoadmapNavRight");
-const splitRoadmapNavSelected = $("#splitRoadmapNavSelected");
 const splitRoadmapNavPosition = $("#splitRoadmapNavPosition");
 const splitProduct = $("#splitProduct");
 const roadmapMenuButton = $("#roadmapMenuButton");
@@ -256,6 +253,7 @@ let roadmapInteractionMode = "pan";
 let roadmapDraft = null;
 let initialVerticalFitPending = true;
 let productLayoutEditing = false;
+let productReorderSession = null;
 
 function id() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -1391,6 +1389,7 @@ function scheduleSave() {
 function activateCategory(categoryId, { render = true, fitVertical = true } = {}) {
   const category = portfolio?.categories?.find((item) => item.id === categoryId) || portfolio?.categories?.[0];
   if (!category) throw new Error("The portfolio contains no usable categories.");
+  finishProductReorder({ render: false });
 
   // Viewer details belong to the current category. Clear them before the
   // active board changes so a product from the previous category cannot leak
@@ -2226,7 +2225,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   if (presentation.primaryLabel) {
     roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
-    context.fillStyle = contrastTextColor(presentation.primaryColor);
+    context.fillStyle = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
     context.font = "700 10px Arial";
     context.textAlign = "center";
     context.fillText(presentation.primaryLabel.toUpperCase(), x + CARD_WIDTH / 2, y + 16);
@@ -2644,7 +2643,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         context.beginPath();
         context.rect(barX + 8, barY, Math.max(0, barWidth - 16), barHeight);
         context.clip();
-        context.fillStyle = contrastTextColor(color);
+        context.fillStyle = PortfolioModel.productLabelColor(product, contrastTextColor(color));
         context.font = portfolio?.settings?.showRoadmapMsrp ? "700 11px Arial" : "700 12px Arial";
         context.textAlign = "center";
         context.textBaseline = "middle";
@@ -2801,7 +2800,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       roundRect(context, floatingX, floatingY + 4, Math.max(140, floatingWidth), ROADMAP_ROW_HEIGHT - 8, 4, roadmapStatusColor(selectedProduct()), "#c3d8cb", 1.5);
       context.shadowBlur = 0;
       context.shadowOffsetY = 0;
-      context.fillStyle = contrastTextColor(roadmapStatusColor(selectedProduct()));
+      context.fillStyle = PortfolioModel.productLabelColor(selectedProduct(), contrastTextColor(roadmapStatusColor(selectedProduct())));
       context.font = "700 11px Arial";
       context.textBaseline = "middle";
       context.fillText(truncate(selectedProduct()?.name || "Product", 34), floatingX + 12, floatingY + ROADMAP_ROW_HEIGHT / 2);
@@ -2949,7 +2948,7 @@ function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
 }
 
 function renderRoadmaps() {
-  roadmapMonthWidth = clampViewZoom(roadmapMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, ROADMAP_DEFAULT_MONTH_WIDTH);
+  roadmapMonthWidth = snappedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH;
   const previousView = activeView;
   syncRoadmapDetailsVisibility();
   syncViewZoomControls();
@@ -2964,11 +2963,11 @@ function renderRoadmaps() {
 }
 
 function roadmapNavigatorRefs() {
-  return { element: roadmapNavigator, range: roadmapNavRange, left: roadmapNavLeft, right: roadmapNavRight, selected: roadmapNavSelected, position: roadmapNavPosition };
+  return { element: roadmapNavigator, range: roadmapNavRange, left: roadmapNavLeft, right: roadmapNavRight, position: roadmapNavPosition };
 }
 
 function splitRoadmapNavigatorRefs() {
-  return { element: splitRoadmapNavigator, range: splitRoadmapNavRange, left: splitRoadmapNavLeft, right: splitRoadmapNavRight, selected: splitRoadmapNavSelected, position: splitRoadmapNavPosition };
+  return { element: splitRoadmapNavigator, range: splitRoadmapNavRange, left: splitRoadmapNavLeft, right: splitRoadmapNavRight, position: splitRoadmapNavPosition };
 }
 
 function syncRoadmapNavigator(targetScroll, refs) {
@@ -2980,16 +2979,21 @@ function syncRoadmapNavigator(targetScroll, refs) {
   refs.range.value = String(Math.round(current));
   refs.left.disabled = !hasOverflow || current <= 1;
   refs.right.disabled = !hasOverflow || current >= max - 1;
-  refs.selected.disabled = !selectedProduct();
   refs.position.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
 }
 
 function scrollRoadmapSelected(targetScroll, smooth = true) {
-  const regions = roadmapHitRegions.get(targetScroll.querySelector("canvas")) || [];
+  const targetCanvas = targetScroll.querySelector("canvas");
+  const regions = roadmapHitRegions.get(targetCanvas) || [];
   const region = regions.find((item) => item.productId === selectedId);
-  if (!region) return;
-  const targetLeft = Math.max(0, region.x + region.width / 2 - targetScroll.clientWidth / 2);
-  const targetTop = Math.max(0, region.y + region.height / 2 - targetScroll.clientHeight / 2);
+  const row = (roadmapRowRegions.get(targetCanvas) || []).find((item) => item.productId === selectedId);
+  if (!region && !row) return;
+  const bodyWidth = Math.max(0, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH);
+  const bodyHeight = Math.max(0, targetScroll.clientHeight - ROADMAP_HEADER_HEIGHT);
+  // Dates outside the configured range still have a visible product row.
+  const targetLeft = region ? Math.max(0, region.x + region.width / 2 - ROADMAP_LEFT_WIDTH - bodyWidth / 2) : targetScroll.scrollLeft;
+  const target = region || row;
+  const targetTop = Math.max(0, target.y + target.height / 2 - ROADMAP_HEADER_HEIGHT - bodyHeight / 2);
   targetScroll.scrollTo({ left: targetLeft, top: targetTop, behavior: smooth ? "smooth" : "auto" });
 }
 
@@ -3005,35 +3009,39 @@ function fitRoadmapTimeline() {
   const range = roadmapRange();
   const available = Math.max(1, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH - 24);
   // Keep month labels and product bars readable; longer timelines scroll.
-  setRoadmapZoom(Math.max(ROADMAP_DEFAULT_MONTH_WIDTH * .4, available / Math.max(1, range.count)));
+  const fittedZoom = available / Math.max(1, range.count) / ROADMAP_DEFAULT_MONTH_WIDTH;
+  setRoadmapZoom(snappedViewZoom(fittedZoom, .4, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, 1, "down") * ROADMAP_DEFAULT_MONTH_WIDTH);
 }
 
 function clampViewZoom(value, minimum, maximum, fallback = 1) {
   return Math.max(minimum, Math.min(maximum, Number.isFinite(value) ? value : fallback));
 }
 
+function snappedViewZoom(value, minimum, maximum, fallback = 1, rounding = "nearest") {
+  const bounded = clampViewZoom(value, minimum, maximum, fallback);
+  const minimumStep = Math.ceil(minimum * 10 - .00000001);
+  const maximumStep = Math.floor(maximum * 10 + .00000001);
+  const step = rounding === "down" ? Math.floor(bounded * 10 + .00000001) : Math.round(bounded * 10);
+  return Math.max(minimumStep, Math.min(maximumStep, step)) / 10;
+}
+
 function steppedViewZoom(current, direction, minimum, maximum) {
-  const value = clampViewZoom(current, minimum, maximum);
-  const visiblePercent = Math.round(value * 100);
-  // Familiar proportional stops remain easy to adjust even at overview scales.
-  // Omit stops that would display the same rounded percentage as an end limit.
-  const steps = [minimum, ...[.1, .125, .16, .2, .25, .33, .4, .5, .65, .8, 1, 1.25, 1.5]
-    .filter((step) => step > minimum + .005 && step < maximum - .005), maximum];
-  return direction < 0
-    ? [...steps].reverse().find((step) => step < value - .00001 && Math.round(step * 100) < visiblePercent) ?? minimum
-    : steps.find((step) => step > value + .00001 && Math.round(step * 100) > visiblePercent) ?? maximum;
+  const value = snappedViewZoom(current, minimum, maximum);
+  return snappedViewZoom(value + (direction < 0 ? -.1 : .1), minimum, maximum, value);
 }
 
 function syncViewZoomControls() {
-  zoom = clampViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
-  roadmapMonthWidth = clampViewZoom(roadmapMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, ROADMAP_DEFAULT_MONTH_WIDTH);
+  zoom = snappedViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
+  const roadmapMinimum = snappedViewZoom(ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH);
+  const roadmapMaximum = snappedViewZoom(ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH);
+  const roadmapZoom = snappedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, roadmapMinimum, roadmapMaximum);
+  roadmapMonthWidth = roadmapZoom * ROADMAP_DEFAULT_MONTH_WIDTH;
   $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
   $("#zoomOut").disabled = zoom <= PRODUCT_MIN_ZOOM;
   $("#zoomIn").disabled = zoom >= PRODUCT_MAX_ZOOM;
-  $("#roadmapZoomReset").textContent = `${Math.round(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH * 100)}%`;
-  $("#roadmapZoomOut").disabled = roadmapMonthWidth <= ROADMAP_MIN_MONTH_WIDTH;
-  $("#roadmapZoomIn").disabled = roadmapMonthWidth >= ROADMAP_MAX_MONTH_WIDTH;
-  $("#roadmapShowSelected").disabled = !selectedProduct();
+  $("#roadmapZoomReset").textContent = `${Math.round(roadmapZoom * 100)}%`;
+  $("#roadmapZoomOut").disabled = roadmapZoom <= roadmapMinimum;
+  $("#roadmapZoomIn").disabled = roadmapZoom >= roadmapMaximum;
 }
 
 function setRoadmapZoom(nextMonthWidth) {
@@ -3041,7 +3049,7 @@ function setRoadmapZoom(nextMonthWidth) {
   const previousMonthWidth = clampViewZoom(roadmapMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, ROADMAP_DEFAULT_MONTH_WIDTH);
   const viewportCenter = Math.max(0, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH) / 2;
   const centerMonth = (targetScroll.scrollLeft + viewportCenter) / previousMonthWidth;
-  roadmapMonthWidth = clampViewZoom(nextMonthWidth, ROADMAP_MIN_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH, previousMonthWidth);
+  roadmapMonthWidth = snappedViewZoom(nextMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, previousMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH;
   renderRoadmaps();
   targetScroll.scrollLeft = Math.max(0, centerMonth * roadmapMonthWidth - viewportCenter);
 }
@@ -3052,7 +3060,7 @@ function setProductZoom(nextZoom) {
   const viewportY = (canvasScroll.clientHeight || 0) / 2;
   const centerX = (canvasScroll.scrollLeft + viewportX) / previousZoom;
   const centerY = (canvasScroll.scrollTop + viewportY) / previousZoom;
-  zoom = clampViewZoom(nextZoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM, previousZoom);
+  zoom = snappedViewZoom(nextZoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM, previousZoom);
   renderBoard();
   canvasScroll.scrollLeft = Math.max(0, centerX * zoom - viewportX);
   canvasScroll.scrollTop = Math.max(0, centerY * zoom - viewportY);
@@ -3074,10 +3082,10 @@ function setRoadmapYearSpan(years) {
 function fitProductLanesVertically() {
   const dimensions = getCanvasDimensions();
   const available = Math.max(240, productView.clientHeight - 48);
-  const fittedZoom = Math.floor((available / dimensions.height) * 100) / 100;
+  const fittedZoom = available / dimensions.height;
   // An overview must remain readable. Additional lanes scroll vertically
   // instead of shrinking every card down to illegible labels.
-  zoom = Math.max(.65, Math.min(1, fittedZoom));
+  zoom = snappedViewZoom(fittedZoom, .7, 1, 1, "down");
   renderBoard();
   requestAnimationFrame(() => {
     canvasScroll.scrollTop = 0;
@@ -3089,9 +3097,9 @@ function fitProductLanesVertically() {
 function fitProductBoard() {
   const dimensions = getCanvasDimensions();
   const available = Math.max(1, canvasScroll.clientWidth - 18);
-  const fittedZoom = Math.floor((available / dimensions.width) * 100) / 100;
+  const fittedZoom = available / dimensions.width;
   // Fit gives a readable overview instead of shrinking a long lane into dots.
-  setProductZoom(Math.max(.65, Math.min(1, fittedZoom)));
+  setProductZoom(snappedViewZoom(fittedZoom, .7, 1, 1, "down"));
 }
 
 function roadmapPoint(event, targetCanvas) {
@@ -3487,7 +3495,7 @@ function renderSplitProduct() {
   const presentation = productPresentation(product);
   splitProduct.innerHTML = `
     <article class="split-product-card split-product-card--detail" style="--product-highlight:${escapeHtml(presentation.outlineColor)}">
-      ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(contrastTextColor(presentation.primaryColor))}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
+      ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)))}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
       <div class="split-product-hero">
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
         <div class="split-product-title"><span class="eyebrow">${escapeHtml(product.roadmap?.family || 'Portfolio product')}</span><h2>${escapeHtml(product.name)}</h2>${presentation.secondaryLabel ? `<span class="split-platform-label">${escapeHtml(presentation.secondaryLabel)}</span>` : ''}${portfolio.settings?.showRoadmapMsrp && productPriceText(product) ? `<div class="split-price">${escapeHtml(productPriceText(product))}</div>` : ''}</div>
@@ -3511,13 +3519,120 @@ function updateDataEditIndicator() {
 
 function updateProductLayoutEditControls() {
   if (!productLayoutEditButton) return;
-  productLayoutEditButton.innerHTML = productLayoutEditing
-    ? '<span>Done reordering product cards</span><small>Return Product Cards to protected viewer mode</small>'
-    : '<span>Reorder product cards</span><small>Enable protected drag-and-drop lane editing</small>';
-  productLayoutEditButton.classList.toggle("is-active", productLayoutEditing);
-  productLayoutEditButton.setAttribute("aria-pressed", String(productLayoutEditing));
+  productLayoutEditButton.classList.toggle("hidden", productLayoutEditing);
+  productLayoutEditButton.disabled = !board?.products?.length;
+  productLayoutEditButton.setAttribute("aria-expanded", String(productLayoutEditing));
+  $("#productReorderActions").classList.toggle("hidden", !productLayoutEditing);
+  productControls.querySelector(".workspace-sort-menu").classList.toggle("hidden", productLayoutEditing);
+  productControls.closest(".workspace-controls").classList.toggle("is-reordering", productLayoutEditing);
   canvas.classList.toggle("is-layout-editing", productLayoutEditing);
   updateDataEditIndicator();
+}
+
+function captureProductCardLayout(targetBoard, laneIds) {
+  return targetBoard.products.filter((product) => laneIds.includes(product.laneId)).map((product) => {
+    const layout = { id: product.id, laneId: product.laneId, order: product.order };
+    if (Object.hasOwn(product, "manualPosition")) layout.manualPosition = product.manualPosition == null ? product.manualPosition : JSON.parse(JSON.stringify(product.manualPosition));
+    return layout;
+  });
+}
+
+function restoreProductCardReorder(targetBoard, operation, blockedLanes) {
+  const { before, after, laneIds } = operation;
+  const products = new Map(targetBoard.products.map((product) => [product.id, product]));
+  const affectedIds = new Set(after.map((layout) => layout.id));
+  const validLanes = new Set(targetBoard.lanes.map((lane) => lane.id));
+  const sequence = (records, laneId) => records.filter((product) => product.laneId === laneId && affectedIds.has(product.id) && products.has(product.id)).sort((a, b) => a.order - b.order).map((product) => product.id);
+  const changedElsewhere = laneIds.some((laneId) => blockedLanes.has(laneId) || !validLanes.has(laneId))
+    || after.some((layout) => {
+      const product = products.get(layout.id);
+      return product && (product.laneId !== layout.laneId || JSON.stringify(product.manualPosition) !== JSON.stringify(layout.manualPosition));
+    })
+    || laneIds.some((laneId) => JSON.stringify(sequence(targetBoard.products, laneId)) !== JSON.stringify(sequence(after, laneId)));
+  if (changedElsewhere) {
+    laneIds.forEach((laneId) => blockedLanes.add(laneId));
+    return false;
+  }
+
+  // Revert only our layout fields. New records retain their current slots;
+  // deleted records stay deleted, and product facts are never replaced.
+  const newcomers = new Map(laneIds.map((laneId) => [laneId, targetBoard.products.filter((product) => product.laneId === laneId).sort((a, b) => a.order - b.order).map((product, index) => ({ product, index })).filter(({ product }) => !affectedIds.has(product.id))]));
+  for (const layout of before) {
+    const product = products.get(layout.id);
+    if (!product) continue;
+    product.laneId = layout.laneId;
+    if (Object.hasOwn(layout, "manualPosition")) product.manualPosition = layout.manualPosition == null ? layout.manualPosition : JSON.parse(JSON.stringify(layout.manualPosition));
+    else delete product.manualPosition;
+  }
+  for (const laneId of laneIds) {
+    const ordered = before.filter((layout) => layout.laneId === laneId && products.has(layout.id)).sort((a, b) => a.order - b.order).map((layout) => products.get(layout.id));
+    for (const { product, index } of newcomers.get(laneId)) ordered.splice(Math.min(index, ordered.length), 0, product);
+    ordered.forEach((product, index) => { product.order = index; });
+  }
+  return true;
+}
+
+function stopProductCardDrag() {
+  const pointerId = dragState?.pointerId;
+  dragState = null;
+  if (pointerId != null && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+  canvas.style.cursor = "grab";
+}
+
+function startProductReorder() {
+  if (productLayoutEditing || activeView !== "products" || !board.products.length) return;
+  closePopupMenus();
+  stopProductCardDrag();
+  productReorderSession = { board, portfolio, categoryId: activeCategoryId, operations: [] };
+  productLayoutEditing = true;
+  updateProductLayoutEditControls();
+  renderBoard();
+  $("#productReorderDone").focus({ preventScroll: true });
+}
+
+function finishProductReorder({ cancel = false, focus = false, render = true } = {}) {
+  if (!productLayoutEditing && !productReorderSession) return;
+  const session = productReorderSession;
+  productReorderSession = null;
+  productLayoutEditing = false;
+  stopProductCardDrag();
+  let restored = false;
+  const blockedLanes = new Set();
+  if (cancel && session?.board === board && session.portfolio === portfolio && session.categoryId === activeCategoryId) {
+    for (const operation of [...session.operations].reverse()) {
+      if (restoreProductCardReorder(board, operation, blockedLanes)) restored = true;
+    }
+    if (restored) scheduleSave();
+  }
+  updateProductLayoutEditControls();
+  if (render) { syncControls(); renderInspector(); renderActiveView(); }
+  if (blockedLanes.size) void showWorkspaceNotice("Some card positions changed while you were reordering and were kept. Your other card moves were canceled.", { id: "product-reorder-conflict", title: "Recent card positions kept", severity: "warning" });
+  if (focus && activeView === "products" && !productLayoutEditButton.disabled) productLayoutEditButton.focus({ preventScroll: true });
+}
+
+function handleProductReorderKeydown(event) {
+  if (!productLayoutEditing) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    finishProductReorder({ cancel: true, focus: true });
+    return true;
+  }
+  if (event.target !== canvas || !event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return false;
+  const product = selectedProduct();
+  if (!product) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  const lanes = sortedLanes();
+  const laneIndex = lanes.findIndex((lane) => lane.id === product.laneId);
+  const vertical = event.key === "ArrowUp" || event.key === "ArrowDown";
+  const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+  const targetLane = vertical ? lanes[laneIndex + direction] : lanes[laneIndex];
+  if (!targetLane) return true;
+  const products = board.products.filter((item) => item.laneId === targetLane.id).sort((a, b) => a.order - b.order);
+  const targetIndex = vertical ? Math.min(product.order, products.length) : products.findIndex((item) => item.id === product.id) + direction;
+  reorderProduct(product.id, targetLane.id, targetIndex);
+  return true;
 }
 
 function updateRoadmapEditControls() {
@@ -3550,7 +3665,7 @@ function syncRoadmapDetailsVisibility() {
   const toggle = $("#toggleRoadmapDetails");
   toggle.classList.toggle("hidden", activeView === "products");
   toggle.disabled = !hasSelection;
-  toggle.textContent = showing ? "Hide product details" : "Show product details";
+  toggle.textContent = showing ? "Hide details" : "Show details";
   toggle.setAttribute("aria-expanded", String(showing));
   toggle.setAttribute("aria-pressed", String(showing));
 }
@@ -3562,10 +3677,7 @@ function setView(view, { focusSelected = false } = {}) {
   if (view === "split") roadmapDetailsOpen = true;
   activeView = view === "products" ? "products" : ["roadmap", "split"].includes(view) ? (roadmapDetailsOpen ? "split" : "roadmap") : "products";
   if (activeView === "products") stopRoadmapSlotEditing();
-  else if (productLayoutEditing) {
-    productLayoutEditing = false;
-    updateProductLayoutEditControls();
-  }
+  else finishProductReorder({ render: false });
   productView.classList.toggle("hidden", activeView !== "products");
   roadmapView.classList.toggle("hidden", activeView !== "roadmap");
   splitView.classList.toggle("hidden", activeView !== "split");
@@ -3642,7 +3754,6 @@ function syncBoardNavigator() {
   navRange.value = String(Math.round(current));
   navLeft.disabled = !hasOverflow || current <= 1;
   navRight.disabled = !hasOverflow || current >= max - 1;
-  navSelected.disabled = !selectedProduct();
   navPosition.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
 }
 
@@ -3656,11 +3767,12 @@ function scrollSelectedIntoView() {
   const cardLeft = card.x * zoom;
   const cardWidth = card.width * zoom;
   const target = cardLeft - Math.max(20, (canvasScroll.clientWidth - cardWidth) / 2);
-  canvasScroll.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+  const targetTop = card.y * zoom - Math.max(16, (canvasScroll.clientHeight - card.height * zoom) / 2);
+  canvasScroll.scrollTo({ left: Math.max(0, target), top: Math.max(0, targetTop), behavior: "smooth" });
 }
 
 function renderBoard() {
-  zoom = clampViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
+  zoom = snappedViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
   const previousLeft = canvasScroll.scrollLeft;
   const previousTop = canvasScroll.scrollTop;
   const { context, dimensions } = setupCanvas(canvas, zoom);
@@ -4856,8 +4968,10 @@ function moveProductToLane(productId, laneId) {
 function reorderProduct(productId, targetLaneId, targetIndex) {
   updateBoard((current) => {
     const moving = current.products.find((product) => product.id === productId);
-    if (!moving) return;
+    if (!moving || !current.lanes.some((lane) => lane.id === targetLaneId)) return;
     const oldLaneId = moving.laneId;
+    const laneIds = [...new Set([oldLaneId, targetLaneId])];
+    const before = captureProductCardLayout(current, laneIds);
     const target = current.products.filter((product) => product.laneId === targetLaneId && product.id !== productId).sort((a, b) => a.order - b.order);
     const clamped = Math.max(0, Math.min(targetIndex, target.length));
     moving.laneId = targetLaneId;
@@ -4865,6 +4979,10 @@ function reorderProduct(productId, targetLaneId, targetIndex) {
     target.splice(clamped, 0, moving);
     target.forEach((product, index) => { product.order = index; });
     normalizeLaneOrders(oldLaneId);
+    const after = captureProductCardLayout(current, laneIds);
+    if (productReorderSession?.board === current && productReorderSession.portfolio === portfolio && JSON.stringify(before) !== JSON.stringify(after)) {
+      productReorderSession.operations.push({ before, after, laneIds });
+    }
   }, { inspector: true });
 }
 
@@ -5030,7 +5148,8 @@ canvas.addEventListener("pointerdown", (event) => {
   stopRoadmapSlotEditing();
   const product = selectedProduct();
   if (productLayoutEditing) {
-    dragState = { productId: card.productId, offsetX: point.x - card.x, offsetY: point.y - card.y, position: { x: card.x, y: card.y } };
+    canvas.focus({ preventScroll: true });
+    dragState = { productId: card.productId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, offsetX: point.x - card.x, offsetY: point.y - card.y, position: { x: card.x, y: card.y } };
     canvas.setPointerCapture(event.pointerId);
     canvas.style.cursor = "grabbing";
   } else {
@@ -5081,6 +5200,9 @@ canvas.addEventListener("pointermove", (event) => {
     return;
   }
 
+  if (!dragState.moved && Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) < 5) return;
+  dragState.moved = true;
+
   const viewport = canvasScroll.getBoundingClientRect();
   const edge = 72;
   if (event.clientX < viewport.left + edge) canvasScroll.scrollLeft -= Math.ceil((viewport.left + edge - event.clientX) / 5);
@@ -5116,6 +5238,7 @@ function finishDrag(event) {
   dragState = null;
   canvas.style.cursor = "grab";
   if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  if (!current.moved || event.type === "pointercancel" || !productLayoutEditing) { renderBoard(); return; }
   const rows = productLaneGeometry().rows;
   const targetRow = rows.reduce((closest, row) => Math.abs(current.position.y - row.top) < Math.abs(current.position.y - closest.top) ? row : closest, rows[0]);
   const targetIndex = Math.max(0, Math.round((current.position.x - GUTTER) / (CARD_WIDTH + CARD_GAP)));
@@ -5791,7 +5914,7 @@ async function renderCategoryRoadmapImageForPptx(category, groups = null) {
           products.push({
             kind: "roadmap", id: product.id, name: product.name,
             label: roadmapProductBarLabel(product), ...rect,
-            fill, textColor: contrastTextColor(fill), concept,
+            fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), concept,
             lineColor: product.statusType === "embargo" ? UI_PALETTE.amaranth
               : concept ? UI_PALETTE.midGrey : UI_PALETTE.gunmetal,
             fontSize: portfolio?.settings?.showRoadmapMsrp ? 11 : 12,
@@ -6591,6 +6714,7 @@ canvasScroll.addEventListener("wheel", (event) => {
 }, { passive: false });
 
 canvas.addEventListener("keydown", (event) => {
+  if (handleProductReorderKeydown(event)) return;
   if (event.key === "Enter" && selectedId) {
     event.preventDefault();
     openViewerInfo(selectedId);
@@ -6606,7 +6730,6 @@ navRange.addEventListener("input", () => {
 });
 navLeft.onclick = () => scrollBoardBy(-Math.max(260, canvasScroll.clientWidth * .75));
 navRight.onclick = () => scrollBoardBy(Math.max(260, canvasScroll.clientWidth * .75));
-navSelected.onclick = scrollSelectedIntoView;
 
 $("#addProduct").onclick = addProduct;
 $("#categorySettings").onclick = openCategorySettings;
@@ -6623,11 +6746,10 @@ categorySettingsDialog.addEventListener("pointerdown", (event) => {
 });
 $("#editSelected").onclick = () => { closePopupMenus(); openInspector(); };
 productLayoutEditButton.onclick = () => {
-  productLayoutEditing = !productLayoutEditing;
-  closePopupMenus();
-  updateProductLayoutEditControls();
-  renderBoard();
+  startProductReorder();
 };
+$("#productReorderDone").onclick = () => finishProductReorder({ focus: true });
+$("#productReorderCancel").onclick = () => finishProductReorder({ cancel: true, focus: true });
 $("#applySort").onclick = applySort;
 dataMenuButton.onclick = (event) => { event.stopPropagation(); togglePopupMenu(dataMenuButton, dataMenu); };
 roadmapMenuButton.onclick = (event) => { event.stopPropagation(); togglePopupMenu(roadmapMenuButton, roadmapMenu); };
@@ -6808,7 +6930,6 @@ $("#roadmapFit").onclick = () => { closePopupMenus(); fitRoadmapTimeline(); };
 $("#roadmapZoomOut").onclick = () => setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, -1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
 $("#roadmapZoomReset").onclick = () => setRoadmapZoom(ROADMAP_DEFAULT_MONTH_WIDTH);
 $("#roadmapZoomIn").onclick = () => setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, 1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
-$("#roadmapShowSelected").onclick = () => { closePopupMenus(); scrollRoadmapSelected(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
 $("#roadmapModePan").onclick = () => setRoadmapInteractionMode("pan");
 $("#roadmapModeDates").onclick = () => setRoadmapInteractionMode("dates");
 $("#roadmapMoveUp").onclick = () => moveSelectedRoadmapRow(-1);
@@ -6818,7 +6939,6 @@ function bindRoadmapNavigatorControls(targetScroll, refs) {
   refs.range.addEventListener("input", () => { targetScroll.scrollLeft = Number(refs.range.value); });
   refs.left.onclick = () => targetScroll.scrollBy({ left: -Math.max(300, targetScroll.clientWidth * .75), behavior: "smooth" });
   refs.right.onclick = () => targetScroll.scrollBy({ left: Math.max(300, targetScroll.clientWidth * .75), behavior: "smooth" });
-  refs.selected.onclick = () => scrollRoadmapSelected(targetScroll);
 }
 
 bindRoadmapCanvas(roadmapCanvas, roadmapScroll, roadmapNavigatorRefs);
@@ -6864,12 +6984,7 @@ window.addEventListener("keydown", (event) => {
   closeAscmImportDialog();
   closePptxExportDialog();
   closeCategorySettings();
-  if (productLayoutEditing) {
-    productLayoutEditing = false;
-    updateProductLayoutEditControls();
-    renderBoard();
-    return;
-  }
+  if (handleProductReorderKeydown(event)) return;
   if (roadmapInteractionMode === "dates" || roadmapDragState || roadmapPanState) {
     setRoadmapInteractionMode("pan");
     return;
@@ -7024,6 +7139,7 @@ globalThis.PortfolioProductMergeAdapter = Object.freeze({
 
 // Shared facts update complete local records without replacing layouts or images.
 globalThis.PortfolioMasterAdapter = Object.freeze({
+  beforeSave: () => finishProductReorder(),
   getProducts: () => portfolio.categories.flatMap((category) => category.board.products.map((product) => ({ ...product, categoryId: category.id }))),
   getBaselineProducts: () => portfolio.masterLocalBaseline || [],
   getMasterTombstones: () => portfolio.masterLocalTombstones || [],

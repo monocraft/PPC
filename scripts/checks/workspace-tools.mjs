@@ -4,12 +4,27 @@ import vm from "node:vm";
 
 const workspaceSource = await readFile(new URL("../../public/js/workspace-ui.js", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
+const html = await readFile(new URL("../../public/index.html", import.meta.url), "utf8");
+const productControls = html.match(/<section id="productControls"[^]*?<\/section>/)?.[0];
+const roadmapControls = html.match(/<section id="roadmapControls"[^]*?<\/section>/)?.[0];
+const currentMenuCount = (html.match(/<details class="workspace-tool-menu\b/g) || []).length;
+assert.ok(productControls && roadmapControls, "Exercise the actual toolbar markup.");
+assert.equal(currentMenuCount, 1, "Only Sort needs a toolbar disclosure.");
+assert.ok(!html.includes("workspace-view-menu") && !html.includes(">View options<"), "Single actions stay directly available rather than behind View options.");
+for (const id of ["resetLayout", "quickTimelineSettings", "toggleRoadmapDetails", "roadmapMoveUp", "roadmapMoveDown"]) {
+  assert.equal((html.match(new RegExp(`id="${id}"`, "g")) || []).length, 1, `Keep ${id} available exactly once.`);
+}
+assert.ok(productControls.includes('id="resetLayout" class="quiet-button workspace-direct-tool"'), "Products exposes Reset layout as a direct button.");
+const timelineZoomPosition = roadmapControls.indexOf('class="view-tools-shell"');
+assert.ok(roadmapControls.indexOf('id="quickTimelineSettings"') < timelineZoomPosition && roadmapControls.indexOf('id="toggleRoadmapDetails"') < timelineZoomPosition, "Date range and details precede the timeline zoom controls.");
+assert.ok(roadmapControls.includes(">Date range ") && roadmapControls.includes(">Show details</button>"));
+assert.ok(!roadmapControls.includes("<details"), "The roadmap contains no tool disclosure or leftover popup panel.");
 const setupSource = workspaceSource.match(/^  function setupToolbarMenus\([^]*?^  \}/m)?.[0];
 const popupSource = appSource.match(/^function closePopupMenus\([^]*?^\}/m)?.[0];
 assert.ok(setupSource, "Exercise the actual compact toolbar interaction function.");
 assert.ok(popupSource, "Exercise the application's shared popup-closing hook.");
 
-function harness() {
+function harness(menuCount = 3) {
   const focusEvents = [];
   const document = { activeElement: null };
   function node(tagName, className = "") {
@@ -77,7 +92,7 @@ function harness() {
   const app = node("main", "app-shell"), outside = node("input"), modalFocus = node("button");
   document.body.append(app, modalFocus);
   app.append(outside);
-  const menus = Array.from({ length: 3 }, (_, index) => {
+  const menus = Array.from({ length: menuCount }, (_, index) => {
     const menu = node("details", "workspace-tool-menu"), summary = node("summary"), panel = node("div", "workspace-tool-menu-panel");
     const button = node("button"), buttonCopy = node("span"), select = node("select"), input = node("input");
     menu.id = `tools-${index}`; button.append(buttonCopy); panel.append(button, select, input); menu.append(summary, panel); app.append(menu);
@@ -95,6 +110,19 @@ function harness() {
   });
   const open = (index = 0) => { menus[index].menu.open = true; menus[index].menu.fire("toggle"); };
   return { context, document, app, outside, modalFocus, menus, focusEvents, open, node };
+}
+
+{
+  const h = harness(currentMenuCount); h.open();
+  const directTool = h.node("button"); h.app.append(directTool); directTool.focus();
+  let actions = 0; directTool.addEventListener("click", () => actions++);
+  const focusCount = h.focusEvents.length;
+  directTool.fire("pointerdown"); directTool.fire("click");
+  assert.equal(actions, 1, "A direct toolbar action runs immediately.");
+  assert.equal(h.menus[0].menu.open, false, "A direct action dismisses an open Sort menu.");
+  assert.equal(h.document.activeElement, directTool);
+  assert.equal(h.focusEvents.length, focusCount, "Direct controls never restore focus to a removed View options summary.");
+  assert.equal(h.context.selection, "selected-product"); assert.equal(h.context.mode, "dates");
 }
 
 {
@@ -203,4 +231,4 @@ function harness() {
   assert.equal(dispatched.length, 2, "The application closure remains safe before Workspace UI is loaded.");
 }
 
-console.log("Workspace tool checks passed: disclosure exclusivity, native control interaction, Escape preservation, outside/focus departure, action and modal focus, and real view/action closure.");
+console.log("Workspace tool checks passed: direct Reset layout/Date range/details placement, one Sort disclosure, native control interaction, Escape preservation, outside/focus departure, action and modal focus, and real view/action closure.");

@@ -1,5 +1,13 @@
 # Change Log
 
+## 2026-10-08 — direct view tools and clear card reordering
+
+- Move Reorder cards into the Products toolbar. Keep Done and Cancel visible while reordering; Done keeps the draft, while Cancel or Escape reverses only this session's card moves and preserves unrelated edits. Finish temporary reordering when changing category, switching view, or opening save review.
+- Remove Show selected from both views. Search and view changes reveal the selected product automatically in both directions; off-range or undated timeline products still reveal their row without changing dates or the viewing range.
+- Expose Reset layout directly beside Products zoom and Fit. Put Date range and Show/Hide details before Roadmap zoom; remove both View options menus.
+- Use clean 10-percentage-point zoom increments for both views, including automatic fit and legacy scale normalization. Products stays within 20–150%, with a readable 70–100% Fit; Roadmap stays within 10–130%, with Fit at least 40%. Preserve the visible center while zooming.
+- Use white lettering for red embargo banners and timeline labels, including product details and exported cards.
+
 ## 2026-10-08 — aligned header and consistent dropdown controls
 
 - Move the active category's product count and filtered count to the bottom status bar beside the latest update information. Keep the toolbar focused on search, view and selected-product actions.

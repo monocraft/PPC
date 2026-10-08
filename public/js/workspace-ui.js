@@ -120,6 +120,8 @@
       get("workspaceSelection").title = selected || "No product selected";
     }
     get("quickEditSelected").disabled = get("editSelected").disabled;
+    get("quickEditSelected").title = selected ? `Edit ${selected}` : "Select a product to edit";
+    get("quickEditSelected").setAttribute("aria-label", selected ? `Edit product: ${selected}` : "Edit product");
     get("workspaceEmpty").classList.toggle("hidden", total !== 0);
     get("workspaceEmptyTitle").textContent = hasPortfolioProducts ? "This category is empty" : "Start your portfolio";
     updateTimelineSummary();

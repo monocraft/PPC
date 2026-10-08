@@ -20,6 +20,7 @@ const element = (selector) => {
   return elements.get(selector);
 };
 let contentWidth = 50000;
+let contentHeight = 9000;
 let months = 120;
 const products = [{ id: "one", order: 4, manualPosition: { x: 400, y: 90 }, launchDate: "2026-09-01" }];
 const unchangedProducts = JSON.stringify(products);
@@ -27,17 +28,18 @@ const sandbox = {
   $: element, zoom: 1, roadmapMonthWidth: 82, activeView: "products", board: { products },
   PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 1.5,
   ROADMAP_LEFT_WIDTH: 190, ROADMAP_DEFAULT_MONTH_WIDTH: 82, ROADMAP_MIN_MONTH_WIDTH: 8, ROADMAP_MAX_MONTH_WIDTH: 112,
-  selectedProduct: () => products[0], getCanvasDimensions: () => ({ width: contentWidth, height: 9000 }),
+  selectedProduct: () => products[0], getCanvasDimensions: () => ({ width: contentWidth, height: contentHeight }),
+  productView: { clientHeight: 648 },
   roadmapRange: () => ({ count: months }),
   canvasScroll: { clientWidth: 900, clientHeight: 600, scrollLeft: 600, scrollTop: 500 },
   roadmapScroll: { clientWidth: 900, scrollLeft: 800, scrollTop: 400 },
   splitRoadmapScroll: { clientWidth: 700, scrollLeft: 500, scrollTop: 250 },
-  requestAnimationFrame: (callback) => callback(), syncBoardNavigator() {}, closePopupMenus() {},
+  requestAnimationFrame: (callback) => callback(), syncBoardNavigator() {}, syncLaneRail() {}, closePopupMenus() {},
   renderBoard() { sandbox.syncViewZoomControls(); }, renderRoadmaps() { sandbox.syncViewZoomControls(); },
 };
 vm.createContext(sandbox);
 vm.runInContext(
-  ["clampViewZoom", "steppedViewZoom", "syncViewZoomControls", "setProductZoom", "setRoadmapZoom", "fitProductBoard", "fitRoadmapTimeline"]
+  ["clampViewZoom", "snappedViewZoom", "steppedViewZoom", "syncViewZoomControls", "setProductZoom", "setRoadmapZoom", "fitProductBoard", "fitProductLanesVertically", "fitRoadmapTimeline"]
     .map(appFunction).join("\n") + "\n" +
   ["zoomOut", "zoomReset", "zoomIn", "fitProducts", "roadmapZoomOut", "roadmapZoomReset", "roadmapZoomIn", "roadmapFit"]
     .map(clickBinding).join("\n"), sandbox,
@@ -49,27 +51,27 @@ const productCenter = () => ({
 });
 const timelineCenter = (scroll) => (scroll.scrollLeft + (scroll.clientWidth - 190) / 2) / sandbox.roadmapMonthWidth;
 
-// Low overview scales get fine steps instead of a fixed ten-point jump.
+// Every scale, including either lower bound, advances by ten percentage points.
 sandbox.zoom = .2;
 sandbox.syncViewZoomControls();
 element("#zoomIn").onclick();
-assert.equal(sandbox.zoom, .25);
-assert.equal(element("#zoomReset").textContent, "25%");
+assert.equal(sandbox.zoom, .3);
+assert.equal(element("#zoomReset").textContent, "30%");
 element("#zoomOut").onclick();
 assert.equal(sandbox.zoom, .2);
 assert.equal(element("#zoomOut").disabled, true);
 sandbox.roadmapMonthWidth = 8;
 element("#roadmapZoomIn").onclick();
-near(sandbox.roadmapMonthWidth, 10.25, "A minimum-scale roadmap advances by a small proportional step.");
-assert.equal(element("#roadmapZoomReset").textContent, "13%");
+near(sandbox.roadmapMonthWidth, 16.4, "A minimum-scale roadmap advances to 20%.");
+assert.equal(element("#roadmapZoomReset").textContent, "20%");
 element("#roadmapZoomOut").onclick();
-assert.equal(sandbox.roadmapMonthWidth, 8);
+near(sandbox.roadmapMonthWidth, 8.2, "Timeline minus returns to its clean 10% lower bound.");
 assert.equal(element("#roadmapZoomOut").disabled, true);
 
 // Every button press makes visible progress, and either bound is reachable.
 for (const [view, minimum, maximum, percentSelector, plus, minus] of [
   ["products", .2, 1.5, "#zoomReset", "#zoomIn", "#zoomOut"],
-  ["roadmap", 8 / 82, 112 / 82, "#roadmapZoomReset", "#roadmapZoomIn", "#roadmapZoomOut"],
+  ["roadmap", .1, 1.3, "#roadmapZoomReset", "#roadmapZoomIn", "#roadmapZoomOut"],
 ]) {
   sandbox.activeView = view;
   if (view === "products") sandbox.zoom = minimum; else sandbox.roadmapMonthWidth = minimum * 82;
@@ -80,8 +82,8 @@ for (const [view, minimum, maximum, percentSelector, plus, minus] of [
     element(plus).onclick();
     assert.ok(scale() > previous, "Plus always increases the real scale.");
     const nextLabel = parseInt(element(percentSelector).textContent, 10);
-    assert.ok(nextLabel > previousLabel, "Plus always changes the displayed percentage.");
-    assert.ok(scale() / previous <= 1.5, "A plus step cannot suddenly double an overview.");
+    assert.equal(nextLabel - previousLabel, 10, "Plus advances exactly ten percentage points at every supported scale.");
+    assert.equal(nextLabel % 10, 0, "Plus never displays a fractional ten-point stop.");
     previous = scale(); previousLabel = nextLabel;
   }
   assert.ok(count < 30, "The maximum does not require excessive clicks.");
@@ -91,7 +93,8 @@ for (const [view, minimum, maximum, percentSelector, plus, minus] of [
     element(minus).onclick();
     assert.ok(scale() < previous, "Minus always decreases the real scale.");
     const nextLabel = parseInt(element(percentSelector).textContent, 10);
-    assert.ok(nextLabel < previousLabel, "Minus always changes the displayed percentage.");
+    assert.equal(previousLabel - nextLabel, 10, "Minus reduces the scale by exactly ten percentage points.");
+    assert.equal(nextLabel % 10, 0);
     previous = scale(); previousLabel = nextLabel;
   }
   near(scale(), minimum, "Minus reaches the view's lower bound.");
@@ -104,7 +107,7 @@ sandbox.canvasScroll.scrollLeft = 700; sandbox.canvasScroll.scrollTop = 600;
 let productFocus = productCenter();
 const retainedTimelineScale = sandbox.roadmapMonthWidth;
 element("#zoomIn").onclick();
-assert.equal(sandbox.zoom, 1);
+assert.equal(sandbox.zoom, .9);
 near(productCenter().x, productFocus.x, "Product plus keeps the horizontal focal point.");
 near(productCenter().y, productFocus.y, "Product plus keeps the vertical focal point.");
 element("#zoomOut").onclick();
@@ -114,8 +117,8 @@ assert.equal(sandbox.roadmapMonthWidth, retainedTimelineScale, "Products zoom ca
 
 // Fit retains readable cards even with hundreds of products in a long lane.
 element("#fitProducts").onclick();
-assert.equal(sandbox.zoom, .65);
-assert.equal(element("#zoomReset").textContent, "65%");
+assert.equal(sandbox.zoom, .7);
+assert.equal(element("#zoomReset").textContent, "70%");
 assert.equal(element("#zoomOut").disabled, false, "Manual overview zoom remains available below Fit.");
 near(productCenter().x, productFocus.x, "Fit products keeps the horizontal focal point.");
 near(productCenter().y, productFocus.y, "Fit products keeps the vertical focal point.");
@@ -127,6 +130,18 @@ assert.equal(element("#zoomReset").textContent, "100%");
 contentWidth = 100;
 element("#fitProducts").onclick();
 assert.equal(sandbox.zoom, 1, "Fitting a short product lane does not enlarge cards beyond normal size.");
+
+// Both Fit entry points round down by tens, including category auto-fit.
+for (const [ratio, expected] of [[.88, .8], [.85, .8], [.79, .7], [.63, .7], [1.24, 1]]) {
+  contentWidth = (sandbox.canvasScroll.clientWidth - 18) / ratio;
+  element("#fitProducts").onclick();
+  assert.equal(sandbox.zoom, expected, `Horizontal Fit for ${ratio * 100}% uses a clean, readable stop.`);
+  contentHeight = (sandbox.productView.clientHeight - 48) / ratio;
+  sandbox.fitProductLanesVertically();
+  assert.equal(sandbox.zoom, expected, `Category auto-fit for ${ratio * 100}% follows the same clean stops.`);
+  assert.equal(sandbox.canvasScroll.scrollTop, 0, "Category auto-fit keeps the established first-lane starting position.");
+  assert.equal(parseInt(element("#zoomReset").textContent, 10) % 10, 0);
+}
 
 // Roadmap Fit uses the active viewport and never crushes a long span to10%.
 for (const view of ["roadmap", "split"]) {
@@ -150,30 +165,57 @@ for (const view of ["roadmap", "split"]) {
   assert.equal(sandbox.roadmapMonthWidth, 82);
   months = 12;
   element("#roadmapFit").onclick();
-  near(sandbox.roadmapMonthWidth, (scroll.clientWidth - 190 - 24) / 12, "A short timeline can fit the available viewport.");
+const available = scroll.clientWidth - 190 - 24;
+assert.equal(parseInt(element("#roadmapZoomReset").textContent, 10) % 10, 0, "Roadmap Fit displays a clean ten-point percentage.");
+assert.ok(sandbox.roadmapMonthWidth * 12 <= available, "Roadmap Fit rounds downward so the range fits when above the readable floor.");
+assert.ok((sandbox.roadmapMonthWidth + 8.2) * 12 > available, "Roadmap Fit chooses the largest clean stop that fits.");
 }
 
 // Off-grid Fit values and legacy tiny/invalid scales remain recoverable.
+for (const restored of [.88, .85, .63, .652, 1.25, 9]) {
+  sandbox.zoom = restored;
+  sandbox.roadmapMonthWidth = restored * 82;
+  sandbox.syncViewZoomControls();
+  assert.equal(parseInt(element("#zoomReset").textContent, 10) % 10, 0, "Restored product zoom never retains irregular percentages.");
+  assert.equal(parseInt(element("#roadmapZoomReset").textContent, 10) % 10, 0, "Restored timeline zoom never retains irregular percentages.");
+  assert.ok(sandbox.zoom >= .2 && sandbox.zoom <= 1.5);
+  assert.ok(sandbox.roadmapMonthWidth >= 8 && sandbox.roadmapMonthWidth <= 112, "Clean timeline stops remain within existing safe pixel limits.");
+}
+sandbox.canvasScroll.scrollLeft = 800; sandbox.canvasScroll.scrollTop = 600;
+sandbox.zoom = .85;
+const legacyFocus = productCenter();
+sandbox.setProductZoom(.88);
+assert.equal(sandbox.zoom, .9, "Direct irregular zoom requests normalize to a ten-point percentage.");
+near(productCenter().x, legacyFocus.x, "Normalizing legacy zoom preserves the actual horizontal focal point.");
+near(productCenter().y, legacyFocus.y, "Normalizing legacy zoom preserves the actual vertical focal point.");
+sandbox.activeView = "roadmap";
+sandbox.roadmapMonthWidth = .85 * 82;
+sandbox.roadmapScroll.scrollLeft = 800;
+const legacyMonth = timelineCenter(sandbox.roadmapScroll);
+sandbox.setRoadmapZoom(.88 * 82);
+assert.equal(element("#roadmapZoomReset").textContent, "90%");
+near(timelineCenter(sandbox.roadmapScroll), legacyMonth, "Normalizing a legacy timeline preserves its visible month center.");
+
 sandbox.zoom = .71;
 element("#zoomIn").onclick(); assert.equal(sandbox.zoom, .8);
 sandbox.zoom = .71;
-element("#zoomOut").onclick(); assert.equal(sandbox.zoom, .65);
+element("#zoomOut").onclick(); assert.equal(sandbox.zoom, .6);
 sandbox.zoom = .652;
-element("#zoomOut").onclick(); assert.equal(sandbox.zoom, .5, "A near-preset scale cannot produce a minus click with an unchanged percentage.");
+element("#zoomOut").onclick(); assert.equal(sandbox.zoom, .6, "An off-grid scale normalizes before a predictable minus step.");
 sandbox.zoom = .798;
-element("#zoomIn").onclick(); assert.equal(sandbox.zoom, 1, "A near-preset scale cannot produce a plus click with an unchanged percentage.");
+element("#zoomIn").onclick(); assert.equal(sandbox.zoom, .9, "An off-grid scale normalizes before a predictable plus step.");
 sandbox.zoom = .01; sandbox.roadmapMonthWidth = .82;
 sandbox.syncViewZoomControls();
-assert.equal(sandbox.zoom, .2); assert.equal(sandbox.roadmapMonthWidth, 8);
+assert.equal(sandbox.zoom, .2); near(sandbox.roadmapMonthWidth, 8.2, "A tiny legacy timeline scale restores to a clean minimum.");
 assert.equal(element("#zoomReset").textContent, "20%");
 assert.equal(element("#roadmapZoomReset").textContent, "10%");
-element("#zoomIn").onclick(); assert.equal(sandbox.zoom, .25);
+element("#zoomIn").onclick(); assert.equal(sandbox.zoom, .3);
 element("#roadmapZoomReset").onclick(); assert.equal(sandbox.roadmapMonthWidth, 82);
-sandbox.setProductZoom(NaN); assert.equal(sandbox.zoom, .25, "Invalid input retains the current product scale.");
+sandbox.setProductZoom(NaN); assert.equal(sandbox.zoom, .3, "Invalid input retains the current product scale.");
 sandbox.setRoadmapZoom(NaN); assert.equal(sandbox.roadmapMonthWidth, 82, "Invalid input retains the current roadmap scale.");
 sandbox.canvasScroll.scrollLeft = 0; sandbox.canvasScroll.scrollTop = 0;
 sandbox.setProductZoom(.2);
 assert.ok(sandbox.canvasScroll.scrollLeft >= 0 && sandbox.canvasScroll.scrollTop >= 0, "Product zoom never scrolls outside the origin.");
 assert.equal(JSON.stringify(products), unchangedProducts, "View zoom/Fit/reset cannot alter product dates, order, or saved layout.");
 
-console.log("Zoom controls checks passed: readable Fit, proportional overview steps, visible percentage progress, focal anchors, independent views, safe recovery, and unchanged product data.");
+console.log("Zoom controls checks passed: clean ten-point steps at every scale, rounded readable Fit, focal anchors, independent views, safe recovery, and unchanged product data.");

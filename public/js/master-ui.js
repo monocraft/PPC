@@ -291,6 +291,7 @@
 
     async function saveFlow() {
       if (running || discarding || session.getState().busy) return;
+      adapter.beforeSave?.();
       lastError = "";
       const reviewed = await review();
       if (!reviewed) { updateStatus(); return; }

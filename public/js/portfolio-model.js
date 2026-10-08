@@ -20,6 +20,10 @@
     return lifecycleTone(product.roadmap?.status);
   }
 
+  function productLabelColor(product, fallback) {
+    return product?.statusType === "embargo" || product?.roadmap?.status === "embargo" ? "#ffffff" : fallback;
+  }
+
   // Visibility belongs to each view; it must never alter the saved MSRP.
   function msrpText(product) {
     const raw = product?.price;
@@ -213,5 +217,5 @@
     });
   }
 
-  root.PortfolioModel = Object.freeze({ DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
+  root.PortfolioModel = Object.freeze({ DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, productLabelColor, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
 })(globalThis);
