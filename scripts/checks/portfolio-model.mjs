@@ -161,6 +161,16 @@ assert.equal(model.canonicalColorCode("White-Pink"), "WHT/PNK");
 
 // Run the real application year-span action with a minimal view adapter.
 const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
+const standardStatusCases = [
+  ["new", "NEW PRODUCT", "#5fd6c1"],
+  ["embargo", "UPCOMING UNDER EMBARGO", "#ef5b5b"],
+  ["in-development", "IN-DEVELOPMENT", "#7aa2cc"],
+  ["sunsetting", "SUNSETTING", "#d4a56a"],
+];
+const standardStatusSource =
+  appSource.slice(appSource.indexOf("const STANDARD_CARD_STATUSES"), appSource.indexOf("const PRODUCT_TIER_OPTIONS")) +
+  appSource.match(/function normalizeCardStatusType\([\s\S]*?\n\}/)[0] +
+  appSource.slice(appSource.indexOf("function standardizedStatus("), appSource.indexOf("function catalogImageAssetId("));
 const action = appSource.slice(appSource.indexOf("function setRoadmapYearSpan("), appSource.indexOf("function fitProductLanesVertically("));
 const sandbox = { board: portfolio.categories[0].board, activeView: "roadmap", monthIndex: (value) => Number(value.slice(0, 4)) * 12 + Number(value.slice(5)) - 1,
   monthStringFromDate: () => "2026-10", updateTimelineSettings: (patch) => model.syncTimelineSettings(portfolio, patch),
@@ -218,10 +228,11 @@ assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty full-spec
 layoutLaneCount = 1;
 assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty single-lane categories use compact geometry");
 
-const presentationSandbox = { PortfolioModel: model, UI_PALETTE: { charcoal600: "#2c2c2c" },
-  normalizeRoadmapStatus: (stage) => stage || "in-planning", standardizedStatus: (type) => ({ label: { new: "NEW PRODUCT", embargo: "UPCOMING UNDER EMBARGO" }[type] || "", color: "#ff0000" }) };
+const presentationSandbox = { PortfolioModel: model, UI_PALETTE: { charcoal600: "#2c2c2c", carbon: "#111111" },
+  normalizeRoadmapStatus: (stage) => stage || "in-planning" };
 vm.createContext(presentationSandbox);
 vm.runInContext(
+  standardStatusSource +
   appSource.slice(appSource.indexOf("function productPresentation("), appSource.indexOf("function productPriceText(")) +
   appSource.slice(appSource.indexOf("function roadmapStatusColor("), appSource.indexOf("function roadmapLabel(")),
   presentationSandbox,
@@ -233,16 +244,28 @@ for (const stage of ["launched", "in-development", "in-planning", "embargo", "en
   assert.equal(presentation.primaryColor, model.lifecycleTone(stage));
   assert.equal(item.variantColor, "#ff0000", "old custom fields remain stored without affecting the shared palette");
 }
-for (const [statusType, expected] of [["new", "#5fd6c1"], ["embargo", "#ef5b5b"]]) {
+for (const [statusType, label, expected] of standardStatusCases) {
   const item = { statusType, roadmap: { status: "in-development" } };
+  assert.equal(presentationSandbox.normalizeCardStatusType(statusType), statusType, "every built-in status remains a valid saved status");
+  assert.equal(presentationSandbox.normalizeCardStatusType(` ${statusType.toUpperCase()} `), statusType, "imported preset names normalize without losing their status");
+  assert.equal(presentationSandbox.standardizedStatus(statusType).label, label, "preset labels use the same wording in every category");
+  assert.equal(presentationSandbox.standardizedStatus(statusType).color, expected, "preset colors are fixed rather than inherited from a roadmap stage");
   assert.equal(presentationSandbox.productPresentation(item).primaryColor, expected);
   assert.equal(presentationSandbox.roadmapStatusColor(item), expected, "theme accents must match between product cards and roadmap");
 }
-assert.equal(model.productTone({ statusType: "new", roadmap: { status: "embargo" } }), "#ef5b5b", "embargo remains visible when a new product is under embargo");
-for (const product of [{ statusType: "embargo" }, { statusType: "none", roadmap: { status: "embargo" } }, { statusType: "new", roadmap: { status: "embargo" } }]) {
+for (const invalidStatus of [undefined, null, "", "unknown", "constructor", "toString", "__proto__"]) {
+  assert.equal(presentationSandbox.normalizeCardStatusType(invalidStatus), "none", "unknown and inherited object keys never become built-in statuses");
+  assert.equal(presentationSandbox.standardizedStatus(invalidStatus).label, "");
+}
+for (const statusType of ["none", ...standardStatusCases.map(([status]) => status)]) {
+  const product = { statusType, roadmap: { status: "embargo" } };
+  assert.equal(model.productTone(product), "#ef5b5b", "embargo remains visible even when another preset is selected");
+  assert.equal(presentationSandbox.productPresentation(product).primaryColor, "#ef5b5b", "embargo precedence also applies to the actual card presentation");
+  assert.equal(presentationSandbox.roadmapStatusColor(product), "#ef5b5b", "embargo precedence remains consistent on the roadmap");
   assert.equal(model.productLabelColor(product, "#111111"), "#ffffff", "Every red embargo surface uses white label text.");
 }
-for (const product of [null, {}, { statusType: "new" }, { statusType: "none", roadmap: { status: "in-development" } }]) {
+assert.equal(model.productLabelColor({ statusType: "embargo" }, "#111111"), "#ffffff");
+for (const product of [null, {}, ...standardStatusCases.filter(([type]) => type !== "embargo").map(([statusType]) => ({ statusType })), { statusType: "none", roadmap: { status: "in-development" } }]) {
   assert.equal(model.productLabelColor(product, "#111111"), "#111111", "The embargo preference leaves normal contrast choices intact.");
 }
 
@@ -272,14 +295,14 @@ vm.runInContext(
 const consoleContext = { save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
   measureText: (text) => ({ width: text.length * 5 }), fillText: (text) => { consoleText.push(text); consoleTextColors.push(consoleContext.fillStyle); } };
 const consoleLayout = { cardHeight: 300, imageSlotTop: 34, imageSlotHeight: 110, titleBlockTop: 150, detailsTopOffset: 65 };
-for (const [statusType, label, color] of [["new", "NEW PRODUCT", "#5fd6c1"], ["embargo", "UPCOMING UNDER EMBARGO", "#ef5b5b"]]) {
-  for (const variantLabel of ["", "PLAYSTATION", "XBOX", label]) {
+for (const [statusType, label, color] of standardStatusCases) {
+  for (const variantLabel of ["", "PLAYSTATION", "XBOX", label, label.toLowerCase()]) {
     consoleProduct = { name: "Console headset", statusType, variantLabel, specs: [], roadmap: { status: "in-development" } };
     const before = JSON.stringify(consoleProduct);
     const presentation = presentationSandbox.productPresentation(consoleProduct);
     assert.equal(presentation.primaryLabel, label, "platforms cannot replace the shared status banner");
     assert.equal(presentation.primaryColor, color);
-    assert.equal(presentation.secondaryLabel, variantLabel && variantLabel !== label ? variantLabel : "", "identical status/variant labels are never duplicated");
+    assert.equal(presentation.secondaryLabel, variantLabel && variantLabel.toUpperCase() !== label ? variantLabel : "", "identical status/variant labels are never duplicated, regardless of case");
     for (const detailed of [false, true]) {
       consoleText.length = 0;
       consoleTextColors.length = 0;
@@ -287,7 +310,7 @@ for (const [statusType, label, color] of [["new", "NEW PRODUCT", "#5fd6c1"], ["e
       presentationSandbox.drawCard(consoleContext, consoleProduct, 0, 0, false, { ...consoleLayout, detailed }, false);
       assert.equal(consoleText[0], label, "both compact and detailed cards start with the shared status label");
       assert.equal(consoleShapes[1][6], color, "the main banner uses the theme accent");
-      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#ffffff" : "#111111", "Compact, detailed, and exported card rendering use white embargo text and keep teal text dark.");
+      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#ffffff" : "#111111", "Compact, detailed, and exported card rendering use white embargo text and dark text on the teal, blue, and amber presets.");
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
         assert.equal(consoleShapes[2][6], color, "the variant badge matches the status banner color");

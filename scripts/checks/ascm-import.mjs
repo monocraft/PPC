@@ -406,7 +406,7 @@ const testedFunctions = [
   "productColorVariants", "colorVariantById", "colorVariantWithImage", "makeRoadmap", "monthStringFromDate",
   "monthIndex", "monthString", "addMonths", "normalizeMonth", "categoryDefinition", "normalizeRoadmapStatus",
   "inferFamily", "defaultRoadmapForProduct", "normalizeProductInfoDate", "normalizeAscmRecord",
-  "normalizeAscmProductMetadata", "normalizeAscmSnapshot", "normalizePartSku", "ensureBoardSchema", "standardizedStatus",
+  "normalizeAscmProductMetadata", "normalizeAscmSnapshot", "normalizePartSku", "ensureBoardSchema", "normalizeCardStatusType", "standardizedStatus",
   "catalogImageAssetId", "catalogImageAssets", "packageCodec", "ensurePortfolioSchema", "parseHexColor", "normalizeHexColor", "clonePortfolioData",
   "ascmGroupBasePartNumbers", "ascmGroupDates", "ascmRecordSignature", "ascmProductNeedsUpdate", "buildAscmImportPlan",
   "ascmRoadmapStatus", "applyAscmGroupToProduct", "ascmProductId", "findPortfolioProductLocation", "applyAscmImportPlan",
@@ -496,6 +496,25 @@ assert.ok(integratedProduct.variantGroups.flatMap((group) => group.items).some((
 assert.ok(integratedProduct.partSkus.some((item) => item.code === "OLD123"), "full import must preserve omitted prior HP SKUs");
 assert.equal(integration.plan(integrationDataset).items[0].action, "unchanged", "real preview must recognize a repeated additive report as unchanged");
 assert.ok(integratedState.categories.every((category) => category.board.settings.roadmap.endMonth === "2030-12"), "import normalization must preserve the shared five-year range in every category");
+
+// Preset statuses must survive every application normalizer used by imports
+// and by a later reload of the saved product data.
+for (const [statusType, statusLabel] of [["in-development", "IN-DEVELOPMENT"], ["sunsetting", "SUNSETTING"]]) {
+  const presetSeed = structuredClone(seed);
+  Object.assign(presetSeed.categories[0].board.products[0], { statusType, statusLabel });
+  integration.load(presetSeed);
+  integration.apply(integration.plan(integrationDataset));
+  const importedPreset = integration.state().categories[0].board.products[0];
+  assert.equal(importedPreset.statusType, statusType, "ASCM updates retain the selected preset status");
+  assert.equal(importedPreset.statusLabel, statusLabel, "ASCM normalization retains the preset banner label");
+  integration.load(JSON.parse(JSON.stringify(integration.state())));
+  const reloadedPreset = integration.state().categories[0].board.products[0];
+  assert.equal(reloadedPreset.statusType, statusType, "preset status survives saved data reload");
+  assert.equal(reloadedPreset.statusLabel, statusLabel);
+  assert.deepEqual(reloadedPreset.roadmap, importedPreset.roadmap, "status normalization preserves lifecycle dates and stage");
+  assert.equal(sandbox.makeProduct("preset-new", "Preset product", null, "wired", 0, { statusType }).statusType, statusType, "new product construction accepts the preset status");
+}
+integration.load(structuredClone(integratedState));
 
 // Category correction relocates the same saved object, preserving its details.
 const movedGroup = { ...cloud, categoryId: "lifestyle-audio" };
