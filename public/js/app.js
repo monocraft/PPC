@@ -4605,11 +4605,7 @@ function renderInspector() {
     </section>
     <section id="productInformationSection" class="panel-section product-information-section">
       <div class="section-heading-row">
-        <div>
-          <span class="eyebrow">Viewer details</span>
-          <h3>Product information</h3>
-        </div>
-        <span class="section-badge">Read-only pane</span>
+        <h3>Product information and dates</h3>
       </div>
       <div class="portfolio-info-card">
         <div class="category-move-control">
