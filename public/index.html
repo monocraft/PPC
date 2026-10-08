@@ -18,7 +18,7 @@
       <header class="topbar">
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">P</span>
-          <label class="category-switcher"><span class="eyebrow">Product portfolio</span><select id="categorySelect" class="category-select" aria-label="Product category"></select></label>
+          <label class="category-switcher"><select id="categorySelect" class="category-select" aria-label="Product category"></select></label>
           <h1 id="boardTitle" class="visually-hidden"></h1>
         </div>
         <div class="view-switch" role="tablist" aria-label="Portfolio view">
@@ -59,7 +59,7 @@
           <details class="workspace-tool-menu workspace-view-menu"><summary>View options</summary><div class="workspace-tool-menu-panel"><button id="quickTimelineSettings" class="quiet-button">Timeline range <span id="timelineRangeSummary"></span><span aria-hidden="true">↗</span></button><button id="toggleRoadmapDetails" class="quiet-button" aria-pressed="false" aria-controls="splitView">Product details</button><button id="roadmapShowSelected" class="quiet-button" title="Center the selected product on the timeline" disabled>Show selected</button><div class="roadmap-edit-controls" role="group" aria-label="Edit selected roadmap product"><button id="roadmapMoveUp" class="compact-button" title="Move selected product up in its family (Alt + Up on timeline)" aria-label="Move selected roadmap product up" disabled>↑ Move up</button><button id="roadmapMoveDown" class="compact-button" title="Move selected product down in its family (Alt + Down on timeline)" aria-label="Move selected roadmap product down" disabled>↓ Move down</button></div></div></details>
           <span id="roadmapEditAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
         </section>
-        <div class="selection-bar"><span id="workspaceSummary">Loading portfolio…</span><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button></div></div>
+        <div class="selection-bar"><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button></div></div>
       </div>
     <section class="workspace">
       <section id="productView" class="view-pane product-view">
@@ -117,7 +117,7 @@
     </section>
 
 
-      <footer id="statusbar" class="statusbar" aria-live="polite"></footer>
+      <footer id="statusbar" class="statusbar" aria-live="polite"><div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div><span id="workspaceSummary">Loading portfolio…</span></footer>
     </div>
   </main>
 
