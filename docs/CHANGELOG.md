@@ -1,5 +1,10 @@
 # Change Log
 
+## 2026-10-08 — integrated discard segment
+
+- Make each product's Discard action a flush end segment in Review changes, with a full-height click target, left divider and inset keyboard focus.
+- Preserve independent Details disclosure, discard confirmation and Undo behavior; reduce the segment width on narrow screens.
+
 ## 2026-10-08 — consistent variant label colors
 
 - Match variant/platform badges to the product status banner in both product cards and Roadmap details, including white text on embargo red and dark text on new-product teal.
