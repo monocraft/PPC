@@ -556,7 +556,7 @@ const viewSandbox = {
   ROADMAP_DEFAULT_MONTH_WIDTH: 82, ROADMAP_MIN_MONTH_WIDTH: 8, ROADMAP_MAX_MONTH_WIDTH: 112, ROADMAP_LEFT_WIDTH: 190,
   PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 1.5,
   selectedProduct: () => viewSelectedProduct,
-  canvasScroll: { clientWidth: 900, scrollLeft: 120, scrollTop: 80,
+  canvasScroll: { clientWidth: 900, clientHeight: 520, scrollLeft: 120, scrollTop: 80,
     scrollTo(options) { if (options.left != null) this.scrollLeft = options.left; if (options.top != null) this.scrollTop = options.top; } },
   getCanvasDimensions: () => ({ width: productFitWidth, height: 700 }),
   roadmapRange: () => ({ start: 2026 * 12, count: timelineFitMonths }),
@@ -576,7 +576,7 @@ viewSandbox.roadmapScroll = timelineScrollAdapter(900, 500);
 viewSandbox.splitRoadmapScroll = timelineScrollAdapter(700, 320);
 vm.createContext(viewSandbox);
 vm.runInContext(
-  ["syncViewZoomControls", "setRoadmapZoom", "fitRoadmapTimeline", "fitProductBoard"].map(applicationFunction).join("\n") +
+  ["clampViewZoom", "steppedViewZoom", "syncViewZoomControls", "setProductZoom", "setRoadmapZoom", "fitRoadmapTimeline", "fitProductBoard"].map(applicationFunction).join("\n") +
   ["zoomOut", "zoomReset", "zoomIn", "resetLayout", "fitProducts", "roadmapZoomOut", "roadmapZoomReset", "roadmapZoomIn", "roadmapFit"].map(applicationClickBinding).join("\n"),
   viewSandbox,
 );
@@ -598,14 +598,14 @@ for (const activeView of ["roadmap", "split"]) {
   const originalMonth = timelineCenterMonth(targetScroll);
   const originalTop = targetScroll.scrollTop;
   viewElement("#roadmapZoomIn").onclick();
-  closeTo(viewSandbox.roadmapMonthWidth, 90.2, "timeline plus increments ten percent of the default month width");
+  closeTo(viewSandbox.roadmapMonthWidth, 102.5, "timeline plus advances to the next familiar proportional zoom stop");
   closeTo(timelineCenterMonth(targetScroll), originalMonth, "timeline zoom anchors the visible month center outside the frozen labels");
   assert.equal(targetScroll.scrollTop, originalTop, "horizontal zoom preserves vertical timeline position");
   assert.equal(otherScroll.scrollLeft, originalOtherLeft, "zoom adjusts only the visible roadmap viewport");
   assert.equal(viewSandbox.zoom, 1, "timeline zoom cannot change the product scale");
-  assert.equal(viewElement("#roadmapZoomReset").textContent, "110%");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "125%");
   viewElement("#roadmapZoomOut").onclick();
-  closeTo(viewSandbox.roadmapMonthWidth, 82, "timeline minus uses the same default-based step");
+  closeTo(viewSandbox.roadmapMonthWidth, 82, "timeline minus returns to the previous proportional zoom stop");
   closeTo(timelineCenterMonth(targetScroll), originalMonth, "inverse timeline zoom retains the anchored month");
   viewSandbox.setRoadmapZoom(200);
   assert.equal(viewSandbox.roadmapMonthWidth, 112, "timeline zoom has a safe maximum month width");
@@ -625,7 +625,7 @@ for (const activeView of ["roadmap", "split"]) {
   assert.equal(viewElement("#roadmapZoomOut").disabled, false);
   assert.equal(viewElement("#roadmapZoomIn").disabled, false);
   viewElement("#roadmapFit").onclick();
-  closeTo(viewSandbox.roadmapMonthWidth, (targetScroll.clientWidth - 190 - 24) / 60, "Fit uses the viewport of the active roadmap or details view");
+  closeTo(viewSandbox.roadmapMonthWidth, Math.max(82 * .4, (targetScroll.clientWidth - 190 - 24) / 60), "Fit uses the active viewport while retaining readable month widths");
   assert.equal(viewElement("#roadmapZoomReset").textContent, `${Math.round(viewSandbox.roadmapMonthWidth / 82 * 100)}%`, "Fit updates the visible timeline percentage");
   assert.equal(viewSandbox.zoom, 1, "timeline Fit leaves the product scale unchanged");
 }
@@ -634,7 +634,7 @@ viewElement("#roadmapFit").onclick();
 assert.equal(viewSandbox.roadmapMonthWidth, 112, "fitting a short timeline respects the maximum month width");
 timelineFitMonths = 120;
 viewElement("#roadmapFit").onclick();
-assert.equal(viewSandbox.roadmapMonthWidth, 8, "fitting a long timeline retains readable month widths");
+closeTo(viewSandbox.roadmapMonthWidth, 32.8, "fitting a long timeline retains a readable40% overview and allows horizontal scrolling");
 viewSandbox.splitRoadmapScroll.scrollLeft = 0;
 viewSandbox.setRoadmapZoom(8);
 assert.ok(viewSandbox.splitRoadmapScroll.scrollLeft >= 0, "zoom at the timeline origin never requests negative scrolling");
@@ -642,8 +642,8 @@ timelineFitMonths = 60;
 viewSandbox.activeView = "products";
 const retainedTimelineWidth = viewSandbox.roadmapMonthWidth;
 viewElement("#zoomOut").onclick();
-assert.equal(viewSandbox.zoom, .9);
-assert.equal(viewElement("#zoomReset").textContent, "90%");
+assert.equal(viewSandbox.zoom, .8);
+assert.equal(viewElement("#zoomReset").textContent, "80%");
 viewElement("#zoomIn").onclick();
 assert.equal(viewSandbox.zoom, 1);
 viewSandbox.zoom = 1.5;
@@ -651,12 +651,12 @@ viewElement("#zoomIn").onclick();
 assert.equal(viewSandbox.zoom, 1.5, "product plus cannot exceed its maximum scale");
 assert.equal(viewElement("#zoomIn").disabled, true);
 viewElement("#fitProducts").onclick();
-assert.equal(viewSandbox.zoom, .48, "Fit products scales the longest visible lane to the available canvas width");
-assert.equal(viewElement("#zoomReset").textContent, "48%");
+assert.equal(viewSandbox.zoom, .65, "Fit products keeps a long lane readable instead of squeezing every product across the screen");
+assert.equal(viewElement("#zoomReset").textContent, "65%");
 productFitWidth = 100000;
 viewElement("#fitProducts").onclick();
-assert.equal(viewSandbox.zoom, .2, "fitting a long lane respects the minimum product scale");
-assert.equal(viewElement("#zoomOut").disabled, true);
+assert.equal(viewSandbox.zoom, .65, "fitting an exceptionally long lane retains the readable overview floor");
+assert.equal(viewElement("#zoomOut").disabled, false, "the user can still zoom out manually after readable Fit");
 productFitWidth = 100;
 viewElement("#fitProducts").onclick();
 assert.equal(viewSandbox.zoom, 1, "fitting a short lane does not enlarge its cards above normal size");
