@@ -702,9 +702,9 @@ for (const scenario of paneScenarios) {
       const card = { productId: `pane-${lane.id}`, x: 18, y: row.top, width: 246, height: layout.cardHeight };
       paneSandbox.renderedCards = [card];
       const parentHeight = card.height * drawZoom;
-      const expectedWidth = parentHeight <= 180 ? 720 : parentHeight <= 280 ? 680 : 540;
+      const expectedWidth = 720;
       closeEnough(paneSandbox.viewerInfoVisualHeight(), parentHeight, "fallback height exactly follows the parent's rendered height");
-      assert.equal(paneSandbox.viewerInfoVisualWidth(), expectedWidth, "short parent cards receive bounded horizontal room while tall cards keep compact specifications");
+      assert.equal(paneSandbox.viewerInfoVisualWidth(), expectedWidth, "all parent heights receive horizontal room for compact date rows and readable specifications");
       paneSandbox.renderViewerInfo();
       assert.ok(viewerPane.innerHTML.includes('data-detail-surface="viewer"'), "the app must mount the shared detail controls on the viewer surface");
       assert.equal(bindCalls.at(-1).container, viewerPane);
@@ -726,8 +726,7 @@ for (const scenario of paneScenarios) {
         closeEnough(placement.paneLeft, (card.x + card.width) * drawZoom + 10, "pane remains beside its own product");
         closeEnough(placement.paneRight - placement.paneLeft, expectedWidth * progress, "opening reveals the pane horizontally");
         assert.equal(viewerPane.dataset.compactHeight, String(parentHeight <= 180));
-        const hasLongValues = scenario.specs.some((item) => String(item.value ?? "").replace(/\s+/g, " ").trim().length > 80);
-        assert.equal(viewerPane.dataset.detailColumns, String(parentHeight <= 280 && !hasLongValues ? 2 : 1), "long category specifications must retain their full single-column width at every zoom");
+        assert.equal(viewerPane.dataset.detailColumns, "1", "specifications retain a readable single column beside the wider dates at every zoom");
         assert.equal(viewerPane.style.pointerEvents, progress > .96 ? "auto" : "none", "controls become interactive when the pane finishes opening");
         const exported = paneSandbox.getCanvasDimensions({ includeViewer: false });
         assert.equal(exported.width, closedDimensions.width, "exports omit the temporary horizontal detail reserve");
@@ -737,27 +736,27 @@ for (const scenario of paneScenarios) {
   }
 }
 
-// Boundaries keep wide compatibility strings legible without rewarding large
-// specification counts with an unnecessarily wide pane. Whitespace from an
-// imported cell does not turn an otherwise short value into a long one.
+// Compact date rows keep consistent horizontal room across height boundaries.
+// Short and long specification values retain one readable column, and high
+// specification counts do not further inflate the pane width.
 const positionedProductId = paneSandbox.viewerInfoProductId;
 paneSandbox.viewerInfoProductId = "pane-first";
 const boundaryProduct = paneSandbox.board.products.find((item) => item.id === "pane-first");
-for (const [height, expectedWidth] of [[180, 720], [180.01, 680], [280, 680], [280.01, 540], [1000, 540]]) {
-  assert.equal(paneSandbox.viewerInfoVisualWidth(height), expectedWidth, "pane width must respect exact parent-height boundaries");
+for (const [height, expectedWidth] of [[180, 720], [180.01, 720], [280, 720], [280.01, 720], [1000, 720]]) {
+  assert.equal(paneSandbox.viewerInfoVisualWidth(height), expectedWidth, "date rows retain horizontal room across compact parent-height boundaries");
 }
 for (const [value, height, expectedColumns] of [
-  ["a".repeat(80), 180, "2"],
-  [`  ${"a".repeat(40)}\n\t${"b".repeat(39)}  `, 280, "2"],
+  ["a".repeat(80), 180, "1"],
+  [`  ${"a".repeat(40)}\n\t${"b".repeat(39)}  `, 280, "1"],
   ["a".repeat(81), 180, "1"],
   ["short", 280.01, "1"],
 ]) {
   boundaryProduct.specs = [{ label: "Compatibility", value }];
   paneSandbox.setViewerInfoSize(paneSandbox.viewerInfoVisualWidth(height), height);
-  assert.equal(viewerPane.dataset.detailColumns, expectedColumns, "column selection must use normalized value length and available parent height");
+  assert.equal(viewerPane.dataset.detailColumns, expectedColumns, "the dates layout must not squeeze short or long specifications into narrow columns");
 }
 boundaryProduct.specs = Array.from({ length: 100 }, (_, index) => ({ label: `Specification ${index}`, value: "Short" }));
-assert.equal(paneSandbox.viewerInfoVisualWidth(500), 540, "many short specifications must not inflate the normal pane width");
+assert.equal(paneSandbox.viewerInfoVisualWidth(500), 720, "many short specifications must not inflate the normal pane width");
 paneSandbox.viewerInfoProductId = positionedProductId;
 
 // Use a deliberately different rendered height to catch accidental dependence
