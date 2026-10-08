@@ -3675,7 +3675,7 @@ function renderBoard() {
 }
 
 function renderStatus() {
-  $("#statusbar").innerHTML = '<div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div>';
+  $("#statusbar").innerHTML = '<div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div><span id="workspaceSummary"></span>';
   publishWorkspaceState();
 }
 

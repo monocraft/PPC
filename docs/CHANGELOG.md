@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-08 — aligned header and consistent dropdown controls
+
+- Move the active category's product count and filtered count to the bottom status bar beside the latest update information. Keep the toolbar focused on search, view and selected-product actions.
+- Align the category selector with the P mark and other header controls, removing the redundant eyebrow label above the selector.
+- Use consistent drawn chevrons for native dropdowns and compact disclosure controls while retaining native keyboard and selection behavior.
+
 ## 2026-10-08 — compact view tools, practical zoom and readable specifications
 
 - Combine search, view tools, product count and selected-product actions into one desktop row for Products and Roadmap. Place sorting and secondary view actions in compact disclosures that open over the workspace, with keyboard dismissal and reliable focus restoration.
