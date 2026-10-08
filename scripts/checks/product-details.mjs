@@ -642,6 +642,8 @@ const paneSandbox = {
   categoryDefinition: () => ({ fullSpecCards: false }),
   variantFooterLayout: () => ({ height: 0 }),
   activeView: "products", zoom: 1, PRODUCT_MIN_ZOOM: .2,
+  dragState: null, productCardMotion: null,
+  productCardMotionValid: () => false,
   viewerInfoProductId: null, viewerInfoProgress: 0, viewerInfoOpen: false,
   viewerInfo: viewerPane, viewerInfoOutline: viewerOutline, renderedCards: [],
   selectedProduct: () => null,
