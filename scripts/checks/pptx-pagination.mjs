@@ -278,7 +278,7 @@ const sandbox = {
   },
   inferFamily: (name) => name || "Other",
   roadmapGroupsForProducts: (products) => [...new Set(products.map((product) => product.family))].map((family) => ({ family, products: products.filter((product) => product.family === family) })),
-  closePopupMenus() {}, renderActiveView() {}, PptxGenJS: RecordingPptx,
+  closePopupMenus() {}, stopProductCardDrag() {}, renderActiveView() {}, PptxGenJS: RecordingPptx,
   PPTXEditable: { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) },
   downloadBlob() {},
   renderCategoryImageForPptx: async (category, page) => recordImage("products", category, page),

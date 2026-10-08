@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-08 — fluid product reordering
+
+- Rename the toolbar action to Reorder products and use product wording in the active Done/Cancel controls.
+- Keep a muted ghost at the original position and a distinct destination placeholder while dragging. Draw the lifted product above the other products, with nearby products sliding smoothly to preview the new arrangement.
+- Animate completed drops into position and canceled gestures back to their source; keep horizontal and vertical edge scrolling active while holding near an edge.
+- Keep previews separate from saved ordering until a completed drop. Preserve hidden-product order under filtering, cancel, keyboard, category/view/save transitions and exports; honor reduced-motion preferences.
+
 ## 2026-10-08 — direct view tools and clear card reordering
 
 - Move Reorder cards into the Products toolbar. Keep Done and Cancel visible while reordering; Done keeps the draft, while Cancel or Escape reverses only this session's card moves and preserves unrelated edits. Finish temporary reordering when changing category, switching view, or opening save review.

@@ -5,7 +5,7 @@ import vm from "node:vm";
 const source = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const html = await readFile(new URL("../../public/index.html", import.meta.url), "utf8");
 const masterUi = await readFile(new URL("../../public/js/master-ui.js", import.meta.url), "utf8");
-const names = ["captureProductCardLayout", "restoreProductCardReorder", "stopProductCardDrag", "startProductReorder", "finishProductReorder", "handleProductReorderKeydown", "reorderProduct", "normalizeLaneOrders", "updateProductLayoutEditControls", "activateCategory", "setView", "finishDrag"];
+const names = ["captureProductCardLayout", "restoreProductCardReorder", "productCardDropTarget", "productCardLayoutFingerprint", "productCardMotionValid", "stopProductCardDrag", "startProductReorder", "finishProductReorder", "handleProductReorderKeydown", "reorderProduct", "normalizeLaneOrders", "updateProductLayoutEditControls", "activateCategory", "setView", "finishDrag"];
 const functions = names.map((name) => {
   const match = source.match(new RegExp(`^function ${name}\\([^]*?^\\}`, "m"));
   assert.ok(match, `Exercise the actual ${name} function`);
@@ -30,7 +30,7 @@ function harness() {
   const captures = new Set();
   const canvas = get("canvas"); Object.assign(canvas, { hasPointerCapture: (id) => captures.has(id), releasePointerCapture: (id) => captures.delete(id), setPointerCapture: (id) => captures.add(id) });
   const context = {
-    board, portfolio, activeCategoryId: "audio", activeView: "products", selectedId: "a", productLayoutEditing: false, productReorderSession: null, dragState: null, panState: null,
+    board, portfolio, activeCategoryId: "audio", activeView: "products", selectedId: "a", productLayoutEditing: false, productReorderSession: null, dragState: null, panState: null, productCardMotion: null, productCardMotionFrame: null, zoom: 1, searchQuery: "",
     productLayoutEditButton: get("productLayoutEditToggle"), productControls: get("productControls"), roadmapControls: get("roadmapControls"), canvas,
     $: (selector) => get(selector.slice(1)), scheduleSave: () => counts.saves++, syncControls() {}, renderInspector() {}, renderActiveView() { counts.paints++; }, renderBoard() { counts.paints++; }, updateDataEditIndicator() {},
     closePopupMenus() {}, showWorkspaceNotice: (message, options) => notices.push({ message, options }), selectedProduct: () => context.board.products.find((product) => product.id === context.selectedId), sortedLanes: () => context.board.lanes,
@@ -38,7 +38,7 @@ function harness() {
     closeViewerInfo() {}, viewerInfoOutline: get("outline"), viewerInfoProgress: 0, viewerInfoProductId: null, viewerInfoOpen: false,
     ensureBoardSchema: (value) => value, categoryDefinition: () => ({}), PortfolioModel: { syncTimelineSettings() {} }, closeInspector() {}, closeVariantPopover() {}, hoveredHeroVariant: null, stopRoadmapSlotEditing() {}, initialVerticalFitPending: false, fitProductLanesVertically() {},
     roadmapPanState: null, roadmapInteractionMode: "pan", roadmapDetailsOpen: false, productView: get("productView"), roadmapView: get("roadmapView"), splitView: get("splitView"), syncRoadmapDetailsVisibility() {}, updateLinkedViewButton() {}, updateRoadmapEditControls() {},
-    document: { querySelectorAll: () => [] }, requestAnimationFrame: (callback) => callback(), scrollSelectedIntoView() {}, scrollRoadmapSelected() {}, roadmapScroll: {}, splitRoadmapScroll: {},
+    document: { querySelectorAll: () => [] }, requestAnimationFrame: (callback) => callback(), cancelAnimationFrame() {}, scrollSelectedIntoView() {}, scrollRoadmapSelected() {}, roadmapScroll: {}, splitRoadmapScroll: {}, startProductCardSettling() {}, updateProductCardDrag() {},
     productLaneGeometry: () => ({ rows: [{ lane: { id: "first" }, top: 34 }, { lane: { id: "second" }, top: 650 }] }), GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, syncBoardNavigator() {}, canvasScroll: { classList: get("scroll").classList },
   };
   vm.createContext(context); new vm.Script(functions).runInContext(context);
@@ -49,7 +49,11 @@ function harness() {
   const layouts = () => plain(context.board.products.map(({ id, laneId, order, manualPosition }) => ({ id, laneId, order, manualPosition })));
   const order = (laneId) => context.board.products.filter((product) => product.laneId === laneId).sort((a, b) => a.order - b.order).map((product) => product.id);
   const event = (key, options = {}) => ({ key, target: canvas, altKey: false, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...options });
-  return { context, board, portfolio, nodes, get, focus, counts, notices, captures, layouts, order, event };
+  const gesture = (options = {}) => {
+    const position = options.position || { x: 274, y: 650 };
+    return { pointerId: 1, productId: "a", moved: true, position, source: { x: 18, y: 34, laneId: "first" }, board: context.board, categoryId: context.activeCategoryId, zoom: context.zoom, searchQuery: context.searchQuery, version: context.productCardLayoutFingerprint(), dropTarget: context.productCardDropTarget(context.board.products, context.board.products, context.productLaneGeometry().rows, options.productId || "a", position), ...options };
+  };
+  return { context, board, portfolio, nodes, get, focus, counts, notices, captures, layouts, order, event, gesture };
 }
 
 {
@@ -118,7 +122,7 @@ function harness() {
 }
 {
   const h = harness(), baseline = h.layouts(); h.context.startProductReorder(); h.context.reorderProduct("a", "first", 2);
-  h.context.dragState = { pointerId: 13, productId: "b", moved: true, position: { x: 274, y: 650 } }; h.captures.add(13);
+  h.context.dragState = h.gesture({ pointerId: 13, productId: "b" }); h.captures.add(13);
   const event = h.event("Escape"); assert.equal(h.context.handleProductReorderKeydown(event), true);
   assert.ok(event.prevented && event.stopped); assert.equal(h.context.selectedId, "a"); assert.deepEqual(h.layouts(), baseline);
   assert.equal(h.context.dragState, null); assert.equal(h.captures.has(13), false, "Cancellation releases an in-progress pointer capture");
@@ -127,10 +131,10 @@ function harness() {
 {
   const h = harness(); h.context.startProductReorder(); const baseline = h.layouts();
   for (const eventType of ["pointercancel", "pointerup"]) {
-    h.context.dragState = { pointerId: 1, productId: "a", moved: eventType === "pointercancel", position: { x: 274, y: 650 } };
+    h.context.dragState = h.gesture({ moved: eventType === "pointercancel" });
     h.context.finishDrag({ pointerId: 1, type: eventType }); assert.deepEqual(h.layouts(), baseline, "Canceled pointers and a simple selection click never reorder a card");
   }
-  h.context.dragState = { pointerId: 1, productId: "a", moved: true, position: { x: 274, y: 650 } };
+  h.context.dragState = h.gesture();
   h.context.finishDrag({ pointerId: 1, type: "pointerup" }); assert.deepEqual(h.order("second"), ["d", "a", "e"], "An intentional completed drag records a move");
 }
 {

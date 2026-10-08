@@ -422,7 +422,8 @@ const drawnLaneCards = [];
 const laneBackgrounds = [];
 const reorderedProducts = [];
 const laneSandbox = {
-  PortfolioModel: model, board: { products: laneProducts }, activeView: "products", zoom: 1,
+  PortfolioModel: model, board: { products: laneProducts, lanes: geometryLanes }, activeView: "products", zoom: 1,
+  activeCategoryId: "geometry", searchQuery: "", productCardMotion: null, productCardMotionFrame: null,
   viewerInfoProductId: "p-middle", viewerInfoProgress: 1,
   sortedLanes: () => geometryLanes, visibleProducts: () => visibleLaneProducts, productCardLayout: () => geometryLayout,
   viewerInfoVisualWidth: () => 540,
@@ -448,6 +449,7 @@ vm.runInContext(
   appSection("function drawBoardTo(", "function specIconKind(") +
   appSection("function renderLaneRail(", "function horizontalScrollMax(") +
   appSection("function hitCard(", "function hitVariantOverflow(") +
+  appSection("function stopProductCardDrag(", "function startProductReorder(") +
   appSection("function finishDrag(", 'canvas.addEventListener("pointerup", finishDrag)'),
   laneSandbox,
 );
@@ -482,7 +484,13 @@ const openDimensions = laneSandbox.getCanvasDimensions();
 laneSandbox.viewerInfoProgress = .01;
 assert.equal(laneSandbox.getCanvasDimensions().height, openDimensions.height, "opening animation never reserves vertical space");
 laneSandbox.viewerInfoProgress = 1;
-laneSandbox.dragState = { productId: "p-last", moved: true, position: { x: 18 + 256, y: openDimensions.laneRows[1].top + 5 } };
+laneSandbox.dragState = {
+  productId: "p-last", pointerId: 1, moved: true, board: laneSandbox.board,
+  categoryId: laneSandbox.activeCategoryId, zoom: laneSandbox.zoom, searchQuery: "",
+  version: laneSandbox.productCardLayoutFingerprint(),
+  position: { x: 18 + 256, y: openDimensions.laneRows[1].top + 5 },
+};
+laneSandbox.dragState.dropTarget = laneSandbox.productCardDropTarget(laneProducts, visibleLaneProducts, openDimensions.laneRows, "p-last", laneSandbox.dragState.position);
 laneSandbox.finishDrag({ pointerId: 1 });
 assert.deepEqual(reorderedProducts, [{ productId: "p-last", laneId: "middle", targetIndex: 1 }], "dropping on a lane uses its unchanged position");
 for (const activeView of ["roadmap", "split"]) {
@@ -571,7 +579,7 @@ const viewSandbox = {
     scrollTo(options) { if (options.left != null) this.scrollLeft = options.left; if (options.top != null) this.scrollTop = options.top; } },
   getCanvasDimensions: () => ({ width: productFitWidth, height: 700 }),
   roadmapRange: () => ({ start: 2026 * 12, count: timelineFitMonths }),
-  requestAnimationFrame: (callback) => callback(), closePopupMenus() {}, syncBoardNavigator() {},
+  requestAnimationFrame: (callback) => callback(), closePopupMenus() {}, stopProductCardDrag() {}, syncBoardNavigator() {},
   updateBoard: (callback) => callback(viewBoard),
   normalizeLaneOrders: (laneId) => normalizedViewLanes.push(laneId),
   renderBoard() { viewRenderCalls.push("products"); viewSandbox.syncViewZoomControls(); },

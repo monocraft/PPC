@@ -220,6 +220,8 @@ let selectedId = null;
 let zoom = 1;
 let searchQuery = "";
 let dragState = null;
+let productCardMotion = null;
+let productCardMotionFrame = null;
 let panState = null;
 let renderedCards = [];
 let renderedVariantOverflow = [];
@@ -1621,11 +1623,126 @@ function productLaneGeometry(layout = productCardLayout()) {
   return PortfolioModel.layoutProductLanes(sortedLanes(), layout, { top: LANE_TOP });
 }
 
+function productCardDropTarget(allProducts, visible, laneRows, draggedId, position) {
+  if (!laneRows.length || !allProducts.some((product) => product.id === draggedId)) return null;
+  const row = laneRows.reduce((closest, candidate) => Math.abs(position.y - candidate.top) < Math.abs(position.y - closest.top) ? candidate : closest, laneRows[0]);
+  const laneId = row.lane.id;
+  const laneProducts = allProducts.filter((product) => product.laneId === laneId && product.id !== draggedId).sort((a, b) => a.order - b.order);
+  const visibleLane = visible.filter((product) => product.laneId === laneId && product.id !== draggedId).sort((a, b) => a.order - b.order);
+  const displayIndex = Math.max(0, Math.min(visibleLane.length, Math.round((position.x - GUTTER) / (CARD_WIDTH + CARD_GAP))));
+  const next = visibleLane[displayIndex];
+  const previous = visibleLane[displayIndex - 1];
+  const sourceVisible = visible.filter((product) => product.laneId === laneId).sort((a, b) => a.order - b.order);
+  const originalRank = sourceVisible.findIndex((product) => product.id === draggedId);
+  const unchanged = originalRank === displayIndex;
+  const index = unchanged ? allProducts.filter((product) => product.laneId === laneId).sort((a, b) => a.order - b.order).findIndex((product) => product.id === draggedId)
+    : next ? laneProducts.findIndex((product) => product.id === next.id) : previous ? laneProducts.findIndex((product) => product.id === previous.id) + 1 : laneProducts.length;
+  return { laneId, index, displayIndex, unchanged, x: GUTTER + displayIndex * (CARD_WIDTH + CARD_GAP), y: row.top };
+}
+
+function productCardPreviewPositions(visible, laneRows, draggedId = "", target = null) {
+  const positions = new Map();
+  for (const row of laneRows) {
+    const products = visible.filter((product) => product.laneId === row.lane.id && product.id !== draggedId).sort((a, b) => a.order - b.order);
+    products.forEach((product, index) => {
+      const displayIndex = index + (target?.laneId === row.lane.id && index >= target.displayIndex ? 1 : 0);
+      positions.set(product.id, { x: GUTTER + displayIndex * (CARD_WIDTH + CARD_GAP), y: row.top, laneId: row.lane.id });
+    });
+  }
+  if (draggedId && target) positions.set(draggedId, { x: target.x, y: target.y, laneId: target.laneId });
+  return positions;
+}
+
+function productCardLayoutFingerprint(targetBoard = board) {
+  return JSON.stringify({ lanes: targetBoard.lanes.map((lane) => [lane.id, lane.order]), products: targetBoard.products.map((product) => [product.id, product.laneId, product.order, product.manualPosition]) });
+}
+
+function productCardMotionValid(motion) {
+  return Boolean(motion && motion.board === board && motion.categoryId === activeCategoryId && motion.zoom === zoom && motion.searchQuery === searchQuery && activeView === "products" && productLayoutEditing && motion.version === productCardLayoutFingerprint());
+}
+
+function queueProductCardMotion() {
+  if (productCardMotionFrame == null) productCardMotionFrame = requestAnimationFrame(animateProductCardMotion);
+}
+
+function updateProductCardDrag(clientX, clientY) {
+  const drag = dragState;
+  if (!drag?.moved || !productCardMotionValid(drag)) return false;
+  drag.clientX = clientX;
+  drag.clientY = clientY;
+  const point = canvasPoint({ clientX, clientY });
+  drag.position = { x: Math.max(GUTTER, point.x - drag.offsetX), y: Math.max(LANE_TOP, point.y - drag.offsetY) };
+  const rows = productLaneGeometry().rows;
+  drag.dropTarget = productCardDropTarget(board.products, visibleProducts(), rows, drag.productId, drag.position);
+  if (!productCardMotion) {
+    productCardMotion = { ...drag, liftedId: drag.productId, positions: productCardPreviewPositions(visibleProducts(), rows), targets: new Map(), lastTimestamp: null, dimensions: null };
+  }
+  productCardMotion.targets = productCardPreviewPositions(visibleProducts(), rows, drag.productId, drag.dropTarget);
+  const dimensions = getCanvasDimensions();
+  if (!productCardMotion.dimensions || dimensions.width !== productCardMotion.dimensions.width || dimensions.height !== productCardMotion.dimensions.height) renderBoard();
+  queueProductCardMotion();
+  return true;
+}
+
+function paintProductCardMotion() {
+  if (!productCardMotionValid(productCardMotion)) return;
+  const dimensions = productCardMotion.dimensions || getCanvasDimensions();
+  drawBoardTo(canvas.getContext("2d"), dimensions, true);
+  syncBoardNavigator();
+  syncLaneRail();
+}
+
+function animateProductCardMotion(timestamp) {
+  productCardMotionFrame = null;
+  const motion = productCardMotion;
+  if (!productCardMotionValid(motion) || (dragState && !productCardMotionValid(dragState))) {
+    const sameOwner = motion?.board === board && motion?.categoryId === activeCategoryId;
+    stopProductCardDrag();
+    if (sameOwner && activeView === "products" && !pptxExportInProgress) renderBoard();
+    return;
+  }
+  const delta = motion.lastTimestamp == null ? 16 : Math.max(8, Math.min(40, timestamp - motion.lastTimestamp));
+  motion.lastTimestamp = timestamp;
+  let scrolling = false;
+  if (dragState?.moved) {
+    const viewport = canvasScroll.getBoundingClientRect();
+    const edge = Math.min(72, (viewport.right - viewport.left) / 4, (viewport.bottom - viewport.top) / 4);
+    const edgeSpeed = (point, start, end) => point < start + edge ? -Math.min(24, (start + edge - point) / 4) : point > end - edge ? Math.min(24, (point - (end - edge)) / 4) : 0;
+    const left = canvasScroll.scrollLeft, top = canvasScroll.scrollTop;
+    const maxLeft = Math.max(0, canvasScroll.scrollWidth - canvasScroll.clientWidth), maxTop = Math.max(0, canvasScroll.scrollHeight - canvasScroll.clientHeight);
+    canvasScroll.scrollLeft = Math.max(0, Math.min(maxLeft, left + edgeSpeed(dragState.clientX, viewport.left, viewport.right) * delta / 16));
+    canvasScroll.scrollTop = Math.max(0, Math.min(maxTop, top + edgeSpeed(dragState.clientY, viewport.top, viewport.bottom) * delta / 16));
+    scrolling = left !== canvasScroll.scrollLeft || top !== canvasScroll.scrollTop;
+    if (scrolling) updateProductCardDrag(dragState.clientX, dragState.clientY);
+  }
+  const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  const amount = reduced ? 1 : 1 - Math.exp(-delta / 65);
+  let moving = false;
+  for (const [productId, target] of motion.targets) {
+    const current = motion.positions.get(productId) || { ...target };
+    const dx = target.x - current.x, dy = target.y - current.y;
+    const finished = reduced || Math.hypot(dx, dy) < .35;
+    motion.positions.set(productId, { x: finished ? target.x : current.x + dx * amount, y: finished ? target.y : current.y + dy * amount, laneId: target.laneId });
+    if (!finished && productId !== dragState?.productId) moving = true;
+  }
+  paintProductCardMotion();
+  if (moving || scrolling) queueProductCardMotion();
+  else if (!dragState) { productCardMotion = null; renderBoard(); }
+}
+
+function startProductCardSettling(positions, liftedId, reserve = {}) {
+  if (activeView !== "products" || !productLayoutEditing || !positions?.size) return;
+  const rows = productLaneGeometry().rows;
+  productCardMotion = { board, categoryId: activeCategoryId, zoom, searchQuery, version: productCardLayoutFingerprint(), liftedId, positions, targets: productCardPreviewPositions(visibleProducts(), rows), lastTimestamp: null, dimensions: null, widthReserve: reserve.width || 0, heightReserve: reserve.height || 0 };
+  renderBoard();
+  queueProductCardMotion();
+}
+
 function getCanvasDimensions({ includeViewer = true } = {}) {
   const lanes = sortedLanes();
   const products = visibleProducts();
   const layout = productCardLayout();
-  const maxCount = Math.max(1, ...lanes.map((lane) => products.filter((product) => product.laneId === lane.id).length));
+  const maxCount = Math.max(1, ...lanes.map((lane) => products.filter((product) => product.laneId === lane.id).length + (includeViewer && dragState?.moved && dragState.dropTarget?.laneId === lane.id && board.products.find((product) => product.id === dragState.productId)?.laneId !== lane.id ? 1 : 0)));
   const editorRevealReserve = inspectorOpen && activeView === "products" && inspector?.offsetWidth
     ? Math.ceil((inspector.offsetWidth + 28) / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
     : 0;
@@ -1634,9 +1751,12 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
   const viewportLogicalWidth = canvasScroll?.clientWidth
     ? Math.ceil(canvasScroll.clientWidth / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
     : 0;
+  const motion = includeViewer && productCardMotionValid(productCardMotion) ? productCardMotion : null;
+  const movingWidth = motion ? Math.max(motion.widthReserve || 0, ...[...motion.positions.values()].map((position) => position.x + CARD_WIDTH + SIDE_PADDING)) : 0;
+  const movingHeight = motion ? Math.max(motion.heightReserve || 0, ...[...motion.positions.values()].map((position) => position.y + layout.cardHeight + 20)) : 0;
   return {
-    width: Math.max(1480, contentWidth, viewportLogicalWidth),
-    height: LANE_TOP + laneGeometry.height + 20,
+    width: Math.max(1480, contentWidth, viewportLogicalWidth, movingWidth),
+    height: Math.max(LANE_TOP + laneGeometry.height + 20, movingHeight),
     laneRows: laneGeometry.rows,
     includeViewer,
   };
@@ -1645,10 +1765,12 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
 function setupCanvas(targetCanvas, drawZoom = zoom) {
   const dimensions = getCanvasDimensions();
   const dpr = window.devicePixelRatio || 1;
-  targetCanvas.width = Math.round(dimensions.width * drawZoom * dpr);
-  targetCanvas.height = Math.round(dimensions.height * drawZoom * dpr);
-  targetCanvas.style.width = `${dimensions.width * drawZoom}px`;
-  targetCanvas.style.height = `${dimensions.height * drawZoom}px`;
+  const pixelWidth = Math.round(dimensions.width * drawZoom * dpr), pixelHeight = Math.round(dimensions.height * drawZoom * dpr);
+  if (targetCanvas.width !== pixelWidth) targetCanvas.width = pixelWidth;
+  if (targetCanvas.height !== pixelHeight) targetCanvas.height = pixelHeight;
+  const cssWidth = `${dimensions.width * drawZoom}px`, cssHeight = `${dimensions.height * drawZoom}px`;
+  if (targetCanvas.style.width !== cssWidth) targetCanvas.style.width = cssWidth;
+  if (targetCanvas.style.height !== cssHeight) targetCanvas.style.height = cssHeight;
   const context = targetCanvas.getContext("2d");
   context.setTransform(dpr * drawZoom, 0, 0, dpr * drawZoom, 0, 0);
   context.imageSmoothingEnabled = true;
@@ -1938,14 +2060,43 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
   const lanes = sortedLanes();
   const products = visibleProducts();
   const layout = dimensions.layout || productCardLayout();
+  const motion = includeSelection && dimensions.includeViewer !== false && !dimensions.pptxPage && productCardMotionValid(productCardMotion) ? productCardMotion : null;
+  const drag = motion && dragState?.moved ? dragState : null;
+  const liftedId = motion?.liftedId;
   renderedCards = [];
   renderedVariantOverflow = [];
   renderedHeroVariantRegions = [];
   renderedInfoButtons = [];
 
   const laneRows = dimensions.laneRows || productLaneGeometry(layout).rows;
-  laneRows.forEach(({ lane, top: laneY, contentHeight, products: rowProducts, continued }) => {
+  // Paint every lane first so a lifted product can cross lane boundaries.
+  laneRows.forEach(({ top: laneY, contentHeight }) => {
     roundRect(context, 0, laneY - 4, dimensions.width, contentHeight + 8, 0, UI_PALETTE.charcoal800);
+  });
+  if (includeProducts && drag) {
+    const product = products.find((item) => item.id === drag.productId);
+    if (product) {
+      const heroCount = renderedHeroVariantRegions.length, overflowCount = renderedVariantOverflow.length;
+      context.save();
+      context.globalAlpha = .13;
+      drawCard(context, product, drag.source.x, drag.source.y, false, layout, false);
+      context.restore();
+      renderedHeroVariantRegions.length = heroCount;
+      renderedVariantOverflow.length = overflowCount;
+    }
+    if (drag.dropTarget) {
+      context.save();
+      context.setLineDash([7, 5]);
+      roundRect(context, drag.dropTarget.x, drag.dropTarget.y, CARD_WIDTH, layout.cardHeight, 5, "rgba(126,158,139,.055)", "rgba(156,190,168,.7)", 1.5);
+      context.setLineDash([]);
+      context.fillStyle = UI_PALETTE.steelTealLight;
+      context.font = "600 11px Arial";
+      context.textAlign = "center";
+      context.fillText("Move here", drag.dropTarget.x + CARD_WIDTH / 2, drag.dropTarget.y + layout.cardHeight / 2);
+      context.restore();
+    }
+  }
+  laneRows.forEach(({ lane, top: laneY, contentHeight, products: rowProducts, continued }) => {
     const laneProducts = (rowProducts || products.filter((product) => product.laneId === lane.id))
       .slice()
       .sort((a, b) => a.order - b.order);
@@ -1961,13 +2112,35 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
     if (!includeProducts) return;
     laneProducts
       .forEach((product, displayIndex) => {
+        if (includeProducts && product.id === liftedId) return;
         const automatic = { x: cardXForDisplayIndex(laneProducts, displayIndex, dimensions.includeViewer !== false), y: laneY };
-        let position = automatic;
-        if (dragState?.productId === product.id) position = dragState.position;
+        const position = motion?.positions.get(product.id) || automatic;
         renderedCards.push({ productId: product.id, laneId: lane.id, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
-        drawCard(context, product, position.x, position.y, includeSelection && product.id === selectedId, layout, includeSelection);
+        drawCard(context, product, position.x, position.y, includeSelection && product.id === selectedId, layout, includeSelection && !productLayoutEditing);
       });
   });
+  if (includeProducts && drag) {
+    // A thin source outline stays legible even after neighbours fill its slot.
+    context.save();
+    context.setLineDash([3, 6]);
+    roundRect(context, drag.source.x + 1.5, drag.source.y + 1.5, CARD_WIDTH - 3, layout.cardHeight - 3, 4, null, "rgba(190,197,194,.3)", 1);
+    context.restore();
+  }
+  if (includeProducts && liftedId) {
+    const product = products.find((item) => item.id === liftedId);
+    const position = drag?.position || motion.positions.get(liftedId);
+    if (product && position) {
+      context.save();
+      context.shadowColor = "rgba(0,0,0,.5)";
+      context.shadowBlur = 20;
+      context.shadowOffsetY = 9;
+      roundRect(context, position.x, position.y, CARD_WIDTH, layout.cardHeight, 5, UI_PALETTE.carbon);
+      context.restore();
+      drawCard(context, product, position.x, position.y, true, layout, false);
+      roundRect(context, position.x + .5, position.y + .5, CARD_WIDTH - 1, layout.cardHeight - 1, 4, null, UI_PALETTE.steelTealLight, 1.5);
+      renderedCards.push({ productId: product.id, laneId: drag?.dropTarget?.laneId || position.laneId || product.laneId, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
+    }
+  }
 }
 
 function specIconKind(label) {
@@ -3575,6 +3748,9 @@ function restoreProductCardReorder(targetBoard, operation, blockedLanes) {
 function stopProductCardDrag() {
   const pointerId = dragState?.pointerId;
   dragState = null;
+  if (productCardMotionFrame != null) cancelAnimationFrame(productCardMotionFrame);
+  productCardMotionFrame = null;
+  productCardMotion = null;
   if (pointerId != null && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
   canvas.style.cursor = "grab";
 }
@@ -3582,6 +3758,7 @@ function stopProductCardDrag() {
 function startProductReorder() {
   if (productLayoutEditing || activeView !== "products" || !board.products.length) return;
   closePopupMenus();
+  closeViewerInfo({ render: false });
   stopProductCardDrag();
   productReorderSession = { board, portfolio, categoryId: activeCategoryId, operations: [] };
   productLayoutEditing = true;
@@ -3773,9 +3950,11 @@ function scrollSelectedIntoView() {
 
 function renderBoard() {
   zoom = snappedViewZoom(zoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM);
+  if ((dragState && !productCardMotionValid(dragState)) || (productCardMotion && !productCardMotionValid(productCardMotion))) stopProductCardDrag();
   const previousLeft = canvasScroll.scrollLeft;
   const previousTop = canvasScroll.scrollTop;
   const { context, dimensions } = setupCanvas(canvas, zoom);
+  if (productCardMotion) productCardMotion.dimensions = dimensions;
   drawBoardTo(context, dimensions, true);
   renderLaneRail(dimensions);
   canvasScroll.scrollLeft = previousLeft;
@@ -5089,15 +5268,16 @@ function hitInfoButton(point) {
 }
 
 canvas.addEventListener("pointerdown", (event) => {
+  if (event.isPrimary === false || event.button !== 0 || dragState || panState) return;
   const point = canvasPoint(event);
-  const infoButton = hitInfoButton(point);
+  const infoButton = productLayoutEditing ? null : hitInfoButton(point);
   if (infoButton) {
     event.preventDefault();
     event.stopPropagation();
     openViewerInfo(infoButton.productId);
     return;
   }
-  const heroVariant = hitHeroVariant(point);
+  const heroVariant = productLayoutEditing ? null : hitHeroVariant(point);
   if (heroVariant) {
     event.preventDefault();
     event.stopPropagation();
@@ -5106,7 +5286,7 @@ canvas.addEventListener("pointerdown", (event) => {
     renderInspector();
     return;
   }
-  const variantOverflow = hitVariantOverflow(point);
+  const variantOverflow = productLayoutEditing ? null : hitVariantOverflow(point);
   if (variantOverflow) {
     event.preventDefault();
     event.stopPropagation();
@@ -5148,8 +5328,9 @@ canvas.addEventListener("pointerdown", (event) => {
   stopRoadmapSlotEditing();
   const product = selectedProduct();
   if (productLayoutEditing) {
+    stopProductCardDrag();
     canvas.focus({ preventScroll: true });
-    dragState = { productId: card.productId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, offsetX: point.x - card.x, offsetY: point.y - card.y, position: { x: card.x, y: card.y } };
+    dragState = { productId: card.productId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, clientX: event.clientX, clientY: event.clientY, moved: false, offsetX: point.x - card.x, offsetY: point.y - card.y, source: { x: card.x, y: card.y, laneId: card.laneId }, position: { x: card.x, y: card.y }, board, categoryId: activeCategoryId, zoom, searchQuery, version: productCardLayoutFingerprint() };
     canvas.setPointerCapture(event.pointerId);
     canvas.style.cursor = "grabbing";
   } else {
@@ -5168,6 +5349,7 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if ((dragState || panState)?.pointerId !== undefined && event.pointerId !== (dragState || panState).pointerId) return;
   if (panState) {
     const deltaX = event.clientX - panState.startX;
     const deltaY = event.clientY - panState.startY;
@@ -5178,13 +5360,13 @@ canvas.addEventListener("pointermove", (event) => {
 
   if (!dragState) {
     const point = canvasPoint(event);
-    const heroVariant = hitHeroVariant(point);
+    const heroVariant = productLayoutEditing ? null : hitHeroVariant(point);
     if (heroVariant) setHoveredHeroVariant(heroVariant.productId, heroVariant.variantId);
     else if (hoveredHeroVariant) setHoveredHeroVariant();
-    const variantOverflow = hitVariantOverflow(point);
+    const variantOverflow = productLayoutEditing ? null : hitVariantOverflow(point);
     if (variantOverflow) scheduleVariantPopoverOpen(variantOverflow, event.clientX, event.clientY);
     else scheduleVariantPopoverClose();
-    const infoButton = hitInfoButton(point);
+    const infoButton = productLayoutEditing ? null : hitInfoButton(point);
     const nextInfoHoverId = infoButton?.productId || "";
     if (nextInfoHoverId !== hoveredInfoButtonProductId) {
       hoveredInfoButtonProductId = nextInfoHoverId;
@@ -5202,15 +5384,7 @@ canvas.addEventListener("pointermove", (event) => {
 
   if (!dragState.moved && Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) < 5) return;
   dragState.moved = true;
-
-  const viewport = canvasScroll.getBoundingClientRect();
-  const edge = 72;
-  if (event.clientX < viewport.left + edge) canvasScroll.scrollLeft -= Math.ceil((viewport.left + edge - event.clientX) / 5);
-  if (event.clientX > viewport.right - edge) canvasScroll.scrollLeft += Math.ceil((event.clientX - (viewport.right - edge)) / 5);
-
-  const point = canvasPoint(event);
-  dragState.position = { x: Math.max(GUTTER, point.x - dragState.offsetX), y: Math.max(LANE_TOP, point.y - dragState.offsetY) };
-  renderBoard();
+  if (!updateProductCardDrag(event.clientX, event.clientY)) { stopProductCardDrag(); renderBoard(); }
 });
 
 canvas.addEventListener("pointerleave", () => {
@@ -5224,6 +5398,7 @@ canvas.addEventListener("pointerleave", () => {
 
 function finishDrag(event) {
   if (panState) {
+    if (event.pointerId !== panState.pointerId) return;
     const wasClick = !panState.moved;
     const cardProductId = panState.cardProductId || "";
     panState = null;
@@ -5234,18 +5409,25 @@ function finishDrag(event) {
     return;
   }
   if (!dragState) return;
+  if (event.pointerId !== dragState.pointerId) return;
+  const valid = productCardMotionValid(dragState);
+  if (valid && dragState.moved && event.type === "pointerup" && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) updateProductCardDrag(event.clientX, event.clientY);
   const current = dragState;
-  dragState = null;
-  canvas.style.cursor = "grab";
-  if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-  if (!current.moved || event.type === "pointercancel" || !productLayoutEditing) { renderBoard(); return; }
-  const rows = productLaneGeometry().rows;
-  const targetRow = rows.reduce((closest, row) => Math.abs(current.position.y - row.top) < Math.abs(current.position.y - closest.top) ? row : closest, rows[0]);
-  const targetIndex = Math.max(0, Math.round((current.position.x - GUTTER) / (CARD_WIDTH + CARD_GAP)));
-  if (targetRow) reorderProduct(current.productId, targetRow.lane.id, targetIndex);
+  const positions = productCardMotion?.positions ? new Map([...productCardMotion.positions].map(([id, position]) => [id, { ...position }])) : null;
+  const reserve = { width: productCardMotion?.dimensions?.width, height: productCardMotion?.dimensions?.height };
+  const left = canvasScroll.scrollLeft, top = canvasScroll.scrollTop;
+  if (positions) positions.set(current.productId, { ...current.position, laneId: current.source.laneId });
+  stopProductCardDrag();
+  if (!valid || !current.moved || !productLayoutEditing) { renderBoard(); return; }
+  if (event.type !== "pointercancel" && event.type !== "lostpointercapture" && current.dropTarget && !current.dropTarget.unchanged) reorderProduct(current.productId, current.dropTarget.laneId, current.dropTarget.index);
+  startProductCardSettling(positions, current.productId, reserve);
+  canvasScroll.scrollLeft = left;
+  canvasScroll.scrollTop = top;
+  if (!positions) renderBoard();
 }
 canvas.addEventListener("pointerup", finishDrag);
 canvas.addEventListener("pointercancel", finishDrag);
+canvas.addEventListener("lostpointercapture", finishDrag);
 canvas.addEventListener("dblclick", (event) => {
   const point = canvasPoint(event);
   if (hitVariantOverflow(point) || hitHeroVariant(point) || hitInfoButton(point)) return;
@@ -6097,6 +6279,7 @@ function syncPptxExportSummary() {
 }
 
 function openPptxExportDialog() {
+  stopProductCardDrag();
   closePopupMenus();
   pptxReturnFocus = document.activeElement;
   renderPptxExportCategories();
@@ -6125,6 +6308,7 @@ function pptxExportFilename(scope) {
 }
 
 async function exportPptx(scope = "both", selectedCategoryIds = null) {
+  stopProductCardDrag();
   closePopupMenus();
   if (typeof PptxGenJS !== "function") throw new Error("The PowerPoint export library did not load. Refresh the page and try again.");
   const categories = PPTXPagination.selectExportCategories(portfolio?.categories, selectedCategoryIds);
@@ -6165,6 +6349,7 @@ async function exportPptx(scope = "both", selectedCategoryIds = null) {
 }
 
 function exportPng() {
+  stopProductCardDrag();
   const exportCanvas = document.createElement("canvas");
   const scale = 2;
 
@@ -6865,6 +7050,7 @@ $("#searchInput").oninput = (event) => { searchQuery = event.target.value; rende
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
 $("#resetLayout").onclick = () => {
+  stopProductCardDrag();
   zoom = 1;
   closePopupMenus();
   updateBoard((current) => { current.products.forEach((product) => delete product.manualPosition); current.settings.freeMove = false; current.lanes.forEach((lane) => normalizeLaneOrders(lane.id)); });
@@ -7217,7 +7403,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
     }
     scheduleSave();
   },
-  canRefresh: () => !packageOperationInProgress && !roadmapDragState && !document.querySelector('.modal-backdrop:not(.hidden), dialog[open]') && !document.activeElement?.closest('#inspector'),
+  canRefresh: () => !packageOperationInProgress && !roadmapDragState && !dragState && !productCardMotion && !document.querySelector('.modal-backdrop:not(.hidden), dialog[open]') && !document.activeElement?.closest('#inspector'),
   applyPatches: (changes) => {
     if (packageOperationInProgress) throw new Error("Finish loading the package before saving shared changes.");
     const nextProducts = new Map(portfolio.categories.map((category) => [category.id, category.board.products.slice()]));
