@@ -379,6 +379,7 @@ function lifecycleHarness() {
 // lifecycle creations/removals and updates to unrelated accepted fields.
 const previousPackageApi = globalThis.PortfolioPackage;
 await import("../../public/js/package-codec.js");
+const packageCodec = globalThis.PortfolioPackage;
 const validatePackageInfo = globalThis.PortfolioPackage.normalizePackageInfo;
 // Earlier transport fixtures intentionally use a simple non-package test key.
 // Use the real metadata validator without changing that request-key fixture.
@@ -604,4 +605,121 @@ for (const choice of ["mine", "master"]) {
   assert.equal(body.sessionId, "anonymous-browser-session"); assert.equal(Object.hasOwn(body, "displayName"), false, "a team member can save without entering a name");
 }
 
-console.log("Master client checks passed: narrow authenticated updates, real-model create/delete synchronization and conflicts, malformed-response atomic safety, lost creation reply recovery, remote lifecycle refresh, stale draft preservation, unrelated date/spec merging, repeat conflict choices, cancellation/reload safety, in-flight local changes, optional team names, disconnect and sanitized errors.");
+// Remember only a validated package unlock in this browser tab, for the exact
+// configured team endpoint. Reconnection must not seed over the saved draft.
+{
+  const previousSessionStorage = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  const previousLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const previousPackage = globalThis.PortfolioPackage;
+  const accessKey = `PPC-${"A".repeat(43)}`, replacementKey = `PPC-${"B".repeat(42)}A`;
+  const tabAccessName = `portfolio.sharedTeamAccess:${endpoint}`;
+  const stored = new Map(), storageCalls = [];
+  const storage = {
+    getItem(name) { storageCalls.push(["get", name]); return stored.get(name) ?? null; },
+    setItem(name, value) { storageCalls.push(["set", name]); stored.set(name, value); },
+    removeItem(name) { storageCalls.push(["remove", name]); stored.delete(name); },
+  };
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: storage });
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => "", setItem() { assert.fail("master access must never be written to localStorage"); } } });
+  globalThis.PortfolioPackage = packageCodec;
+  const teamSession = (h, options = {}) => client.createSession({ endpoint, source: { mode: "service", team: true }, adapter: h.adapter,
+    fetchImpl: async (_url, request) => { assert.equal(JSON.parse(request.body).key, accessKey); return Response.json({ snapshot: h.remote }); }, ...options });
+  try {
+    const h = harness();
+    const unlocked = teamSession(h);
+    unlocked.markImported(h.baseline, ` ${accessKey} `);
+    assert.equal(JSON.parse(stored.get(tabAccessName)).key, accessKey, "a decrypted imported package stores only the normalized unlock for this tab");
+    assert.deepEqual(Object.keys(JSON.parse(stored.get(tabAccessName))).sort(), ["endpoint", "key", "version"], "saved access contains no GitHub token or backend credential");
+    h.edit({ ffsDate: "2026-10-01" }); h.remoteEdit({ ffsDate: "2026-10-02", codename: "Accepted by another teammate" });
+    const productsBeforeReload = clone(h.products), baselineBeforeReload = clone(h.baseline);
+    const restored = teamSession(h);
+    assert.equal(restored.getState().hasKey, true); assert.equal(restored.getState().connected, false);
+    assert.equal(restored.getState().snapshot, null, "restoring tab access does not manufacture a master snapshot");
+    assert.deepEqual(h.products, productsBeforeReload); assert.deepEqual(h.baseline, baselineBeforeReload, "restoring access never overwrites the draft comparison baseline");
+    await restored.refresh();
+    assert.equal(restored.getState().connected, true);
+    assert.equal(h.products[0].ffsDate, "2026-10-01", "automatic reconnection retains the local conflicting date");
+    assert.equal(h.products[0].codename, "Accepted by another teammate", "automatic reconnection collects unrelated accepted changes");
+    assert.equal(restored.track()[0].base.ffsDate, fixture.ffsDate, "automatic reconnect retains the original conflict baseline");
+    for (const options of [
+      { endpoint: "https://another-master.example.org/api/master" },
+      { source: { mode: "service", team: false } },
+      { source: { mode: "github", team: true } },
+      { endpoint: "http://insecure.example.org/api/master" },
+    ]) assert.equal(teamSession(h, options).getState().hasKey, false, "tab access is isolated from another endpoint, transport, or non-team setup");
+    restored.disconnect();
+    assert.equal(stored.has(tabAccessName), false); assert.equal(teamSession(h).getState().hasKey, false, "disconnect prevents automatic reconnection on reload");
+
+    const imported = teamSession(h);
+    imported.markImported(h.baseline, accessKey);
+    imported.markImported(h.baseline, replacementKey);
+    assert.equal(JSON.parse(stored.get(tabAccessName)).key, replacementKey, "unlocking a replacement package switches the saved tab key");
+    imported.markImported(h.baseline);
+    assert.equal(imported.getState().hasKey, false); assert.equal(stored.has(tabAccessName), false, "importing without an unlock clears remembered access");
+    imported.markImported(h.baseline, accessKey);
+    imported.markImported(h.baseline, "invalid-package-key");
+    assert.equal(imported.getState().hasKey, false); assert.equal(stored.has(tabAccessName), false, "invalid imported access cannot survive a reload");
+
+    for (const invalid of ["invalid-json", " ".repeat(1025), JSON.stringify({ version: 1, endpoint, key: "invalid-package-key" }), JSON.stringify({ version: 1, endpoint: "https://other.example.org/api/master", key: accessKey }), JSON.stringify({ version: 1, endpoint, key: accessKey, githubToken: "should-never-be-restored" })]) {
+      stored.set(tabAccessName, invalid);
+      assert.equal(teamSession(h).getState().hasKey, false);
+      assert.equal(stored.has(tabAccessName), false, "malformed saved tab access is removed safely");
+    }
+
+    const connected = teamSession(h);
+    await connected.connect({ key: ` ${accessKey} `, editorToken: "unused-team-credential" });
+    assert.equal(JSON.parse(stored.get(tabAccessName)).key, accessKey, "a successful direct team connection remembers its normalized unlock");
+    const rejected = teamSession(h, { fetchImpl: async () => Response.json({}, { status: 401 }) });
+    await assert.rejects(rejected.refresh(), { code: "INVALID_KEY" });
+    assert.equal(rejected.getState().hasKey, false); assert.equal(stored.has(tabAccessName), false, "a rejected restored key is cleared instead of repeatedly reconnecting");
+    connected.markImported(h.baseline, accessKey);
+    const rejectedPresence = teamSession(h, { fetchImpl: async () => Response.json({}, { status: 401 }) });
+    await assert.rejects(rejectedPresence.presence({ sessionId: "restored-browser-session" }), { code: "INVALID_KEY" });
+    assert.equal(rejectedPresence.getState().hasKey, false); assert.equal(stored.has(tabAccessName), false, "a rejected heartbeat clears invalid restored access");
+
+    let finishLatest;
+    const held = teamSession(h, { fetchImpl: async () => new Promise((resolve) => { finishLatest = resolve; }) });
+    held.markImported(h.baseline, accessKey);
+    const loading = held.refresh(); held.disconnect();
+    finishLatest(Response.json({ snapshot: h.remote }));
+    await assert.rejects(loading, { code: "MASTER_CONNECTION_CHANGED" });
+    assert.equal(held.getState().hasKey, false); assert.equal(held.getState().connected, false); assert.equal(stored.has(tabAccessName), false, "a late successful response cannot undo disconnect or remember its old key");
+
+    const switched = teamSession(h, { fetchImpl: async () => new Promise((resolve) => { finishLatest = resolve; }) });
+    switched.markImported(h.baseline, accessKey);
+    const oldLoading = switched.refresh(); switched.markImported(h.baseline, replacementKey);
+    finishLatest(Response.json({}, { status: 401 }));
+    await assert.rejects(oldLoading, { code: "INVALID_KEY" });
+    assert.equal(switched.getState().hasKey, true); assert.equal(JSON.parse(stored.get(tabAccessName)).key, replacementKey, "a stale rejection cannot clear a newly imported package unlock");
+
+    let finishSave;
+    const saving = teamSession(h, { fetchImpl: async (url) => url.endsWith("/latest") ? Response.json({ snapshot: h.remote }) : new Promise((resolve) => { finishSave = resolve; }) });
+    saving.markImported(h.baseline, accessKey); await saving.refresh(); h.edit({ ffsDate: "2026-10-04" });
+    const draftBeforeSave = clone(h.products), baselineBeforeSave = clone(h.baseline);
+    const savingRequest = saving.save(); saving.disconnect();
+    finishSave(Response.json({ snapshot: h.remote }));
+    await assert.rejects(savingRequest, { code: "MASTER_CONNECTION_CHANGED" });
+    assert.deepEqual(h.products, draftBeforeSave); assert.deepEqual(h.baseline, baselineBeforeSave, "a save returning after disconnect cannot alter the draft or comparison baseline");
+    assert.equal(saving.getState().connected, false); assert.equal(stored.has(tabAccessName), false);
+
+    for (const blockedStorage of [
+      { get() { throw new Error("Browser storage disabled"); } },
+      { value: { getItem() { throw new Error("Storage read blocked"); }, setItem() { throw new Error("Storage quota reached"); }, removeItem() { throw new Error("Storage removal blocked"); } } },
+      { value: { getItem: () => null, setItem() { throw new Error("Storage quota reached"); }, removeItem() { throw new Error("Storage removal blocked"); } } },
+    ]) {
+      Object.defineProperty(globalThis, "sessionStorage", { configurable: true, ...blockedStorage });
+      const inMemory = teamSession(h);
+      assert.equal(inMemory.getState().hasKey, false);
+      inMemory.markImported(h.baseline, accessKey); await inMemory.refresh();
+      assert.equal(inMemory.getState().connected, true, "blocked tab storage does not prevent an unlocked in-memory connection");
+      inMemory.disconnect(); assert.equal(inMemory.getState().hasKey, false);
+    }
+    assert.ok(storageCalls.some(([action]) => action === "set"));
+  } finally {
+    if (previousSessionStorage) Object.defineProperty(globalThis, "sessionStorage", previousSessionStorage); else delete globalThis.sessionStorage;
+    if (previousLocalStorage) Object.defineProperty(globalThis, "localStorage", previousLocalStorage); else delete globalThis.localStorage;
+    globalThis.PortfolioPackage = previousPackage;
+  }
+}
+
+console.log("Master client checks passed: narrow authenticated updates, real-model create/delete synchronization and conflicts, malformed-response atomic safety, lost creation reply recovery, remote lifecycle refresh, stale draft preservation, unrelated date/spec merging, repeat conflict choices, cancellation/reload safety, in-flight local changes, optional team names, tab-scoped reconnect with endpoint isolation and blocked-storage fallback, disconnect access races and sanitized errors.");

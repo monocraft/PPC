@@ -12,7 +12,7 @@
   const avatarTone = (sessionId) => [...String(sessionId)].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) % 5, 0);
   const sessionSummary = (count) => `${count} connected ${count === 1 ? "session" : "sessions"}`;
   const activityText = (user) => `${user.editing ? "Editing" : "Viewing"} ${user.productName || user.categoryName || "the portfolio"}${user.productName && user.categoryName ? ` · ${user.categoryName}` : ""}`;
-  const connectionSummary = (state) => !state.configured ? "Team sharing is not connected" : state.mode === "github" ? state.connected ? `${state.users.length} recent ${state.users.length === 1 ? "editor" : "editors"}` : "Pull latest data to see recent editors." : state.unavailable ? "Shared connection unavailable" : state.connected ? sessionSummary(state.onlineCount) : state.hasKey ? "Connecting to the shared portfolio…" : "Pull latest data to connect.";
+  const connectionSummary = (state) => !state.configured ? "Team sharing is not connected" : state.mode === "github" ? state.connected ? `${state.users.length} recent ${state.users.length === 1 ? "editor" : "editors"}` : "No recent editors" : state.unavailable ? "Shared connection unavailable" : state.connected ? sessionSummary(state.onlineCount) : state.hasKey ? "Connecting…" : "Not connected";
 
   function normalizeRecentEditors(snapshot, identity) {
     const seen = new Set(), users = [];
@@ -112,13 +112,12 @@
     const close = make("button", "icon-button", "×"); close.type = "button"; close.setAttribute("aria-label", "Close connected sessions"); heading.append(title, close);
     const connection = make("p", "master-presence-summary"), rows = make("div", "master-presence-list"); connection.setAttribute("role", "status"); connection.setAttribute("aria-live", "polite");
     const nameForm = make("form", "master-presence-name-form"), nameLabel = make("label", "", "Your display name (optional)"), nameInput = make("input", "master-presence-name");
-    nameInput.type = "text"; nameInput.maxLength = 60; nameInput.autocomplete = "nickname"; nameInput.placeholder = "Use a name your teams recognize";
+    nameInput.type = "text"; nameInput.maxLength = 60; nameInput.autocomplete = "nickname"; nameInput.placeholder = "Name";
     let storedName = ""; try { storedName = root.localStorage.getItem(displayNameKey) || ""; } catch {}
     nameInput.value = storedName.slice(0, 60); nameLabel.append(nameInput);
     const nameSave = make("button", "quiet-button", "Apply"); nameSave.type = "submit"; nameForm.append(nameLabel, nameSave);
-    const note = make("p", "master-presence-note", "Each circle is a connected browser session. A name is optional.");
     const githubConnect = make("button", "quiet-button", "Connect GitHub"); githubConnect.type = "button"; githubConnect.hidden = true; githubConnect.addEventListener("click", () => root.PortfolioMasterUI?.connectGitHub());
-    popover.append(heading, connection, rows, nameForm, githubConnect, note); shell.append(trigger, popover); brand.append(shell);
+    popover.append(heading, connection, rows, nameForm, githubConnect); shell.append(trigger, popover); brand.append(shell);
     let open = false, debounceTimer = null;
     function setOpen(value) { open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value)); if (value) controller.heartbeat(); else trigger.focus({ preventScroll: true }); }
     function avatar(user, extraClass = user.editing ? "is-editing" : "") { const circle = make("span", `master-presence-avatar master-presence-tone-${avatarTone(user.sessionId)}${extraClass ? ` ${extraClass}` : ""}`, avatarText(user.displayName, user.sessionId)); circle.setAttribute("aria-hidden", "true"); circle.title = `${user.label}${user.categoryName || user.productName ? ` · ${activityText(user)}` : ""}`; return circle; }
@@ -126,7 +125,6 @@
       trigger.replaceChildren(); rows.replaceChildren();
       title.textContent = state.mode === "github" ? "Recent editors" : "Connected now";
       close.setAttribute("aria-label", state.mode === "github" ? "Close recent editors" : "Close connected sessions");
-      note.textContent = state.mode === "github" ? "People who last saved accepted changes to this GitHub master. Live viewing status is unavailable." : "Each circle is a connected browser session. A name is optional.";
       nameForm.hidden = state.mode === "github"; nameForm.style.display = state.mode === "github" ? "none" : "";
       githubConnect.hidden = state.mode !== "github"; githubConnect.style.display = state.mode === "github" ? "" : "none"; githubConnect.disabled = !state.hasKey;
       githubConnect.textContent = state.hasGitHubToken ? "Change GitHub account" : "Connect GitHub";

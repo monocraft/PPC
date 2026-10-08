@@ -114,7 +114,8 @@
     keyInput.readOnly = completed && mode === "export";
     get("packageGenerateKey").classList.toggle("hidden", mode !== "export" || completed);
     get("packagePublisherHelp").classList.toggle("hidden", mode !== "export" || !needsKey);
-    get("packageKeyHelp").textContent = mode === "pull" && !usesRelay() ? "Your key unlocks the downloaded package on this device. It is never sent to GitHub or saved." : "The key is used for this request and is not saved on this device.";
+    const teamUnlock = globalThis.PPC_MASTER_SOURCE?.team === true && (mode === "pull" || (mode === "import" && selectedFile?.encrypted));
+    get("packageKeyHelp").textContent = teamUnlock ? "Your key unlocks the portfolio and reconnects this browser tab automatically." : mode === "pull" && !usesRelay() ? "Your key unlocks the downloaded package on this device. It is never sent to GitHub or saved." : "The key is used for this request and is not saved on this device.";
     get("packagePublisherHelp").textContent = "Reuse the current package key, build master_ppc.pkg, then replace public/data/master_ppc.pkg in GitHub on the main branch. Wait for the site update to finish. Keep the key separate from the package.";
     keyInput.type = get("packageShowKey").checked ? "text" : "password";
   }
