@@ -9,6 +9,7 @@
 - Publish the full encrypted GitHub package through one serialized Actions workflow. Preserve archive entries, detect unexpected master replacements, prevent revision regression, and show accepted team saves separately from pending or failed GitHub publication.
 - Allow distinct single and dual colorways to share an abbreviation: Black, Red, Black/Red and Red/Black are different variants. Flag identical normalized codes with the same complete color combination, while retaining layout and HP SKU protections.
 - Add meaningful model/client/actual database/gateway/publisher checks and private owner setup documentation.
+- Refresh deployment asset versions on every Pages run, including settings-only redeploys, so browsers load updated team connection settings.
 
 ## 2026-10-08 — portfolio-specific duplicate checks
 
