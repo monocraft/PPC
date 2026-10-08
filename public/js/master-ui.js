@@ -159,7 +159,7 @@
           section.append(details);
           const card = element("div", "master-product-card"); card.append(section);
           if (typeof adapter.discardChanges === "function") {
-            const discard = element("button", "quiet-button master-discard-product", "Discard"); discard.type = "button"; discard.disabled = session.getState().busy || running || discarding || Boolean(adapter.hasPendingPackageOperation?.());
+            const discard = element("button", "quiet-button master-discard-product"); discard.append(element("span", "", "Discard")); discard.type = "button"; discard.disabled = session.getState().busy || running || discarding || Boolean(adapter.hasPendingPackageOperation?.());
             discard.setAttribute("aria-label", `Discard changes to ${product.productName || product.mine?.name || "this product"}`);
             discard.addEventListener("click", () => discardFlow([product.productId])); card.append(discard);
           }
