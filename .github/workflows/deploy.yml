@@ -39,6 +39,7 @@ jobs:
           PPC_PACKAGE_ENDPOINT: ${{ vars.PPC_PACKAGE_ENDPOINT }}
           PPC_MASTER_ENDPOINT: ${{ vars.PPC_MASTER_MODE == 'service' && vars.PPC_MASTER_ENDPOINT || '' }}
           PPC_MASTER_MODE: ${{ vars.PPC_MASTER_MODE }}
+          PPC_SITE_VERSION: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           mkdir -p _site/css _site/js _site/data
           cp public/index.html _site/
