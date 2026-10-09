@@ -1,13 +1,13 @@
 # Biweekly PLC import module
 
-The PPC application has **PLC updates** in its toolbar and **Import PLC update** in Settings → Data & export. The default flow is **drop one Excel file → automatic collection → result and date ages**. An external `.xlsx` can be dropped directly onto PPC, or into the module's drop area. Clear matches and reliable milestones save automatically. Uncertain records remain in **Needs review** and do not block eligible fields in the rest of the workbook.
+The PPC application keeps **Open PLC updates** and **Import HyperX PLC report** in **Settings → Data & export**, alongside the last import time and aging. The default flow is **drop one Excel file → automatic collection → result and date ages**. An external `.xlsx` can be dropped directly onto PPC, or into the module's drop area. Clear matches and reliable milestones save automatically. Uncertain records remain in **Needs review** and do not block eligible fields in the rest of the workbook.
 
 When PPC is already connected to shared saving with editing access, collection automatically submits only the importer's milestone and evidence changes. Unrelated product edits remain local drafts. Without that connection, collection is saved on the device and the sharing status explains what remains to be shared. A sharing retry submits retained updates without parsing the workbook again or resetting timestamps.
 
 ## Operator workflow
 
 1. Use the current portfolio/master already open in PPC. Matching uses those product IDs, SKUs, codenames, names and prior confirmed mappings.
-2. Drop one biweekly `.xlsx` onto PPC or **PLC updates → Drop workbook & updates**. No column mapping, report-date entry or routine Apply action is required.
+2. Open **Settings → Data & export → Open PLC updates**, then drop one biweekly `.xlsx` into **Drop workbook & updates**. Dropping the workbook directly onto PPC also opens the importer. No column mapping, report-date entry or routine Apply action is required.
 3. PPC reads, matches and validates the workbook, then saves eligible dates, independent field timestamps, project evidence and exceptions together. Collection freshness uses the import date. Explicit source reporting periods remain separate and govern date ordering; a file without a source period falls back to import day.
 4. Read the receipt: dates updated, matched projects collected, projects needing review, and local/shared saving status. Open **Product dates & aging** to see each date's own clocks.
 5. Optionally open **Needs review** for uncertain product matches or dates. Select a product or supply a verified exact date, then **Save reviewed updates**. Remaining exceptions stay saved across reloads. Newer reports supersede older pending evidence by source identity and period; older reports cannot replace a newer queued item.

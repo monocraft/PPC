@@ -25,7 +25,7 @@ if (!argumentsSet.has("--deployment-only")) {
   const metadataZip = codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify(metadataManifest)) }, { name: "images/image1.webp", data: Uint8Array.of(1, 2, 3) }]);
   const metadataEncrypted = await codec.encrypt(metadataZip, key);
   assert.deepEqual(validateDecryptedPackage(metadataZip).packageInfo, metadataManifest.packageInfo, "authenticated update metadata must be retained without exposing it in publication output");
-  for (const packageInfo of [null, { ...metadataManifest.packageInfo, comments: "" }, { ...metadataManifest.packageInfo, comments: "x".repeat(2000) }]) {
+  for (const packageInfo of [null, { ...metadataManifest.packageInfo, comments: "" }, { ...metadataManifest.packageInfo, comments: "x".repeat(2000) }, { ...metadataManifest.packageInfo, comments: "x".repeat(2001) }, { ...metadataManifest.packageInfo, comments: "x".repeat(codec.MAX_STORED_PACKAGE_COMMENTS) }]) {
     const validManifest = { ...structuredClone(manifest), packageInfo };
     const validZip = codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify(validManifest)) }, { name: "images/image1.webp", data: Uint8Array.of(1) }]);
     assert.deepEqual(validateDecryptedPackage(validZip).packageInfo, packageInfo, "absent metadata and permitted comment boundaries remain valid");
@@ -43,7 +43,7 @@ if (!argumentsSet.has("--deployment-only")) {
     { ...metadataManifest.packageInfo, version: 2 },
     { ...metadataManifest.packageInfo, updatedAt: "2026-02-30T18:45:12.000Z" },
     { ...metadataManifest.packageInfo, updatedAt: "2026-10-07" },
-    { ...metadataManifest.packageInfo, comments: "x".repeat(2001) },
+    { ...metadataManifest.packageInfo, comments: "x".repeat(codec.MAX_STORED_PACKAGE_COMMENTS + 1) },
     { ...metadataManifest.packageInfo, comments: { text: "Invalid" } },
     { ...metadataManifest.packageInfo, unexpected: "extra field" },
   ];
@@ -92,10 +92,16 @@ if (!argumentsSet.has("--deployment-only")) {
     const withMetadata = await publishMasterPackage({ input, keyFile: validKeyFile, projectRoot: fixtureRoot });
     assert.equal(withMetadata.authenticated, true);
     assert.deepEqual(await readFile(master), Buffer.from(metadataEncrypted), "publication must preserve encrypted metadata with the rest of the package");
-    const invalidMetadataZip = codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify({ ...manifest, packageInfo: { ...metadataManifest.packageInfo, comments: "x".repeat(2001) } })) }, { name: "images/image1.webp", data: Uint8Array.of(1) }]);
+    const automaticSummaryManifest = { ...structuredClone(manifest), packageInfo: { ...metadataManifest.packageInfo, comments: "Accepted product names:\n" + "Complete accepted product name\n".repeat(100) } };
+    const automaticSummaryZip = codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify(automaticSummaryManifest)) }, { name: "images/image1.webp", data: Uint8Array.of(1) }]);
+    const automaticSummaryEncrypted = await codec.encrypt(automaticSummaryZip, key);
+    await writeFile(input, automaticSummaryEncrypted);
+    assert.equal((await publishMasterPackage({ input, keyFile: validKeyFile, projectRoot: fixtureRoot })).authenticated, true);
+    assert.deepEqual(await readFile(master), Buffer.from(automaticSummaryEncrypted), "complete automatic comments must publish unchanged beyond the manual-note limit");
+    const invalidMetadataZip = codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify({ ...manifest, packageInfo: { ...metadataManifest.packageInfo, comments: "x".repeat(codec.MAX_STORED_PACKAGE_COMMENTS + 1) } })) }, { name: "images/image1.webp", data: Uint8Array.of(1) }]);
     await writeFile(input, await codec.encrypt(invalidMetadataZip, key));
     await assert.rejects(publishMasterPackage({ input, keyFile: validKeyFile, projectRoot: fixtureRoot }), /package|metadata|comment/i);
-    assert.deepEqual(await readFile(master), Buffer.from(metadataEncrypted), "invalid authenticated update metadata must not replace the published master");
+    assert.deepEqual(await readFile(master), Buffer.from(automaticSummaryEncrypted), "invalid authenticated update metadata must not replace the published master");
     await writeFile(master, encrypted);
     await writeFile(input, encrypted);
     const publicKey = path.join(publicDirectory, "private-key.txt"); await writeFile(publicKey, key);

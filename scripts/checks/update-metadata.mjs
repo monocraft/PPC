@@ -40,7 +40,7 @@ assert.deepEqual(rejected.manifest.packageInfo, second.manifest.packageInfo);
 const many = model.mergeChanges(second.manifest, [change(second.manifest, "one", { codename: "Two changes", name: "Renamed headset" }), change(second.manifest, "two", { codename: "Third change" })],
   { requestId: "save-many", now: "2026-10-08T01:02:00.000Z", reason: " \n " });
 assert.equal(many.savedProducts, 2); assert.equal(many.savedFields, 3);
-assert.equal(many.manifest.packageInfo.comments, "2 products updated.", "an empty note describes distinct changed products, not field count");
+assert.equal(many.manifest.packageInfo.comments, "2 products updated:\n- Renamed headset\n- Microphone", "an automatic note lists each accepted product once using its saved full name");
 const legacy = clone(many.manifest); legacy.packageInfo = clone(seed.packageInfo);
 const legacyBefore = clone(legacy);
 assert.deepEqual(model.latestPackageInfo(legacy), many.manifest.packageInfo, "accepted legacy history corrects stale seed information before another save");
@@ -77,15 +77,105 @@ const bounded = model.mergeChanges(seed, [change(seed, "one", { name: "Long note
   { requestId: "save-bounded", now: "2026-10-08T03:00:00.000Z", reason: longNote });
 assert.equal(bounded.manifest.packageInfo.comments, longNote.slice(0, 2000));
 const malformedReason = clone(bounded.manifest); malformedReason.packageInfo = null; malformedReason.masterSync.history[0].reason = { privatePath: "do not display" };
-assert.equal(model.latestPackageInfo(malformedReason).comments, "1 product updated.");
+assert.equal(model.latestPackageInfo(malformedReason).comments, "1 product updated:\n- Long note");
 assert.equal(model.latestPackageInfo({ packageInfo: { version: 2, updatedAt: "bad", comments: "bad" }, masterSync: [] }), null);
 assert.equal(model.latestPackageInfo({ masterSync: { history: [null] } }), null);
 const detached = model.latestPackageInfo(first.manifest);
 assert.notEqual(detached, first.manifest.packageInfo); assert.ok(Object.isFrozen(detached));
+
+const sharedName = "HyperX Full Shared Display Name Gaming Headset";
+const duplicateNames = clone(seed);
+for (const product of duplicateNames.categories[0].board.products) product.name = sharedName;
+const sameNames = model.mergeChanges(duplicateNames,
+  [change(duplicateNames, "one", { codename: "First identity", price: 129 }), change(duplicateNames, "two", { codename: "Second identity" })],
+  { requestId: "distinct-ids-same-name", now: "2026-10-08T04:00:00.000Z" });
+assert.equal(sameNames.savedFields, 3);
+assert.equal(sameNames.manifest.packageInfo.comments, `2 products updated:\n- ${sharedName}\n- ${sharedName}`, "comment deduplication uses product IDs rather than display names or the number of changed fields");
+
+const plc = model.mergeChanges(seed, [change(seed, "one", { ffsDate: "2026-11-05" })],
+  { requestId: "automatic-plc-reason", reason: "Biweekly PLC import", now: "2026-10-08T04:01:00.000Z" });
+assert.equal(plc.manifest.packageInfo.comments, "Biweekly PLC import\n1 product updated:\n- Headset", "the automatic PLC reason must include the full accepted product names");
+assert.deepEqual(model.snapshot(plc.manifest).packageInfo, plc.manifest.packageInfo);
+const legacyPlc = clone(plc.manifest); legacyPlc.packageInfo = clone(seed.packageInfo);
+assert.deepEqual(model.latestPackageInfo(legacyPlc), plc.manifest.packageInfo, "a legacy metadata reread reconstructs the automatic PLC reason and names together");
+
+const equalTime = "2026-10-08T04:02:00.000Z";
+const sameTimeFirst = model.mergeChanges(seed, [change(seed, "one", { codename: "First simultaneous batch" })], { requestId: "same-time-first", now: equalTime });
+const sameTimeSecond = model.mergeChanges(sameTimeFirst.manifest, [change(sameTimeFirst.manifest, "two", { codename: "Second simultaneous batch" })], { requestId: "same-time-second", now: equalTime });
+assert.equal(sameTimeSecond.manifest.packageInfo.comments, "1 product updated:\n- Microphone");
+assert.deepEqual(model.latestPackageInfo(sameTimeSecond.manifest), sameTimeSecond.manifest.packageInfo, "the accepted request watermark isolates two batches with the same timestamp");
+const legacyEqualTime = clone(sameTimeSecond.manifest); legacyEqualTime.packageInfo = clone(seed.packageInfo);
+assert.deepEqual(model.latestPackageInfo(legacyEqualTime), sameTimeSecond.manifest.packageInfo, "legacy reconstruction selects only the highest-revision request at an equal timestamp");
+
+const deletedEntry = model.snapshot(seed).products.find((entry) => entry.productId === "one");
+const lifecycle = model.mergeChanges(seed, [
+  { kind: "delete", productId: deletedEntry.productId, categoryId: deletedEntry.categoryId, laneId: deletedEntry.laneId, base: deletedEntry.values, baseRevisions: deletedEntry.revisions, baseProductVersion: deletedEntry.productVersion },
+  { kind: "create", productId: "new-product", categoryId: "pc", laneId: "wired", mine: { name: "HyperX Full Newly Created Gaming Product", codename: "New synthetic project" } },
+], { requestId: "create-and-delete-names", now: "2026-10-08T04:03:00.000Z" });
+assert.equal(lifecycle.conflicts.length, 0);
+assert.equal(lifecycle.manifest.packageInfo.comments, "2 products updated:\n- Headset\n- HyperX Full Newly Created Gaming Product", "automatic comments include both removed and newly created products");
+assert.equal(lifecycle.manifest.categories[0].board.products.some((product) => product.id === "one"), false);
+const lifecycleLegacy = clone(lifecycle.manifest); lifecycleLegacy.packageInfo = clone(seed.packageInfo);
+for (const record of lifecycleLegacy.masterSync.history) delete record.productName;
+assert.deepEqual(model.latestPackageInfo(lifecycleLegacy), lifecycle.manifest.packageInfo, "legacy create/delete records recover names from the accepted before/after product values");
+
+const legacyNames = clone(seed);
+legacyNames.categories[0].board.products = [
+  { ...clone(seed.categories[0].board.products[0]), id: "renamed", name: "A later current name must not replace the saved rename" },
+  { ...clone(seed.categories[0].board.products[0]), id: "created", name: "A later current name must not replace the saved creation" },
+  { ...clone(seed.categories[0].board.products[1]), id: "existing", name: "Full Current Legacy Product Name" },
+];
+const legacyNameAt = "2026-10-08T04:04:00.000Z";
+const legacyNameRecords = [
+  { productId: "renamed", path: "name", kind: "update", before: "Previous historical name", after: "Full Accepted Historical Rename", beforeExists: true, afterExists: true },
+  { productId: "created", path: "@product", kind: "create", before: null, after: { name: "Full Accepted Historical Creation" }, beforeExists: false, afterExists: true },
+  { productId: "deleted", path: "@product", kind: "delete", before: { name: "Full Historical Removed Product" }, after: null, beforeExists: true, afterExists: false },
+  { productId: "existing", path: "codename", kind: "update", before: "Prior project", after: "New project", beforeExists: true, afterExists: true },
+  { productId: "archived", path: "@product", kind: "delete", before: "Legacy truncated product", after: null, beforeExists: true, afterExists: false, valueTruncated: true },
+];
+legacyNames.masterSync = { version: 1, revision: legacyNameRecords.length, products: { archived: { deleted: true, productName: "Full Tombstone Product Name" } },
+  history: legacyNameRecords.map((record, index) => ({ ...record, at: legacyNameAt, revision: index + 1, requestId: "legacy-full-name-fallbacks" })) };
+const legacyNameBefore = clone(legacyNames);
+assert.equal(model.latestPackageInfo(legacyNames).comments,
+  "5 products updated:\n- Full Accepted Historical Rename\n- Full Accepted Historical Creation\n- Full Historical Removed Product\n- Full Current Legacy Product Name\n- Full Tombstone Product Name",
+  "legacy name recovery prefers accepted historical names, then current product names and deleted-product tombstones");
+assert.deepEqual(legacyNames, legacyNameBefore, "recovering legacy names leaves source history and current products untouched");
+
+const longNames = clone(seed);
+const oldLongName = `HyperX Complete Previous Product Name ${"A".repeat(1450)}`;
+const renamedLongName = `HyperX Complete Accepted Rename ${"B".repeat(1450)}`;
+const secondLongName = `HyperX Complete Second Product Name ${"C".repeat(1450)}`;
+longNames.categories[0].board.products[0].name = oldLongName;
+longNames.categories[0].board.products[1].name = secondLongName;
+const longNamesSaved = model.mergeChanges(longNames,
+  [change(longNames, "one", { name: renamedLongName, codename: "Long-name renamed product" }), change(longNames, "two", { codename: "Long-name second product" })],
+  { requestId: "full-names-beyond-manual-limit", now: "2026-10-08T04:05:00.000Z" });
+assert.ok(longNamesSaved.manifest.packageInfo.comments.length > 2000, "the automatic product list can exceed the separately bounded manual note length");
+assert.equal(longNamesSaved.manifest.packageInfo.comments, `2 products updated:\n- ${renamedLongName}\n- ${secondLongName}`, "complete accepted names are never sliced to the old 2000-character bound");
+assert.equal(longNamesSaved.manifest.packageInfo.comments.includes(oldLongName), false, "a rename lists the accepted final name rather than the previous one");
+assert.deepEqual(codec.normalizePackageInfo(longNamesSaved.manifest.packageInfo), longNamesSaved.manifest.packageInfo);
+assert.deepEqual(model.snapshot(longNamesSaved.manifest).packageInfo, longNamesSaved.manifest.packageInfo);
+
+const retentionSeed = clone(seed);
+retentionSeed.categories[0].board.products.push({ ...clone(seed.categories[0].board.products[0]), id: "three", name: "Full Third Product In Retained Save" });
+const evidence = { version: 1, chunks: Array.from({ length: 4 }, (_, index) => `${index}: ${"x".repeat(30000)}`) };
+const retentionSave = model.mergeChanges(retentionSeed, ["one", "two", "three"].map((id) => change(retentionSeed, id, { plc: evidence })),
+  { requestId: "comment-survives-trimmed-history", now: "2026-10-08T04:06:00.000Z" });
+assert.equal(retentionSave.history.length, 3);
+assert.ok(retentionSave.manifest.masterSync.history.length < retentionSave.history.length, "large bounded PLC operations genuinely trim the front of the current save's audit history");
+assert.equal(retentionSave.manifest.masterSync.history.some((record) => record.productId === "one"), false);
+assert.equal(retentionSave.manifest.packageInfo.comments, "3 products updated:\n- Headset\n- Microphone\n- Full Third Product In Retained Save", "comment generation uses all accepted changes before audit retention");
+assert.deepEqual(model.latestPackageInfo(retentionSave.manifest), retentionSave.manifest.packageInfo, "history trimming cannot overwrite the complete authoritative save comment with only the retained products");
+assert.deepEqual(model.snapshot(retentionSave.manifest).packageInfo, retentionSave.manifest.packageInfo);
 
 const key = codec.generateKey(), encoder = new TextEncoder(), decoder = new TextDecoder();
 const bytes = await codec.encrypt(codec.createZip([{ name: "portfolio.json", data: encoder.encode(JSON.stringify(second.manifest)) }]), key);
 assert.ok(!Buffer.from(bytes).includes(Buffer.from(second.manifest.packageInfo.comments)), "accepted update comments stay encrypted inside a published package");
 const restored = JSON.parse(decoder.decode(codec.readZip(await codec.decrypt(bytes, key)).get("portfolio.json")));
 assert.deepEqual(model.latestPackageInfo(restored), second.manifest.packageInfo, "the accepted update date and note survive encryption and package reloading");
-console.log("Update metadata checks passed: accepted save notes and dates, distinct product summaries, peer snapshots, legacy history, newer exports, rejected/no-op stability, malformed records, bounded notes, immutable reads, and encrypted package round trips.");
+const longNameBytes = await codec.encrypt(codec.createZip([{ name: "portfolio.json", data: encoder.encode(JSON.stringify(longNamesSaved.manifest)) }]), key);
+assert.ok(!Buffer.from(longNameBytes).includes(Buffer.from(renamedLongName)), "full generated product lists remain inside the encrypted master package");
+const longNamesRestored = JSON.parse(decoder.decode(codec.readZip(await codec.decrypt(longNameBytes, key)).get("portfolio.json")));
+assert.deepEqual(codec.normalizePackageInfo(longNamesRestored.packageInfo), longNamesSaved.manifest.packageInfo);
+assert.deepEqual(model.latestPackageInfo(longNamesRestored), longNamesSaved.manifest.packageInfo, "generated comments beyond 2000 characters survive encryption and accepted metadata rereads without truncating any product name");
+console.log("Update metadata checks passed: accepted save notes and dates, full names deduped by product ID, rename/create/delete and legacy-name recovery, automatic PLC comments, same-time request isolation, complete long comments and audit-retention watermarks, peer snapshots, newer exports, rejected/no-op stability, bounded manual notes, immutable reads, and encrypted short/large comment round trips.");
