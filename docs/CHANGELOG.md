@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-08 — 200% viewing zoom
+
+- Extend manual Products and Roadmap zoom to 200% for large and high-resolution displays, keeping clean 10-point steps and the visible center in place.
+- Keep the percentage button's 100% reset and existing readable Fit behavior. Disable zoom in at 200% and retain zoom out immediately below the upper limit.
+- Verify 200% product details geometry and reorder positioning alongside zoom bounds, fitting and restored scales.
+
 ## 2026-10-08 — unobstructed date editing
 
 - Delay history on pointer hover by 450 ms and cancel it when the pointer only crosses a date label. Keep deliberate click/tap and keyboard inspection immediate.
