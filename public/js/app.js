@@ -3370,8 +3370,8 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
         : "Move over a product row to place it";
     } else {
       const preview = PortfolioModel.mergeProductUpdate(product, { roadmap: roadmapDraft.roadmap });
-      const start = preview.generalAvailabilityDate ? formatProductInfoDate(preview.generalAvailabilityDate) : roadmapLabel(preview.roadmap.startMonth);
-      const end = preview.endManufacturingDate ? formatProductInfoDate(preview.endManufacturingDate) : roadmapLabel(preview.roadmap.endMonth);
+      const start = preview.generalAvailabilityDate ? globalThis.PortfolioDatePrecision?.displayDate(preview, "generalAvailabilityDate", formatProductInfoDate) || formatProductInfoDate(preview.generalAvailabilityDate) : roadmapLabel(preview.roadmap.startMonth);
+      const end = preview.endManufacturingDate ? globalThis.PortfolioDatePrecision?.displayDate(preview, "endManufacturingDate", formatProductInfoDate) || formatProductInfoDate(preview.endManufacturingDate) : roadmapLabel(preview.roadmap.endMonth);
       feedback.textContent = `Start · ${start}   →   End · ${end}`;
     }
     feedback.classList.remove("hidden");
@@ -3642,7 +3642,10 @@ function productDetailsModel(product) {
       ["general-availability", "General availability", product.generalAvailabilityDate], ["end-manufacturing", "End of manufacturing", product.endManufacturingDate],
       ["ffs", "FFS", product.ffsDate], ["global-announcement", "Global announcement", product.globalAnnouncementDate],
       ["web-readiness", "Web readiness", product.webReadinessDate], ["final-assets", "Final assets", product.finalAssetsDate],
-    ].map(([key, label, value]) => ({ key, label, value: formatProductInfoDate(value), empty: !value })),
+    ].map(([key, label, value]) => {
+      const field = { "general-availability": "generalAvailabilityDate", "end-manufacturing": "endManufacturingDate", ffs: "ffsDate", "global-announcement": "globalAnnouncementDate", "web-readiness": "webReadinessDate", "final-assets": "finalAssetsDate" }[key];
+      return { key, label, value: globalThis.PortfolioDatePrecision?.displayDate(product, field, formatProductInfoDate) || formatProductInfoDate(value), empty: !value };
+    }),
     lifecycle: [
       ...plannedDates,
       { key: "stage", label: "Stage", value: splitRoadmapStatusLabel(roadmap.status) },
@@ -3684,17 +3687,45 @@ function productDateHistoryOptions(productId) {
     getDraft(field) {
       const { product, shared } = state();
       const edit = portfolio.dateLocalEdits?.[productId]?.[field];
-      return product && edit?.value === (product[field] || "") && (!shared || (product[field] || "") !== (shared.values[field] || "")) ? edit : null;
+      const precision = globalThis.PortfolioDatePrecision;
+      const periodChanged = JSON.stringify(precision?.currentPeriod(product, field) || null) !== JSON.stringify(precision?.currentPeriod(shared?.values, field) || null);
+      return product && edit?.value === (product[field] || "") && (!shared || (product[field] || "") !== (shared.values[field] || "") || periodChanged) ? edit : null;
     },
     isPending(field) {
       const { product, shared } = state();
-      return Boolean(product && (shared ? (product[field] || "") !== (shared.values[field] || "") : product[field]));
+      const precision = globalThis.PortfolioDatePrecision;
+      const periodChanged = JSON.stringify(precision?.currentPeriod(product, field) || null) !== JSON.stringify(precision?.currentPeriod(shared?.values, field) || null);
+      return Boolean(product && (shared ? (product[field] || "") !== (shared.values[field] || "") || periodChanged : product[field]));
     },
   };
 }
 
 function productDateHistoryLabel(label, field) {
   return globalThis.PortfolioDateHistory?.labelHtml(label, field) || escapeHtml(label);
+}
+
+function productDatePrecisionControls(product, field, inputId, label) {
+  const period = globalThis.PortfolioDatePrecision?.currentPeriod(product, field);
+  return `<select id="${inputId}Precision" aria-label="${escapeHtml(label)} precision"><option value="exact" ${period ? "" : "selected"}>Exact date</option><option value="quarter" ${period ? "selected" : ""}>Calendar quarter</option></select>`;
+}
+
+function updateProductMilestone(productId, field, value, period = null) {
+  const product = selectedProduct();
+  if (!product || product.id !== productId) return false;
+  const precision = globalThis.PortfolioDatePrecision;
+  const normalized = period ? precision?.normalizePeriod(period, value) : null;
+  if (period && !normalized) throw new Error("Choose one valid calendar quarter.");
+  const before = precision?.currentPeriod(product, field) || null;
+  if ((product[field] || "") === value && JSON.stringify(before) === JSON.stringify(normalized)) return false;
+  const at = new Date().toISOString(), plc = JSON.parse(JSON.stringify(product.plc || {}));
+  plc.fields ||= {};
+  const previous = plc.fields[field] || {};
+  plc.fields[field] = { value, sourceType: "local", changedAt: at, observedAt: at, raw: normalized?.label || value, source: { kind: "manual" }, ...(normalized ? { period: normalized } : {}) };
+  if (previous.scope) plc.fields[field].scope = previous.scope;
+  portfolio.dateLocalEdits ||= {}; portfolio.dateLocalEdits[productId] ||= {};
+  portfolio.dateLocalEdits[productId][field] = { at, value, source: "local", ...(normalized ? { period: normalized } : {}) };
+  updateProduct(productId, { [field]: value, plc }, false);
+  return true;
 }
 
 function renderSplitProduct() {
@@ -4664,43 +4695,55 @@ function renderInspector() {
         </div>
         <div class="portfolio-date-grid">
           <label class="portfolio-date-field">${productDateHistoryLabel("General availability (GA)", "generalAvailabilityDate")}
+            ${productDatePrecisionControls(product, "generalAvailabilityDate", "fieldGeneralAvailabilityDate", "General availability")}
             <span class="portfolio-date-control">
-              <input id="fieldGeneralAvailabilityDate" type="date" aria-label="General availability (GA)" value="${escapeHtml(product.generalAvailabilityDate || "")}">
+              <input id="fieldGeneralAvailabilityDate" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "generalAvailabilityDate") ? "hidden" : ""}" type="date" aria-label="General availability (GA)" value="${escapeHtml(product.generalAvailabilityDate || "")}">
+              <input id="fieldGeneralAvailabilityDateQuarter" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "generalAvailabilityDate") ? "" : "hidden"}" type="text" aria-label="General availability calendar quarter" value="${escapeHtml(globalThis.PortfolioDatePrecision?.currentPeriod(product, "generalAvailabilityDate")?.label || "")}" placeholder="Q2 2028" maxlength="30" autocomplete="off">
               <button id="fieldGeneralAvailabilityDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
           <label class="portfolio-date-field">${productDateHistoryLabel("End of manufacturing (EM)", "endManufacturingDate")}
+            ${productDatePrecisionControls(product, "endManufacturingDate", "fieldEndManufacturingDate", "End of manufacturing")}
             <span class="portfolio-date-control">
-              <input id="fieldEndManufacturingDate" type="date" aria-label="End of manufacturing (EM)" value="${escapeHtml(product.endManufacturingDate || "")}">
+              <input id="fieldEndManufacturingDate" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "endManufacturingDate") ? "hidden" : ""}" type="date" aria-label="End of manufacturing (EM)" value="${escapeHtml(product.endManufacturingDate || "")}">
+              <input id="fieldEndManufacturingDateQuarter" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "endManufacturingDate") ? "" : "hidden"}" type="text" aria-label="End of manufacturing calendar quarter" value="${escapeHtml(globalThis.PortfolioDatePrecision?.currentPeriod(product, "endManufacturingDate")?.label || "")}" placeholder="Q2 2028" maxlength="30" autocomplete="off">
               <button id="fieldEndManufacturingDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
           <label class="portfolio-date-field">${productDateHistoryLabel("FFS date", "ffsDate")}
+            ${productDatePrecisionControls(product, "ffsDate", "fieldFfsDate", "FFS")}
             <span class="portfolio-date-control">
-              <input id="fieldFfsDate" type="date" aria-label="FFS date" value="${escapeHtml(product.ffsDate || "")}">
+              <input id="fieldFfsDate" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "ffsDate") ? "hidden" : ""}" type="date" aria-label="FFS date" value="${escapeHtml(product.ffsDate || "")}">
+              <input id="fieldFfsDateQuarter" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "ffsDate") ? "" : "hidden"}" type="text" aria-label="FFS calendar quarter" value="${escapeHtml(globalThis.PortfolioDatePrecision?.currentPeriod(product, "ffsDate")?.label || "")}" placeholder="Q2 2028" maxlength="30" autocomplete="off">
               <button id="fieldFfsDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
           <label class="portfolio-date-field">${productDateHistoryLabel("Global announcement", "globalAnnouncementDate")}
+            ${productDatePrecisionControls(product, "globalAnnouncementDate", "fieldGlobalAnnouncementDate", "Global announcement")}
             <span class="portfolio-date-control">
-              <input id="fieldGlobalAnnouncementDate" type="date" aria-label="Global announcement" value="${escapeHtml(product.globalAnnouncementDate || "")}">
+              <input id="fieldGlobalAnnouncementDate" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "globalAnnouncementDate") ? "hidden" : ""}" type="date" aria-label="Global announcement" value="${escapeHtml(product.globalAnnouncementDate || "")}">
+              <input id="fieldGlobalAnnouncementDateQuarter" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "globalAnnouncementDate") ? "" : "hidden"}" type="text" aria-label="Global announcement calendar quarter" value="${escapeHtml(globalThis.PortfolioDatePrecision?.currentPeriod(product, "globalAnnouncementDate")?.label || "")}" placeholder="Q2 2028" maxlength="30" autocomplete="off">
               <button id="fieldGlobalAnnouncementDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
           <label class="portfolio-date-field">${productDateHistoryLabel("Web readiness", "webReadinessDate")}
+            ${productDatePrecisionControls(product, "webReadinessDate", "fieldWebReadinessDate", "Web readiness")}
             <span class="portfolio-date-control">
-              <input id="fieldWebReadinessDate" type="date" aria-label="Web readiness" value="${escapeHtml(product.webReadinessDate || "")}">
+              <input id="fieldWebReadinessDate" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "webReadinessDate") ? "hidden" : ""}" type="date" aria-label="Web readiness" value="${escapeHtml(product.webReadinessDate || "")}">
+              <input id="fieldWebReadinessDateQuarter" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "webReadinessDate") ? "" : "hidden"}" type="text" aria-label="Web readiness calendar quarter" value="${escapeHtml(globalThis.PortfolioDatePrecision?.currentPeriod(product, "webReadinessDate")?.label || "")}" placeholder="Q2 2028" maxlength="30" autocomplete="off">
               <button id="fieldWebReadinessDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
           <label class="portfolio-date-field">${productDateHistoryLabel("Final assets", "finalAssetsDate")}
+            ${productDatePrecisionControls(product, "finalAssetsDate", "fieldFinalAssetsDate", "Final assets")}
             <span class="portfolio-date-control">
-              <input id="fieldFinalAssetsDate" type="date" aria-label="Final assets" value="${escapeHtml(product.finalAssetsDate || "")}">
+              <input id="fieldFinalAssetsDate" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "finalAssetsDate") ? "hidden" : ""}" type="date" aria-label="Final assets" value="${escapeHtml(product.finalAssetsDate || "")}">
+              <input id="fieldFinalAssetsDateQuarter" class="${globalThis.PortfolioDatePrecision?.currentPeriod(product, "finalAssetsDate") ? "" : "hidden"}" type="text" aria-label="Final assets calendar quarter" value="${escapeHtml(globalThis.PortfolioDatePrecision?.currentPeriod(product, "finalAssetsDate")?.label || "")}" placeholder="Q2 2028" maxlength="30" autocomplete="off">
               <button id="fieldFinalAssetsDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
         </div>
-        <p class="field-help date-field-help">GA sets the roadmap launch month; EM sets its end month. Leave a date blank or select <strong>TBD</strong> when the exact day is not determined.</p>
+        <p class="field-help date-field-help">Choose an exact day or a calendar quarter such as <strong>Q2 2028</strong>. GA sets the roadmap launch month; a quarter starts in its first month. FFS stays independent. Select <strong>TBD</strong> when timing is unknown.</p>
         <p id="productDateFeedback" class="field-help date-feedback" role="status" aria-live="polite"></p>
       </div>
       <div class="part-sku-editor">
@@ -4800,40 +4843,60 @@ function renderInspector() {
   const bindProductDate = (inputSelector, tbdButtonSelector, fieldName) => {
     const input = $(inputSelector);
     const tbdButton = $(tbdButtonSelector);
-    if (!input || !tbdButton) return;
+    const precision = $(`${inputSelector}Precision`);
+    const quarterInput = $(`${inputSelector}Quarter`);
+    if (!input || !tbdButton || !precision || !quarterInput) return;
 
     const syncTbdState = () => {
-      const isTbd = !normalizeProductInfoDate(input.value);
+      const isTbd = !normalizeProductInfoDate(selectedProduct()?.[fieldName]);
       tbdButton.classList.toggle("is-active", isTbd);
       tbdButton.setAttribute("aria-pressed", String(isTbd));
     };
-
-    input.addEventListener("change", () => {
+    const syncPrecision = () => { input.classList.toggle("hidden", precision.value === "quarter"); quarterInput.classList.toggle("hidden", precision.value !== "quarter"); };
+    const commit = (period = null) => {
       const current = selectedProduct();
       if (!current || current.id !== product.id) return;
-      const value = normalizeProductInfoDate(input.value);
+      const value = period?.start || normalizeProductInfoDate(input.value);
       const ga = fieldName === "generalAvailabilityDate" ? value : current.generalAvailabilityDate;
       const em = fieldName === "endManufacturingDate" ? value : current.endManufacturingDate;
       const invalidRange = ["generalAvailabilityDate", "endManufacturingDate"].includes(fieldName) && ga && em && em < ga;
       if (!input.validity.valid || invalidRange) {
         $("#productDateFeedback").textContent = invalidRange ? "End of manufacturing must be on or after general availability. The previous date was kept." : "Enter a complete, valid date. The previous date was kept.";
         input.value = current[fieldName] || "";
+        quarterInput.value = globalThis.PortfolioDatePrecision?.currentPeriod(current, fieldName)?.label || "";
         syncTbdState();
         return;
       }
       $("#productDateFeedback").textContent = "";
-      updateProduct(product.id, { [fieldName]: value }, false);
+      updateProductMilestone(product.id, fieldName, value, period);
+      input.value = value; if (period) quarterInput.value = period.label;
       syncTbdState();
+    };
+    input.addEventListener("change", () => { if (precision.value === "exact") commit(); });
+    quarterInput.addEventListener("change", () => {
+      const period = globalThis.PortfolioDatePrecision?.parseQuarter(quarterInput.value);
+      if (!period) { $("#productDateFeedback").textContent = "Enter one calendar quarter and year, such as Q2 2028. The previous date was kept."; quarterInput.setAttribute("aria-invalid", "true"); return; }
+      quarterInput.removeAttribute("aria-invalid"); commit(period);
+    });
+    precision.addEventListener("change", () => {
+      const current = selectedProduct();
+      if (!current || current.id !== product.id) return;
+      const period = globalThis.PortfolioDatePrecision?.currentPeriod(current, fieldName);
+      if (precision.value === "exact" && period) input.value = "";
+      else input.value = current[fieldName] || "";
+      quarterInput.value = period?.label || ""; quarterInput.removeAttribute("aria-invalid"); syncPrecision();
+      $("#productDateFeedback").textContent = precision.value === "quarter" ? "Enter a calendar quarter and year to save it. The existing date stays saved until then." : period ? "Choose a verified exact day to replace the saved quarter. The quarter stays saved until then." : "";
+      (precision.value === "quarter" ? quarterInput : input).focus();
     });
 
     tbdButton.addEventListener("click", () => {
-      input.value = "";
+      input.value = ""; quarterInput.value = ""; quarterInput.removeAttribute("aria-invalid");
       $("#productDateFeedback").textContent = "";
-      updateProduct(product.id, { [fieldName]: "" }, false);
+      updateProductMilestone(product.id, fieldName, "");
       syncTbdState();
     });
 
-    syncTbdState();
+    syncPrecision(); syncTbdState();
   };
 
   bindProductDate("#fieldFfsDate", "#fieldFfsDateTbd", "ffsDate");
@@ -7550,10 +7613,23 @@ async function commitPlcPlan(plan, choices) {
   const pending = new Map((draft.plcSharePending?.patches || []).map((item) => [item.productId, item]));
   for (const category of draft.categories) for (const product of category.board.products) {
     const previous = previousProducts.get(product.id);
-    if (!previous) continue;
+    if (!previous) {
+      if (product.plc?.createdFromSource?.key) pending.set(product.id, { kind: "create", productId: product.id, categoryId: category.id, laneId: product.laneId, sourceKey: product.plc.createdFromSource.key, values: globalThis.PortfolioMasterModel.productValues(product) });
+      continue;
+    }
+    const queuedCreation = pending.get(product.id);
+    if (queuedCreation?.kind === "create") {
+      if (JSON.stringify(globalThis.PortfolioMasterModel.productValues(previous)) === JSON.stringify(queuedCreation.values)) pending.set(product.id, { ...queuedCreation, values: globalThis.PortfolioMasterModel.productValues(product) });
+      continue;
+    }
     const patch = {};
     for (const field of [...Object.keys(globalThis.PLCImporter.fieldLabels), "plc"]) if (JSON.stringify(previous[field]) !== JSON.stringify(product[field])) patch[field] = product[field];
-    if (Object.keys(patch).length) pending.set(product.id, { productId: product.id, patch: { ...(pending.get(product.id)?.patch || {}), ...patch } });
+    if (Object.keys(patch).length) {
+      const queued = pending.get(product.id);
+      const plcFields = Object.keys(globalThis.PLCImporter.fieldLabels).filter(field => JSON.stringify(previous.plc?.fields?.[field]) !== JSON.stringify(product.plc?.fields?.[field]));
+      const queuedFields = queued?.plcFields || Object.keys(queued?.patch?.plc?.fields || {}).filter(field => queued.patch.plc.fields[field]?.sourceType !== "local");
+      pending.set(product.id, { productId: product.id, patch: { ...(queued?.patch || {}), ...patch }, plcFields: [...new Set([...queuedFields, ...plcFields])] });
+    }
   }
   if (pending.size) draft.plcSharePending = { version: 1, queuedAt: before.plcSharePending?.queuedAt || new Date().toISOString(), patches: [...pending.values()] };
   // Persist evidence, field clocks and exceptions together before activating it.

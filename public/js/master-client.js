@@ -424,6 +424,15 @@
       const current = new Map(adapter.getProducts().map((product) => [idOf(product), valuesOf(product)]));
       for (const entry of patches) {
         const productId = String(entry?.productId || ""), supplied = entry?.patch;
+        if (entry?.kind === "create") {
+          if (!productId || seen.has(productId) || !entry.values || typeof entry.values !== "object" || Array.isArray(entry.values)) throw errorOf("The reviewed PLC product could not be shared. Its local draft is safe.", "INVALID_SCOPE");
+          seen.add(productId);
+          const actual = current.get(productId), original = pending.get(productId), expected = model().validateValues(entry.values);
+          if (!actual || JSON.stringify(actual) !== JSON.stringify(expected) || original && (original.kind !== "create" || original.categoryId !== entry.categoryId || original.laneId !== entry.laneId)) throw errorOf("The new product changed after its PLC review. Review those edits before sharing.", "SCOPED_UPDATE_CHANGED");
+          if (!expected.plc?.createdFromSource || expected.plc.createdFromSource.key !== entry.sourceKey || !expected.plc.identities?.some((identity) => identity.key === entry.sourceKey)) throw errorOf("Only explicitly reviewed PLC product drafts can be created automatically.", "INVALID_SCOPE");
+          if (original) selected.set(productId, { ...original, mine: expected });
+          continue;
+        }
         if (!productId || seen.has(productId) || !supplied || typeof supplied !== "object" || Array.isArray(supplied) || !Object.keys(supplied).length || Object.keys(supplied).some((field) => !supported.has(field))) throw errorOf("Only imported milestones and PLC evidence can be shared automatically.", "INVALID_SCOPE");
         seen.add(productId);
         const actual = current.get(productId), original = pending.get(productId);
@@ -434,7 +443,18 @@
         if (original.kind) throw errorOf("This product has an unsaved creation or merge. Its PLC update is safe on this device; review the product before sharing.", "SCOPED_PRODUCT_REVIEW");
         // The virtual submitted product contains only this import's values. The
         // snapshot merge can then retain other local drafts on the same product.
-        const mine = model().patchValues(original.base, supplied), patch = model().diffValues(original.base, mine);
+        const selectedPatch = clone(supplied);
+        if (selectedPatch.plc) {
+          const allowedFields = entry.plcFields === undefined ? Object.keys(selectedPatch.plc.fields || {}).filter(field => selectedPatch.plc.fields[field]?.sourceType !== "local") : entry.plcFields;
+          if (!Array.isArray(allowedFields) || allowedFields.some(field => !supported.has(field) || field === "plc")) throw errorOf("The PLC milestone evidence selection is invalid. Its local data is safe.", "INVALID_SCOPE");
+          const fields = clone(original.base.plc?.fields || {});
+          for (const field of allowedFields) {
+            if (Object.hasOwn(selectedPatch.plc.fields || {}, field)) fields[field] = clone(selectedPatch.plc.fields[field]);
+            else delete fields[field];
+          }
+          selectedPatch.plc.fields = fields;
+        }
+        const mine = model().patchValues(original.base, selectedPatch), patch = model().diffValues(original.base, mine);
         if (Object.keys(patch).length) selected.set(productId, { ...original, mine, patch });
       }
       return selected;
