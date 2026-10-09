@@ -109,7 +109,7 @@ function harness({ view = "products", transform } = {}) {
     portfolio, board: portfolio.categories[0].board, activeCategoryId: "pc", activeView: view, selectedId: "pc-cloud", packageOperationInProgress: false,
     searchQuery: "filter that hides every product", roadmapSearchQuery: "another hidden selection", productLayoutEditing: true, hoveredHeroVariant: { productId: "pc-cloud" },
     viewerInfo: viewer, splitProduct: split, viewerInfoOutline: element(), viewerInfoProgress: 1, viewerInfoProductId: "pc-cloud", viewerInfoOpen: true, viewerInfoAnimationFrame: null,
-    roadmapDetailsOpen: view === "split", roadmapDragState: null, roadmapDraft: null, roadmapPanState: null, roadmapInteractionMode: "dates", initialVerticalFitPending: false,
+    roadmapDetailsOpen: view === "split", roadmapDragState: null, roadmapDraft: null, roadmapPanState: null, roadmapInteractionMode: "dates", roadmapLaneHovers: new Map(), initialVerticalFitPending: false,
     productView: element(), roadmapView: element(), splitView: element(), productControls: element(), roadmapControls: element(), splitRoadmapScroll: { name: "split" }, roadmapScroll: { name: "roadmap" },
     categorySettingsDraftLanes: freezeTree([{ id: "draft-lane", label: "Unsaved category lane label" }]),
     discardedDrafts: new Map([["console-cloud", freezeTree({ name: "Discarded local draft", custom: { source: "unsaved" } })]]),
