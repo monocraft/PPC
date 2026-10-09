@@ -4,6 +4,7 @@ await import("../../public/js/package-codec.js");
 const codec = globalThis.PortfolioPackage;
 assert.equal(codec.MAX_PACKAGE_BYTES, 64 * 1024 * 1024);
 assert.equal(codec.MAX_PACKAGE_COMMENTS, 2000);
+assert.equal(codec.MAX_STORED_PACKAGE_COMMENTS, 2 * 1024 * 1024);
 const comments = "Added the new launch dates.\nReviewed the regional variants.";
 const beforeBuild = Date.now();
 const packageInfo = codec.createPackageInfo({ comments });
@@ -18,9 +19,10 @@ assert.notEqual(codec.normalizePackageInfo(packageInfo), packageInfo, "normaliza
 assert.deepEqual(codec.normalizePackageInfo(packageInfo), packageInfo);
 assert.ok(Object.isFrozen(packageInfo));
 assert.equal(codec.createPackageInfo({ comments: "x".repeat(2000) }).comments.length, 2000);
+assert.equal(codec.normalizePackageInfo({ ...packageInfo, comments: "x".repeat(5000) }).comments.length, 5000, "complete automatic product lists are retained beyond the manual-note limit");
 for (const invalid of [
   { ...packageInfo, version: 2 }, { ...packageInfo, version: "1" },
-  { ...packageInfo, comments: "x".repeat(2001) }, { ...packageInfo, comments: null },
+  { ...packageInfo, comments: "x".repeat(codec.MAX_STORED_PACKAGE_COMMENTS + 1) }, { ...packageInfo, comments: null },
   { ...packageInfo, updatedAt: "2026-02-30T12:00:00.000Z" },
   { ...packageInfo, updatedAt: "2026-10-07T12:00:00.000+00:00" },
   { ...packageInfo, updatedAt: "2026-10-07" }, { ...packageInfo, updatedAt: "invalid" },

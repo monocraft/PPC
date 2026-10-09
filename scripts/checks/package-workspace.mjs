@@ -262,6 +262,13 @@ assert.deepEqual(JSON.parse(stamped.stored.get(storageKey)).packageInfo, stamped
 const reloaded = harness(JSON.parse(stamped.stored.get(storageKey)));
 reloaded.sandbox.portfolio = reloaded.sandbox.ensurePortfolioSchema(reloaded.sandbox.portfolio);
 assert.deepEqual(reloaded.sandbox.getCurrentPackageInfo(), stampedManifest.packageInfo, "normal workspace loading must preserve imported metadata");
+const automaticSummaryManifest = clone(stampedManifest);
+automaticSummaryManifest.packageInfo.comments = "Accepted product names:\n" + "Complete accepted product name\n".repeat(100);
+const automaticSummaryWorkspace = harness();
+const automaticSummaryResult = await automaticSummaryWorkspace.sandbox.importProjectPackage(new Blob([await codec.encrypt(packageBytes(automaticSummaryManifest), key)]), { key, requireEncrypted: true });
+assert.ok(automaticSummaryManifest.packageInfo.comments.length > codec.MAX_PACKAGE_COMMENTS);
+assert.deepEqual(automaticSummaryResult.packageInfo, automaticSummaryManifest.packageInfo, "stored automatic comments must survive authenticated import beyond the manual-note limit");
+assert.deepEqual(JSON.parse(automaticSummaryWorkspace.stored.get(storageKey)).packageInfo, automaticSummaryManifest.packageInfo, "complete accepted product names must persist without truncation");
 const firstInfoCopy = stamped.sandbox.getCurrentPackageInfo();
 assert.notEqual(firstInfoCopy, stamped.sandbox.getCurrentPackageInfo());
 assert.throws(() => { firstInfoCopy.comments = "Changed outside the workspace"; }, TypeError);
@@ -317,7 +324,7 @@ await assertPreflightFailure(packageBytes(invalidBoard));
 for (const packageInfo of [
   { ...stampedManifest.packageInfo, version: 2 },
   { ...stampedManifest.packageInfo, updatedAt: "2026-02-30T12:30:00.000Z" },
-  { ...stampedManifest.packageInfo, comments: "x".repeat(2001) },
+  { ...stampedManifest.packageInfo, comments: "x".repeat(codec.MAX_STORED_PACKAGE_COMMENTS + 1) },
   { ...stampedManifest.packageInfo, comments: { text: "not plain text" } },
   { version: 1, updatedAt: stampedManifest.packageInfo.updatedAt },
   { ...stampedManifest.packageInfo, unrecognized: true },
