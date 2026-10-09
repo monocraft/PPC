@@ -345,7 +345,7 @@
         }
         const baseRevisions = submitted ? remote.revisions : old?.revisions || {};
         const plan = model().planMerge(base, mine, remote.values, baseRevisions, remote.revisions);
-        const localValues = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, "mine"])));
+        const localValues = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, "mine"])), { preserveDrafts: true });
         const fullProduct = hydrated(remote.productId, product, old);
         updates.push({ productId: remote.productId, values: localValues, patch: localValues, ...(fullProduct ? { fullProduct } : {}) });
         if (fullProduct) hydratedIds.add(remote.productId);
@@ -417,6 +417,77 @@
       catch (error) { if (accessVersion === operationVersion) { connected = false; if (error.code === "INVALID_KEY") clearAccess(); } throw error; }
     }
 
+    function scopedVariantEvidence(entry, actual, base, selectedPatch, milestoneFields) {
+      const invalid = (message = "The reviewed colorway selection is invalid. Its local data is safe.") => { throw errorOf(message, "INVALID_SCOPE"); };
+      const review = () => { throw errorOf("This reviewed colorway changed or was removed. Its PLC update is safe on this device; review its product match before sharing.", "SCOPED_PRODUCT_REVIEW"); };
+      const validId = value => typeof value === "string" && value.length > 0 && value.length <= 180 && !["__proto__", "prototype", "constructor"].includes(value);
+      const additions = entry.variantAdds ?? [], scopes = entry.plcVariantFields ?? {};
+      if (!Array.isArray(additions) || additions.length > 2000 || !scopes || typeof scopes !== "object" || Array.isArray(scopes) || Object.keys(scopes).length > 2000) invalid();
+      const groups = clone(base.variantGroups || []), approved = new Map(), selected = new Map();
+      const locate = (list, variantId) => list.flatMap(group => (group.items || []).filter(variant => variant.id === variantId).map(variant => ({ group, variant })));
+      const evidence = selectedPatch.plc;
+      if ((additions.length || Object.keys(scopes).length) && !evidence) invalid("Reviewed colorway updates require their PLC source evidence.");
+      for (const addition of additions) {
+        if (!validId(addition?.variantId) || !validId(addition.groupId) || typeof addition.sourceKey !== "string" || !addition.sourceKey || addition.sourceKey.length > 200 || approved.has(addition.variantId) || addition.variant?.id !== addition.variantId) invalid();
+        const local = locate(actual.variantGroups || [], addition.variantId), remote = locate(groups, addition.variantId), project = evidence.variantProjects?.[addition.variantId], created = project?.createdFromSource;
+        if (local.length !== 1 || local[0].group.id !== addition.groupId || local[0].group.type !== "color") review();
+        const canonical = model().validateValues({ variantGroups: [{ id: addition.groupId, type: "color", label: local[0].group.label, items: [addition.variant] }] }).variantGroups[0].items[0];
+        if (JSON.stringify(canonical) !== JSON.stringify(local[0].variant)) throw errorOf("A reviewed colorway was edited after its PLC review. Review those edits before sharing.", "SCOPED_UPDATE_CHANGED");
+        if (!created || created.key !== addition.sourceKey || created.productId !== entry.productId || created.variantId !== addition.variantId || created.groupId !== addition.groupId || !evidence.identities?.some(identity => identity.key === addition.sourceKey && identity.variantId === addition.variantId && identity.confirmed === true)) invalid("Only explicitly reviewed PLC colorway additions can be shared automatically.");
+        approved.set(addition.variantId, addition);
+        if (remote.length) {
+          if (remote.length !== 1 || remote[0].group.id !== addition.groupId || remote[0].group.type !== "color") review();
+          if (model().variantMatchIdentity(remote[0].variant) !== model().variantMatchIdentity(canonical)) review();
+          // A retry may find the reviewed row already accepted. Its remote values
+          // stay authoritative; unrelated local row edits are never submitted.
+          continue;
+        }
+        let group = groups.find(candidate => candidate.id === addition.groupId);
+        if (group && group.type !== "color") review();
+        if (!group) {
+          if (!addition.group || addition.group.id !== addition.groupId || addition.group.type !== "color" || addition.group.label !== local[0].group.label) invalid("A new color group requires its explicitly reviewed color metadata.");
+          group = { id: addition.groupId, type: "color", label: addition.group.label, items: [] }; groups.push(group);
+        }
+        group.items.push(canonical);
+      }
+      for (const [variantId, fields] of Object.entries(scopes)) {
+        if (!validId(variantId) || !Array.isArray(fields) || fields.length > milestoneFields.size || fields.some(field => !milestoneFields.has(field)) || new Set(fields).size !== fields.length) invalid();
+        const remote = locate(groups, variantId), local = locate(actual.variantGroups || [], variantId);
+        if (remote.length !== 1 || local.length !== 1 || remote[0].group.type !== "color" || local[0].group.type !== "color" || remote[0].group.id !== local[0].group.id) review();
+        const reviewed = evidence.variantProjects?.[variantId]?.colorway;
+        if (reviewed && model().variantMatchIdentity(reviewed) !== model().variantMatchIdentity(local[0].variant)) review();
+        selected.set(variantId, fields);
+      }
+      for (const variantId of approved.keys()) if (!selected.has(variantId)) selected.set(variantId, []);
+      if (additions.length) selectedPatch.variantGroups = groups;
+      if (!evidence) return;
+      const baseEvidence = base.plc || {}, projects = clone(baseEvidence.variantProjects || {});
+      const unique = (rows, limit = 100) => [...new Map(rows.map(row => [JSON.stringify(row), clone(row)])).values()].slice(-limit);
+      for (const [variantId, fields] of selected) {
+        const incoming = evidence.variantProjects?.[variantId], previous = projects[variantId] || {};
+        if (!incoming || incoming.version !== 1 || incoming.variantId !== variantId || !evidence.identities?.some(identity => identity.variantId === variantId && identity.confirmed === true)) invalid("Reviewed colorway evidence must identify its confirmed source match.");
+        const fieldValues = clone(previous.fields || {});
+        for (const field of fields) {
+          if (Object.hasOwn(incoming.fields || {}, field)) fieldValues[field] = clone(incoming.fields[field]); else delete fieldValues[field];
+        }
+        projects[variantId] = { ...clone(incoming), fields: fieldValues,
+          history: unique([...(previous.history || []), ...(incoming.history || []).filter(event => event.variantId === variantId && fields.includes(event.field))]) };
+        if (previous.createdFromSource) projects[variantId].createdFromSource = clone(previous.createdFromSource);
+        else if (!approved.has(variantId)) delete projects[variantId].createdFromSource;
+      }
+      if (Object.keys(projects).length || Object.hasOwn(baseEvidence, "variantProjects")) evidence.variantProjects = projects;
+      else delete evidence.variantProjects;
+      const identities = new Map((baseEvidence.identities || []).map(identity => [identity.key, clone(identity)]));
+      for (const identity of evidence.identities || []) if (!identity.variantId || selected.has(identity.variantId)) {
+        if (identity.variantId && (locate(groups, identity.variantId).length !== 1 || identity.confirmed !== true)) invalid("A PLC source identity must refer to one approved colorway.");
+        identities.set(identity.key, clone(identity));
+      }
+      if (identities.size || Object.hasOwn(evidence, "identities")) evidence.identities = [...identities.values()];
+      const selectedEvent = event => event.variantId && selected.get(event.variantId)?.includes(event.field);
+      if (evidence.history || baseEvidence.history) evidence.history = unique([...(baseEvidence.history || []).filter(event => event.variantId), ...(evidence.history || []).filter(event => !event.variantId || selectedEvent(event))]);
+      if (evidence.rows?.some(row => row.variantId) || baseEvidence.rows?.some(row => row.variantId)) evidence.rows = unique([...(baseEvidence.rows || []).filter(row => row.variantId), ...(evidence.rows || []).filter(row => !row.variantId || selected.has(row.variantId))], 1000);
+    }
+
     function scopedOriginals(patches) {
       if (!Array.isArray(patches) || patches.length > 30000) throw errorOf("The PLC update could not be shared. Its local data is safe.", "INVALID_SCOPE");
       const supported = new Set(["generalAvailabilityDate", "ffsDate", "endManufacturingDate", "globalAnnouncementDate", "webReadinessDate", "finalAssetsDate", "plc"]);
@@ -439,7 +510,10 @@
         if (!actual) throw errorOf("A product changed after the PLC import. Review its saved update when you are ready.", "SCOPED_UPDATE_CHANGED");
         const expected = model().patchValues(actual, supplied);
         if (Object.keys(supplied).some((field) => JSON.stringify(actual[field]) !== JSON.stringify(expected[field]))) throw errorOf("A product changed after the PLC import. Review its saved update when you are ready.", "SCOPED_UPDATE_CHANGED");
-        if (!original) continue;
+        if (!original) {
+          scopedVariantEvidence(entry, actual, baseline.get(productId)?.values || actual, clone(supplied), new Set([...supported].filter(field => field !== "plc")));
+          continue;
+        }
         if (original.kind) throw errorOf("This product has an unsaved creation or merge. Its PLC update is safe on this device; review the product before sharing.", "SCOPED_PRODUCT_REVIEW");
         // The virtual submitted product contains only this import's values. The
         // snapshot merge can then retain other local drafts on the same product.
@@ -454,6 +528,7 @@
           }
           selectedPatch.plc.fields = fields;
         }
+        scopedVariantEvidence(entry, actual, original.base, selectedPatch, new Set([...supported].filter(field => field !== "plc")));
         const mine = model().patchValues(original.base, selectedPatch), patch = model().diffValues(original.base, mine);
         if (Object.keys(patch).length) selected.set(productId, { ...original, mine, patch });
       }
@@ -544,7 +619,7 @@
               continue;
             }
             const resolved = model().resolveConflicts(plan, choices), patch = model().diffValues(remote.values, resolved);
-            const mineResolved = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, "mine"])));
+            const mineResolved = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, ["removed-colorway", "changed-colorway"].includes(conflict.reason) ? "master" : "mine"])));
             const minePatch = model().diffValues(remote.values, mineResolved);
             if (Object.keys(minePatch).length) recheckChanges.push({ productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch: minePatch });
             if (Object.keys(patch).length) nextChanges.push({ productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch });
@@ -568,6 +643,30 @@
       if (busy || adapter.hasPendingPackageOperation?.()) return { status: "pending", saved: false, message: "PLC data is saved on this device. Sharing will resume when the current update finishes.", code: "MASTER_BUSY" };
       let conflicts = [];
       try {
+        if (Array.isArray(patches) && patches.some(entry => entry?.variantAdds?.length || Object.keys(entry?.plcVariantFields || {}).length)) {
+          // Verify reviewed targets against the current master without rebasing
+          // or writing any local drafts. A deleted row needs a new match review.
+          scopedOriginals(patches);
+          const operationGeneration = generation, operationVersion = accessVersion;
+          busy = true;
+          let latest;
+          try { latest = (await send("latest")).snapshot; }
+          finally { busy = false; }
+          if (generation !== operationGeneration || accessVersion !== operationVersion) throw errorOf("The workspace or master connection changed while checking colorway matches. Your current workspace is safe.", "MASTER_CONNECTION_CHANGED");
+          const remote = new Map(latest.products.map(product => [product.productId, product.values]));
+          const current = new Map(adapter.getProducts().map(product => [idOf(product), valuesOf(product)]));
+          for (const entry of patches) {
+            const approved = new Set((entry.variantAdds || []).map(addition => addition.variantId));
+            for (const variantId of new Set([...Object.keys(entry.plcVariantFields || {}), ...approved])) {
+              const locate = values => (values?.variantGroups || []).flatMap(group => (group.items || []).filter(item => item.id === variantId).map(item => ({ group, item })));
+              const target = locate(remote.get(entry.productId)), local = locate(current.get(entry.productId));
+              const reviewed = entry.patch?.plc?.variantProjects?.[variantId]?.colorway || local[0]?.item;
+              if (local.length !== 1 || local[0].group.type !== "color" || model().variantMatchIdentity(reviewed) !== model().variantMatchIdentity(local[0].item)) throw errorOf("The reviewed PLC source no longer matches this colorway. Its local update is safe; review the source match before sharing.", "SCOPED_PRODUCT_REVIEW");
+              if (!target.length && approved.has(variantId)) continue;
+              if (target.length !== 1 || target[0].group.type !== "color" || target[0].group.id !== local[0].group.id || model().variantMatchIdentity(target[0].item) !== model().variantMatchIdentity(reviewed)) throw errorOf("This reviewed colorway changed or was removed from the master. Its PLC update is safe on this device; review its product match before sharing.", "SCOPED_PRODUCT_REVIEW");
+            }
+          }
+        }
         const result = await save({ reason, scopedPatches: patches, resolveConflicts: (items) => { conflicts = clone(items); return null; } });
         if (result.cancelled) return { status: "pending", saved: false, message: "PLC data is saved on this device. Some shared values changed; review those changes before sharing.", code: "MASTER_CONFLICT", conflicts };
         return { ...result, status: "saved", message: result.saved ? "Imported milestones and their timestamps are shared with the team." : "The shared master already has these imported values." };

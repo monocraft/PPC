@@ -806,4 +806,207 @@ const scopedRequest = () => ({ reason: "Biweekly PLC import", patches: [{ produc
   assert.equal(h.session.track()[0].patch.ffsDate, "2026-11-07", "edits made during an import save remain local and pending");
 }
 
-console.log("Master client checks passed: narrow authenticated updates, real-model create/delete synchronization and conflicts, malformed-response atomic safety, lost creation reply recovery, remote lifecycle refresh, stale draft preservation, unrelated date/spec merging, repeat conflict choices, cancellation/reload safety, in-flight local changes, optional team names, tab-scoped reconnect with endpoint isolation and blocked-storage fallback, disconnect access races, scoped PLC sharing without manual drafts, guarded expected values, preserved provenance timestamps, conflict deferral, ABA protection, receipt retries and sanitized errors.");
+const whiteVariant = { id: "white", code: "WHT", colorName: "White", colorHex: "#ffffff" };
+const colorGroups = (items = []) => [{ ...clone(fixture.variantGroups[0]), items: [...clone(fixture.variantGroups[0].items), ...clone(items)] }];
+function variantProject(variantId, value, { sourceKey = `source-${variantId}`, created = false, groupId = "colors" } = {}) {
+  const evidence = { version: 1, variantId, variantName: variantId, importedAt: plcAt, sourceFile: "Synthetic colorway PLC.xlsx", fingerprint: "synthetic-colorways", reportDate: "2026-10-09",
+    fields: { ffsDate: { value, observedAt: plcAt, changedAt: plcAt, sourceType: "plc", reviewed: true }, generalAvailabilityDate: { value: "2028-07-01", changedAt: plcAt, sourceType: "plc" } },
+    identities: [{ key: sourceKey, name: variantId, codename: variantId, confirmed: true }], rows: [{ key: sourceKey, importedAt: plcAt }],
+    history: [{ at: plcAt, productId: fixture.id, variantId, field: "ffsDate", before: "", after: value }] };
+  const row = variantId === "white" ? whiteVariant : fixture.variantGroups[0].items.find(item => item.id === variantId);
+  if (row) evidence.colorway = Object.fromEntries(["code", "colorKey", "colorName", "colorHex", "colorKey2", "colorName2", "colorHex2"].map(field => [field, String(row[field] || "")]));
+  if (created) evidence.createdFromSource = { key: sourceKey, productId: fixture.id, variantId, groupId, at: plcAt };
+  return evidence;
+}
+function colorwayEvidence(projects) {
+  return { version: 1, fields: { ffsDate: { value: fixture.ffsDate, changedAt: plcAt, sourceType: "plc" } },
+    variantProjects: projects, identities: Object.entries(projects).flatMap(([variantId, project]) => project.identities.map(identity => ({ ...clone(identity), variantId }))),
+    history: Object.values(projects).flatMap(project => clone(project.history)) };
+}
+const scopedVariant = (plc, extra = {}) => ({ patches: [{ productId: fixture.id, patch: { plc: clone(plc) }, plcFields: [], plcVariantFields: { white: ["ffsDate"] }, ...extra }] });
+
+{
+  const h = lifecycleHarness(), accepted = colorwayEvidence({ black: variantProject("black", "2027-01-01"), white: variantProject("white", "2027-02-01") });
+  h.remoteEdit({ variantGroups: colorGroups([whiteVariant]), plc: accepted }); await h.session.connect({ key });
+  const draft = clone(h.products[0].plc);
+  draft.variantProjects.black.fields.ffsDate = { value: "2029-01-01", sourceType: "local", changedAt: "2026-10-10T01:00:00.000Z" };
+  draft.variantProjects.black.variantName = "Manual Black name";
+  draft.variantProjects.black.identities.push({ key: "unreviewed-black-source", confirmed: true });
+  draft.identities.push({ key: "unreviewed-black-source", variantId: "black", confirmed: true });
+  draft.variantProjects.white.fields.ffsDate = { value: "2028-04-15", sourceType: "plc", reviewed: true, changedAt: "2026-10-10T02:00:00.000Z" };
+  draft.variantProjects.white.fields.generalAvailabilityDate = { value: "2029-07-01", sourceType: "local", changedAt: "2026-10-10T02:00:00.000Z" };
+  const whiteEvent = { at: "2026-10-10T02:00:00.000Z", productId: fixture.id, variantId: "white", field: "ffsDate", before: "2027-02-01", after: "2028-04-15" };
+  const blackDraftEvent = { ...whiteEvent, variantId: "black", after: "2029-01-01" }, whiteGaDraft = { ...whiteEvent, field: "generalAvailabilityDate", after: "2029-07-01" };
+  draft.variantProjects.white.history.push(whiteEvent, whiteGaDraft); draft.history.push(whiteEvent, blackDraftEvent, whiteGaDraft);
+  h.edit({ plc: draft, name: "Manual product name", partSkus: [{ id: "sku-a", code: "MANUAL-SKU", variantId: "black" }],
+    variantGroups: colorGroups([whiteVariant]).map(group => ({ ...group, label: "Manual group label", items: group.items.map(item => item.id === "black" ? { ...item, colorName: "Manual Black" } : item) })) });
+  assert.equal((await h.session.saveScoped(scopedVariant(draft))).status, "saved");
+  const shared = h.snapshot.products[0].values;
+  assert.deepEqual(shared.plc.variantProjects.black, accepted.variantProjects.black, "Sharing White FFS cannot share Black draft evidence or names.");
+  assert.equal(shared.plc.variantProjects.white.fields.ffsDate.value, "2028-04-15");
+  assert.deepEqual(shared.plc.variantProjects.white.fields.generalAvailabilityDate, accepted.variantProjects.white.fields.generalAvailabilityDate, "Unselected dates on the selected colorway retain remote values and clocks.");
+  assert.ok(shared.plc.variantProjects.white.history.some(event => event.after === "2028-04-15"));
+  assert.ok(!shared.plc.history.some(event => event.after === "2029-01-01" || event.after === "2029-07-01"));
+  assert.ok(!shared.plc.identities.some(identity => identity.key === "unreviewed-black-source"));
+  assert.equal(shared.variantGroups[0].label, fixture.variantGroups[0].label); assert.equal(shared.variantGroups[0].items[0].colorName, "Black");
+  assert.equal(shared.partSkus[0].code, fixture.partSkus[0].code); assert.equal(shared.name, fixture.name); assert.equal(shared.ffsDate, fixture.ffsDate);
+  assert.equal(h.products[0].plc.variantProjects.black.fields.ffsDate.value, "2029-01-01"); assert.equal(h.products[0].variantGroups[0].items[0].colorName, "Manual Black");
+  assert.equal(h.products[0].partSkus[0].code, "MANUAL-SKU"); assert.equal(h.session.track().length, 1, "Other manual fields and colorway changes remain pending.");
+  const writes = h.calls.filter(call => call.url.endsWith("/save")).length;
+  assert.equal((await h.session.saveScoped(scopedVariant(draft))).status, "saved");
+  assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, writes, "An accepted colorway date retry cannot submit retained manual drafts.");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key });
+  const project = variantProject("white", "2028-04-01", { created: true }), draft = colorwayEvidence({ white: project });
+  const unreviewed = { id: "pink", code: "PNK", colorName: "Pink", colorHex: "#ff88aa" };
+  h.edit({ plc: draft, partSkus: [{ id: "sku-a", code: "MANUAL-SKU" }], variantGroups: colorGroups([whiteVariant, unreviewed]) });
+  const request = scopedVariant(draft, { variantAdds: [{ variantId: "white", groupId: "colors", variant: clone(whiteVariant), sourceKey: "source-white" }] });
+  h.loseNextSaveReply(); assert.equal((await h.session.saveScoped(request)).status, "pending");
+  assert.equal((await h.session.saveScoped(request)).status, "saved");
+  const saves = h.calls.filter(call => call.url.endsWith("/save")); assert.equal(saves[0].body.requestId, saves[1].body.requestId); assert.equal(h.savedRequests, 1);
+  const shared = h.snapshot.products[0].values;
+  assert.deepEqual(shared.variantGroups[0].items.map(item => item.id), ["black", "white"], "Only the reviewed White row is added; an unrelated Pink draft stays local.");
+  assert.equal(shared.partSkus[0].code, fixture.partSkus[0].code); assert.equal(shared.plc.variantProjects.white.fields.ffsDate.value, "2028-04-01");
+  assert.equal(shared.plc.variantProjects.white.createdFromSource.key, "source-white"); assert.equal(shared.plc.identities[0].variantId, "white");
+  assert.ok(h.products[0].variantGroups[0].items.some(item => item.id === "pink"));
+  assert.equal(shared.variantGroups[0].items.filter(item => item.id === "white").length, 1, "Lost reply retry never duplicates an approved addition.");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key });
+  const project = variantProject("white", "2028-04-01", { created: true, groupId: "new-colors" }), draft = colorwayEvidence({ white: project });
+  h.edit({ plc: draft, variantGroups: [...colorGroups(), { id: "new-colors", type: "color", label: "Reviewed colors", items: [whiteVariant] }] });
+  const request = scopedVariant(draft, { plcVariantFields: { white: [] }, variantAdds: [{ variantId: "white", groupId: "new-colors", variant: whiteVariant, sourceKey: "source-white", group: { id: "new-colors", type: "color", label: "Reviewed colors" } }] });
+  assert.equal((await h.session.saveScoped(request)).status, "saved");
+  const shared = h.snapshot.products[0].values; assert.equal(shared.variantGroups[1].label, "Reviewed colors");
+  assert.deepEqual(shared.plc.variantProjects.white.fields, {}, "Creation with no selected dates shares source binding without invented date acceptance.");
+  assert.equal(shared.plc.variantProjects.white.createdFromSource.variantId, "white");
+}
+
+for (const invalid of ["missing-target", "wrong-source", "changed-reviewed-row", "missing-group-review", "unsupported-field", "unapproved-identity"]) {
+  const h = lifecycleHarness(); await h.session.connect({ key });
+  const groupId = invalid === "missing-group-review" ? "new-colors" : "colors", project = variantProject("white", "2028-04-01", { created: true, groupId }), draft = colorwayEvidence({ white: project });
+  h.edit({ plc: draft, variantGroups: invalid === "missing-target" ? colorGroups() : groupId === "colors" ? colorGroups([whiteVariant]) : [...colorGroups(), { id: groupId, type: "color", label: "New colors", items: [whiteVariant] }] });
+  const request = scopedVariant(draft, { variantAdds: invalid === "missing-target" ? [] : [{ variantId: "white", groupId, variant: { ...whiteVariant, ...(invalid === "changed-reviewed-row" ? { colorName: "Changed reviewed name" } : {}) }, sourceKey: invalid === "wrong-source" ? "another-source" : "source-white" }] });
+  if (invalid === "unsupported-field") request.patches[0].plcVariantFields.white = ["name"];
+  if (invalid === "unapproved-identity") { request.patches[0].patch.plc.identities[0].confirmed = false; h.edit({ plc: request.patches[0].patch.plc }); }
+  const before = clone(h.products), count = h.calls.length, baseline = clone(h.baseline), result = await h.session.saveScoped(request);
+  assert.equal(result.status, "pending", `${invalid} requires review rather than silent creation or evidence sharing.`);
+  assert.ok(["INVALID_SCOPE", "SCOPED_UPDATE_CHANGED", "SCOPED_PRODUCT_REVIEW"].includes(result.code));
+  assert.equal(h.calls.length, count); assert.deepEqual(h.products, before); assert.deepEqual(h.baseline, baseline);
+}
+
+{
+  const h = lifecycleHarness(), accepted = colorwayEvidence({ white: variantProject("white", "2027-02-01") });
+  h.remoteEdit({ variantGroups: colorGroups([whiteVariant]), plc: accepted }); await h.session.connect({ key });
+  const draft = clone(accepted); draft.variantProjects.white.fields.ffsDate.value = "2028-04-01"; h.edit({ plc: draft });
+  h.remoteEdit({ variantGroups: colorGroups() });
+  const result = await h.session.saveScoped(scopedVariant(draft));
+  // A deletion discovered in the master needs a new match review, without
+  // silently publishing evidence against a missing colorway row.
+  assert.equal(result.status, "pending"); assert.equal(result.code, "SCOPED_PRODUCT_REVIEW");
+  assert.ok(!h.snapshot.products[0].values.variantGroups[0].items.some(item => item.id === "white"));
+}
+
+{
+  const h = lifecycleHarness(), accepted = colorwayEvidence({ white: variantProject("white", "2027-02-01") });
+  h.remoteEdit({ variantGroups: colorGroups([whiteVariant]), plc: accepted }); await h.session.connect({ key });
+  const draft = clone(accepted); draft.variantProjects.white.fields.ffsDate.value = "2028-04-01"; h.edit({ plc: draft });
+  const before = clone(h.products), baseline = clone(h.baseline);
+  h.onSave(() => h.remoteEdit({ variantGroups: colorGroups() }));
+  const result = await h.session.saveScoped(scopedVariant(draft));
+  assert.equal(result.status, "pending"); assert.equal(result.code, "MASTER_CONFLICT");
+  assert.ok(result.conflicts.some(conflict => conflict.path === "plc" && conflict.reason === "removed-colorway"), "Deleting a target during submission is stopped by the shared server model, after the latest-target preflight.");
+  assert.deepEqual(h.products, before); assert.deepEqual(h.baseline, baseline);
+  assert.equal(h.snapshot.products[0].values.plc.variantProjects.white.fields.ffsDate.value, "2027-02-01", "A late target deletion cannot publish the new variant date.");
+}
+
+{
+  const h = lifecycleHarness(), acceptedRow = { ...whiteVariant, colorName: "Accepted White name", colorHex: "#eeeeee" };
+  h.remoteEdit({ variantGroups: colorGroups([acceptedRow]) }); await h.session.connect({ key });
+  const project = variantProject("white", "2028-04-01", { created: true }), draft = colorwayEvidence({ white: project });
+  h.edit({ plc: draft, variantGroups: colorGroups([whiteVariant]) });
+  const result = await h.session.saveScoped(scopedVariant(draft, { variantAdds: [{ variantId: "white", groupId: "colors", variant: whiteVariant, sourceKey: "source-white" }] }));
+  assert.equal(result.status, "saved");
+  const row = h.snapshot.products[0].values.variantGroups[0].items.find(item => item.id === "white");
+  assert.equal(row.colorName, acceptedRow.colorName); assert.equal(row.colorHex, acceptedRow.colorHex, "An already accepted variant definition cannot be overwritten by the reviewed addition's local draft.");
+  assert.equal(h.products[0].variantGroups[0].items.find(item => item.id === "white").colorName, whiteVariant.colorName, "Its separate manual row edit remains pending locally.");
+}
+
+for (const race of ["before-preflight", "during-save"]) {
+  const h = lifecycleHarness(), accepted = colorwayEvidence({ white: variantProject("white", "2027-02-01") });
+  h.remoteEdit({ variantGroups: colorGroups([whiteVariant]), plc: accepted }); await h.session.connect({ key });
+  const draft = clone(accepted); draft.variantProjects.white.fields.ffsDate.value = "2028-04-01"; h.edit({ plc: draft });
+  const before = clone(h.products), baseline = clone(h.baseline), writes = h.calls.filter(call => call.url.endsWith("/save")).length;
+  const changeTarget = () => h.remoteEdit({ variantGroups: colorGroups([{ ...whiteVariant, colorKey2: "pink", colorName2: "Pink", colorHex2: "#ff88aa" }]) });
+  if (race === "before-preflight") changeTarget(); else h.onSave(changeTarget);
+  const result = await h.session.saveScoped(scopedVariant(draft));
+  assert.equal(result.status, "pending", `${race}: retaining a row ID is insufficient after White becomes White/Pink.`);
+  assert.equal(result.code, race === "before-preflight" ? "SCOPED_PRODUCT_REVIEW" : "MASTER_CONFLICT");
+  if (race === "before-preflight") assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, writes, "Preflight stops a semantic mismatch before submitting any writes.");
+  else assert.ok(result.conflicts.some(conflict => conflict.path === "plc" && conflict.reason === "changed-colorway"), "The shared server model fences a semantic mismatch introduced after the latest preflight.");
+  assert.deepEqual(h.products, before); assert.deepEqual(h.baseline, baseline);
+  const shared = h.snapshot.products[0].values;
+  assert.equal(shared.variantGroups[0].items.find(item => item.id === "white").colorName2, "Pink");
+  assert.equal(shared.plc.variantProjects.white.fields.ffsDate.value, "2027-02-01", "White-only evidence cannot be published to a newly dual-color White/Pink row.");
+}
+
+for (const race of ["before-preflight", "during-save"]) {
+  const h = lifecycleHarness(), accepted = colorwayEvidence({ white: variantProject("white", "2027-02-01") });
+  h.remoteEdit({ variantGroups: colorGroups([whiteVariant]), plc: accepted }); await h.session.connect({ key });
+  const draft = clone(accepted); draft.variantProjects.white.fields.ffsDate.value = "2028-04-01"; h.edit({ plc: draft });
+  const acceptedRow = { ...whiteVariant, colorName: "Accepted White finish", colorHex: "#eeeeee" };
+  let canonicalAcceptedRow;
+  const refineTarget = () => { h.remoteEdit({ variantGroups: colorGroups([acceptedRow]) }); canonicalAcceptedRow = clone(h.snapshot.products[0].values.variantGroups[0].items.find(item => item.id === "white")); };
+  if (race === "before-preflight") refineTarget(); else h.onSave(refineTarget);
+  const result = await h.session.saveScoped(scopedVariant(draft));
+  assert.equal(result.status, "saved", `${race}: known color identity permits cosmetic labels and swatch refinements.`);
+  const shared = h.snapshot.products[0].values, row = shared.variantGroups[0].items.find(item => item.id === "white");
+  assert.deepEqual(row, canonicalAcceptedRow, "Sharing a reviewed date preserves remote accepted color definitions.");
+  assert.equal(shared.plc.variantProjects.white.fields.ffsDate.value, "2028-04-01");
+}
+
+for (const reason of ["removed-colorway", "changed-colorway"]) for (const choice of ["mine", "master"]) {
+  const h = lifecycleHarness(), accepted = colorwayEvidence({ white: variantProject("white", "2027-02-01") });
+  h.remoteEdit({ variantGroups: colorGroups([whiteVariant]), plc: accepted }); await h.session.connect({ key });
+  const draft = clone(accepted); draft.variantProjects.white.fields.ffsDate.value = "2028-04-01"; h.edit({ plc: draft });
+  h.remoteEdit({ variantGroups: reason === "removed-colorway" ? colorGroups() : colorGroups([{ ...whiteVariant, colorName2: "Pink", colorHex2: "#ff88aa" }]) });
+  const before = clone(h.products), baseline = clone(h.baseline);
+  let reviews = 0;
+  const resolveConflicts = conflicts => { reviews += 1; assert.ok(conflicts.some(conflict => conflict.path === "plc" && conflict.reason === reason)); return Object.fromEntries(conflicts.map(conflict => [conflict.key, choice])); };
+  if (choice === "mine") {
+    await assert.rejects(h.session.save({ resolveConflicts }), /review the source match/, "A generic keep-my-value action cannot override a source mismatch.");
+    assert.deepEqual(h.products, before); assert.deepEqual(h.baseline, baseline);
+  } else {
+    assert.equal((await h.session.save({ resolveConflicts })).keptMaster, true);
+    assert.equal(h.session.track().length, 0, "Keeping master resolves a stale source-match draft safely.");
+    assert.deepEqual(model.productValues(h.products[0]), h.snapshot.products[0].values);
+  }
+  assert.equal(reviews, 1); assert.equal(h.snapshot.products[0].values.plc.variantProjects.white.fields.ffsDate.value, "2027-02-01");
+}
+
+for (const legacy of [false, true]) {
+  const h = lifecycleHarness(), accepted = colorwayEvidence({ white: variantProject("white", "2027-02-01") });
+  if (legacy) delete accepted.variantProjects.white.colorway;
+  h.remoteEdit({ variantGroups: colorGroups([whiteVariant]), plc: accepted }); await h.session.connect({ key });
+  const draft = clone(accepted); draft.variantProjects.white.fields.ffsDate.value = "2028-04-01"; h.edit({ plc: draft });
+  h.remoteEdit({ variantGroups: colorGroups([{ ...whiteVariant, colorName2: "Pink", colorKey2: "pink", colorHex2: "#ff88aa" }]) });
+  const writes = h.calls.filter(call => call.url.endsWith("/save")).length;
+  await h.session.refresh();
+  assert.equal(h.session.getState().connected, true, "A source mismatch preserves the connection while refreshing a read-only draft preview.");
+  assert.equal(h.products[0].plc.variantProjects.white.fields.ffsDate.value, "2028-04-01");
+  assert.equal(h.products[0].plc.variantProjects.white.colorway.colorName, "White");
+  assert.equal(h.products[0].plc.variantProjects.white.colorway.colorName2, "", "Refresh retains or seals the original approved White identity.");
+  assert.equal(h.products[0].variantGroups[0].items.find(item => item.id === "white").colorName2, "Pink");
+  assert.equal(h.baseline[0].values.variantGroups[0].items.find(item => item.id === "white").colorName2, "Pink");
+  const result = await h.session.saveScoped(scopedVariant(h.products[0].plc));
+  assert.equal(result.status, "pending"); assert.equal(result.code, "SCOPED_PRODUCT_REVIEW", "A refreshed row/baseline cannot make stale White-only evidence eligible to share.");
+  assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, writes);
+  assert.equal(h.snapshot.products[0].values.plc.variantProjects.white.fields.ffsDate.value, "2027-02-01");
+  await h.session.refresh();
+  assert.equal(h.session.getState().connected, true); assert.equal(h.products[0].plc.variantProjects.white.colorway.colorName2, "", "Repeated refresh keeps the immutable source identity.");
+}
+
+console.log("Master client checks passed: narrow authenticated updates, real-model lifecycle conflicts, malformed-response safety, lost reply recovery, stale draft preservation, independent merges, reload/access safety, scoped parent and colorway PLC sharing without manual drafts, reviewed additions and group metadata, per-variant field/provenance scopes, invalid or changed targets before and during submission, cosmetic refinements, idempotent retries, and conflict fences.");

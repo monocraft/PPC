@@ -536,6 +536,34 @@ assert.equal(legacyLaunchModel.lifecycle[0].value, "Dec 2025", "a legacy launchM
 const missingDateModel = appModelSandbox.productDetailsModel({ ...actualProduct, ffsDate: "" });
 assert.equal(missingDateModel.dates[2].value, "TBD", "missing dates must remain visible as TBD rather than disappearing");
 assert.equal(missingDateModel.dates[2].empty, true);
+await import("../../public/js/plc-import.js");
+appModelSandbox.PLCImporter = {
+  ...globalThis.PLCImporter,
+  getVariantFieldAge: (product, variantId, field) => globalThis.PLCImporter.getVariantFieldAge(product, variantId, field, "2026-10-23"),
+};
+const colorScheduleProduct = structuredClone(actualProduct);
+colorScheduleProduct.plc = { version: 1, variantProjects: { dual: {
+  version: 1, variantId: "dual", codename: "Synthetic color project", sourceFile: "Synthetic color PLC.xlsx",
+  fields: { ffsDate: { value: "2028-04-01", period: globalThis.PLCImporter.parseDate("Q2 2028", { quarterBasis: "calendar" }).period,
+    changedAt: "2026-10-09T16:00:00Z", observedAt: "2026-10-16T16:00:00Z", reportDate: "2026-10-16" } },
+} } };
+const colorScheduleBefore = structuredClone(colorScheduleProduct);
+const colorScheduleModel = appModelSandbox.productDetailsModel(colorScheduleProduct);
+assert.equal(colorScheduleModel.colorwaySchedules.length, 1, "Only colors with their own PLC project should show a schedule.");
+const colorDates = colorScheduleModel.colorwaySchedules[0].dates;
+assert.equal(colorDates.find(date => date.field === "ffsDate").value, "Q2 2028", "Colorway FFS must preserve quarter precision in normal portfolio details.");
+assert.equal(colorDates.find(date => date.field === "ffsDate").ageDays, 14);
+assert.equal(colorDates.find(date => date.field === "ffsDate").observationAgeDays, 7);
+assert.equal(colorDates.find(date => date.field === "generalAvailabilityDate").value, "TBD", "A colorway cannot inherit the parent launch date as confirmed colorway data.");
+assert.equal(colorScheduleModel.dates[2].value, "Jan 3, 2026", "A new colorway schedule cannot replace the product-wide FFS.");
+const colorScheduleHtml = details.render(colorScheduleModel, { surface: "viewer" });
+assert.match(colorScheduleHtml, /Colorway schedules/);
+assert.match(colorScheduleHtml, /White \/ Pink/);
+assert.match(colorScheduleHtml, /Q2 2028/);
+assert.match(colorScheduleHtml, /14 days old/);
+assert.match(colorScheduleHtml, /Last confirmed Oct 16, 2026/);
+assert.match(colorScheduleHtml, /Synthetic color PLC.xlsx/);
+assert.deepEqual(colorScheduleProduct, colorScheduleBefore, "Viewing colorway milestones must never modify the product, SKUs or clocks.");
 const dualHtml = details.render(actualDetailModel);
 assert.ok(dualHtml.includes("White / Pink") && dualHtml.includes("is-dual"));
 assert.ok(dualHtml.includes("--sku-primary:#eeeeee;--sku-secondary:#ff5599"), "manual two-tone SKU assignment must retain both mapped colors");

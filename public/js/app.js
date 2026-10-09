@@ -3673,6 +3673,22 @@ function productDetailsModel(product) {
       group: group.label, code: item.code, label: group.type === "layout" ? item.label : "",
       colors: group.type === "color" ? [{ ...item, label: [item.colorName, item.colorName2].filter(Boolean).join(" / ") || item.code }] : [],
     }))),
+    colorwaySchedules: productVariantGroups(product).filter((group) => group.type === "color").flatMap((group) => group.items.filter((item) => product.plc?.variantProjects?.[item.id]).map((item) => {
+      const project = product.plc.variantProjects[item.id];
+      return {
+        id: item.id, code: item.code, label: [item.colorName, item.colorName2].filter(Boolean).join(" / ") || item.label || item.code,
+        colors: [{ ...item, label: [item.colorName, item.colorName2].filter(Boolean).join(" / ") || item.label || item.code }], codename: project.codename || "", sourceFile: project.sourceFile || "",
+        dates: Object.entries(globalThis.PLCImporter?.fieldLabels || {}).map(([field, label]) => {
+          const evidence = project.fields?.[field], age = globalThis.PLCImporter?.getVariantFieldAge?.(product, item.id, field);
+          return {
+            field, label, value: evidence?.period?.label || formatProductInfoDate(evidence?.value),
+            changed: evidence?.changedAt ? formatProductInfoDate(evidence.changedAt.slice(0, 10)) : "",
+            observed: evidence?.observedAt ? formatProductInfoDate(evidence.observedAt.slice(0, 10)) : "",
+            ageDays: age?.changeAgeDays ?? null, observationAgeDays: age?.observedAgeDays ?? null,
+          };
+        }),
+      };
+    })),
     source: {
       category: source?.sourceCategory || "ASCM", imported: source?.importedAt ? formatProductInfoDate(source.importedAt.slice(0, 10)) : "TBD",
       records: (source?.records || []).map((record) => ({ code: record.basePartNumber, description: record.fullProductName || "", ga: formatProductInfoDate(record.generalAvailabilityDate), em: formatProductInfoDate(record.endManufacturingDate) })),
@@ -7598,7 +7614,9 @@ if (globalThis.PortfolioMasterModel && !portfolio.masterLocalBaseline) {
     void showWorkspaceNotice(error.message || "Some product records need review before saving to master.", { id: "workspace-product-validation", title: "Product records need review", severity: "warning", actions: [{ label: "Review duplicates", onClick: () => globalThis.PortfolioProductIssues?.reviewDuplicateIssues() }] });
   }
 }
-activateCategory(portfolio.activeCategoryId, { render: false, fitVertical: true });
+// Fresh openings start at the first listed category; saved navigation still
+// remains available to imports and category changes within the current session.
+activateCategory(portfolio.categories[0]?.id, { render: false, fitVertical: true });
 syncControls();
 renderInspector();
 setView("products");
@@ -7634,6 +7652,12 @@ async function commitPlcPlan(plan, choices) {
   const before = portfolio;
   const result = globalThis.PLCImporter.applyPlan(before, plan, choices);
   const draft = ensurePortfolioSchema(result.portfolio);
+  for (const change of result.variantChanges || []) {
+    const product = draft.categories.flatMap((category) => category.board.products).find((entry) => entry.id === change.productId);
+    const variant = product?.variantGroups.flatMap((group) => group.items).find((entry) => entry.id === change.variantId);
+    const project = product?.plc?.variantProjects?.[change.variantId];
+    if (variant && project) project.colorway = Object.fromEntries(["code", "colorKey", "colorName", "colorHex", "colorKey2", "colorName2", "colorHex2"].map((field) => [field, String(variant[field] || "")]));
+  }
   globalThis.PLCImporter.recordDateChanges(globalThis.PLCImporter.snapshotDateValues(before), draft, { source: "plc", now: result.history[0]?.at || new Date() });
   const previousProducts = new Map(before.categories.flatMap((category) => category.board.products).map((product) => [product.id, product]));
   const pending = new Map((draft.plcSharePending?.patches || []).map((item) => [item.productId, item]));
@@ -7654,7 +7678,55 @@ async function commitPlcPlan(plan, choices) {
       const queued = pending.get(product.id);
       const plcFields = Object.keys(globalThis.PLCImporter.fieldLabels).filter(field => JSON.stringify(previous.plc?.fields?.[field]) !== JSON.stringify(product.plc?.fields?.[field]));
       const queuedFields = queued?.plcFields || Object.keys(queued?.patch?.plc?.fields || {}).filter(field => queued.patch.plc.fields[field]?.sourceType !== "local");
-      pending.set(product.id, { productId: product.id, patch: { ...(queued?.patch || {}), ...patch }, plcFields: [...new Set([...queuedFields, ...plcFields])] });
+      const variantAdds = new Map((queued?.variantAdds || []).map((addition) => [addition.variantId, addition]));
+      const plcVariantFields = { ...(queued?.plcVariantFields || {}) };
+      const newlyChangedVariantFields = {};
+      // Share only the color options explicitly approved in this PLC review.
+      // Existing color/SKU edits elsewhere in the workspace remain drafts.
+      for (const change of result.variantChanges || []) {
+        if (change.productId !== product.id) continue;
+        const group = product.variantGroups.find((entry) => entry.id === change.groupId);
+        const approvedVariant = globalThis.PortfolioMasterModel.productValues(product).variantGroups.find((entry) => entry.id === change.groupId)?.items.find((entry) => entry.id === change.variantId);
+        if (change.created) variantAdds.set(change.variantId, {
+          variantId: change.variantId, groupId: change.groupId,
+          variant: approvedVariant, sourceKey: change.sourceKey,
+          group: { id: group.id, type: group.type, label: group.label },
+        });
+      }
+      // Remembered source bindings can update a color without a fresh user
+      // assignment, including a confirmation that leaves the date unchanged.
+      for (const [variantId, project] of Object.entries(product.plc?.variantProjects || {})) {
+        if (JSON.stringify(project) === JSON.stringify(previous.plc?.variantProjects?.[variantId])) continue;
+        const oldFields = previous.plc?.variantProjects?.[variantId]?.fields || {};
+        const nextFields = project.fields || {};
+        const changedFields = Object.keys(globalThis.PLCImporter.fieldLabels).filter((field) => JSON.stringify(oldFields[field]) !== JSON.stringify(nextFields[field]));
+        newlyChangedVariantFields[variantId] = changedFields;
+        plcVariantFields[variantId] = [...new Set([...(plcVariantFields[variantId] || []), ...changedFields])];
+      }
+      if (queued?.patch?.plc && patch.plc) {
+        // A later import cannot replace an earlier reviewed queued milestone
+        // with a manual draft made while sharing was offline. Keep the reviewed
+        // evidence; the client holds the queue if it no longer matches locally.
+        patch.plc = JSON.parse(JSON.stringify(patch.plc));
+        const preserve = (target, original, field) => {
+          if (Object.hasOwn(original || {}, field)) target[field] = JSON.parse(JSON.stringify(original[field]));
+          else delete target[field];
+        };
+        patch.plc.fields ||= {};
+        for (const field of queuedFields) if (!plcFields.includes(field)) preserve(patch.plc.fields, queued.patch.plc.fields, field);
+        for (const [variantId, fields] of Object.entries(queued.plcVariantFields || {})) {
+          const original = queued.patch.plc.variantProjects?.[variantId], target = patch.plc.variantProjects?.[variantId];
+          if (!original || !target) continue;
+          target.fields ||= {};
+          for (const field of fields) if (!newlyChangedVariantFields[variantId]?.includes(field)) preserve(target.fields, original.fields, field);
+        }
+      }
+      pending.set(product.id, {
+        productId: product.id, patch: JSON.parse(JSON.stringify({ ...(queued?.patch || {}), ...patch })),
+        plcFields: [...new Set([...queuedFields, ...plcFields])],
+        ...(variantAdds.size ? { variantAdds: JSON.parse(JSON.stringify([...variantAdds.values()])) } : {}),
+        ...(Object.keys(plcVariantFields).length ? { plcVariantFields } : {}),
+      });
     }
   }
   if (pending.size) draft.plcSharePending = { version: 1, queuedAt: before.plcSharePending?.queuedAt || new Date().toISOString(), patches: [...pending.values()] };

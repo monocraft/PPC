@@ -131,6 +131,8 @@ await new Promise((resolve) => setTimeout(resolve, 0)); assert.equal(busyControl
 
 const html = await readFile(new URL('../../public/index.html', import.meta.url), 'utf8');
 await import('../../public/js/plc-import.js');
+await import('../../public/js/ascm-import.js');
+await import('../../public/js/portfolio-model.js');
 const realImporter = globalThis.PLCImporter, periodDate = realImporter.parseDate('Q2 2028', { quarterBasis: 'calendar' });
 assert.equal(ui.dateSuggestions({ field: 'ffsDate', status: 'update', kind: 'quarter', incoming: periodDate.value, period: periodDate.period, reason: periodDate.reason })[0].clear, true, 'A clear supported calendar quarter retains bulk eligibility.');
 for (const reason of ['Different FFS in a current stage-gate table', 'FFS day in status notes differs from the structured current FFS']) {
@@ -206,10 +208,11 @@ const uiSource = await readFile(new URL('../../public/js/plc-import-ui.js', impo
 // Replacing a date input loses its private month/day/year focus, so the node must
 // survive both input and change while only its preview and action are refreshed.
 class ManualDateNode {
-  constructor(tagName, className = '', content = '') { this.tagName = tagName.toUpperCase(); this.className = className; this.children = []; this.dataset = {}; this.listeners = new Map(); this.attributes = new Map(); this._text = content; this.value = ''; this.disabled = false; this.isConnected = true; }
+  constructor(tagName, className = '', content = '') { this.tagName = tagName.toUpperCase(); this.className = className; this.children = []; this.dataset = {}; this.style = {}; this.listeners = new Map(); this.attributes = new Map(); this._text = content; this.value = ''; this.disabled = false; this.isConnected = true; }
   get textContent() { return this._text + this.children.map(node => node.textContent).join(''); }
   set textContent(value) { this._text = value; this.children = []; }
   append(...nodes) { this.children.push(...nodes); }
+  prepend(...nodes) { this.children.unshift(...nodes); }
   replaceChildren(...nodes) { this._text = ''; this.children = [...nodes]; }
   setAttribute(key, value) { this.attributes.set(key, String(value)); }
   addEventListener(name, listener) { const events = this.listeners.get(name) || []; events.push(listener); this.listeners.set(name, events); }
@@ -265,4 +268,85 @@ for (const id of ['settingsPlcUpdates', 'importPlcReport', 'plcSettingsStatus'])
 for (const id of ['openPlcUpdates', 'plcToolbarStatus']) assert.ok(!html.includes(`id="${id}"`), 'The biweekly importer has no main-toolbar control.');
 const settingsData = html.slice(html.indexOf('id="settingsDataPanel"'), html.indexOf('id="workspaceSettingsDone"'));
 for (const id of ['settingsPlcUpdates', 'importPlcReport', 'plcSettingsStatus']) assert.ok(settingsData.includes(`id="${id}"`), 'PLC controls and freshness belong to Settings → Data & export.');
-console.log('PLC UI checks passed: bounded search/paging, 220-product match cards, safe date suggestions, regional/newer-date guards, stable native exact/quarter year editing, manual review for all milestones with valid boundaries/provenance/timestamps, codename creation, deferred dates, Keep PPC, original clocks, complete exports, and Settings integration.');
+
+function colorwayFixture({ existingWhite = true, sourceName = 'QuadCast White', codename = 'Future white project' } = {}) {
+  const colors = [{ id: 'black', code: 'BK', colorName: 'Black', colorHex: '#111111' }, ...(existingWhite ? [{ id: 'white', code: 'WHT', colorName: 'White', colorHex: '#f2f2f2' }] : [])];
+  const parent = { id: 'quadcast', name: 'QuadCast', codename: 'Quad parent project', laneId: 'planning', ffsDate: '2026-10-01', generalAvailabilityDate: '2026-12-01', partSkus: [{ id: 'real-black-part', code: 'ACTUAL-HP-001', variantId: 'black' }], variantGroups: [{ id: 'colors', type: 'color', label: 'COLOR SKU', items: colors }] };
+  const row = { key: 'quad-white', name: sourceName, codename, categoryId: 'microphones', section: 'Colorway projects', dates: { ffsDate: { ...periodDate, source: { sheet: 'Synthetic current PLC', cell: 'H7' } }, generalAvailabilityDate: { kind: 'exact', value: '2028-08-01', raw: '8/1/2028', source: { sheet: 'Synthetic current PLC', cell: 'J7' } } }, sources: [{ sheet: 'Synthetic current PLC', cell: 'D7' }] };
+  let manifest = { version: 4, categories: [{ id: 'microphones', name: 'Microphones', board: { lanes: [{ id: 'planning', name: 'Planning' }], products: [parent] } }], plcReview: { version: 1, entries: [{ key: row.key, row, matchNeeded: true, fields: ['ffsDate', 'generalAvailabilityDate'], reportDate: '2026-10-09', metadata: { fileName: 'Synthetic colorway PLC.xlsx', fingerprint: `colorway-${sourceName}`, reportDate: '2026-10-09' } }] } };
+  const saves = [];
+  const controller = ui.createController({ document: null, importer: realImporter, adapter: { getPortfolio: () => manifest, async applyPlan(plan, choices) { saves.push(structuredClone(choices)); const result = realImporter.applyPlan(manifest, plan, { ...choices, now: '2026-10-10T12:00:00.000Z' }); manifest = result.portfolio; return result; } } });
+  controller.open({ tab: 'review' });
+  return { controller, row, saves, get portfolio() { return manifest; }, get parent() { return manifest.categories[0].board.products[0]; } };
+}
+
+{
+  const h = colorwayFixture(), c = h.controller;
+  c.chooseMatch(h.row.key, 'quadcast');
+  assert.equal(c.getState().plan.items[0].variantBindingNeeded, true);
+  assert.equal(c.selectSuggestion(h.row.key, 'ffsDate', { value: periodDate.value, period: periodDate.period }), false, 'A parent match alone cannot select a colorway milestone.');
+  assert.equal(c.setManualDate(h.row.key, 'ffsDate', { mode: 'quarter', quarter: '2', year: '2028' }), false);
+  assert.equal(c.keepDate(h.row.key, 'ffsDate'), false, 'An unbound source cannot dismiss an unrelated parent date.');
+  assert.equal(c.confirmCreate(h.row.key, { name: 'QuadCast White', codename: h.row.codename, categoryId: 'microphones' }), false, 'Colorway sources cannot silently create duplicate product cards.');
+  assert.equal(c.chooseVariant(h.row.key, { productId: 'quadcast', variantId: 'white' }), true);
+  const item = c.getState().plan.items[0];
+  assert.equal(item.variantTarget.variantId, 'white'); assert.equal(item.fields.find(field => field.field === 'ffsDate').current, '', 'Colorway preview reads its own date rather than the parent FFS.');
+  assert.equal(c.selectSuggestion(h.row.key, 'ffsDate', ui.dateSuggestions(item.fields.find(field => field.field === 'ffsDate'))[0]), true);
+  const selectedBefore = c.getState().resolutions[h.row.key];
+  assert.equal(c.chooseVariant(h.row.key, { productId: 'quadcast', variantId: 'black' }), false, 'Explicit source color cannot attach to a different color chip.');
+  assert.deepEqual(c.getState().resolutions[h.row.key], selectedBefore, 'A rejected target preserves the previous reviewed date choice.');
+  c.open({ tab: 'dates' }); c.open({ tab: 'review' });
+  assert.equal(c.getState().variantAssignments[h.row.key].variantId, 'white'); assert.equal(h.saves.length, 0, 'Navigation retains colorway drafts without changing portfolio data.');
+  assert.equal(await c.apply(), true); assert.equal(h.saves.length, 1);
+  assert.deepEqual(h.saves[0].deferredFields[h.row.key], ['generalAvailabilityDate']);
+  assert.equal(h.parent.ffsDate, '2026-10-01'); assert.equal(h.parent.generalAvailabilityDate, '2026-12-01');
+  assert.equal(h.portfolio.categories[0].board.products.length, 1); assert.deepEqual(h.parent.partSkus, [{ id: 'real-black-part', code: 'ACTUAL-HP-001', variantId: 'black' }]);
+  const project = realImporter.getVariantProject(h.parent, 'white'), clock = realImporter.getVariantFieldAge(h.parent, 'white', 'ffsDate', '2026-10-12');
+  assert.equal(project.fields.ffsDate.value, '2028-04-01'); assert.equal(clock.displayValue, 'Q2 2028'); assert.equal(clock.changeAgeDays, 2); assert.equal(project.fields.generalAvailabilityDate, undefined);
+  const dateRows = ui.productDateEntries(h.portfolio, realImporter); assert.equal(dateRows.length, 2);
+  assert.equal(dateRows[0].product.ffsDate, '2026-10-01'); assert.equal(dateRows[1].product.name, 'QuadCast · White'); assert.equal(dateRows[1].product.ffsDate, '2028-04-01'); assert.equal(dateRows[1].variantId, 'white');
+  assert.equal(ui.historyRows(h.portfolio)[0].productName, 'QuadCast · White'); assert.ok(ui.historyCsv(h.portfolio).includes('QuadCast · White')); assert.ok(ui.historyCsv(h.portfolio).includes('Q2 2028'));
+  c.destroy();
+}
+
+{
+  const h = colorwayFixture({ existingWhite: false }), c = h.controller;
+  assert.equal(c.chooseVariant(h.row.key, { productId: 'quadcast', colorName: 'White', colorHex: '#f2f2f2', colorCode: 'WHT', create: true }), true);
+  const target = c.getState().plan.items[0].variantTarget;
+  assert.equal(target.create, true); assert.equal(h.parent.variantGroups[0].items.length, 1, 'Selecting a new color only prepares a draft.');
+  assert.equal(await c.apply(), true);
+  assert.equal(h.parent.variantGroups[0].items.length, 2); assert.equal(h.portfolio.categories[0].board.products.length, 1);
+  assert.equal(h.parent.ffsDate, '2026-10-01'); assert.equal(realImporter.getVariantFieldAge(h.parent, target.variantId, 'ffsDate').value, '', 'Confirming a source link without a selected date keeps its date in review.');
+  assert.ok(h.portfolio.plcReview.entries[0].fields.includes('ffsDate')); assert.equal(h.saves[0].variantAssignments[h.row.key].create, true);
+  c.open({ tab: 'review' }); assert.equal(c.getState().plan.items[0].variantTarget.variantId, target.variantId, 'The saved source link restores its colorway on a later review.');
+  c.destroy();
+}
+
+{
+  const h = colorwayFixture({ sourceName: 'QuadCast 2 White', codename: 'FutureQuad' }), c = h.controller;
+  const draft = { name: 'QuadCast 2 White', codename: 'FutureQuad', categoryId: 'microphones' };
+  assert.equal(c.confirmCreate(h.row.key, draft), false);
+  assert.equal(c.chooseSeparateProduct(h.row.key, true), true); assert.equal(c.confirmCreate(h.row.key, draft), true);
+  assert.equal(c.getState().createProducts[h.row.key].separateProduct, true, 'A deliberate different-hardware choice is retained in the creation request.');
+  assert.equal(h.portfolio.categories[0].board.products.length, 1); c.destroy();
+}
+
+const colorBindingDefinition = uiSource.match(/^    function renderColorway\([^]*?^    \}/m); assert.ok(colorBindingDefinition);
+let colorFooterRenders = 0;
+const typedColor = colorwayFixture({ existingWhite: false }), colorBindings = { state: { variantAssignments: {}, variantDrafts: {}, separateProducts: {}, createProducts: {}, resolutions: {}, busy: false, skippedKeys: new Set() },
+  make: manualMake, text: String, searchText: (value) => String(value).toLowerCase(), colorVariants: (product) => product.variantGroups.flatMap(group => group.items), colorwayName: (variant) => variant.colorName,
+  fieldClock: () => ({ displayValue: '2026-10-01' }), milestoneLabel: (value) => value || 'No saved date', rebuild() {}, render() { throw new Error('Typing a color draft must preserve its input node.'); },
+  renderFooter() { colorFooterRenders++; },
+  button(label, className, action) { const node = manualMake('button', className, label); node.addEventListener('click', action); return node; }, chooseVariant() {}, chooseSeparateProduct() {},
+};
+vm.createContext(colorBindings); vm.runInContext(colorBindingDefinition[0], colorBindings);
+const colorPanel = manualMake('section'); colorBindings.renderColorway(typedColor.controller.getState().plan.items[0], colorPanel, typedColor.parent, 'quadcast');
+const nameInput = findFocus(colorPanel, 'variant-new-quad-white-colorName'), codeInput = findFocus(colorPanel, 'variant-new-quad-white-colorCode'), colorConfirm = findFocus(colorPanel, 'variant-new-quad-white-confirm');
+assert.equal(nameInput.value, 'White'); assert.equal(codeInput.value, 'WHT', 'New color creation uses the canonical source hint.');
+for (const value of ['W', 'Wh', 'Whit', 'White']) { nameInput.value = value; nameInput.emit('input'); assert.equal(findFocus(colorPanel, 'variant-new-quad-white-colorName'), nameInput); }
+assert.equal(colorConfirm.disabled, false); assert.equal(typedColor.parent.variantGroups[0].items.length, 1);
+colorBindings.state.variantAssignments['quad-white'] = { productId: 'quadcast', colorName: 'White', create: true }; colorBindings.state.resolutions['quad-white'] = { ffsDate: '2028-04-01' };
+nameInput.value = 'White revised'; nameInput.emit('input'); assert.equal(colorBindings.state.variantAssignments['quad-white'], undefined); assert.equal(colorBindings.state.resolutions['quad-white'], undefined); assert.equal(colorFooterRenders, 1, 'Changing a confirmed new-color draft refreshes batch eligibility without rebuilding the input.'); assert.equal(findFocus(colorPanel, 'variant-new-quad-white-colorName'), nameInput);
+const needsBindingControl = manualMake('td'); manualBinding.renderManualDate({ ...typedItem, variantBindingNeeded: true }, typedField, needsBindingControl, { productId: 'quadcast' }); assert.equal(findFocus(needsBindingControl, 'manual-day-typed-year-ffsDate')?.disabled ?? findFocus(needsBindingControl, 'manual-year-typed-year-ffsDate')?.disabled, true, 'Native date controls remain disabled until the colorway is confirmed.');
+typedColor.controller.destroy();
+console.log('PLC UI checks passed: bounded search/paging and product cards, safe date suggestions and quarter editing, reviewed existing/new colorways with independent FFS clocks and unchanged parent dates/SKUs, remembered source links, explicit hardware creation, stable draft input and batch eligibility, deferred dates, full product/color history exports and Settings integration.');
