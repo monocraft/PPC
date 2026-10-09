@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-08 — unobstructed date editing
+
+- Delay history on pointer hover by 450 ms and cancel it when the pointer only crosses a date label. Keep deliberate click/tap and keyboard inspection immediate.
+- Prefer placing date history above its label, with a side fallback near the viewport edge. Make the informational popup transparent to pointer input and dismiss it immediately when entering or focusing an editing control.
+- Retain accessible, hoverable history and age updates while ensuring fields and calendar/TBD buttons remain reachable.
+
 ## 2026-10-08 — date edit history and aging
 
 - Add an unobtrusive hover, focus or tap popup to each of the six date labels in product details, Roadmap details and the editable date fields. Show the localized last update, elapsed age and optional updater name; indicate unsaved date changes separately.

@@ -2,7 +2,7 @@
 .date-history-label { cursor: help; border-radius: 2px; }
 .date-history-label:hover { text-decoration: underline dashed; text-decoration-color: #829c91; text-underline-offset: 3px; }
 .date-history-label:focus-visible { outline: 1px solid #9caeaa; outline-offset: 3px; }
-.date-history-popup { position: fixed; inset: auto; z-index: 1600; width: max-content; max-width: min(320px, calc(100vw - 20px)); margin: 0; padding: 12px 14px; overflow: visible; border: 1px solid #465451; border-radius: 8px; background: #1e2421; color: #dbe3de; box-shadow: 0 8px 28px #0009; font-family: inherit; font-size: 11px; line-height: 1.5; letter-spacing: normal; text-align: left; text-transform: none; overflow-wrap: anywhere; }
+.date-history-popup { position: fixed; inset: auto; z-index: 1600; pointer-events: none; width: max-content; max-width: min(320px, calc(100vw - 20px)); margin: 0; padding: 12px 14px; overflow: visible; border: 1px solid #465451; border-radius: 8px; background: #1e2421; color: #dbe3de; box-shadow: 0 8px 28px #0009; font-family: inherit; font-size: 11px; line-height: 1.5; letter-spacing: normal; text-align: left; text-transform: none; overflow-wrap: anywhere; }
 .date-history-popup::backdrop { background: transparent; pointer-events: none; }
 .date-history-heading { color: #eef2ee; font-size: 12px; font-weight: 650; }
 .date-history-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; margin: 9px 0 0; }

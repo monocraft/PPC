@@ -65,7 +65,7 @@
     const document = options.document || container.ownerDocument || root.document;
     if (!document?.body) return null;
     const window = document.defaultView || root;
-    let adapter = options, anchor = null, popup = null, pinned = false, closeTimer = null, ageTimer = null, observer = null, destroyed = false;
+    let adapter = options, anchor = null, popup = null, pinned = false, hoverTarget = null, hoverTimer = null, closeTimer = null, ageTimer = null, observer = null, destroyed = false, pointerOverPopup = false;
     const permanentListeners = [], openListeners = [];
     const schedule = window.setTimeout?.bind(window) || root.setTimeout?.bind(root);
     const cancel = window.clearTimeout?.bind(window) || root.clearTimeout?.bind(root);
@@ -84,6 +84,8 @@
       const trigger = target?.closest?.("[data-date-history-field]");
       return trigger && container.contains(trigger) ? trigger : null;
     };
+    const isEditingControl = (target) => Boolean(target?.closest?.('input, select, textarea, [contenteditable="true"], .portfolio-date-control, .date-tbd-button'));
+    const clearHoverTimer = () => { if (hoverTimer !== null) cancel?.(hoverTimer); hoverTimer = null; hoverTarget = null; };
     const clearCloseTimer = () => { if (closeTimer !== null) cancel?.(closeTimer); closeTimer = null; };
     const restoreDescription = () => {
       if (!anchor || !popup) return;
@@ -92,6 +94,7 @@
       anchor.removeAttribute("aria-expanded");
     };
     function close() {
+      clearHoverTimer();
       clearCloseTimer();
       if (ageTimer !== null) cancel?.(ageTimer);
       ageTimer = null;
@@ -99,7 +102,7 @@
       for (const remove of openListeners.splice(0)) remove();
       restoreDescription();
       if (popup) { try { popup.hidePopover?.(); } catch (_) { /* The fallback is also removed. */ } popup.remove(); }
-      anchor = null; popup = null; pinned = false;
+      anchor = null; popup = null; pinned = false; pointerOverPopup = false;
     }
     function position() {
       if (!anchor?.isConnected || !container.isConnected) { close(); return; }
@@ -110,9 +113,17 @@
       const offsetX = Number(window.visualViewport?.offsetLeft || 0), offsetY = Number(window.visualViewport?.offsetTop || 0);
       if (rect.bottom < offsetY || rect.top > offsetY + height || rect.right < offsetX || rect.left > offsetX + width) { close(); return; }
       const inset = 10, gap = 7;
-      const left = Math.max(offsetX + inset, Math.min(rect.left, offsetX + width - bounds.width - inset));
+      let left = Math.max(offsetX + inset, Math.min(rect.left, offsetX + width - bounds.width - inset));
       const below = rect.bottom + gap, above = rect.top - bounds.height - gap;
-      const top = below + bounds.height <= offsetY + height - inset ? below : Math.max(offsetY + inset, above);
+      let top;
+      if (above >= offsetY + inset) top = above;
+      else if (rect.right + gap + bounds.width <= offsetX + width - inset) {
+        left = rect.right + gap;
+        top = Math.max(offsetY + inset, Math.min(rect.top, offsetY + height - bounds.height - inset));
+      } else if (rect.left - gap - bounds.width >= offsetX + inset) {
+        left = rect.left - gap - bounds.width;
+        top = Math.max(offsetY + inset, Math.min(rect.top, offsetY + height - bounds.height - inset));
+      } else top = Math.max(offsetY + inset, Math.min(below, offsetY + height - bounds.height - inset));
       popup.style.left = `${Math.round(left)}px`;
       popup.style.top = `${Math.round(top)}px`;
     }
@@ -142,6 +153,7 @@
       ageTimer = schedule?.(() => { ageTimer = null; refresh(); if (popup) tick(); }, 60000) ?? null;
     }
     function open(trigger, pin = false) {
+      clearHoverTimer();
       clearCloseTimer();
       if (anchor === trigger && popup) { pinned = pinned || pin; refresh(); return; }
       close();
@@ -155,9 +167,19 @@
       const descriptions = String(anchor.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
       anchor.setAttribute("aria-describedby", [...descriptions, popup.id].join(" "));
       anchor.setAttribute("aria-expanded", "true");
-      listen(popup, "pointerenter", clearCloseTimer, openListeners);
-      listen(popup, "pointerleave", scheduleClose, openListeners);
+      // The read-only popup lets all pointer input pass through. Geometric
+      // hover detection keeps its text readable without intercepting fields.
+      listen(document, "pointermove", (event) => {
+        if (isEditingControl(event.target)) { close(); return; }
+        if (!popup) return;
+        const bounds = popup.getBoundingClientRect();
+        const inside = event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+        if (inside) { pointerOverPopup = true; clearCloseTimer(); }
+        else if (pointerOverPopup) { pointerOverPopup = false; scheduleClose(event); }
+      }, openListeners);
       listen(document, "pointerdown", (event) => { if (!anchor?.contains(event.target) && !popup?.contains(event.target)) close(); }, openListeners, true);
+      listen(document, "pointerover", (event) => { if (isEditingControl(event.target)) close(); }, openListeners, true);
+      listen(document, "focusin", (event) => { if (!anchor?.contains(event.target)) close(); }, openListeners, true);
       listen(document, "keydown", (event) => { if (event.key === "Escape" && popup) { event.preventDefault(); event.stopPropagation(); close(); } }, openListeners, true);
       listen(document, "scroll", position, openListeners, true);
       listen(window, "resize", position, openListeners);
@@ -168,17 +190,35 @@
       refresh(); if (popup) tick();
     }
     function scheduleClose(event) {
+      if (isEditingControl(event?.relatedTarget)) { close(); return; }
       if (!popup || pinned || document.activeElement === anchor || popup.contains(event?.relatedTarget) || anchor?.contains(event?.relatedTarget)) return;
       clearCloseTimer();
       closeTimer = schedule?.(() => { closeTimer = null; close(); }, 150) ?? null;
     }
+    // A pending hover must also stop when the user leaves this section to edit.
+    listen(document, "focusin", (event) => { if (hoverTarget && !hoverTarget.contains(event.target)) clearHoverTimer(); }, permanentListeners, true);
+    listen(document, "pointerover", (event) => { if (hoverTarget && isEditingControl(event.target)) clearHoverTimer(); }, permanentListeners, true);
+    listen(document, "keydown", (event) => { if (hoverTarget && event.key === "Escape") clearHoverTimer(); }, permanentListeners, true);
     listen(container, "pointerover", (event) => {
       if (event.pointerType === "touch") return;
       const trigger = triggerFor(event.target);
-      if (trigger && !trigger.contains(event.relatedTarget)) open(trigger);
+      if (isEditingControl(event.target)) { close(); return; }
+      if (!trigger || trigger.contains(event.relatedTarget)) return;
+      clearHoverTimer(); clearCloseTimer();
+      if (anchor === trigger && popup) return;
+      close();
+      hoverTarget = trigger;
+      hoverTimer = schedule?.(() => {
+        const target = hoverTarget;
+        hoverTimer = null; hoverTarget = null;
+        if (target?.isConnected && container.isConnected && !destroyed) open(target);
+      }, 450) ?? null;
     }, permanentListeners);
-    listen(container, "pointerout", (event) => { if (anchor?.contains(event.target) && !anchor.contains(event.relatedTarget)) scheduleClose(event); }, permanentListeners);
-    listen(container, "focusin", (event) => { const trigger = triggerFor(event.target); if (trigger) open(trigger); }, permanentListeners);
+    listen(container, "pointerout", (event) => {
+      if (hoverTarget?.contains(event.target) && !hoverTarget.contains(event.relatedTarget)) clearHoverTimer();
+      if (anchor?.contains(event.target) && !anchor.contains(event.relatedTarget)) scheduleClose(event);
+    }, permanentListeners);
+    listen(container, "focusin", (event) => { const trigger = triggerFor(event.target); if (trigger) open(trigger); else close(); }, permanentListeners);
     listen(container, "focusout", (event) => { if (anchor?.contains(event.target) && !popup?.contains(event.relatedTarget)) { pinned = false; scheduleClose(event); } }, permanentListeners);
     listen(container, "click", (event) => {
       const trigger = triggerFor(event.target);
