@@ -722,4 +722,88 @@ for (const choice of ["mine", "master"]) {
   }
 }
 
-console.log("Master client checks passed: narrow authenticated updates, real-model create/delete synchronization and conflicts, malformed-response atomic safety, lost creation reply recovery, remote lifecycle refresh, stale draft preservation, unrelated date/spec merging, repeat conflict choices, cancellation/reload safety, in-flight local changes, optional team names, tab-scoped reconnect with endpoint isolation and blocked-storage fallback, disconnect access races and sanitized errors.");
+const plcAt = "2026-10-09T16:00:00.000Z";
+const plcEvidence = { version: 1, importedAt: plcAt, fields: { ffsDate: { value: "2026-11-05", observedAt: plcAt, changedAt: plcAt, populatedAt: plcAt } } };
+const plcPatch = { ffsDate: "2026-11-05", plc: plcEvidence };
+const scopedRequest = () => ({ reason: "Biweekly PLC import", patches: [{ productId: fixture.id, patch: clone(plcPatch) }] });
+
+{
+  const h = lifecycleHarness();
+  h.edit(plcPatch);
+  const before = clone(h.products);
+  assert.equal((await h.session.saveScoped(scopedRequest())).status, "local", "unconnected imports remain local without asking for credentials");
+  assert.equal(h.calls.length, 0); assert.deepEqual(h.products, before);
+  await h.session.connect({ key });
+  h.remoteAdd("other-product"); await h.session.refresh();
+  h.edit({ name: "Unsaved manual product name", specs: [{ id: "spec-a", label: "Battery", value: "55 hours" }] });
+  h.edit({ price: 149 }, "other-product");
+  h.remoteEdit({ codename: "Accepted remote codename" });
+  const saved = await h.session.saveScoped(scopedRequest());
+  assert.equal(saved.status, "saved");
+  const shared = h.snapshot.products.find((item) => item.productId === fixture.id);
+  assert.equal(shared.values.ffsDate, plcPatch.ffsDate); assert.deepEqual(shared.values.plc, plcEvidence);
+  assert.equal(shared.values.name, fixture.name); assert.equal(shared.values.specs[0].value, fixture.specs[0].value);
+  assert.equal(shared.values.codename, "Accepted remote codename");
+  assert.equal(h.snapshot.products.find((item) => item.productId === "other-product").values.price, fixture.price, "another product's manual draft is never shared by an import");
+  assert.equal(h.products.find((item) => item.id === fixture.id).name, "Unsaved manual product name");
+  assert.equal(h.products.find((item) => item.id === fixture.id).specs[0].value, "55 hours");
+  assert.equal(h.products.find((item) => item.id === fixture.id).codename, "Accepted remote codename");
+  assert.equal(h.session.track().length, 2, "manual drafts on imported and unrelated products still need their normal save");
+  const submitted = h.calls.find((call) => call.url.endsWith("/save")).body;
+  assert.equal(submitted.changes.length, 1); assert.deepEqual(Object.keys(submitted.changes[0].patch).sort(), ["ffsDate", "plc"]);
+  const callsBefore = h.calls.length;
+  assert.equal((await h.session.saveScoped(scopedRequest())).status, "saved");
+  assert.equal(h.calls.length, callsBefore, "retrying already shared import values does not submit manual drafts");
+  assert.deepEqual(model.dateEditsForProduct(h.remoteManifest, fixture.id).ffsDate.value, plcPatch.ffsDate, "accepted shared timestamp identifies the actual imported FFS value");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit(plcPatch);
+  const before = clone(h.products), baseBefore = clone(h.baseline), callsBefore = h.calls.length;
+  const changed = await h.session.saveScoped({ patches: [{ productId: fixture.id, patch: { ...plcPatch, ffsDate: "2026-11-06" } }] });
+  assert.equal(changed.status, "pending"); assert.equal(changed.code, "SCOPED_UPDATE_CHANGED");
+  const invalid = await h.session.saveScoped({ patches: [{ productId: fixture.id, patch: { name: fixture.name } }] });
+  assert.equal(invalid.status, "pending"); assert.equal(invalid.code, "INVALID_SCOPE");
+  assert.equal(h.calls.length, callsBefore); assert.deepEqual(h.products, before); assert.deepEqual(h.baseline, baseBefore);
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit(plcPatch);
+  h.remoteEdit({ ffsDate: "2026-12-01", plc: { version: 1, importedAt: "2026-10-10T16:00:00.000Z" } });
+  const before = clone(h.products), baseBefore = clone(h.baseline);
+  const pending = await h.session.saveScoped(scopedRequest());
+  assert.equal(pending.status, "pending"); assert.equal(pending.code, "MASTER_CONFLICT"); assert.ok(pending.conflicts.length >= 2);
+  assert.deepEqual(h.products, before); assert.deepEqual(h.baseline, baseBefore, "a conflict neither clears collection data nor advances its comparison baseline");
+  assert.equal(h.snapshot.products[0].values.ffsDate, "2026-12-01");
+  await h.session.save({ resolveConflicts: (items) => Object.fromEntries(items.map((item) => [item.key, "mine"])) });
+  assert.equal(h.snapshot.products[0].values.ffsDate, plcPatch.ffsDate, "the ordinary review/save flow can resolve queued import conflicts");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit(plcPatch);
+  h.remoteEdit({ ffsDate: "2026-12-01" }); h.remoteEdit({ ffsDate: fixture.ffsDate });
+  const pending = await h.session.saveScoped(scopedRequest());
+  assert.equal(pending.status, "pending"); assert.equal(pending.code, "MASTER_CONFLICT", "scoped saves keep revision protection when a shared value changes and changes back");
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit({ ...plcPatch, name: "Manual draft must remain" });
+  h.loseNextSaveReply();
+  assert.equal((await h.session.saveScoped(scopedRequest())).status, "pending");
+  const retried = await h.session.saveScoped(scopedRequest());
+  assert.equal(retried.status, "saved"); assert.equal(retried.alreadySaved, true);
+  const requests = h.calls.filter((call) => call.url.endsWith("/save")); assert.equal(requests[0].body.requestId, requests[1].body.requestId, "automatic retry reuses the original idempotent receipt");
+  assert.equal(h.session.track()[0].patch.name, "Manual draft must remain");
+  assert.equal(h.snapshot.products[0].values.name, fixture.name);
+}
+
+{
+  const h = lifecycleHarness(); await h.session.connect({ key }); h.edit(plcPatch);
+  h.onSave(() => h.edit({ name: "Name edited during automatic sharing", ffsDate: "2026-11-07" }));
+  assert.equal((await h.session.saveScoped(scopedRequest())).status, "saved");
+  assert.equal(h.products[0].ffsDate, "2026-11-07"); assert.equal(h.products[0].name, "Name edited during automatic sharing");
+  assert.equal(h.snapshot.products[0].values.ffsDate, plcPatch.ffsDate);
+  assert.equal(h.session.track()[0].patch.ffsDate, "2026-11-07", "edits made during an import save remain local and pending");
+}
+
+console.log("Master client checks passed: narrow authenticated updates, real-model create/delete synchronization and conflicts, malformed-response atomic safety, lost creation reply recovery, remote lifecycle refresh, stale draft preservation, unrelated date/spec merging, repeat conflict choices, cancellation/reload safety, in-flight local changes, optional team names, tab-scoped reconnect with endpoint isolation and blocked-storage fallback, disconnect access races, scoped PLC sharing without manual drafts, guarded expected values, preserved provenance timestamps, conflict deferral, ABA protection, receipt retries and sanitized errors.");

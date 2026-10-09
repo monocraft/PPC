@@ -9,6 +9,7 @@
 .date-history-facts dt { margin: 0; color: #a6b7ad; font-size: 10px; }
 .date-history-facts dd { margin: 0; color: #e1e8e2; }
 .date-history-facts .date-history-age { color: #b8d5c7; }
+.date-history-shared, .date-history-source { padding-top: 8px; border-top: 1px solid #465451; }
 .date-history-empty { margin-top: 8px; color: #d2dfd7; }
 .date-history-note { max-width: 255px; margin: 3px 0 0; color: #a6b7ad; font-size: 10px; }
 .date-history-pending { display: inline-block; margin-top: 8px; padding: 2px 6px; border: 1px solid #6b5a3d; border-radius: 4px; background: #383025; color: #e9c88c; font-size: 10px; }

@@ -1,5 +1,13 @@
 # Change Log
 
+## 2026-10-09 — biweekly HyperX PLC updates
+
+- Add a direct workbook drop/import module with automatic eligible updates, source freshness, per-product milestones, graphical health, supporting schedules, persistent optional review and collection/history exports.
+- Match products by confirmed identities, IDs, SKUs, codenames and full normalized names; hold variants, ambiguous dates, regional scope, merged dates, stale reports and concurrent edits for review.
+- Keep current/target FFS and GA separate. Preserve missing years, quarter/month precision, raw dates and source references; prevent blank or cancelled rows from changing schedules.
+- Automatically share importer dates and bounded per-product PLC evidence when connected with editing access, preserving unrelated local drafts. Retain pending sharing and retry without reimporting.
+- Capture independent change timestamps and aging for all six date fields, including manual edits. Keep collection, confirmation, source period and accepted-master clocks separate; duplicate bytes preserve clocks and manual changes supersede prior PLC evidence. Verify real-workbook desktop/mobile behavior plus encrypted/shared round trips.
+
 ## 2026-10-08 — 200% viewing zoom
 
 - Extend manual Products and Roadmap zoom to 200% for large and high-resolution displays, keeping clean 10-point steps and the visible center in place.

@@ -215,6 +215,7 @@ let categorySettingsDraftLanes = [];
 let pendingAscmImport = null;
 
 let portfolio = null;
+let localDateBaseline = null;
 let workspaceValidationPending = false;
 let board = null;
 let activeCategoryId = null;
@@ -1387,6 +1388,7 @@ function loadPortfolio() {
 function scheduleSave() {
   clearTimeout(saveTimer);
   if (packageOperationInProgress) return;
+  if (globalThis.PLCImporter && typeof localDateBaseline !== "undefined" && localDateBaseline) localDateBaseline = globalThis.PLCImporter.recordDateChanges(localDateBaseline, portfolio);
   saveTimer = setTimeout(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(portfolio));
@@ -3677,6 +3679,13 @@ function productDateHistoryOptions(productId) {
   };
   return {
     getHistory(field) { return state().edits[field] || null; },
+    getValue(field) { return state().product?.[field] || ""; },
+    getSource(field) { return state().product?.plc?.fields?.[field] || null; },
+    getDraft(field) {
+      const { product, shared } = state();
+      const edit = portfolio.dateLocalEdits?.[productId]?.[field];
+      return product && edit?.value === (product[field] || "") && (!shared || (product[field] || "") !== (shared.values[field] || "")) ? edit : null;
+    },
     isPending(field) {
       const { product, shared } = state();
       return Boolean(product && (shared ? (product[field] || "") !== (shared.values[field] || "") : product[field]));
@@ -5595,10 +5604,12 @@ async function commitPackageDraft(draft, expectedCurrent) {
     // replacement is saved and activated so a failed commit can roll back.
     localStorage.setItem(STORAGE_KEY, serialized);
     portfolio = draft;
+    localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     clearPackageImageCaches();
     activateCategory(portfolio.activeCategoryId, { fitVertical: true });
   } catch (error) {
     portfolio = previousPortfolio;
+    localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     try { if (previousStored === null) localStorage.removeItem(STORAGE_KEY); else localStorage.setItem(STORAGE_KEY, previousStored); } catch (_) {}
     clearPackageImageCaches();
     try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
@@ -6588,6 +6599,7 @@ function importJson(file) {
       const parsed = parsePortfolioImportText(reader.result);
       if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading new data.");
       portfolio = normalizeImportedPortfolio(parsed);
+      localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
       globalThis.PortfolioProductIssues?.clearAscmIssues();
       globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
       if (globalThis.PortfolioMasterModel) portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products;
@@ -7473,10 +7485,13 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
         const values = change.values || change.patch;
         const original = change.fullProduct ? { ...localizeSharedProduct(change.fullProduct), order: current.order, laneId: current.laneId } : current;
         products[index] = globalThis.PortfolioMasterModel.applyProductValues(original, values);
+        for (const field of Object.keys(globalThis.PLCImporter?.fieldLabels || {})) if ((current[field] || "") !== (products[index][field] || "")) delete portfolio.dateLocalEdits?.[current.id]?.[field];
         break;
       }
     }
     for (const category of portfolio.categories) category.board.products = nextProducts.get(category.id);
+    // Accepted shared changes already have the master's own date clocks.
+    localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     if (selectedId && !board.products.some((product) => product.id === selectedId)) selectedId = board.products[0]?.id || null;
     scheduleSave();
     syncControls();
@@ -7486,6 +7501,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
 });
 
 portfolio = loadPortfolio();
+localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
 if (globalThis.PortfolioMasterModel && !portfolio.masterLocalBaseline) {
   try { portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products; }
   catch (error) {
@@ -7498,6 +7514,75 @@ syncControls();
 renderInspector();
 setView("products");
 flushPendingLegacyImages();
+function persistPlcDraft(draft) {
+  const serialized = JSON.stringify(draft);
+  if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("PLC evidence is too large to save in this browser.");
+  globalThis.PortfolioMasterModel?.snapshot(draft);
+  localStorage.setItem(STORAGE_KEY, serialized);
+}
+
+async function retryPlcSharing() {
+  const patches = portfolio.plcSharePending?.patches || [];
+  if (!patches.length) return { status: "saved", saved: false, message: "The collected updates are already saved." };
+  const submitted = JSON.stringify(patches);
+  let sharing;
+  try {
+    sharing = await globalThis.PortfolioMasterUI?.saveScoped({ reason: "Biweekly PLC import", patches: JSON.parse(submitted) })
+      || { status: "local", saved: false, message: "PLC data is saved on this device. Connect shared saving to share it automatically." };
+  } catch (_) {
+    sharing = { status: "pending", saved: false, message: "PLC data is saved on this device. Retry saving to master when the connection is available." };
+  }
+  if (sharing.status === "saved" && JSON.stringify(portfolio.plcSharePending?.patches || []) === submitted) delete portfolio.plcSharePending;
+  portfolio.plcLastSharing = { at: new Date().toISOString(), status: sharing.status, message: sharing.message };
+  try { persistPlcDraft(portfolio); }
+  catch (_) { sharing = { ...sharing, message: `${sharing.message} The collection is retained; this device could not save the latest sharing receipt.` }; }
+  globalThis.PortfolioMasterUI?.updateStatus?.();
+  return sharing;
+}
+
+async function commitPlcPlan(plan, choices) {
+  if (packageOperationInProgress) throw new Error("Finish loading the package before applying PLC updates.");
+  const before = portfolio;
+  const result = globalThis.PLCImporter.applyPlan(before, plan, choices);
+  const draft = ensurePortfolioSchema(result.portfolio);
+  globalThis.PLCImporter.recordDateChanges(globalThis.PLCImporter.snapshotDateValues(before), draft, { source: "plc", now: result.history[0]?.at || new Date() });
+  const previousProducts = new Map(before.categories.flatMap((category) => category.board.products).map((product) => [product.id, product]));
+  const pending = new Map((draft.plcSharePending?.patches || []).map((item) => [item.productId, item]));
+  for (const category of draft.categories) for (const product of category.board.products) {
+    const previous = previousProducts.get(product.id);
+    if (!previous) continue;
+    const patch = {};
+    for (const field of [...Object.keys(globalThis.PLCImporter.fieldLabels), "plc"]) if (JSON.stringify(previous[field]) !== JSON.stringify(product[field])) patch[field] = product[field];
+    if (Object.keys(patch).length) pending.set(product.id, { productId: product.id, patch: { ...(pending.get(product.id)?.patch || {}), ...patch } });
+  }
+  if (pending.size) draft.plcSharePending = { version: 1, queuedAt: before.plcSharePending?.queuedAt || new Date().toISOString(), patches: [...pending.values()] };
+  // Persist evidence, field clocks and exceptions together before activating it.
+  // Storage failure leaves the current workspace and review untouched.
+  persistPlcDraft(draft);
+  clearTimeout(saveTimer);
+  portfolio = draft;
+  localDateBaseline = globalThis.PLCImporter.snapshotDateValues(portfolio);
+  activateCategory(activeCategoryId || portfolio.activeCategoryId, { fitVertical: false });
+  renderInspector();
+  renderActiveView();
+  result.sharing = pending.size ? await retryPlcSharing() : portfolio.plcLastSharing || { status: "local", saved: false, message: "The workbook and its review details are saved on this device." };
+  result.portfolio = portfolio;
+  return result;
+}
+
+globalThis.PortfolioPlcUI?.init({
+  adapter: {
+    getPortfolio: () => portfolio,
+    applyPlan: commitPlcPlan,
+    retrySharing: retryPlcSharing,
+    getFieldAge: (productId, field) => {
+      const options = productDateHistoryOptions(productId);
+      const product = portfolio.categories.flatMap((category) => category.board.products).find((item) => item.id === productId);
+      return globalThis.PLCImporter.getFieldAge(product, field, globalThis.PLCImporter.localDay(), { accepted: options.getHistory(field), local: portfolio.dateLocalEdits?.[productId]?.[field] });
+    },
+  },
+});
+
 globalThis.PortfolioProductIssues?.mount({
   adapter: {
     getPortfolio: () => portfolio,
