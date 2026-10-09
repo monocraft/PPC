@@ -13,7 +13,7 @@
     const date = new Date(`${value}T00:00:00Z`);
     return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : "";
   }
-  const yearNumber = (text) => Number(text) < 100 ? 2000 + Number(text) : Number(text);
+  const yearNumber = (text) => /^\d{2}$/.test(String(text)) ? 2000 + Number(text) : Number(text);
   function normalizePeriod(period, value) {
     if (!period || period.precision !== "quarter" || period.basis !== "calendar" || !Number.isInteger(period.year) || period.year < 1900 || period.year > 9999 || ![1, 2, 3, 4].includes(period.quarter)) return null;
     const startMonth = (period.quarter - 1) * 3 + 1;
@@ -519,7 +519,11 @@
       const sourceDate = options.review ? row.reportDate || metadata.reportDate || reportDate : options.reportDateBasis === "Import date" ? row.reportDate || metadata.reportDate || reportDate : row.reportDate && row.reportDate !== dataset.metadata?.reportDate ? row.reportDate : reportDate;
       const fields = Object.entries(row.dates || {}).filter(([field]) => fieldLabels[field]).map(([field, supplied]) => {
         const suppliedDate = typeof supplied === "object" && supplied ? supplied : parseDate(supplied, { quarterBasis: "calendar" });
-        const parsed = suppliedDate.kind === "quarter" && !suppliedDate.period ? { ...parseDate(suppliedDate.raw, { quarterBasis: "calendar" }), source: suppliedDate.source } : suppliedDate;
+        // Older saved review rows can classify a now-supported, single quarter
+        // as a range. Reinterpret only that explicit raw quarter and retain all
+        // original source guards; previewing never rewrites saved evidence.
+        const refreshedQuarter = !suppliedDate.value && !suppliedDate.period && ["quarter", "range"].includes(suppliedDate.kind) && suppliedDate.raw ? parseDate(suppliedDate.raw, { quarterBasis: "calendar" }) : null;
+        const parsed = refreshedQuarter?.kind === "quarter" && normalizePeriod(refreshedQuarter.period, refreshedQuarter.value) ? { ...suppliedDate, ...refreshedQuarter, source: suppliedDate.source } : suppliedDate;
         const current = clean(product?.[field]), incoming = parsed.value || "", previous = product?.plc?.fields?.[field];
         const period = normalizePeriod(parsed.period, incoming), oldPeriod = currentPeriod(product, field), usable = parsed.kind === "exact" || Boolean(period);
         let status = parsed.kind === "blank" ? "blank" : usable ? current === incoming && JSON.stringify(period) === JSON.stringify(oldPeriod) ? "unchanged" : "update" : "review", reason = parsed.reason || "";

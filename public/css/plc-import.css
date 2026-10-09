@@ -81,6 +81,14 @@ body.plc-workbook-dragging::after { content: "Drop Excel to collect your PLC upd
 .plc-batch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 12px 14px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); margin-top: 14px; }
 .plc-batch-actions p { flex: 1 1 260px; }
 .plc-manual-resolution { margin-top: 12px; }
+.plc-manual-date { display: grid; gap: 10px; margin-top: 10px; }
+.plc-date-modes { display: flex; flex-wrap: wrap; gap: 6px; }
+.plc-date-modes button[aria-pressed="true"] { background: var(--color-surface-hover); border-color: var(--color-accent); color: var(--color-text); }
+.plc-quarter-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.plc-quarter-fields input, .plc-quarter-fields select { width: 100%; }
+.plc-manual-preview { padding: 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); }
+.plc-manual-preview strong { display: block; font-size: 13px; color: var(--color-text); margin-bottom: 5px; }
+.plc-manual-date > button { justify-self: start; }
 .plc-raw { margin-top: 15px; font-size: 12px; }
 .plc-raw > summary { cursor: pointer; color: var(--color-text-secondary); }
 .plc-facts { display: grid; grid-template-columns: minmax(130px, .4fr) minmax(0, 1fr); gap: 9px 17px; font-size: 12px; margin: 14px 0 0; line-height: 1.6; }
@@ -106,6 +114,12 @@ body.plc-workbook-dragging::after { content: "Drop Excel to collect your PLC upd
 .plc-products-table th:first-child, .plc-products-table td:first-child { width: 32%; }
 .plc-products-table tr.is-selected { background: var(--color-surface-hover); }
 .plc-products-table tr:hover { background: var(--color-surface-hover); }
+.plc-review-row { cursor: pointer; }
+.plc-review-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; background: var(--color-surface-hover); }
+.plc-browser-review .plc-products-table th:last-child, .plc-browser-review .plc-products-table td:last-child { width: 76px; }
+.plc-review-editor-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.plc-review-editor-nav .plc-note { margin-left: auto; }
+.plc-review-editor > .plc-selected-detail { width: 100%; }
 .plc-products-table td small { display: block; margin-top: 3px; color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
 .plc-product-link { display: block; border: 0; padding: 0; background: transparent; color: var(--color-text); text-align: left; font: inherit; font-weight: 600; cursor: pointer; line-height: 1.5; }
 .plc-product-link:hover { color: var(--color-text); text-decoration: underline; }

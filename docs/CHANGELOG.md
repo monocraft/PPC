@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-09 — quarter selection and stable PLC review editing
+
+- Offer Exact day and Calendar quarter in PLC exception review, with Q1–Q4, validated four-digit years, quarter labels and qualified roadmap anchors. Preserve precision, source evidence and independent timestamps through confirmation and sharing.
+- Recover supported single-quarter evidence from older saved reviews without refreshing their clocks or bypassing source safeguards. Reject malformed four-digit years instead of interpreting them as two-digit years.
+- Open review editing from the whole row or a visible Edit action in a dedicated editor. Return to the previous list position and keep editor scroll and staged dates stable while navigating projects.
+
 ## 2026-10-09 — FFS collection and product navigation
 
 - Put FFS dates and aging in a compact searchable product table with category and date-status filters, bounded pages, and details for one selected product. Keep tabs accessible while the content scrolls; apply the same navigation to reviews and history.

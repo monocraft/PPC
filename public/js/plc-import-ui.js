@@ -33,6 +33,28 @@
     const words = searchText(query).split(" ").filter(Boolean), candidates = new Map((item.match?.candidates || []).map((candidate) => [candidate.productId, candidate]));
     return products.filter((entry) => { const value = searchText([entry.product.name, entry.product.codename, entry.product.id, entry.categoryName].join(" ")); return words.length ? words.every((word) => value.includes(word)) : candidates.has(entry.product.id); }).sort((a, b) => (candidates.get(b.product.id)?.score || 0) - (candidates.get(a.product.id)?.score || 0) || text(a.product.name).localeCompare(text(b.product.name))).slice(0, Math.max(1, Math.min(8, limit))).map((entry) => ({ ...entry, candidate: candidates.get(entry.product.id) || null }));
   }
+  function manualDateResolution(draft, importer = root.PLCImporter) {
+    if (draft?.mode === "quarter") {
+      const quarter = text(draft.quarter), year = text(draft.year);
+      if (!/^[1-4]$/.test(quarter) || !/^\d{4}$/.test(year)) throw new Error("Choose Q1–Q4 and enter a four-digit year.");
+      if (Number(year) < 1900 || Number(year) > 9999) throw new Error("Enter a calendar quarter with a year from 1900 to 9999.");
+      const parsed = importer?.parseDate?.(`Q${quarter} ${year}`, { quarterBasis: "calendar" });
+      if (parsed?.kind !== "quarter" || !parsed.period || !parsed.value || !importer.normalizePeriod?.(parsed.period, parsed.value)) throw new Error("Enter a calendar quarter with a year from 1900 to 9999.");
+      return { value: parsed.value, period: JSON.parse(JSON.stringify(parsed.period)) };
+    }
+    if (draft?.mode !== "exact" || !/^\d{4}-\d{2}-\d{2}$/.test(text(draft.day))) throw new Error("Choose a valid exact calendar day.");
+    const parsed = importer?.parseDate?.(draft.day);
+    if (parsed?.kind !== "exact" || parsed.value !== draft.day) throw new Error("Choose a valid exact calendar day.");
+    return parsed.value;
+  }
+  function reviewScrollPosition(previousSelection, selection, scrollTop, listScrollTop = 0) {
+    if (previousSelection === selection) return scrollTop;
+    return selection ? 0 : listScrollTop;
+  }
+  function reviewRowActivation(event, row) {
+    if (event.type === "keydown") return event.target === row && ["Enter", " "].includes(event.key);
+    return event.type === "click" && !event.target?.closest?.("button,a,input,select,textarea,summary");
+  }
   function csvCell(value) {
     const raw = text(value), safe = /^[\s\u0000-\u001f]*[=+@-]/.test(raw) ? `'${raw}` : raw;
     return `"${safe.replace(/"/g, '""')}"`;
@@ -59,9 +81,9 @@
   }
   function createController({ adapter, importer = root.PLCImporter, document: doc = root.document, notifications = root.PortfolioNotifications } = {}) {
     if (!adapter?.getPortfolio || !importer) return null;
-    let dialog = null, returnFocus = null, body = null, footer = null, errorNode = null, fileInput = null, fileGeneration = 0, destroyed = false, renderedTab = "";
-    const browsers = Object.fromEntries(["dates", "review", "history"].map((tab) => [tab, { query: "", category: "all", status: "all", page: 0, selected: "" }]));
-    let state = { open: false, tab: "overview", dataset: null, plan: null, reportDate: "", selections: {}, resolutions: {}, createProducts: {}, createDrafts: {}, matchQueries: {}, matchOpen: {}, skippedKeys: new Set(), skippedFields: {}, busy: false, phase: "", error: "", result: null };
+    let dialog = null, returnFocus = null, body = null, footer = null, errorNode = null, fileInput = null, fileGeneration = 0, destroyed = false, renderedTab = "", renderedReviewSelection = "";
+    const browsers = Object.fromEntries(["dates", "review", "history"].map((tab) => [tab, { query: "", category: "all", status: "all", page: 0, selected: "", listScrollTop: 0, editorKeys: [] }]));
+    let state = { open: false, tab: "overview", dataset: null, plan: null, reportDate: "", selections: {}, resolutions: {}, manualDates: {}, createProducts: {}, createDrafts: {}, matchQueries: {}, matchOpen: {}, skippedKeys: new Set(), skippedFields: {}, busy: false, phase: "", error: "", result: null };
     const make = (tag, className = "", content) => { const node = doc.createElement(tag); if (className) node.className = className; if (content !== undefined) node.textContent = text(content); return node; };
     const button = (label, className, action) => { const node = make("button", className, label); node.type = "button"; node.addEventListener("click", action); return node; };
     const portfolio = () => adapter.getPortfolio();
@@ -91,7 +113,7 @@
       const selected = { selections: state.selections, createProducts: state.createProducts };
       state.plan = state.dataset ? importer.buildPlan(state.dataset, portfolio(), { reportDate: state.reportDate || localDay(), reportDateBasis: "Import date", ...selected }) : importer.buildReviewPlan?.(portfolio(), selected) || null;
     }
-    function resetChoices() { state.selections = {}; state.resolutions = {}; state.createProducts = {}; state.createDrafts = {}; state.matchQueries = {}; state.matchOpen = {}; state.skippedKeys = new Set(); state.skippedFields = {}; }
+    function resetChoices() { state.selections = {}; state.resolutions = {}; state.manualDates = {}; state.createProducts = {}; state.createDrafts = {}; state.matchQueries = {}; state.matchOpen = {}; state.skippedKeys = new Set(); state.skippedFields = {}; }
     function reviewCount() { return importer.buildReviewPlan?.(portfolio())?.items?.length || 0; }
     function collectResult(result) {
       state.result = result || {}; state.dataset = null; resetChoices(); rebuild(); state.tab = "overview";
@@ -135,6 +157,17 @@
       if (state.busy || suggestion?.blocked || !suggestion?.value) return false;
       state.resolutions[key] ||= {}; state.resolutions[key][field] = suggestion.period ? { value: suggestion.value, period: JSON.parse(JSON.stringify(suggestion.period)) } : suggestion.value;
       state.skippedFields[key] = (state.skippedFields[key] || []).filter((value) => value !== field); if (rerender) render(); return true;
+    }
+    function setManualDate(key, fieldName, draft) {
+      if (state.busy) return false;
+      const item = state.plan?.items?.find((entry) => entry.key === key), field = item?.fields?.find((entry) => entry.field === fieldName);
+      if (!item || !field || !["review", "update"].includes(field.status) || item.row?.cancelled || state.skippedKeys.has(key)) { setError(field?.status === "stale" ? "Older sources cannot overwrite a newer date." : "This source date cannot be selected for review."); return false; }
+      if (!(state.selections[key] || item.matchedProductId || item.match?.productId)) { setError("Match the source to a product before selecting its verified date."); return false; }
+      let resolution;
+      try { resolution = manualDateResolution(draft, importer); } catch (error) { setError(error.message); return false; }
+      state.resolutions[key] ||= {}; state.resolutions[key][fieldName] = resolution;
+      state.manualDates[key] ||= {}; state.manualDates[key][fieldName] = { ...draft, open: true };
+      state.skippedFields[key] = (state.skippedFields[key] || []).filter((value) => value !== fieldName); setError(""); render(); return true;
     }
     function keepDate(key, field) { if (state.busy) return false; delete state.resolutions[key]?.[field]; state.skippedFields[key] = [...new Set([...(state.skippedFields[key] || []), field])]; render(); return true; }
     function confirmCreate(key, draft, confirmed = true) {
@@ -191,6 +224,17 @@
     function smallCell(value, note = "") { const cell = make("td", "", value); if (note) cell.append(make("small", "", note)); return cell; }
     function renderBrowser(rows, { tab = state.tab, categories = [], statuses = [], columns, renderCells, renderDetail, empty = "No products match these filters." } = {}) {
       const view = browsers[tab], wrapper = make("section", `plc-browser plc-browser-${tab}`), controls = make("div", "plc-browser-tools"), searchLabel = make("label", "plc-search", tab === "history" ? "Find a record" : "Find a product"), search = make("input");
+      if (tab === "review" && view.selected) {
+        const selected = rows.find((row) => row.key === view.selected);
+        if (selected) {
+          body.replaceChildren(); wrapper.classList.add("plc-review-editor");
+          const navigation = make("div", "plc-review-editor-nav"), back = button("Back to review list", "quiet-button", () => { const returnRow = view.returnRow || view.selected; view.selected = ""; render(); focusBrowserKey(`review-row-${returnRow}`) || focusBrowserKey("review-search"); }); back.dataset.plcFocus = "review-editor-back"; back.disabled = state.busy; navigation.append(back);
+          const keys = (view.editorKeys || []).filter((key) => rows.some((row) => row.key === key)), index = keys.indexOf(view.selected), move = (offset) => { view.selected = keys[index + offset]; render(); focusBrowserKey(offset > 0 ? "review-editor-next" : "review-editor-prev") || focusBrowserKey(offset > 0 ? "review-editor-prev" : "review-editor-next") || focusBrowserKey("review-editor-back"); };
+          const prev = button("Previous project", "quiet-button", () => move(-1)), next = button("Next project", "quiet-button", () => move(1)); prev.dataset.plcFocus = "review-editor-prev"; next.dataset.plcFocus = "review-editor-next"; prev.disabled = state.busy || index <= 0; next.disabled = state.busy || index < 0 || index + 1 >= keys.length; navigation.append(make("span", "plc-note", index >= 0 ? `Project ${index + 1} of ${keys.length}` : "Selected project"), prev, next); wrapper.append(navigation);
+          const detail = make("section", "plc-selected-detail"), title = make("h3", "plc-detail-title", selected.title); detail.id = "plc-detail-panel-review"; title.id = "plc-detail-review"; title.tabIndex = -1; title.dataset.plcFocus = "review-detail"; detail.setAttribute("aria-labelledby", title.id); detail.append(title); renderDetail(selected, detail); wrapper.append(detail); body.append(wrapper); return browseRows(rows, view);
+        }
+        view.selected = "";
+      }
       search.type = "search"; search.value = view.query; search.placeholder = tab === "history" ? "Product, workbook, milestone…" : "Product, codename, category…"; search.dataset.plcFocus = `${tab}-search`; search.setAttribute("aria-label", tab === "history" ? "Search PLC update history" : `Search PLC ${tab === "review" ? "review projects" : "products"}`); search.disabled = state.busy;
       search.addEventListener("input", () => { view.query = search.value; view.page = 0; view.selected = ""; render(); }); searchLabel.append(search); controls.append(searchLabel);
       for (const [key, label, options] of [["category", "Category", categories], ["status", "Show", statuses]]) {
@@ -210,11 +254,17 @@
       if (!page.rows.length) list.append(make("p", "plc-empty", empty));
       else {
         const shell = make("div", "plc-table-shell"), table = make("table", "plc-products-table"), head = make("thead"), heading = make("tr"), tbody = make("tbody");
-        for (const label of columns) { const cell = make("th", "", label); cell.setAttribute("scope", "col"); heading.append(cell); } head.append(heading); table.append(head);
+        for (const label of [...columns, ...(tab === "review" ? ["Edit"] : [])]) { const cell = make("th", "", label); cell.setAttribute("scope", "col"); heading.append(cell); } head.append(heading); table.append(head);
         for (const row of page.rows) {
           const tr = make("tr"); tr.dataset.plcListRow = row.key; if (view.selected === row.key) tr.classList.add("is-selected");
-          const choose = button(row.title, "plc-product-link", () => { view.selected = view.selected === row.key ? "" : row.key; render(); if (view.selected) { const title = doc.getElementById(`plc-detail-${tab}`); title?.focus({ preventScroll: true }); title?.scrollIntoView?.({ block: "nearest" }); } else focusBrowserKey(`${tab}-row-${row.key}`)?.scrollIntoView?.({ block: "nearest" }); }); choose.dataset.plcFocus = `${tab}-row-${row.key}`; choose.setAttribute("aria-expanded", String(view.selected === row.key)); choose.setAttribute("aria-controls", `plc-detail-panel-${tab}`); choose.disabled = state.busy;
+          const chooseRow = () => {
+            if (state.busy) return;
+            if (tab === "review") { view.listScrollTop = dialog.querySelector(".plc-body")?.scrollTop || 0; view.editorKeys = page.filtered.map((entry) => entry.key); view.returnRow = row.key; view.selected = row.key; render(); doc.getElementById("plc-detail-review")?.focus({ preventScroll: true }); return; }
+            view.selected = view.selected === row.key ? "" : row.key; render(); if (view.selected) { const title = doc.getElementById(`plc-detail-${tab}`); title?.focus({ preventScroll: true }); title?.scrollIntoView?.({ block: "nearest" }); } else focusBrowserKey(`${tab}-row-${row.key}`)?.scrollIntoView?.({ block: "nearest" });
+          };
+          const choose = button(row.title, "plc-product-link", chooseRow); choose.dataset.plcFocus = `${tab}-row-${row.key}`; choose.setAttribute("aria-expanded", String(view.selected === row.key)); choose.setAttribute("aria-controls", `plc-detail-panel-${tab}`); choose.disabled = state.busy;
           const name = make("td"); name.append(choose); if (row.subtitle) name.append(make("small", "", row.subtitle)); tr.append(name, ...renderCells(row)); tbody.append(tr);
+          if (tab === "review") { tr.classList.add("plc-review-row"); tr.tabIndex = state.busy ? -1 : 0; tr.setAttribute("aria-label", `Edit ${row.title}`); tr.dataset.plcFocus = `review-row-${row.key}`; tr.addEventListener("click", (event) => { if (reviewRowActivation(event, tr)) chooseRow(); }); tr.addEventListener("keydown", (event) => { if (!reviewRowActivation(event, tr)) return; event.preventDefault(); chooseRow(); }); const action = make("td"), edit = button("Edit", "quiet-button", chooseRow); edit.setAttribute("aria-label", `Edit ${row.title}`); edit.disabled = state.busy; action.append(edit); tr.append(action); }
         }
         table.append(tbody); shell.append(table); list.append(shell);
       }
@@ -239,7 +289,8 @@
       for (const [id, label] of tabItems) { const node = button(label, "quiet-button", () => { state.tab = id; render(); doc.getElementById(`plc-tab-${id}`)?.focus(); }); node.id = `plc-tab-${id}`; node.setAttribute("role", "tab"); node.setAttribute("aria-selected", String(state.tab === id)); node.setAttribute("aria-controls", `plc-panel-${id}`); node.tabIndex = state.tab === id ? 0 : -1; node.disabled = state.busy; node.addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || state.busy) return; event.preventDefault(); const index = tabItems.findIndex(([key]) => key === id), next = event.key === "Home" ? 0 : event.key === "End" ? tabItems.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabItems.length) % tabItems.length; state.tab = tabItems[next][0]; render(); doc.getElementById(`plc-tab-${state.tab}`)?.focus(); }); tabs.append(node); }
       body = make("section"); body.id = `plc-panel-${state.tab}`; body.setAttribute("role", "tabpanel"); body.setAttribute("aria-labelledby", `plc-tab-${state.tab}`); scrollBody.append(body);
       if (state.tab === "overview") renderOverview(); else if (state.tab === "dates") renderDates(); else if (state.tab === "history") renderHistory(); else renderReview();
-      footer = make("footer", "plc-footer"); shell.append(header, tabs, scrollBody, footer); dialog.append(shell); scrollBody.scrollTop = scrollTop; renderFooter();
+      footer = make("footer", "plc-footer"); shell.append(header, tabs, scrollBody, footer); dialog.append(shell);
+      const reviewSelection = state.tab === "review" ? browsers.review.selected : ""; scrollBody.scrollTop = sameTab && state.tab === "review" ? reviewScrollPosition(renderedReviewSelection, reviewSelection, scrollTop, browsers.review.listScrollTop) : scrollTop; renderedReviewSelection = reviewSelection; renderFooter();
       if (focusKey && sameTab) { const replacement = [...dialog.querySelectorAll("[data-plc-focus]")].find((node) => node.dataset.plcFocus === focusKey), closed = replacement?.closest?.("details:not([open])"), hidden = closed && !closed.querySelector("summary")?.contains(replacement); if (replacement && !replacement.disabled && !hidden) { replacement.focus({ preventScroll: true }); if (selection && typeof replacement.setSelectionRange === "function" && selection.start != null) replacement.setSelectionRange(selection.start, selection.end); } else if (!state.busy) focusBrowserKey(`${state.tab}-search`) || doc.getElementById(`plc-tab-${state.tab}`)?.focus({ preventScroll: true }); }
     }
     function renderOverview() {
@@ -310,6 +361,7 @@
       const rows = items.map((item) => { const source = item.row || {}, productId = state.selections[item.key] || item.matchedProductId || item.match?.productId || "", entry = productMap.get(productId), ffs = item.fields?.find((field) => field.field === "ffsDate"), skipped = state.skippedKeys.has(item.key), selected = Boolean(Object.keys(state.resolutions[item.key] || {}).length || state.createProducts[item.key]), status = skipped ? "Skipped" : state.createProducts[item.key] ? "New product selected" : selected ? "Dates selected" : !productId ? "Product match needed" : ffs?.status === "review" ? "FFS needs review" : item.fields?.some((field) => field.status === "update") ? "Date suggestion ready" : "Other details to review"; return { key: item.key, title: source.name || source.codename || "Unnamed project", subtitle: entry ? `PPC: ${entry.product.name || productId} · ${entry.categoryName}` : source.section || "Unmatched source project", categoryId: entry?.categoryId || "unmatched", categoryName: entry?.categoryName || "Needs product match", searchText: [source.name, source.codename, source.projectId, source.section, entry?.product.name, entry?.product.codename, entry?.categoryName].join(" "), statuses: [...(!productId ? ["match"] : []), ...(ffs?.status === "review" ? ["ffs"] : []), ...(item.fields?.some((field) => field.status === "update") ? ["ready"] : []), ...(skipped ? ["skipped"] : []), ...(selected ? ["selected"] : [])], item, ffs, status }; });
       const categories = [...new Map(rows.map((row) => [row.categoryId, row.categoryName])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
       renderBrowser(rows, { categories, statuses: [["selected", "Selected for confirmation"], ["ffs", "FFS needs review"], ["match", "Product match needed"], ["ready", "Date suggestion ready"], ["skipped", "Skipped this save"]], columns: ["Source product / PPC match", "Current PPC FFS", "Source FFS", "Review status"], renderCells(row) { const chosen = state.resolutions[row.key]?.ffsDate; return [smallCell(milestoneLabel(row.ffs?.current, row.ffs?.currentPeriod)), smallCell(chosen ? milestoneLabel(resolutionValue(chosen), chosen.period) : row.ffs?.incoming ? milestoneLabel(row.ffs.incoming, row.ffs.period) : row.ffs?.raw || "No FFS in source", chosen ? "Selected for confirmation" : row.ffs?.reason || ""), smallCell(row.status)]; }, renderDetail(row, detail) { renderItem(row.item, detail); }, empty: "No review projects match these filters. Your existing choices remain available when you clear the filters." });
+      if (browsers.review.selected) return;
       const visible = browseRows(rows, { ...browsers.review, pageSize: 50 }).filtered, clear = visible.flatMap((row) => row.item.matchedProductId && !state.skippedKeys.has(row.key) ? (row.item.fields || []).flatMap((field) => ["update", "review"].includes(field.status) && !(state.skippedFields[row.key] || []).includes(field.field) ? dateSuggestions(field, row.item.row).filter((suggestion) => suggestion.clear).map((suggestion) => ({ key: row.key, field: field.field, suggestion })) : []) : []), actions = make("section", "plc-batch-actions");
       actions.append(make("p", "plc-note", `${clear.length} clear source date suggestion${clear.length === 1 ? "" : "s"} in this filter. Dates with different regional options need an individual choice.`));
       const selectClear = button(`Select ${clear.length} clear suggestions`, "quiet-button", () => { for (const choice of clear) selectSuggestion(choice.key, choice.field, choice.suggestion, { rerender: false }); render(); }); selectClear.disabled = state.busy || !clear.length; actions.append(selectClear);
@@ -341,6 +393,27 @@
       const selected = Boolean(state.createProducts[item.key]), choose = button(selected ? "Remove from new product batch" : "Select this new product", "quiet-button", () => confirmCreate(item.key, draft, !selected)); choose.disabled = state.busy || !draft.name.trim() || !draft.codename.trim() || !draft.categoryId || row.cancelled; choose.dataset.plcFocus = `create-${item.key}-confirm`; choose.setAttribute("aria-pressed", String(selected)); section.append(choose);
       if (row.cancelled) section.append(make("p", "plc-note", "Cancelled source projects cannot be created.")); content.append(section);
     }
+    function renderManualDate(item, field, control, { skipped, productId, saved } = {}) {
+      state.manualDates[item.key] ||= {};
+      const sourcePeriod = field.period || importer.parseDate?.(field.raw, { quarterBasis: "calendar" })?.period, selectedPeriod = saved?.period, draft = state.manualDates[item.key][field.field] ||= { mode: selectedPeriod || sourcePeriod ? "quarter" : "exact", quarter: text((selectedPeriod || sourcePeriod)?.quarter), year: text((selectedPeriod || sourcePeriod)?.year), day: typeof saved === "string" ? saved : !field.period ? field.incoming || "" : "", open: false };
+      const disabled = skipped || !productId || state.busy || field.status === "stale" || item.row?.cancelled, manual = make("details", "plc-raw plc-manual-resolution"), summary = make("summary", "", "Enter a verified date"); manual.open = Boolean(draft.open); summary.dataset.plcFocus = `manual-${item.key}-${field.field}`; manual.append(summary); manual.addEventListener("toggle", () => { if (manual.isConnected) draft.open = manual.open; });
+      const box = make("div", "plc-manual-date"), modes = make("div", "plc-date-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", `Verified ${field.label || field.field} precision`);
+      for (const [value, title] of [["exact", "Exact day"], ["quarter", "Calendar quarter"]]) { const choose = button(title, "quiet-button", () => { draft.mode = value; draft.open = true; render(); focusBrowserKey(`manual-mode-${item.key}-${field.field}-${value}`); }); choose.disabled = disabled; choose.setAttribute("aria-pressed", String(draft.mode === value)); choose.dataset.plcFocus = `manual-mode-${item.key}-${field.field}-${value}`; modes.append(choose); } box.append(modes);
+      if (draft.mode === "quarter") {
+        const fields = make("div", "plc-quarter-fields"), quarterLabel = make("label", "plc-resolution", "Quarter"), quarter = make("select"), blank = make("option", "", "Choose quarter…"); blank.value = ""; quarter.append(blank);
+        for (const value of [1, 2, 3, 4]) { const option = make("option", "", `Q${value}`); option.value = String(value); quarter.append(option); } quarter.value = draft.quarter; quarter.disabled = disabled; quarter.setAttribute("aria-label", `Verified ${field.label || field.field} quarter for ${item.row?.name || item.row?.codename || "project"}`); quarter.dataset.plcFocus = `manual-quarter-${item.key}-${field.field}`; quarter.addEventListener("change", () => { draft.quarter = quarter.value; draft.open = true; render(); }); quarterLabel.append(quarter);
+        const yearLabel = make("label", "plc-resolution", "Year"), year = make("input"); year.type = "text"; year.inputMode = "numeric"; year.pattern = "[0-9]{4}"; year.maxLength = 4; year.placeholder = "2028"; year.value = draft.year; year.disabled = disabled; year.setAttribute("aria-label", `Verified ${field.label || field.field} quarter year for ${item.row?.name || item.row?.codename || "project"}`); year.dataset.plcFocus = `manual-year-${item.key}-${field.field}`; year.addEventListener("input", () => { draft.year = year.value; draft.open = true; render(); }); yearLabel.append(year); fields.append(quarterLabel, yearLabel); box.append(fields);
+      } else {
+        const label = make("label", "plc-resolution", "Verified exact day"), day = make("input"); day.type = "date"; day.value = draft.day; day.disabled = disabled; day.dataset.plcFocus = `manual-day-${item.key}-${field.field}`; day.setAttribute("aria-label", `Verified ${field.label || field.field} exact day for ${item.row?.name || item.row?.codename || "project"}`); day.addEventListener("change", () => { draft.day = day.value; draft.open = true; render(); }); label.append(day); box.append(label);
+      }
+      let resolution = null;
+      try { resolution = manualDateResolution(draft, importer); } catch { /* Incomplete input remains an unsaved draft. */ }
+      const preview = make("div", "plc-manual-preview"); preview.setAttribute("role", "status"); preview.setAttribute("aria-live", "polite");
+      if (resolution) { const value = resolutionValue(resolution); preview.append(make("strong", "", milestoneLabel(value, resolution.period)), make("p", "plc-note", `${milestoneLabel(field.current, field.currentPeriod)} → ${milestoneLabel(value, resolution.period)}`)); if (resolution.period) { const placement = new Date(`${value}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }); preview.append(make("p", "plc-note", `Quarter precision · roadmap placement: ${placement}. The actual day remains unspecified.`)); } }
+      else preview.append(make("p", "plc-note", draft.mode === "quarter" ? "Choose Q1–Q4 and enter a four-digit year to preview." : "Choose an exact day to preview."));
+      box.append(preview);
+      const pickKey = `manual-select-${item.key}-${field.field}`, pick = button(resolution ? `Select verified ${draft.mode === "quarter" ? "quarter" : "date"}` : "Select verified date", "quiet-button", () => { setManualDate(item.key, field.field, draft); focusBrowserKey(pickKey); }); pick.dataset.plcFocus = pickKey; pick.disabled = disabled || !resolution; box.append(pick, make("p", "plc-note", field.status === "stale" ? "Older sources cannot overwrite a newer date." : item.row?.cancelled ? "Cancelled source dates remain unchanged." : "Select only after checking the source. Confirm selected updates saves it; unselected dates remain in review.")); manual.append(box); control.append(manual);
+    }
     function renderItem(item, content) {
       const row = item.row || {}, skipped = state.skippedKeys.has(item.key), productId = state.selections[item.key] || item.matchedProductId || item.match?.productId || "", product = proposedEntries().find((entry) => entry.product.id === productId)?.product;
       content.dataset.plcRow = item.key; content.append(make("p", "plc-note", [row.section, row.stage, row.status].filter(Boolean).join(" · ")));
@@ -355,8 +428,7 @@
           if (suggestions.some((suggestion) => suggestion.blocked)) cards.append(make("p", "plc-note", "A newer or protected PPC date is preserved. Source suggestions cannot replace it."));
           if (saved) cards.append(make("p", "plc-selection-note", `Selected: ${milestoneLabel(resolutionValue(saved), saved.period)}`));
           const keep = button(kept ? "Keeping current date" : "Keep current date", "quiet-button", () => { keepDate(item.key, field.field); focusBrowserKey(`keep-${item.key}-${field.field}`); }); keep.dataset.plcFocus = `keep-${item.key}-${field.field}`; keep.disabled = skipped || !productId || state.busy; keep.setAttribute("aria-pressed", String(kept)); cards.append(keep); control.append(cards);
-          const manual = make("details", "plc-raw plc-manual-resolution"), resolution = make("label", "plc-resolution", "Verified exact date"), input = make("input"); manual.append(make("summary", "", "Enter a verified exact date")); input.type = "date"; input.value = typeof saved === "string" ? saved : ""; input.disabled = skipped || !productId || state.busy || field.status === "stale"; input.dataset.plcFocus = `resolve-${item.key}-${field.field}`; input.setAttribute("aria-label", `Verified ${field.label || field.field} for ${row.name || row.codename}`);
-          input.addEventListener("change", () => { state.resolutions[item.key] ||= {}; if (input.value) { state.resolutions[item.key][field.field] = input.value; state.skippedFields[item.key] = (state.skippedFields[item.key] || []).filter((value) => value !== field.field); } else delete state.resolutions[item.key][field.field]; renderFooter(); }); resolution.append(input, make("small", "", field.status === "stale" ? "Older sources cannot overwrite a newer date." : "Use only after checking the source. Unselected dates remain in review.")); manual.append(resolution); control.append(manual);
+          renderManualDate(item, field, control, { skipped, productId, saved });
         } else control.append(make("span", "plc-note", field.status === "unchanged" ? "Date unchanged" : "PPC preserved"));
         const current = make("td", "", milestoneLabel(field.current, field.currentPeriod)); if (field.current && product) { const clock = adapter.getFieldAge?.(product.id, field.field) || importer.getFieldAge?.(product, field.field, localDay()); if (clock) current.append(make("small", "", `Updated ${clock.changedAt ? dateLabel(clock.changedAt) : "timestamp unknown"}\n${clock.changeAgeDays ?? "unknown"} aging days`)); }
         const milestone = make("td", "", field.label || importer.fieldLabels?.[field.field] || field.field);
@@ -419,7 +491,7 @@
       listeners.push(() => doc.body.classList.remove("plc-workbook-dragging"));
     }
     const onRender = () => refresh(); root.addEventListener?.("portfolio:render", onRender); refresh();
-    return Object.freeze({ open, close, loadFile, loadFiles, chooseMatch, selectSuggestion, keepDate, confirmCreate, apply, retrySharing, refresh, getState: () => ({ ...state, selections: { ...state.selections }, resolutions: JSON.parse(JSON.stringify(state.resolutions)), createProducts: JSON.parse(JSON.stringify(state.createProducts)), createDrafts: JSON.parse(JSON.stringify(state.createDrafts)), skippedKeys: [...state.skippedKeys] }), destroy() { destroyed = true; fileGeneration += 1; for (const remove of listeners) remove(); root.removeEventListener?.("portfolio:render", onRender); dialog?.remove(); } });
+    return Object.freeze({ open, close, loadFile, loadFiles, chooseMatch, selectSuggestion, setManualDate, keepDate, confirmCreate, apply, retrySharing, refresh, getState: () => ({ ...state, selections: { ...state.selections }, resolutions: JSON.parse(JSON.stringify(state.resolutions)), manualDates: JSON.parse(JSON.stringify(state.manualDates)), createProducts: JSON.parse(JSON.stringify(state.createProducts)), createDrafts: JSON.parse(JSON.stringify(state.createDrafts)), skippedKeys: [...state.skippedKeys] }), destroy() { destroyed = true; fileGeneration += 1; for (const remove of listeners) remove(); root.removeEventListener?.("portfolio:render", onRender); dialog?.remove(); } });
   }
-  root.PortfolioPlcUI = Object.freeze({ createController, init(options) { active?.destroy(); active = createController(options); return active; }, open(options) { return active?.open(options); }, refresh() { active?.refresh(); }, getController() { return active; }, sourceSummary, historyRows, historyCsv, csvCell, browseRows, dateSuggestions, matchingProducts });
+  root.PortfolioPlcUI = Object.freeze({ createController, init(options) { active?.destroy(); active = createController(options); return active; }, open(options) { return active?.open(options); }, refresh() { active?.refresh(); }, getController() { return active; }, sourceSummary, historyRows, historyCsv, csvCell, browseRows, dateSuggestions, matchingProducts, manualDateResolution, reviewScrollPosition, reviewRowActivation });
 })(typeof globalThis !== "undefined" ? globalThis : window);
