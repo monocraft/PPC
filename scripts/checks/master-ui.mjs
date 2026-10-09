@@ -12,7 +12,7 @@ const byTag = (node, tag) => all(node).filter((entry) => entry.tagName === tag.t
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
 
 function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" } } = {}) {
-  const listeners = new Map(), notices = new Map(), calls = { saves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [], beforeSaves: 0 };
+  const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [], beforeSaves: 0 };
   const document = { activeElement: null, visibilityState: "visible", addEventListener() {} };
   document.createElement = (tag) => {
     const handlers = new Map(), attributes = new Map(), classes = new Set();
@@ -33,12 +33,14 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   document.getElementById = (id) => all(document.body).find((node) => node.id === id);
   const state = { configured, hasKey, connected: false, pending: structuredClone(initialPending), snapshot: { publication } };
   let saveHandler = async () => { state.pending = []; return { saved: true, snapshot: state.snapshot }; };
+  let scopedSaveHandler = async () => ({ status: "saved", saved: true, message: "Imported values shared." });
   let discardedPending = [], discardFailure = false;
   const session = {
     getState: () => state, track: () => state.pending,
     async refresh() { calls.refreshes += 1; state.connected = true; },
     async connect(options) { calls.connects.push(options); state.hasKey = true; },
     async save(options) { calls.saves.push(options); return saveHandler(options); },
+    async saveScoped(options) { calls.scopedSaves.push(options); return scopedSaveHandler(options); },
     disconnect() { calls.disconnects += 1; state.hasKey = false; },
   };
   const adapter = { getProducts() {}, canRefresh: () => true,
@@ -60,7 +62,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   vm.createContext(sandbox); new vm.Script(source).runInContext(sandbox);
   const api = sandbox.PortfolioMasterUI.initialize({ source: { mode: "service", team: true, endpoint: "https://private.example/api/master" }, adapter });
   const dialog = document.getElementById("masterDialog");
-  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, calls, notices, state, listeners, setSave: (handler) => { saveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
+  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, calls, notices, state, listeners, setSave: (handler) => { saveHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
 }
 
 const base = model.productValues({ id: "p1", name: "Headset", specs: [{ id: "s1", label: "Weight", value: "200g" }, { id: "s2", label: "Notes", value: "Original" }], partSkus: [], variantGroups: [], roadmap: { startMonth: "2027-01", endMonth: "2028-01" } });
@@ -234,4 +236,25 @@ assert.equal(discardFailed.state.pending.length, 1);
 assert.doesNotMatch(discardFailed.notices.get("master-discard-result").message, /Private implementation/);
 assert.match(text(discardFailed.dialog), /Review changes/);
 byTag(discardFailed.dialog, "button").find((button) => button.textContent === "Keep editing").dispatchEvent({ type: "click" }); await discardFailedFlow;
-console.log("Master UI checks passed: compact accessible disclosures, summaries, search, bounded values, notes, safe save/conflict decisions, discard confirmation/cancel/single/all/Undo/failure, no visible disconnect and private-friendly messages.");
+const automatic = createUi([edited]); await flush();
+const automaticOptions = { reason: "Biweekly PLC import", patches: [{ productId: "p1", patch: { ffsDate: mine.ffsDate, plc: { version: 1, importedAt: "2026-10-09T16:00:00.000Z" } } }] };
+assert.equal(typeof automatic.publicApi.saveScoped, "function");
+assert.equal((await automatic.publicApi.saveScoped(automaticOptions)).status, "saved");
+assert.deepEqual(automatic.calls.scopedSaves[0], automaticOptions);
+assert.equal(automatic.dialog.open, false); assert.equal(automatic.calls.saves.length, 0); assert.equal(automatic.calls.beforeSaves, 0, "automatic source sharing never starts the general manual-draft save flow");
+assert.equal(automatic.state.pending.length, 1);
+automatic.setScopedSave(async () => ({ status: "pending", saved: false, code: "MASTER_CONFLICT", message: "Private endpoint https://private.example/ changed" }));
+assert.equal((await automatic.publicApi.saveScoped(automaticOptions)).status, "pending");
+assert.equal(automatic.dialog.open, false, "conflicts stay available for later review without interrupting an Excel drop");
+assert.ok(automatic.notices.has("plc-master-sharing")); assert.doesNotMatch(automatic.notices.get("plc-master-sharing").message, /private|endpoint/);
+automatic.setScopedSave(async () => ({ status: "saved", saved: true }));
+await automatic.publicApi.saveScoped(automaticOptions); assert.equal(automatic.notices.has("plc-master-sharing"), false);
+const manualReview = automatic.api.save(); assert.equal(automatic.dialog.open, true);
+const scopedBeforeReview = automatic.calls.scopedSaves.length;
+assert.equal((await automatic.publicApi.saveScoped(automaticOptions)).status, "pending");
+assert.equal(automatic.calls.scopedSaves.length, scopedBeforeReview, "an automatic update cannot compete with a user's open manual review");
+byTag(automatic.dialog, "button").find((button) => button.textContent === "Keep editing").dispatchEvent({ type: "click" }); await manualReview;
+automatic.setScopedSave(async () => ({ status: "local", saved: false, code: "SHARING_ACCESS_REQUIRED" }));
+assert.equal((await automatic.publicApi.saveScoped(automaticOptions)).status, "local");
+assert.equal(automatic.dialog.open, false); assert.equal(automatic.calls.connects.length, 0, "missing access leaves collected data local without a credential prompt");
+console.log("Master UI checks passed: compact accessible disclosures, summaries, search, bounded values, notes, safe save/conflict decisions, discard confirmation/cancel/single/all/Undo/failure, automatic scoped PLC sharing and deferred conflicts without dialogs, no visible disconnect and private-friendly messages.");

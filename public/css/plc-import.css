@@ -1,0 +1,72 @@
+.plc-toolbar-trigger { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; }
+.plc-toolbar-status { color: #d1ac73; font-size: 10px; }
+.plc-settings-summary { display: flex; align-items: center; gap: 18px; justify-content: space-between; border: 1px solid #3c4b43; background: #1c2420; padding: 14px 16px; border-radius: 10px; margin: 16px 0; }
+.plc-settings-summary h4 { margin: 0 0 5px; font-size: 13px; }
+.plc-settings-summary p { margin: 0; }
+.plc-settings-summary button { flex: 0 0 auto; }
+.plc-dialog { padding: 0; width: min(1120px, calc(100vw - 36px)); max-height: 92dvh; overflow: hidden; border: 1px solid #455a50; border-radius: 15px; background: #171e1b; color: #d6dfdb; box-shadow: 0 24px 90px #0008; }
+.plc-dialog::backdrop { background: #050a08ad; backdrop-filter: blur(4px); }
+.plc-shell { display: flex; flex-direction: column; max-height: 92dvh; }
+.plc-header { display: flex; flex-shrink: 0; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 22px 26px 17px; border-bottom: 1px solid #35463b; }
+.plc-header h2 { margin: 4px 0 8px; font-size: 23px; }
+.plc-header p, .plc-note { margin: 0; color: #a1b2a8; font-size: 12px; line-height: 1.6; }
+.plc-header .icon-button { font-size: 22px; }
+.plc-body { overflow: auto; overscroll-behavior: contain; min-height: 0; padding: 20px 26px 26px; }
+.plc-tabs { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 20px; }
+.plc-tabs button[aria-selected="true"] { background: #34473d; color: #def0e3; border-color: #718f7d; }
+.plc-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 15px 0 20px; }
+.plc-metric { border: 1px solid #3c4c41; background: #202c24; border-radius: 9px; padding: 14px; }
+.plc-metric span { display: block; color: #a7b9ad; font-size: 11px; line-height: 1.4; }
+.plc-metric strong { display: block; font-size: 18px; margin-top: 6px; line-height: 1.4; overflow-wrap: anywhere; }
+.plc-dropzone { display: grid; place-items: center; gap: 10px; text-align: center; min-height: 150px; padding: 25px; border: 1px dashed #788d7f; border-radius: 11px; background: #1c2721; }
+.plc-dropzone.is-dragging { border-color: #b5dbc6; background: #2e4135; }
+.plc-dropzone[aria-busy="true"] { opacity: .8; }
+.plc-receipt { border: 1px solid #668c72; background: #233629; border-radius: 11px; padding: 18px; margin: 0 0 18px; }
+.plc-receipt h3 { margin: 0 0 7px; font-size: 16px; color: #daeddf; }
+.plc-receipt p { font-size: 13px; line-height: 1.6; margin: 0 0 9px; }
+.plc-receipt button { margin: 7px 9px 0 0; }
+.plc-receipt.is-pending { background: #332e22; border-color: #a18a58; }
+body.plc-workbook-dragging::after { content: "Drop Excel to collect your PLC update"; position: fixed; inset: 20px; z-index: 9999; pointer-events: none; display: grid; place-items: center; border: 2px dashed #b7d5c3; border-radius: 16px; background: #15221ded; color: #e6f3ea; font: 600 22px/1.4 system-ui, sans-serif; text-align: center; padding: 20px; }
+.plc-dropzone strong { font-size: 15px; }
+.plc-dropzone p { margin: 0; color: #a7b8ac; font-size: 12px; line-height: 1.6; }
+.plc-error { border: 1px solid #9b7852; background: #342c22; border-radius: 8px; color: #efd6ae; padding: 12px 15px; font-size: 13px; line-height: 1.55; margin-bottom: 17px; }
+.plc-report-options { display: flex; align-items: end; flex-wrap: wrap; gap: 15px 24px; margin: 18px 0; border: 1px solid #3b4d41; padding: 15px; border-radius: 9px; }
+.plc-report-options label { display: grid; gap: 7px; color: #b8c8be; font-size: 12px; }
+.plc-report-options label.plc-check { display: flex; align-items: center; gap: 8px; }
+.plc-dialog input, .plc-dialog select { background: #121914; color: #dbe5de; border: 1px solid #4b5f50; border-radius: 6px; padding: 8px; font: inherit; min-width: 0; }
+.plc-dialog input[type="checkbox"] { accent-color: #a0c7ad; }
+.plc-report-options small { display: block; color: #d5b586; max-width: 290px; line-height: 1.5; }
+.plc-source { color: #a7b8af; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; margin: 14px 0; }
+.plc-section-title { margin: 24px 0 12px; font-size: 15px; }
+.plc-projects { display: grid; gap: 11px; }
+.plc-project { border: 1px solid #3a4e40; border-radius: 10px; overflow: hidden; }
+.plc-project > summary { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 16px; background: #202b24; cursor: pointer; font-size: 13px; }
+.plc-project > summary strong { font-size: 14px; }
+.plc-project > summary small { display: block; color: #a1b4a7; font-size: 11px; margin-top: 5px; }
+.plc-badge { color: #b0d1be; font-size: 11px; white-space: nowrap; }
+.plc-badge.is-review, .plc-badge.is-overdue { color: #e6c18e; }
+.plc-project-content { padding: 16px; }
+.plc-match { display: grid; gap: 7px; font-size: 12px; margin: 0 0 15px; }
+.plc-match select { width: 100%; max-width: 700px; }
+.plc-fields { width: 100%; border-collapse: collapse; font-size: 12px; }
+.plc-fields th { text-align: left; color: #a4b8aa; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.plc-fields th, .plc-fields td { border-bottom: 1px solid #35483c; padding: 10px 8px; vertical-align: top; }
+.plc-fields th:first-child, .plc-fields td:first-child { padding-left: 0; }
+.plc-fields td small { display: block; margin-top: 5px; color: #98afa0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.plc-fields td:last-child { width: 30%; }
+.plc-fields input[type="date"] { width: 150px; max-width: 100%; font-size: 12px; }
+.plc-field-choice { display: flex; align-items: center; gap: 7px; line-height: 1.5; }
+.plc-resolution { display: grid; gap: 7px; color: #d6bf99; }
+.plc-raw { margin-top: 15px; font-size: 12px; }
+.plc-raw > summary { cursor: pointer; color: #a6bdad; }
+.plc-facts { display: grid; grid-template-columns: minmax(130px, .4fr) minmax(0, 1fr); gap: 9px 17px; font-size: 12px; margin: 14px 0 0; line-height: 1.6; }
+.plc-facts dt { color: #a1b3a6; }
+.plc-facts dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.plc-table-shell { overflow-x: auto; }
+.plc-empty { padding: 18px; margin: 0; border: 1px solid #394b3e; border-radius: 9px; background: #1e2821; color: #a9beb0; font-size: 13px; line-height: 1.65; }
+.plc-history-tools { display: flex; gap: 9px; align-items: center; margin-bottom: 16px; }
+.plc-history-tools .plc-note { margin-right: auto; }
+.plc-footer { display: flex; flex-shrink: 0; align-items: center; gap: 10px; justify-content: flex-end; border-top: 1px solid #35493b; background: #1b251f; padding: 17px 26px; }
+.plc-footer .plc-note { margin-right: auto; max-width: 670px; }
+.plc-dialog button:focus-visible, .plc-dialog input:focus-visible, .plc-dialog select:focus-visible, .plc-dialog summary:focus-visible { outline: 2px solid #b2d0be; outline-offset: 3px; }
+@media (max-width: 720px) { .plc-dialog { width: calc(100vw - 14px); max-height: 95dvh; }.plc-shell { max-height: 95dvh; }.plc-header { padding: 18px; }.plc-body { padding: 18px; }.plc-footer { padding: 14px 18px; flex-wrap: wrap; }.plc-footer .plc-note { flex-basis: 100%; }.plc-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }.plc-fields { min-width: 620px; }.plc-project > summary { align-items: flex-start; }.plc-facts { grid-template-columns: 1fr; gap: 3px; }.plc-facts dd { margin-bottom: 9px; }.plc-settings-summary { flex-wrap: wrap; }.plc-toolbar-trigger { padding: 7px 9px; } }

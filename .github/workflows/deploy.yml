@@ -31,7 +31,8 @@ jobs:
 
       - name: Validate source and deployment closure
         run: |
-          node scripts/checks/project.mjs
+          npm run check
+          node scripts/build-supabase-master.mjs --check
           node scripts/checks/hosted-package.mjs --required --deployment-only
 
       - name: Prepare static site
@@ -48,6 +49,8 @@ jobs:
           cp public/js/portfolio-search.js public/js/portfolio-search-ui.js _site/js/
           cp public/js/date-history.js _site/js/
           cp public/css/date-history.css _site/css/
+          cp public/js/plc-import.js public/js/plc-import-ui.js _site/js/
+          cp public/css/plc-import.css _site/css/
           cp public/js/app.js public/js/app-dialogs.js public/js/workspace-ui.js public/js/portfolio-model.js public/js/master-model.js public/js/master-github.js public/js/master-client.js public/js/master-ui.js public/js/master-presence.js public/js/roadmap-interaction.js public/js/product-details.js public/js/ascm-import.js public/js/catalog-data.js public/js/pptx-pagination.js public/js/pptx-editable.js public/js/package-codec.js public/js/package-source.js public/js/package-client.js public/js/package-ui.js _site/js/
           node scripts/configure-package-source.mjs
           node scripts/configure-site-version.mjs
@@ -65,6 +68,9 @@ jobs:
           test -f _site/data/master_ppc.pkg
           test -f _site/js/date-history.js
           test -f _site/css/date-history.css
+          test -f _site/js/plc-import.js
+          test -f _site/js/plc-import-ui.js
+          test -f _site/css/plc-import.css
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

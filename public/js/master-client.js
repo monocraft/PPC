@@ -417,11 +417,34 @@
       catch (error) { if (accessVersion === operationVersion) { connected = false; if (error.code === "INVALID_KEY") clearAccess(); } throw error; }
     }
 
-    async function save({ reason = "", resolveConflicts, requestId } = {}) {
+    function scopedOriginals(patches) {
+      if (!Array.isArray(patches) || patches.length > 30000) throw errorOf("The PLC update could not be shared. Its local data is safe.", "INVALID_SCOPE");
+      const supported = new Set(["generalAvailabilityDate", "ffsDate", "endManufacturingDate", "globalAnnouncementDate", "webReadinessDate", "finalAssetsDate", "plc"]);
+      const pending = new Map(track().map((item) => [item.productId, item])), selected = new Map(), seen = new Set();
+      const current = new Map(adapter.getProducts().map((product) => [idOf(product), valuesOf(product)]));
+      for (const entry of patches) {
+        const productId = String(entry?.productId || ""), supplied = entry?.patch;
+        if (!productId || seen.has(productId) || !supplied || typeof supplied !== "object" || Array.isArray(supplied) || !Object.keys(supplied).length || Object.keys(supplied).some((field) => !supported.has(field))) throw errorOf("Only imported milestones and PLC evidence can be shared automatically.", "INVALID_SCOPE");
+        seen.add(productId);
+        const actual = current.get(productId), original = pending.get(productId);
+        if (!actual) throw errorOf("A product changed after the PLC import. Review its saved update when you are ready.", "SCOPED_UPDATE_CHANGED");
+        const expected = model().patchValues(actual, supplied);
+        if (Object.keys(supplied).some((field) => JSON.stringify(actual[field]) !== JSON.stringify(expected[field]))) throw errorOf("A product changed after the PLC import. Review its saved update when you are ready.", "SCOPED_UPDATE_CHANGED");
+        if (!original) continue;
+        if (original.kind) throw errorOf("This product has an unsaved creation or merge. Its PLC update is safe on this device; review the product before sharing.", "SCOPED_PRODUCT_REVIEW");
+        // The virtual submitted product contains only this import's values. The
+        // snapshot merge can then retain other local drafts on the same product.
+        const mine = model().patchValues(original.base, supplied), patch = model().diffValues(original.base, mine);
+        if (Object.keys(patch).length) selected.set(productId, { ...original, mine, patch });
+      }
+      return selected;
+    }
+
+    async function save({ reason = "", resolveConflicts, requestId, scopedPatches } = {}) {
       if (busy) throw new Error("The master is already updating. Please wait.");
       if (!configured) throw errorOf("Team saving has not been connected by the portfolio owner yet. Your changes remain on this device.", "TEAM_SETUP_REQUIRED");
       if (!key) throw errorOf("Connect to the master before saving.", "INVALID_KEY", 401);
-      const originals = new Map(track().map((item) => [item.productId, item]));
+      const originals = scopedPatches === undefined ? new Map(track().map((item) => [item.productId, item])) : scopedOriginals(scopedPatches);
       if (!originals.size) return { saved: false, snapshot };
       let changes = [...originals.values()].map(toChange);
       let rebase = null, attempt = 0, keptFences = [], recheckChanges = [];
@@ -518,6 +541,23 @@
       } finally { busy = false; }
     }
 
+    async function saveScoped({ reason = "Biweekly PLC import", patches = [] } = {}) {
+      const local = (message, code) => ({ status: "local", saved: false, message, ...(code ? { code } : {}) });
+      if (!configured) return local("PLC data is saved on this device. Connect shared-master saving to share future imports.", "TEAM_SETUP_REQUIRED");
+      if (!key || !connected || mode === "github" && !githubToken || snapshot?.canWrite === false || !team && snapshot?.requiresEditorToken && !editorToken) return local("PLC data is saved on this device. Connect with editing access to share it automatically.", "SHARING_ACCESS_REQUIRED");
+      if (busy || adapter.hasPendingPackageOperation?.()) return { status: "pending", saved: false, message: "PLC data is saved on this device. Sharing will resume when the current update finishes.", code: "MASTER_BUSY" };
+      let conflicts = [];
+      try {
+        const result = await save({ reason, scopedPatches: patches, resolveConflicts: (items) => { conflicts = clone(items); return null; } });
+        if (result.cancelled) return { status: "pending", saved: false, message: "PLC data is saved on this device. Some shared values changed; review those changes before sharing.", code: "MASTER_CONFLICT", conflicts };
+        return { ...result, status: "saved", message: result.saved ? "Imported milestones and their timestamps are shared with the team." : "The shared master already has these imported values." };
+      } catch (error) {
+        const access = ["INVALID_KEY", "TEAM_SETUP_REQUIRED", "EDITOR_KEY_REQUIRED", "WRITES_DISABLED", "GITHUB_TOKEN_REQUIRED", "INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code);
+        const message = ["INVALID_SCOPE", "SCOPED_UPDATE_CHANGED", "SCOPED_PRODUCT_REVIEW"].includes(error.code) ? error.message : access ? "PLC data is saved on this device. Connect with editing access to share it automatically." : "PLC data is saved on this device. Sharing needs attention; review the pending changes or retry when connected.";
+        return { status: access ? "local" : "pending", saved: false, code: error.code || "SAVE_FAILED", message, ...(error.conflicts ? { conflicts: clone(error.conflicts) } : {}), ...(Number.isFinite(error.retryUntil) ? { retryUntil: error.retryUntil } : {}) };
+      }
+    }
+
     function toChange(item) {
       if (item.kind === "merge") return { kind: "merge", productId: item.productId, sourceProductId: item.sourceProductId, categoryId: item.categoryId, laneId: item.laneId, sourceCategoryId: item.sourceCategoryId, sourceLaneId: item.sourceLaneId, choices: clone(item.choices || {}), base: clone(item.base), sourceBase: clone(item.sourceBase), ...(item.base ? { baseProductVersion: item.baseProductVersion } : {}), ...(item.sourceBase ? { sourceBaseProductVersion: item.sourceBaseProductVersion } : {}), keeperProduct: adapter.serializeNewProduct?.(item.keeperProduct) || clone(item.keeperProduct), sourceProduct: adapter.serializeNewProduct?.(item.sourceProduct) || clone(item.sourceProduct), mine: clone(item.mine) };
       if (item.kind === "create") return { kind: "create", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, mine: clone(item.mine), baseRevisions: clone(item.baseRevisions) };
@@ -545,7 +585,7 @@
       rememberTeamAccess(key);
       persistBaseline();
     }
-    return Object.freeze({ connect, refresh, save, applySnapshot, track, markImported,
+    return Object.freeze({ connect, refresh, save, saveScoped, applySnapshot, track, markImported,
       async presence({ sessionId, displayName, editing, productId, categoryId, leave = false } = {}) {
         if (mode === "github" || !configured || !key) return null;
         const operationVersion = accessVersion;

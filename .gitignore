@@ -7,6 +7,8 @@ pwsh.log
 
 # Private project packages and local portfolio data
 project-data/private/
+# Detailed source audit contains internal workbook schedules and project names.
+/docs/HYPERX-PLC-DATA-ANALYSIS.md
 *.pkg
 !public/data/master_ppc.pkg
 
