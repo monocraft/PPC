@@ -18,6 +18,10 @@ When PPC is already connected to shared saving with editing access, collection a
 
 The first report may have more exceptions when the current master lacks codenames or exact SKU/name coverage. Confirming those identities makes later biweekly drops easier. User decisions refine identity and supported source scope; they do not teach the parser to invent missing years or date precision.
 
+Review rows open a dedicated full-width editor from the row surface or its **Edit** action. **Back to review list** restores the list's search, filters, page and scroll position; **Previous project** and **Next project** move between projects in the filtered list. Edits retain their scroll position and staged date choices. Selecting a source or typing a date does not save until **Confirm selected updates**.
+
+In a review editor, **Enter a verified date** offers **Exact day** or **Calendar quarter**. Quarter selection uses Q1–Q4 and a four-digit year from 1900 to 9999, previews the quarter label and qualified placement anchor, then adds the value and precision together with **Select verified quarter**. Switching to an exact day requires an explicitly verified day and clears the quarter precision only when confirmed. Older saved review entries containing one supported raw quarter recover that quarter for display without rewriting their source evidence or refreshing their aging; source conflicts, formula/error cells, cancelled projects and stale observations retain their existing protections.
+
 ## Collection coverage
 
 The supplied workbook produces 48 primary source records, including two cancelled records. The module reads target and current FFS separately, stage, notes, forecast, cancellation, visible/raw auxiliary cell values, merge origins, and 43 DrawingML health indicators. Green/yellow indicators retain their source labels and colors without inventing business severity definitions.
