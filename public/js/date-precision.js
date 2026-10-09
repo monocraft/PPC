@@ -17,7 +17,7 @@
     const match = /^(?:calendar\s+)?Q([1-4])\s*(?:[/'-]\s*)?'?(\d{4}|\d{2})$/i.exec(candidate)
       || /^(\d{4})\s*Q([1-4])$/i.exec(candidate)?.map((part, index, all) => index === 1 ? all[2] : index === 2 ? all[1] : part);
     if (!match) return null;
-    const year = Number(match[2]) < 100 ? 2000 + Number(match[2]) : Number(match[2]);
+    const year = match[2].length === 2 ? 2000 + Number(match[2]) : Number(match[2]);
     return quarterPeriod(year, Number(match[1]));
   }
   function normalizePeriod(period, anchor) {
