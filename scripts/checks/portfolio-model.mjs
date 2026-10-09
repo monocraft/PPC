@@ -161,6 +161,52 @@ assert.equal(model.canonicalColorCode("White-Pink"), "WHT/PNK");
 
 // Run the real application year-span action with a minimal view adapter.
 const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
+// Exercise the actual initialization path with a last-visited category saved on
+// the device. Opening the app chooses the first visible category, while normal
+// navigation and imported-workspace restoration retain their own selection.
+const bootStart = appSource.indexOf("\nportfolio = loadPortfolio();") + 1;
+const bootEnd = appSource.indexOf("\nfunction persistPlcDraft(", bootStart);
+assert.ok(bootStart > 0 && bootEnd > bootStart);
+const loadDefinition = appSource.match(/^function loadPortfolio\([^]*?^\}/m)?.[0];
+const importDefinition = appSource.match(/^function normalizeImportedPortfolio\([^]*?^\}/m)?.[0];
+assert.ok(loadDefinition && importDefinition);
+const startupPortfolio = (first = "audio", activeCategoryId = "mice", version = 4) => ({
+  version, activeCategoryId, settings: { timeline: { startMonth: "2026-01", endMonth: "2030-12" } },
+  categories: [first, ...["audio", "mice", "console"].filter(id => id !== first)].map(id => ({ id, name: id,
+    board: { products: [{ id: `${id}-product`, name: `${id} product`, ffsDate: "2028-04-01", roadmap: { startMonth: "2028-07", endMonth: "2030-12" } }] } })),
+});
+for (const [label, saved, prior, expected] of [
+  ["saved last category", startupPortfolio(), null, "audio"],
+  ["reordered category list", startupPortfolio("console"), null, "console"],
+  ["previous workspace version", null, startupPortfolio("console", "mice", 3), "console"],
+  ["first browser opening", null, null, "audio"],
+  ["unreadable local storage", "broken json", null, "audio"],
+]) {
+  const activation = [], stored = new Map(), baselineReads = [];
+  if (saved != null) stored.set("current", typeof saved === "string" ? saved : JSON.stringify(saved));
+  if (prior != null) stored.set("previous", JSON.stringify(prior));
+  const boot = {
+    portfolio: null, activeCategoryId: null, localDateBaseline: null,
+    STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
+    localStorage: { getItem: key => stored.get(key) || null },
+    ensurePortfolioSchema: value => ({ ...value, version: 4 }),
+    createDefaultPortfolio: () => startupPortfolio("audio", "audio"),
+    PLCImporter: { snapshotDateValues(value) { baselineReads.push(structuredClone(value.categories)); return { unchanged: true }; } },
+    activateCategory(categoryId, options) { const category = boot.portfolio.categories.find(item => item.id === categoryId) || boot.portfolio.categories[0]; boot.activeCategoryId = category.id; boot.portfolio.activeCategoryId = category.id; activation.push({ id: category.id, options: { ...options } }); },
+    syncControls() {}, renderInspector() {}, setView() {}, flushPendingLegacyImages() {},
+    packageCodec: () => ({ normalizePackageInfo: value => value || null }),
+  };
+  vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${appSource.slice(bootStart, bootEnd)}`, boot);
+  assert.equal(boot.activeCategoryId, expected, `${label}: app initialization starts at the first listed category.`);
+  assert.equal(activation.length, 1); assert.equal(activation[0].options.render, false); assert.equal(activation[0].options.fitVertical, true);
+  assert.deepEqual(structuredClone(boot.portfolio.categories), baselineReads[0], "Startup navigation preserves every product, date, and roadmap record.");
+  if (saved && typeof saved !== "string") assert.equal(JSON.parse(stored.get("current")).activeCategoryId, "mice", "Loading does not rewrite the remembered selection before startup activation.");
+  boot.activateCategory("mice", { render: true }); assert.equal(boot.activeCategoryId, "mice", "Normal navigation can still change categories in the same session.");
+  const imported = boot.normalizeImportedPortfolio(startupPortfolio("audio", "console"));
+  assert.equal(imported.activeCategoryId, "console", "Import normalization keeps the imported workspace's saved category.");
+  const preserved = boot.loadPortfolio();
+  if (saved && typeof saved !== "string" || prior) assert.equal(preserved.activeCategoryId, "mice", "Schema loading remains independent of the fresh-opening category policy.");
+}
 const standardStatusCases = [
   ["new", "NEW PRODUCT", "#5fd6c1"],
   ["embargo", "UPCOMING UNDER EMBARGO", "#ef5b5b"],
@@ -716,4 +762,4 @@ assert.deepEqual(normalizedViewLanes, ["audio", "accessories"], "Reset layout no
 assert.equal(viewSandbox.roadmapMonthWidth, retainedTimelineWidth, "all product view actions preserve the shared timeline scale");
 assert.ok(viewRenderCalls.includes("roadmap") && viewRenderCalls.includes("split") && viewRenderCalls.includes("products"), "view controls render the active Products, Roadmap, and details surfaces");
 
-console.log("Portfolio model checks passed: explicit lifecycle date/month synchronization without initial migration, global timeline actions, preserved specs/SKU colors, shared prices/stage tones, non-overlapping inline details, and independent view zoom/Fit/reset actions.");
+console.log("Portfolio model checks passed: first-listed startup category with preserved session/import navigation, explicit lifecycle date/month synchronization without initial migration, global timeline actions, preserved specs/SKU colors, shared prices/stage tones, non-overlapping inline details, and independent view zoom/Fit/reset actions.");
