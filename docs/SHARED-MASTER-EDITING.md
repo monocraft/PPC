@@ -40,7 +40,9 @@ Quiet refresh checks the shared facts while the page is visible and idle. The Gi
 
 Shared facts include name, codename, price and price label, tier, product status, variant label, roadmap family/stage/confidence/relationships, six exact milestone dates, planned start/end months, specifications, HP SKU codes and assignments, and variant SKU text/color details. Image binaries, local image assignments, category/lane layout, display settings, and creating/deleting whole products remain full-package/local operations.
 
-The saved master retains image ZIP entries and unrelated manifest fields. Its update timestamp advances, existing publisher comments remain, and bounded encrypted history records changed facts and the GitHub account used for the save. Local baselines preserve the origins of unsent edits across refreshes and browser reloads. ASCM updates to supported facts become pending changes and use the same conflict flow.
+The saved master retains image ZIP entries and unrelated manifest fields. Its update timestamp advances, and automatic save comments list every accepted product's full saved name. Multiple changed fields list a product once; separate products sharing a name remain separate entries. Automatic PLC comments include both the import context and the complete product list. User-supplied save notes are preserved. The generated comment is stamped from the complete accepted save before history pruning and stays inside the encrypted package.
+
+Manual notes remain limited to 2,000 characters. Stored update comments allow up to 2 MiB of text so long automatic name lists are not silently shortened; existing manifest/package bounds still apply. The request/revision watermark retains the complete comment when older audit records are pruned. Bounded encrypted history records changed facts and the GitHub account used for the save. Local baselines preserve the origins of unsent edits across refreshes and browser reloads. ASCM updates to supported facts become pending changes and use the same conflict flow.
 
 ## Publish the application
 

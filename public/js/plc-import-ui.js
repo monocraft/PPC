@@ -50,7 +50,7 @@
       if (state.busy) return false;
       state.open = false; if (dialog?.open) dialog.close();
       if (returnFocus?.isConnected && !returnFocus.closest?.(".hidden")) returnFocus.focus({ preventScroll: true });
-      else doc?.getElementById("openPlcUpdates")?.focus({ preventScroll: true });
+      else doc?.getElementById("workspaceSettingsButton")?.focus({ preventScroll: true });
       returnFocus = null; return true;
     }
     function open({ tab = "overview" } = {}) {
@@ -258,14 +258,12 @@
     function refresh() {
       if (destroyed) return;
       if (!state.busy && !state.dataset) rebuild();
-      const summary = sourceSummary(portfolio(), importer), age = summary.freshness.ageDays;
-      const toolbar = doc?.getElementById("plcToolbarStatus"), setting = doc?.getElementById("plcSettingsStatus");
-      if (toolbar) toolbar.textContent = reviewCount() ? `${reviewCount()} review` : summary.overdue ? `${summary.overdue} overdue` : age != null ? `${age}d` : "";
+      const summary = sourceSummary(portfolio(), importer), setting = doc?.getElementById("plcSettingsStatus");
       if (setting) setting.textContent = summary.last ? `Collected ${dateLabel(summary.last.importedAt)} · ${summary.freshness.importAgeDays ?? "unknown"} aging days${reviewCount() ? ` · ${reviewCount()} projects need review` : ""}` : "Drop in the biweekly PLC workbook. Reliable milestone dates and their timestamps update automatically.";
       if (state.open && !state.busy) render();
     }
     const listeners = [];
-    if (doc) for (const [id, tab] of [["openPlcUpdates", "overview"], ["settingsPlcUpdates", "overview"], ["importPlcReport", "overview"]]) { const node = doc.getElementById(id); if (node) { const listener = () => open({ tab }); node.addEventListener("click", listener); listeners.push(() => node.removeEventListener("click", listener)); } }
+    if (doc) for (const [id, tab] of [["settingsPlcUpdates", "overview"], ["importPlcReport", "overview"]]) { const node = doc.getElementById(id); if (node) { const listener = () => open({ tab }); node.addEventListener("click", listener); listeners.push(() => node.removeEventListener("click", listener)); } }
     function hasFileDrag(event) { return Array.from(event.dataTransfer?.types || []).includes("Files") || Boolean(event.dataTransfer?.files?.length); }
     function hasWorkbookDrag(event) { return hasFileDrag(event) && (Array.from(event.dataTransfer?.files || []).some((file) => /\.xlsx$/i.test(file.name || "")) || Array.from(event.dataTransfer?.items || []).some((item) => item.kind === "file" && item.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")); }
     if (doc) {

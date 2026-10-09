@@ -3,6 +3,7 @@
   "use strict";
 
   const DATE_FIELDS = Object.freeze(["generalAvailabilityDate", "ffsDate", "endManufacturingDate", "globalAnnouncementDate", "webReadinessDate", "finalAssetsDate"]);
+  const MAX_STORED_PACKAGE_COMMENTS = 2 * 1024 * 1024;
   const PRODUCT_FIELDS = Object.freeze(["name", "codename", "price", "priceLabel", "tier", "statusType", "statusLabel", "variantLabel"]);
   const ROADMAP_FIELDS = Object.freeze({ startMonth: "startMonth", endMonth: "endMonth", roadmapFamily: "family", roadmapStatus: "status", roadmapConfidence: "confidence", roadmapPredecessorId: "predecessorId", roadmapSuccessorId: "successorId" });
   const COLLECTIONS = Object.freeze(["specs", "partSkus", "variantGroups"]);
@@ -522,7 +523,7 @@
   function packageInfo(value) {
     if (!object(value) || value.version !== 1 || Object.keys(value).length !== 3
       || Object.keys(value).some((key) => !["version", "updatedAt", "comments"].includes(key))
-      || typeof value.comments !== "string" || value.comments.length > 2000
+      || typeof value.comments !== "string" || value.comments.length > MAX_STORED_PACKAGE_COMMENTS
       || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.updatedAt)
       || updateTimestamp(value.updatedAt) !== value.updatedAt) return null;
     return Object.freeze({ version: 1, updatedAt: value.updatedAt, comments: value.comments });
@@ -539,12 +540,31 @@
       if ((record.beforeExists !== undefined && typeof record.beforeExists !== "boolean") || (record.afterExists !== undefined && typeof record.afterExists !== "boolean")) return null;
       if (own(record, "before") && own(record, "after") && record.beforeExists === record.afterExists && equal(record.before, record.after)) return null;
     } catch { return null; }
-    return { productId: record.productId, revision: record.revision, at,
+    const name = path === "name" ? record.after : path === "@product" ? (record.afterExists === false || record.kind === "delete" || record.kind === "merge" && record.after === null ? record.before?.name : record.after?.name) : "";
+    return { productId: record.productId, productName: savedProductName(record.productName) || savedProductName(name), revision: record.revision, at,
       requestId: typeof record.requestId === "string" && record.requestId.length <= 180 ? record.requestId : "",
       comments: typeof record.reason === "string" ? record.reason.slice(0, 2000) : "" };
   }
 
-  function updateSummary(productCount) { return `${productCount} ${productCount === 1 ? "product" : "products"} updated.`; }
+  function savedProductName(value) { return typeof value === "string" && value.trim() && value.length <= 2048 ? value : ""; }
+
+  function automaticReason(note) { return !note.trim() || note === "Biweekly PLC import"; }
+
+  function automaticComment(value) { return /^(?:Biweekly PLC import\n)?\d+ products? updated:\n- /.test(value); }
+
+  function updateSummary(records, manifest, note = "") {
+    const products = new Map();
+    for (const record of records.slice().sort((left, right) => left.revision - right.revision)) {
+      products.set(record.productId, savedProductName(record.productName) || products.get(record.productId) || "");
+    }
+    const fallback = new Map(entriesFromManifest(manifest).map((entry) => [entry.productId, savedProductName(entry.productName)]));
+    const names = [...products].map(([id, name]) => name || fallback.get(id) || savedProductName(manifest?.masterSync?.products?.[id]?.productName) || `Unnamed product (${id})`);
+    const comments = `${note.trim() ? `${note}\n` : ""}${names.length} ${names.length === 1 ? "product" : "products"} updated:\n${names.map((name) => `- ${name}`).join("\n")}`;
+    if (comments.length > MAX_STORED_PACKAGE_COMMENTS) throw new RangeError("The update comment is too large. Save fewer products together so every full product name can be included.");
+    return comments;
+  }
+
+  function saveComment(records, manifest, note = "") { return automaticReason(note) ? updateSummary(records, manifest, note.trim()) : note; }
 
   function dateEdit(record, field, currentValue) {
     if (!object(record) || record.unknown || !own(record, "value")) return null;
@@ -633,7 +653,13 @@
     if (original && Date.parse(original.updatedAt) > Date.parse(latest.at) + 1000) return original;
     const batch = accepted.filter((record) => record.at === latest.at && record.requestId === latest.requestId);
     const withNote = batch.filter((record) => record.comments.trim()).sort((left, right) => right.revision - left.revision)[0];
-    return Object.freeze({ version: 1, updatedAt: latest.at, comments: withNote?.comments || updateSummary(new Set(batch.map((record) => record.productId)).size) });
+    const note = withNote?.comments || "";
+    // A save stamps its complete comment before audit retention. Its exact
+    // request/revision watermark prevents a trimmed batch or equal-time save
+    // from replacing that complete product list with partial history.
+    if (original?.updatedAt === latest.at && sync.packageInfoRevision === latest.revision && sync.packageInfoRequestId === latest.requestId
+      && (automaticReason(note) ? automaticComment(original.comments) : original.comments === note)) return original;
+    return Object.freeze({ version: 1, updatedAt: latest.at, comments: saveComment(batch, manifest, note) });
   }
 
   function snapshot(manifest) {
@@ -1018,8 +1044,10 @@
       savedFields += 1;
     }
     metadata.history = boundedHistory([...metadata.history, ...history]);
+    metadata.packageInfoRevision = metadata.revision;
+    metadata.packageInfoRequestId = String(context.requestId || "").slice(0, 180);
     nextManifest.masterSync = metadata;
-    nextManifest.packageInfo = { version: 1, updatedAt: now, comments: comments.trim() ? comments : updateSummary(new Set(history.map((record) => record.productId)).size) };
+    nextManifest.packageInfo = { version: 1, updatedAt: now, comments: saveComment(history, nextManifest, comments) };
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: updates.length, history };
   }
 

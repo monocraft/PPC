@@ -1,5 +1,3 @@
-.plc-toolbar-trigger { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; }
-.plc-toolbar-status { color: #d1ac73; font-size: 10px; }
 .plc-settings-summary { display: flex; align-items: center; gap: 18px; justify-content: space-between; border: 1px solid #3c4b43; background: #1c2420; padding: 14px 16px; border-radius: 10px; margin: 16px 0; }
 .plc-settings-summary h4 { margin: 0 0 5px; font-size: 13px; }
 .plc-settings-summary p { margin: 0; }
@@ -69,4 +67,4 @@ body.plc-workbook-dragging::after { content: "Drop Excel to collect your PLC upd
 .plc-footer { display: flex; flex-shrink: 0; align-items: center; gap: 10px; justify-content: flex-end; border-top: 1px solid #35493b; background: #1b251f; padding: 17px 26px; }
 .plc-footer .plc-note { margin-right: auto; max-width: 670px; }
 .plc-dialog button:focus-visible, .plc-dialog input:focus-visible, .plc-dialog select:focus-visible, .plc-dialog summary:focus-visible { outline: 2px solid #b2d0be; outline-offset: 3px; }
-@media (max-width: 720px) { .plc-dialog { width: calc(100vw - 14px); max-height: 95dvh; }.plc-shell { max-height: 95dvh; }.plc-header { padding: 18px; }.plc-body { padding: 18px; }.plc-footer { padding: 14px 18px; flex-wrap: wrap; }.plc-footer .plc-note { flex-basis: 100%; }.plc-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }.plc-fields { min-width: 620px; }.plc-project > summary { align-items: flex-start; }.plc-facts { grid-template-columns: 1fr; gap: 3px; }.plc-facts dd { margin-bottom: 9px; }.plc-settings-summary { flex-wrap: wrap; }.plc-toolbar-trigger { padding: 7px 9px; } }
+@media (max-width: 720px) { .plc-dialog { width: calc(100vw - 14px); max-height: 95dvh; }.plc-shell { max-height: 95dvh; }.plc-header { padding: 18px; }.plc-body { padding: 18px; }.plc-footer { padding: 14px 18px; flex-wrap: wrap; }.plc-footer .plc-note { flex-basis: 100%; }.plc-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }.plc-fields { min-width: 620px; }.plc-project > summary { align-items: flex-start; }.plc-facts { grid-template-columns: 1fr; gap: 3px; }.plc-facts dd { margin-bottom: 9px; }.plc-settings-summary { flex-wrap: wrap; } }

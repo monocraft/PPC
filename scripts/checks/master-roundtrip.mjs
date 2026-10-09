@@ -61,7 +61,7 @@ try {
   assert.equal(b.product.generalAvailabilityDate, "2027-04-03");
   assert.equal(a.product.roadmap.startMonth, "2027-04");
   assert.deepEqual(a.packageInfo, b.packageInfo, "two refreshed workspaces receive the same accepted footer information");
-  assert.equal(a.packageInfo.comments, "1 product updated.");
+  assert.equal(a.packageInfo.comments, "1 product updated:\n- Synthetic shared product");
 
   a.edit({ specs: a.product.specs.map((item) => item.id === "battery" ? { ...item, value: "50 hours" } : item) });
   b.edit({ specs: b.product.specs.map((item) => item.id === "connection" ? { ...item, value: "USB + wireless" } : item) });

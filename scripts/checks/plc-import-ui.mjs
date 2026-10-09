@@ -75,5 +75,8 @@ await new Promise((resolve) => setTimeout(resolve, 0)); assert.equal(busyControl
 
 const html = await readFile(new URL('../../public/index.html', import.meta.url), 'utf8');
 assert.ok(html.indexOf('js/plc-import.js') < html.indexOf('js/plc-import-ui.js')); assert.ok(html.indexOf('js/plc-import-ui.js') < html.indexOf('js/app.js'));
-for (const id of ['openPlcUpdates', 'settingsPlcUpdates', 'importPlcReport', 'plcSettingsStatus', 'plcToolbarStatus']) assert.ok(html.includes(`id="${id}"`));
+for (const id of ['settingsPlcUpdates', 'importPlcReport', 'plcSettingsStatus']) assert.ok(html.includes(`id="${id}"`));
+for (const id of ['openPlcUpdates', 'plcToolbarStatus']) assert.ok(!html.includes(`id="${id}"`), 'The biweekly importer has no main-toolbar control.');
+const settingsData = html.slice(html.indexOf('id="settingsDataPanel"'), html.indexOf('id="workspaceSettingsDone"'));
+for (const id of ['settingsPlcUpdates', 'importPlcReport', 'plcSettingsStatus']) assert.ok(settingsData.includes(`id="${id}"`), 'PLC controls and freshness belong to Settings → Data & export.');
 console.log('PLC UI checks passed: direct collection once per drop, import-day timestamps, duplicates preserve clocks, persistent partial review, parse failure isolation, collection retry, sharing-only retry, busy guards, traceable exports, CSV formula protection, and script integration.');

@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-09 — complete save comments and Settings-only PLC access
+
+- List every accepted product's full saved name in automatic save comments, including automatic PLC saves. Count each product once, retain distinct products with the same name, and preserve comments typed by the user.
+- Retain the complete generated name list across encrypted package publication, refresh and audit-history pruning. Keep manual notes limited to 2,000 characters while allowing bounded longer generated lists.
+- Keep the biweekly PLC importer and freshness summary in Settings → Data & export; remove the daily toolbar action and badge.
+
 ## 2026-10-09 — biweekly HyperX PLC updates
 
 - Add a direct workbook drop/import module with automatic eligible updates, source freshness, per-product milestones, graphical health, supporting schedules, persistent optional review and collection/history exports.
