@@ -32,6 +32,22 @@ assert.ok(ui.dateSuggestions({ ...regionalField, reason: 'The master has an acce
 assert.ok(ui.dateSuggestions(regionalField, { cancelled: true }).every(choice => choice.blocked));
 assert.equal(ui.dateSuggestions({ field: 'ffsDate', status: 'update', kind: 'exact', incoming: '2026-11-02', reason: '' }).at(0).clear, true, 'One unambiguous exact source date can be selected in an explicit batch action.');
 assert.equal(ui.dateSuggestions({ field: 'ffsDate', status: 'review', kind: 'quarter', incoming: '2028-04-01', period: { label: 'Q2 2028' }, reason: 'PPC has an exact day; confirm before replacing it with quarter precision' }).at(0).clear, false, 'Quarter precision cannot enter a clear-suggestion batch when it would replace an existing exact date.');
+const safeExactField = { field: 'ffsDate', status: 'update', kind: 'exact', incoming: '2026-11-02', reason: 'Explicit date for TH', region: 'TH' };
+for (const reason of ['Different FFS in a current stage-gate table', 'FFS day in status notes differs from the structured current FFS']) {
+  const choices = ui.dateSuggestions({ ...safeExactField, status: 'review', reason }, { conflicts: [{ field: 'ffsDate', reason }] });
+  assert.equal(choices.length, 1); assert.equal(choices[0].clear, false, 'A genuine FFS source conflict cannot enter the clear-suggestion batch.');
+  assert.equal(choices[0].blocked, false, 'Conflict source cards remain available for deliberate individual review.');
+}
+assert.equal(ui.dateSuggestions(safeExactField, { conflicts: [{ field: 'ffsDate', reason: 'Future source warning wording' }] })[0].clear, false, 'Structured conflicts disqualify a candidate independently of its current status and reason wording.');
+assert.equal(ui.dateSuggestions(safeExactField, { conflicts: [{ reason: 'Project-wide source warning' }] })[0].clear, false, 'An unscoped source conflict cannot silently enter a clear batch.');
+assert.equal(ui.dateSuggestions(safeExactField, { conflicts: [{ field: 'generalAvailabilityDate', reason: 'Different GA sources' }] })[0].clear, true, 'A conflict in another milestone does not hold an independently clear FFS update.');
+assert.equal(ui.dateSuggestions({ ...safeExactField, status: 'review', reason: 'Future review reason' })[0].clear, false, 'Unknown review reasons fail closed instead of relying on an explanation-word allowlist.');
+const uncertainChoices = ui.dateSuggestions({ ...safeExactField, candidates: [{ kind: 'exact', value: safeExactField.incoming }, { kind: 'missing-year', value: '', raw: '11/04' }] });
+assert.equal(uncertainChoices.length, 1); assert.equal(uncertainChoices[0].clear, false, 'Ignoring an unsupported alternative cannot make the remaining exact candidate unambiguous.');
+assert.equal(uncertainChoices[0].blocked, false);
+assert.ok(ui.dateSuggestions({ ...safeExactField, candidates: [{ kind: 'exact', value: '2026-11-02' }, { kind: 'exact', value: '2026-11-04' }] }).every(choice => !choice.clear && !choice.blocked), 'Distinct exact candidates stay individually selectable and out of bulk.');
+for (const unsafeField of [{ ...safeExactField, protected: true }, { ...safeExactField, newerMaster: true }, { ...safeExactField, status: 'stale' }]) assert.ok(ui.dateSuggestions(unsafeField).every(choice => !choice.clear && choice.blocked), 'Protected and stale source dates cannot be selected individually or in bulk.');
+assert.ok(ui.dateSuggestions(safeExactField, { cancelled: true }).every(choice => !choice.clear && choice.blocked), 'Cancelled projects cannot enter a clear batch.');
 for (const unsafe of ['=SUM(1,2)', '+cmd', '-cmd', '@cmd', '  =formula', '\t=HYPERLINK("bad")']) assert.ok(ui.csvCell(unsafe).startsWith('"\''), 'CSV evidence cannot become a spreadsheet formula.');
 assert.equal(ui.csvCell('plain, "text"'), '"plain, ""text"""');
 assert.equal(ui.csvCell({ precision: 'quarter', label: 'Q2 2028', start: '2028-04-01' }), '"{""precision"":""quarter"",""label"":""Q2 2028"",""start"":""2028-04-01""}"', 'CSV preserves structured precision facts instead of an object placeholder.');
@@ -105,6 +121,16 @@ await new Promise((resolve) => setTimeout(resolve, 0)); assert.equal(busyControl
 const html = await readFile(new URL('../../public/index.html', import.meta.url), 'utf8');
 await import('../../public/js/plc-import.js');
 const realImporter = globalThis.PLCImporter, periodDate = realImporter.parseDate('Q2 2028', { quarterBasis: 'calendar' });
+assert.equal(ui.dateSuggestions({ field: 'ffsDate', status: 'update', kind: 'quarter', incoming: periodDate.value, period: periodDate.period, reason: periodDate.reason })[0].clear, true, 'A clear supported calendar quarter retains bulk eligibility.');
+for (const reason of ['Different FFS in a current stage-gate table', 'FFS day in status notes differs from the structured current FFS']) {
+  const row = { key: 'conflicting-source', name: 'Synthetic mouse', categoryId: 'mice', reportDate: '2026-10-08', dates: { ffsDate: { ...realImporter.parseDate('2026-11-20'), source: { sheet: 'Synthetic current', cell: 'F7', authoritativeCurrentFfs: true } } }, conflicts: [{ field: 'ffsDate', reason, value: '2026-11-21', source: { sheet: 'Synthetic supporting', cell: 'Q7' } }], milestones: {}, sources: [] };
+  const plan = realImporter.buildPlan({ metadata: { fileName: 'Synthetic conflicting PLC.xlsx', fingerprint: `conflict-${reason}`, reportDate: '2026-10-08' }, rows: [row], diagnostics: [] }, source, { reportDate: '2026-10-09', reportDateBasis: 'Import date' });
+  const item = plan.items[0], field = item.fields.find(field => field.field === 'ffsDate');
+  assert.equal(item.matchedProductId, 'mouse-a'); assert.equal(field.status, 'review'); assert.equal(field.reason, reason);
+  const batchChoices = item.fields.flatMap(field => ['update', 'review'].includes(field.status) ? ui.dateSuggestions(field, item.row).filter(choice => choice.clear) : []);
+  assert.equal(batchChoices.length, 0, 'The real plan cannot classify a stage-gate or status-note source conflict as a clear bulk selection.');
+  const choices = ui.dateSuggestions(field, item.row); assert.equal(choices.length, 1); assert.equal(choices[0].blocked, false, 'Verified individual review remains possible after the actual importer holds the conflict.');
+}
 let creationPortfolio = { version: 4, categories: [{ id: 'mice', name: 'Mice', board: { lanes: [{ id: 'planning', name: 'Planning' }], products: [] } }], plcReview: { version: 1, entries: [{ key: 'source-zephyr', row: { key: 'source-zephyr', name: 'Zephyr', codename: 'Zephyr', section: 'Mice', dates: { ffsDate: periodDate, generalAvailabilityDate: { kind: 'exact', value: '2028-08-01', raw: '8/1/2028' } }, sources: [{ sheet: 'Synthetic PLC', cell: 'D7' }] }, matchNeeded: true, fields: ['ffsDate', 'generalAvailabilityDate'], reportDate: '2026-10-09', metadata: { fileName: 'Synthetic PLC.xlsx', fingerprint: 'create-source', reportDate: '2026-10-09' } }] } };
 let creationCalls = 0, creationChoices;
 const creationController = ui.createController({ document: null, importer: realImporter, adapter: { getPortfolio: () => creationPortfolio, async applyPlan(plan, selected) { creationCalls++; creationChoices = selected; const result = realImporter.applyPlan(creationPortfolio, plan, { ...selected, now: '2026-10-10T12:00:00.000Z' }); creationPortfolio = result.portfolio; return result; } } });

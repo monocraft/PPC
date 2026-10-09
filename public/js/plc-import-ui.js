@@ -14,16 +14,20 @@
     const size = Math.max(1, Math.min(50, Number.isFinite(Number(pageSize)) ? Math.floor(Number(pageSize)) : 15)), pages = Math.max(1, Math.ceil(filtered.length / size)), currentPage = Math.max(0, Math.min(pages - 1, Number.isFinite(Number(page)) ? Math.floor(Number(page)) : 0)), start = currentPage * size;
     return { rows: filtered.slice(start, start + size), filtered, total: filtered.length, page: currentPage, pages, pageSize: size, start: filtered.length ? start + 1 : 0, end: Math.min(start + size, filtered.length) };
   }
-  function dateSuggestions(field, { cancelled = false } = {}) {
-    const protectedDate = Boolean(field.protected || field.newerMaster) || field.status === "stale" || /older source|newer accepted|accepted date change|local date edit|edited after|GA.*after|dates conflict/i.test(field.reason || ""), ambiguous = /conflict|different value|multiple source|scope changed|regional|supporting|merged|formula|inherits|exact day/i.test(field.reason || "") || Boolean(field.source?.crossProduct || field.source?.formula || field.source?.currentFfsFromOtherColumn);
+  function dateSuggestions(field, { cancelled = false, conflicts = [] } = {}) {
+    const protectedDate = Boolean(field.protected || field.newerMaster) || field.status === "stale" || /older source|newer accepted|accepted date change|local date edit|edited after|GA.*after|dates conflict/i.test(field.reason || "");
     const candidates = field.candidates?.length ? field.candidates : field.incoming ? [{ kind: field.period ? "quarter" : field.kind, value: field.incoming, period: field.period, region: field.region, raw: field.raw }] : [], choices = new Map();
+    const supportedCandidate = (candidate) => /^\d{4}-\d{2}-\d{2}$/.test(candidate.value || "") && (candidate.kind === "exact" || candidate.kind === "quarter" && candidate.period);
+    const sourceConflict = conflicts.some((conflict) => !conflict.field || conflict.field === field.field);
+    const ambiguous = sourceConflict || candidates.some((candidate) => !supportedCandidate(candidate)) || /conflict|different value|different FFS|status notes.*differ|multiple source|scope changed|regional|supporting|merged|formula|inherits|exact day/i.test(field.reason || "") || Boolean(field.source?.crossProduct || field.source?.formula || field.source?.currentFfsFromOtherColumn);
     for (const candidate of candidates) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate.value || "") || candidate.kind !== "exact" && !(candidate.kind === "quarter" && candidate.period)) continue;
+      if (!supportedCandidate(candidate)) continue;
       const id = `${candidate.value}|${JSON.stringify(candidate.period || null)}`, existing = choices.get(id), region = candidate.region || "";
       if (existing) { if (region && !existing.regions.includes(region)) existing.regions.push(region); continue; }
       choices.set(id, { id, value: candidate.value, ...(candidate.period ? { period: candidate.period } : {}), label: root.PLCImporter?.dateLabel?.(candidate.value, candidate.period) || candidate.period?.label || candidate.value, regions: region ? [region] : [], raw: candidate.raw || field.raw || "", source: candidate.source || field.source, reason: field.reason || candidate.reason || "Explicit date from source", blocked: cancelled || protectedDate });
     }
-    return [...choices.values()].map((choice) => ({ ...choice, clear: choices.size === 1 && !ambiguous && !choice.blocked, region: choice.regions.join(", ") }));
+    // Review exceptions remain selectable individually; only an eligible update can enter the clear batch.
+    return [...choices.values()].map((choice) => ({ ...choice, clear: field.status === "update" && choices.size === 1 && !ambiguous && !choice.blocked, region: choice.regions.join(", ") }));
   }
   function matchingProducts(products, item, query = "", limit = 8) {
     const words = searchText(query).split(" ").filter(Boolean), candidates = new Map((item.match?.candidates || []).map((candidate) => [candidate.productId, candidate]));
