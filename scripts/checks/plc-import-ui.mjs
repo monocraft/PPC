@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 await import('../../public/js/plc-import-ui.js');
 
 const ui = globalThis.PortfolioPlcUI;
@@ -201,6 +202,61 @@ assert.equal(staleManual.getState().plan.items[0].fields[0].status, 'stale'); as
 const cancelledPortfolio = structuredClone(stalePortfolio); cancelledPortfolio.plcReview.entries[0].row.cancelled = true; cancelledPortfolio.plcReview.entries[0].reportDate = '2026-10-11';
 const cancelledManual = ui.createController({ document: null, importer: realImporter, adapter: { getPortfolio: () => cancelledPortfolio, applyPlan() { throw new Error('No cancelled date may save.'); } } }); cancelledManual.open({ tab: 'review' }); assert.equal(cancelledManual.setManualDate(staleSource.key, 'ffsDate', { mode: 'quarter', quarter: '3', year: '2028' }), false); cancelledManual.destroy();
 const uiSource = await readFile(new URL('../../public/js/plc-import-ui.js', import.meta.url), 'utf8'), uiStyle = await readFile(new URL('../../public/css/plc-import.css', import.meta.url), 'utf8');
+// Exercise the actual manual date binding with native-style partial-year changes.
+// Replacing a date input loses its private month/day/year focus, so the node must
+// survive both input and change while only its preview and action are refreshed.
+class ManualDateNode {
+  constructor(tagName, className = '', content = '') { this.tagName = tagName.toUpperCase(); this.className = className; this.children = []; this.dataset = {}; this.listeners = new Map(); this.attributes = new Map(); this._text = content; this.value = ''; this.disabled = false; this.isConnected = true; }
+  get textContent() { return this._text + this.children.map(node => node.textContent).join(''); }
+  set textContent(value) { this._text = value; this.children = []; }
+  append(...nodes) { this.children.push(...nodes); }
+  replaceChildren(...nodes) { this._text = ''; this.children = [...nodes]; }
+  setAttribute(key, value) { this.attributes.set(key, String(value)); }
+  addEventListener(name, listener) { const events = this.listeners.get(name) || []; events.push(listener); this.listeners.set(name, events); }
+  emit(name) { if (name === 'click' && this.disabled) return; for (const listener of this.listeners.get(name) || []) listener({ type: name, target: this }); }
+}
+const manualMake = (tagName, className, content) => new ManualDateNode(tagName, className, content);
+const descend = (node) => [node, ...node.children.flatMap(descend)];
+const bindingDefinition = uiSource.match(/^    function renderManualDate\([^]*?^    \}/m);
+assert.ok(bindingDefinition);
+let manualRenders = 0; const verifiedSelections = [];
+const manualBinding = {
+  state: { manualDates: {}, busy: false }, importer: realImporter, text: (value) => value == null ? '' : String(value),
+  make: manualMake, button(label, className, onClick) { const node = manualMake('button', className, label); node.addEventListener('click', onClick); return node; },
+  manualDateResolution: ui.manualDateResolution,
+  resolutionValue: (value) => typeof value === 'string' ? value : value?.value || '',
+  milestoneLabel: (value, period) => period?.label || value || 'TBD',
+  render() { manualRenders++; }, focusBrowserKey() {},
+  setManualDate(key, field, draft) { verifiedSelections.push({ key, field, draft: { ...draft } }); },
+};
+vm.createContext(manualBinding); vm.runInContext(bindingDefinition[0], manualBinding);
+const typedItem = { key: 'typed-year', row: { name: 'Synthetic typed FFS' } }, typedField = { field: 'ffsDate', label: 'FFS', status: 'review', current: '2027-12-01' };
+const exactControl = manualMake('td'); manualBinding.renderManualDate(typedItem, typedField, exactControl, { productId: 'synthetic-product' });
+const findFocus = (control, key) => descend(control).find(node => node.dataset.plcFocus === key);
+const typedDay = findFocus(exactControl, 'manual-day-typed-year-ffsDate'), selectExact = findFocus(exactControl, 'manual-select-typed-year-ffsDate');
+assert.equal(typedDay.type, 'date'); assert.equal(typedDay.min, '1900-01-01'); assert.equal(typedDay.max, '9999-12-31');
+for (const partial of ['', '0002-04-15', '0020-04-15', '0202-04-15']) {
+  typedDay.value = partial; typedDay.emit('input'); typedDay.emit('change');
+  assert.equal(selectExact.disabled, true, 'An unfinished native year cannot select a verified date.');
+  assert.equal(findFocus(exactControl, 'manual-day-typed-year-ffsDate'), typedDay, 'The active native date node survives every partial-year event.');
+}
+typedDay.value = '2028-04-15'; typedDay.emit('input'); typedDay.emit('change');
+assert.equal(selectExact.disabled, false); assert.ok(exactControl.textContent.includes('2027-12-01 → 2028-04-15'));
+assert.equal(manualBinding.state.manualDates[typedItem.key].ffsDate.day, '2028-04-15');
+assert.equal(verifiedSelections.length, 0, 'Typing a complete date still requires Select verified date.');
+selectExact.emit('click'); assert.equal(verifiedSelections.at(-1).draft.day, '2028-04-15');
+for (const invalid of ['2028-02-30', '1899-12-31', '10000-04-15']) { typedDay.value = invalid; typedDay.emit('change'); assert.equal(selectExact.disabled, true); }
+manualBinding.state.manualDates[typedItem.key].ffsDate = { mode: 'quarter', quarter: '', year: '', open: true };
+const quarterControl = manualMake('td'); manualBinding.renderManualDate(typedItem, typedField, quarterControl, { productId: 'synthetic-product' });
+const typedQuarter = findFocus(quarterControl, 'manual-quarter-typed-year-ffsDate'), typedYear = findFocus(quarterControl, 'manual-year-typed-year-ffsDate'), selectQuarter = findFocus(quarterControl, 'manual-select-typed-year-ffsDate');
+typedQuarter.value = '2'; typedQuarter.emit('change');
+for (const partial of ['2', '20', '202']) { typedYear.value = partial; typedYear.emit('input'); assert.equal(selectQuarter.disabled, true); assert.equal(findFocus(quarterControl, 'manual-year-typed-year-ffsDate'), typedYear, 'Quarter year editing preserves the focused node and caret.'); }
+typedYear.value = '2028'; typedYear.emit('input'); assert.equal(selectQuarter.disabled, false); assert.ok(quarterControl.textContent.includes('Q2 2028')); assert.ok(quarterControl.textContent.includes('Apr 1, 2028'));
+selectQuarter.emit('click'); assert.equal(verifiedSelections.at(-1).draft.year, '2028');
+for (const invalid of ['0002', '1800', '202x', '10000']) { typedYear.value = invalid; typedYear.emit('input'); assert.equal(selectQuarter.disabled, true); }
+typedYear.value = '2028'; typedYear.emit('input'); typedQuarter.value = ''; typedQuarter.emit('change'); assert.equal(selectQuarter.disabled, true, 'Removing a quarter immediately removes its stale preview eligibility.');
+assert.equal(manualRenders, 0, 'Typing exact or quarter dates never rebuilds the dialog or moves the native segment focus.');
+assert.equal(typedField.current, '2027-12-01', 'Typing and previewing never change the saved PPC milestone.');
 assert.ok(!uiSource.includes('Match ${row.name || row.codename || "project"} to portfolio product'), 'The full product dropdown was replaced by a bounded searchable card picker.');
 assert.ok(uiSource.includes('tools.open = Boolean(state.matchOpen[item.key])') && uiSource.includes('"Change match"'), 'Already matched products keep their searchable picker collapsed, with disclosure state retained through typing and rerender.');
 assert.ok(uiStyle.includes('background: var(--color-surface)') && uiStyle.includes('color: var(--color-text)'), 'PLC surfaces follow the workspace theme tokens.');
@@ -209,4 +265,4 @@ for (const id of ['settingsPlcUpdates', 'importPlcReport', 'plcSettingsStatus'])
 for (const id of ['openPlcUpdates', 'plcToolbarStatus']) assert.ok(!html.includes(`id="${id}"`), 'The biweekly importer has no main-toolbar control.');
 const settingsData = html.slice(html.indexOf('id="settingsDataPanel"'), html.indexOf('id="workspaceSettingsDone"'));
 for (const id of ['settingsPlcUpdates', 'importPlcReport', 'plcSettingsStatus']) assert.ok(settingsData.includes(`id="${id}"`), 'PLC controls and freshness belong to Settings → Data & export.');
-console.log('PLC UI checks passed: bounded search/paging, 220-product match cards, safe date suggestions, regional/newer-date guards, manual exact/quarter review for all milestones with valid boundaries/provenance/timestamps, codename creation, deferred dates, Keep PPC, original clocks, complete exports, and Settings integration.');
+console.log('PLC UI checks passed: bounded search/paging, 220-product match cards, safe date suggestions, regional/newer-date guards, stable native exact/quarter year editing, manual review for all milestones with valid boundaries/provenance/timestamps, codename creation, deferred dates, Keep PPC, original clocks, complete exports, and Settings integration.');

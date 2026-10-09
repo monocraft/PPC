@@ -37,7 +37,7 @@ function harness() {
     updateBoard(mutator) { counts.writes++; mutator(context.board); context.scheduleSave(); context.updateProductLayoutEditControls(); },
     closeViewerInfo() {}, viewerInfoOutline: get("outline"), viewerInfoProgress: 0, viewerInfoProductId: null, viewerInfoOpen: false,
     ensureBoardSchema: (value) => value, categoryDefinition: () => ({}), PortfolioModel: { syncTimelineSettings() {} }, closeInspector() {}, closeVariantPopover() {}, hoveredHeroVariant: null, stopRoadmapSlotEditing() {}, initialVerticalFitPending: false, fitProductLanesVertically() {},
-    roadmapPanState: null, roadmapInteractionMode: "pan", roadmapDetailsOpen: false, productView: get("productView"), roadmapView: get("roadmapView"), splitView: get("splitView"), syncRoadmapDetailsVisibility() {}, updateLinkedViewButton() {}, updateRoadmapEditControls() {},
+    roadmapPanState: null, roadmapLaneHovers: new Map(), roadmapInteractionMode: "pan", roadmapDetailsOpen: false, productView: get("productView"), roadmapView: get("roadmapView"), splitView: get("splitView"), syncRoadmapDetailsVisibility() {}, updateLinkedViewButton() {}, updateRoadmapEditControls() {},
     document: { querySelectorAll: () => [] }, requestAnimationFrame: (callback) => callback(), cancelAnimationFrame() {}, scrollSelectedIntoView() {}, scrollRoadmapSelected() {}, roadmapScroll: {}, splitRoadmapScroll: {}, startProductCardSettling() {}, updateProductCardDrag() {},
     productLaneGeometry: () => ({ rows: [{ lane: { id: "first" }, top: 34 }, { lane: { id: "second" }, top: 650 }] }), GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, syncBoardNavigator() {}, canvasScroll: { classList: get("scroll").classList },
   };
