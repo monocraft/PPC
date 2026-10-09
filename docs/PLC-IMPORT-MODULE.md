@@ -93,6 +93,20 @@ The XLSX reader treats formulas, macros, links, drawings and prose as inert evid
 
 ## Files and validation
 
+### Colorway projects
+
+One hardware model is one portfolio product. Black and White versions are color items in that product's existing `variantGroups`, with confirmed HP part numbers linked by `partSkus[].variantId`. The color code (for example, WHT) is not an HP part number. The PLC importer never invents part numbers; confirmed numbers can be assigned through the existing product editor. Hardware generation, S/Core/Pro/Mini editions, wired/wireless models and console platforms retain their separate identities.
+
+A PLC row with an explicit color or a colorway section requires an initial reviewed parent and color assignment. The review offers the existing bounded product search, color chips, and an explicit new color option. A separate product requires an explicit different-hardware decision. Source names/codenames are suggestions, not permission to merge products or overwrite an existing color definition. Both primary and secondary colors participate in identity; a single White option cannot silently reuse White/Pink even when their displayed codes match.
+
+Colorway milestones are stored under `product.plc.variantProjects[variantId]`. Each project retains the six independent date fields, exact/quarter precision, source evidence, changed/observed timestamps, aging, codename, history, and a reviewed creation marker. Root `product.plc.identities` remembers the source-to-parent-and-color relationship. The parent product's scalar milestone dates and roadmap placement are preserved when a colorway is updated. A quarter such as Q2 2028 retains its label and calendar interval; its April 1 anchor does not claim an exact FFS day. Milestone proposals conflict only within the same product/color scope.
+
+Future files reuse a valid remembered relationship. The first confirmation can add a color with no dates, keeping unresolved milestones in review. Identical files do not create another product, color or clock. Missing/deleted targets, changed color identity, stale dates, mixed manufacturing scopes and contradictory proposals remain review items. Existing duplicate product cards are not automatically consolidated; review their identities and use the normal product merge flow when appropriate.
+
+The PLC sharing queue carries only reviewed `variantAdds` plus `plcVariantFields` whitelists. Existing color definitions, HP SKU edits, other colorway dates and unrelated product drafts do not ride along. Sharing checks the latest master for removed targets; the shared model also rejects newly changed variant PLC evidence when its color disappears during submission. The canonical guard is generated into the Supabase Edge function, so deploy it before the frontend. No table migration or reseeding is required.
+
+The PLC Products & FFS view and the portfolio's HP SKUs details expose each colorway schedule and its own aging. History, receipts and CSV retain the parent product and color names. Synthetic checks in `plc-colorways.mjs`, `plc-workspace.mjs`, `plc-import-ui.mjs`, `product-details.mjs`, `master-client.mjs` and `master-model.mjs` exercise creation, remembered updates, six milestone scopes, quarter precision, draft isolation, retries and concurrent target removal.
+
 - `public/js/plc-import.js`: sparse workbook parsing, typed evidence, product matching, import/review planning, persistent exceptions, atomic application and independent date clocks.
 - `public/js/date-precision.js`: validated calendar-quarter intervals, display labels and current-evidence checks.
 - `public/js/plc-import-ui.js` and `public/css/plc-import.css`: direct drop flow, collection receipt, optional review, date dashboard, accessible controls and exports.

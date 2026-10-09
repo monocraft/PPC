@@ -122,6 +122,56 @@
     return { codename: match ? clean(match[1]) : "", marketingName: match ? clean(name).replace(match[0], "").trim() : clean(name) };
   }
   const normalizeCode = (value) => clean(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  const colorVariants = (product) => (product?.variantGroups || []).filter((group) => group.type === "color").flatMap((group) => (group.items || []).map((variant) => ({ ...variant, groupId: group.id })));
+  const colorCode = (value) => root.ASCMImporter?.helpers?.canonicalColorCode?.(value) || root.PortfolioModel?.canonicalColorCode?.(value) || clean(value).toUpperCase();
+  const variantName = (variant) => [variant?.colorName, variant?.colorName2].filter(Boolean).join(" / ") || variant?.label || variant?.code || "Colorway";
+  const colorwaySnapshot = (variant) => Object.fromEntries(["code", "colorKey", "colorName", "colorHex", "colorKey2", "colorName2", "colorHex2"].map((field) => [field, String(variant?.[field] ?? "")]));
+  function colorIdentity(variant) {
+    const canonical = root.ASCMImporter?.helpers?.canonicalColorCode;
+    const codes = clean(canonical?.(variant?.canonicalCode || variant?.code)).split("/");
+    const names = clean(canonical?.(variant?.colorName)).split("/");
+    const primary = names[0] || canonical?.(variant?.colorKey) || codes[0] || `custom:${normalizeCode(variant?.colorName)}:${clean(variant?.colorHex).toLowerCase()}`;
+    const secondaryPresent = Boolean(variant?.colorKey2 || variant?.colorName2 || variant?.colorHex2 || names[1] || codes[1]);
+    const secondary = secondaryPresent ? canonical?.(variant?.colorName2) || canonical?.(variant?.colorKey2) || names[1] || codes[1] || `custom:${normalizeCode(variant?.colorName2)}:${clean(variant?.colorHex2).toLowerCase()}` : "";
+    return `${primary}|${secondary}`;
+  }
+  const sourceColorMatches = (variant, source) => !source || colorIdentity(variant) === colorIdentity(source);
+  function colorwayIdentity(row) {
+    const identity = extractIdentity(row.name), code = clean(row.codename || identity.codename), name = clean(row.marketingName || identity.marketingName);
+    const infer = root.ASCMImporter?.helpers?.inferColorVariant;
+    const codeColor = infer?.(code), nameColor = infer?.(name), color = codeColor || nameColor || null;
+    const remove = (text, found) => found ? clean(`${text.slice(0, found.matchStart)} ${text.slice(found.matchEnd)}`).replace(/\s+/g, " ") : text;
+    const detected = Boolean(color || /\bcolorway\b/i.test(`${row.section || ""} ${row.name || ""}`));
+    return { detected, color, baseName: remove(name, nameColor), baseCodename: remove(code, codeColor), reason: detected ? "Colorway milestones belong to a color option, not the product-wide dates" : "" };
+  }
+  function hardwareConflict(source, target) {
+    const signature = (value) => normalizeName(value).replace(/\b(quadcast|solocast|flipcast|cloud|alpha)\s*(\d+)/g, "$1 $2").replace(/\b(\d+)(s|pro|mini)\b/g, "$1 $2").replace(/\bsmini\b/g, "s mini");
+    const first = signature(source), second = signature(target);
+    const family = (value) => value.match(/\b(?:quadcast|solocast|flipcast|cloud|alpha|pulsefire haste|clutch|alloy origins)\b/)?.[0] || "";
+    const a = family(first), b = family(second);
+    if (a && b && a !== b) return "Product families differ";
+    if (a && a === b) {
+      const generation = (value) => value.slice(value.indexOf(a) + a.length).match(/^\s+(\d+)\b/)?.[1] || "";
+      if (generation(first) !== generation(second)) return "Hardware generations differ";
+      const qualifiers = (value) => (value.match(/\b(?:pro|s|mini|core)\b/g) || []).sort().join("/");
+      if (qualifiers(first) !== qualifiers(second)) return "Hardware editions differ";
+    }
+    const connection = (value) => /\b(?:wireless|wl)\b/i.test(value) ? "wireless" : /\b(?:wired|wd)\b/i.test(value) ? "wired" : "";
+    if (connection(source) && connection(target) && connection(source) !== connection(target)) return "Wired and wireless models differ";
+    const platform = (value) => /\bxbox\b/i.test(value) ? "xbox" : /\b(?:ps[345]|playstation)\b/i.test(value) ? "playstation" : "";
+    if (platform(source) && platform(target) && platform(source) !== platform(target)) return "Console platforms differ";
+    return "";
+  }
+  function getVariantProject(product, variantId) { return product?.plc?.variantProjects?.[variantId] || null; }
+  function variantProduct(product, variantId) {
+    if (!variantId || !product) return product;
+    const project = getVariantProject(product, variantId) || {};
+    return { ...product, ...Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, clean(project.fields?.[field]?.value)])), plc: project };
+  }
+  function rememberedVariant(product, key) {
+    const identity = product?.plc?.identities?.find((entry) => entry.key === key && entry.variantId);
+    return identity && colorVariants(product).some((variant) => variant.id === identity.variantId) ? identity.variantId : "";
+  }
   function categoryFor(name, section = "") {
     const text = `${name} ${section}`.toLowerCase();
     if (/pop filter|microphone arm/.test(text)) return "microphone-accessories";
@@ -140,12 +190,13 @@
   }
   function matchProduct(row, portfolio, options = {}) {
     const all = identities(portfolio), key = sourceKey(row);
-    const explicit = options.selections?.[key] || options.aliases?.[key];
+    const explicit = options.variantAssignments?.[key]?.productId || options.selections?.[key] || options.aliases?.[key];
     const compatible = (entry) => !row.categoryId || row.categoryId === entry.categoryId;
     const candidates = [];
     const incomingIdentity = extractIdentity(row.name);
     const incomingName = normalizeName(row.marketingName || incomingIdentity.marketingName);
     const incomingCode = normalizeCode(row.codename || incomingIdentity.codename);
+    const colorway = colorwayIdentity(row), baseName = normalizeName(colorway.baseName), baseCode = normalizeCode(colorway.baseCodename);
     const skuList = (row.skus || row.partNumbers || []).map((sku) => clean(sku).toUpperCase());
     for (const entry of all) {
       const product = entry.product;
@@ -153,19 +204,23 @@
       if (explicit === entry.productId) { score = 100; reason = "Selected product"; }
       else if (product.plc?.createdFromSource?.key === key && product.plc?.identities?.some((identity) => identity.key === key)) { score = 99; reason = "Confirmed PLC source identity"; }
       else if (!compatible(entry)) continue;
+      else if (hardwareConflict(colorway.baseName || incomingIdentity.marketingName, extractIdentity(product.name).marketingName)) continue;
       else if (/\b(?:xbox|ps5|ps4|playstation)\b/i.test(row.name) && /\b(?:xbox|ps5|ps4|playstation)\b/i.test(product.name)
         && /xbox/i.test(row.name) !== /xbox/i.test(product.name)) continue;
       else if (/\b(?:wireless|wl)\b/i.test(row.name) && /\b(?:wired|wd)\b/i.test(product.name) || /\b(?:wired|wd)\b/i.test(row.name) && /\b(?:wireless|wl)\b/i.test(product.name)) continue;
       else if (row.productId === entry.productId || row.projectId && !/^\d+$/.test(String(row.projectId)) && row.projectId === entry.productId) { score = 100; reason = "Exact PPC product ID"; }
       else if (product.plc?.identities?.some((identity) => identity.key === key)) { score = 99; reason = "Remembered source identity"; }
       else {
-        const codes = [...(product.partSkus || []).map((sku) => sku.code), ...(product.ascm?.basePartNumbers || [])].map((sku) => clean(sku).toUpperCase());
+        const codes = [...(product.partSkus || []).map((sku) => sku.code), ...(product.ascm?.basePartNumbers || []), ...colorVariants(product).map((variant) => variant.code).filter((value) => !root.ASCMImporter?.helpers?.canonicalColorCode?.(value) && /^[A-Z0-9]{4,}(?:#[A-Z0-9]+)?$/i.test(clean(value)))].map((sku) => clean(sku).toUpperCase());
         const ownIdentity = extractIdentity(product.name);
         const name = normalizeName(ownIdentity.marketingName);
         const code = normalizeCode(product.codename || product.codeName || ownIdentity.codename);
+        const ownColorway = colorwayIdentity({ name: product.name, codename: product.codename || product.codeName });
         if (skuList.some((sku) => codes.includes(sku))) { score = 98; reason = "Exact HP SKU"; }
         else if (incomingCode && code === incomingCode) { score = 96; reason = "Exact codename"; }
         else if (incomingName && incomingName === name) { score = 94; reason = "Exact normalized product name"; }
+        else if (colorway.detected && baseCode && normalizeCode(ownColorway.baseCodename) === baseCode) { score = 95; reason = "Same hardware codename; select its color option"; }
+        else if (colorway.detected && baseName && baseName === normalizeName(ownColorway.baseName)) { score = 94; reason = "Same hardware name; select its color option"; }
         else {
           const a = new Set(incomingName.split(" ").filter(Boolean)), b = new Set(name.split(" ").filter(Boolean));
           const overlap = [...a].filter((token) => b.has(token)).length;
@@ -449,6 +504,68 @@
     return { version, metadata, rows, supportingRows, diagnostics };
   }
 
+  function stableId(value, prefix) {
+    let hash = 2166136261;
+    for (const character of value) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619) >>> 0; }
+    return `${prefix}-${hash.toString(36)}`;
+  }
+  function prepareVariantAssignments(dataset, portfolio, options = {}) {
+    const requests = options.variantAssignments || {};
+    if (!requests || typeof requests !== "object" || Array.isArray(requests)) throw new Error("Colorway assignments need reviewed product and color details.");
+    const requested = Object.entries(requests).filter(([, request]) => request);
+    if (requested.length > 200) throw new Error("Review at most 200 colorway assignments in one collection.");
+    if (!requested.length) return { portfolio, assignments: {}, variantChanges: [] };
+    const prepared = clone(portfolio), assignments = {}, variantChanges = [];
+    const text = (value, label, limit = 160) => {
+      if (typeof value !== "string" || !clean(value) || clean(value).length > limit) throw new Error(`Confirm the ${label} before attaching a PLC colorway.`);
+      return clean(value);
+    };
+    for (const [key, request] of requested) {
+      if (options.skippedKeys?.includes(key)) continue;
+      if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("Confirm the product and its color option.");
+      const rows = (dataset.rows || []).filter((row) => sourceKey(row) === key);
+      if (rows.length !== 1) throw new Error("A color option must come from one unique PLC source record.");
+      const row = rows[0], source = colorwayIdentity(row);
+      if (!source.detected) throw new Error("This source has no explicit colorway identity. Keep its product-wide milestones separate.");
+      if (row.cancelled) throw new Error("Cancelled PLC projects cannot attach color options.");
+      const entry = identities(prepared).find((item) => item.productId === request.productId);
+      if (!entry) throw new Error("Choose an existing parent product for this colorway.");
+      const conflict = hardwareConflict(source.baseName, extractIdentity(entry.product.name).marketingName);
+      if (conflict) throw new Error(`${conflict}. A colorway cannot change the hardware model.`);
+      const product = entry.product;
+      let variant = null, created = false;
+      if (request.variantId) {
+        variant = colorVariants(product).find((item) => item.id === request.variantId);
+        if (!variant) throw new Error("The selected color option no longer exists on this product.");
+        if (!sourceColorMatches(variant, source.color)) throw new Error("The source primary or secondary color differs from the selected color option. Choose the matching color.");
+      } else if (request.create === true) {
+        const code = colorCode(text(request.colorCode, "color code")), name = text(request.colorName, "color name"), hex = text(request.colorHex, "primary color");
+        if (!/^#[a-f\d]{6}$/i.test(hex)) throw new Error("A color option needs a valid six-digit color value.");
+        const name2 = clean(request.colorName2), hex2 = clean(request.colorHex2);
+        if (name2.length > 160 || hex2 && !/^#[a-f\d]{6}$/i.test(hex2) || Boolean(name2) !== Boolean(hex2)) throw new Error("Confirm both the secondary color name and its six-digit color value.");
+        if (source.color && code !== source.color.canonicalCode) throw new Error("The source color differs from the new color option. Keep its explicit color code.");
+        const proposed = { code, colorName: name, colorHex: hex, colorName2: name2, colorHex2: hex2 };
+        if (!sourceColorMatches(proposed, source.color)) throw new Error("The source primary or secondary color differs from the new color option.");
+        const existing = colorVariants(product).filter((item) => colorCode(item.code) === code && colorIdentity(item) === colorIdentity(proposed));
+        if (existing.length > 1) throw new Error("More than one color option uses this code. Choose the exact existing option.");
+        if (existing.length === 1) variant = existing[0];
+        else {
+          product.variantGroups ||= [];
+          let group = product.variantGroups.find((item) => item.type === "color");
+          if (!group) { group = { id: stableId(product.id, "plc-colors"), type: "color", label: "COLOR SKU", items: [] }; product.variantGroups.push(group); }
+          const id = stableId(`${product.id}|${code}|${colorIdentity(proposed)}`, "plc-color");
+          if (product.variantGroups.some((item) => (item.items || []).some((value) => value.id === id))) throw new Error("This color option ID is already reserved. Choose the existing option.");
+          variant = { id, code, label: name2 ? `${name} / ${name2}` : name, colorKey: source.color?.colorKey || "custom", colorName: name, colorHex: hex.toLowerCase(), colorKey2: name2 ? source.color?.colorKey2 || "custom" : "", colorName2: name2, colorHex2: hex2.toLowerCase(), groupId: group.id };
+          const saved = { ...variant }; delete saved.groupId;
+          group.items.push(saved); created = true;
+        }
+      } else throw new Error("Choose an existing color option or confirm a new color option.");
+      assignments[key] = { productId: product.id, variantId: variant.id };
+      const saved = { ...variant }; delete saved.groupId;
+      variantChanges.push({ productId: product.id, variantId: variant.id, groupId: variant.groupId, created, variant: saved, sourceKey: key });
+    }
+    return { portfolio: prepared, assignments, variantChanges };
+  }
   function prepareProductCreations(dataset, portfolio, options = {}) {
     const requests = options.createProducts || {};
     if (!requests || typeof requests !== "object" || Array.isArray(requests)) throw new Error("New PLC products need reviewed product details.");
@@ -467,6 +584,7 @@
       if (rows.length !== 1) throw new Error("A new product must come from one unique PLC source record. Resolve duplicate source records first.");
       const row = rows[0];
       if (row.cancelled) throw new Error("Cancelled PLC projects cannot create new portfolio products.");
+      if (colorwayIdentity(row).detected && request.separateProduct !== true) throw new Error("Attach this colorway to its parent product, or explicitly confirm that it is different hardware before creating another product.");
       const name = text(request.name, "product name"), codename = text(request.codename, "codename"), categoryId = text(request.categoryId, "portfolio category");
       if (!normalizeCode(codename)) throw new Error("Confirm a codename containing letters or digits so future PLC imports can identify this product.");
       const category = (prepared.categories || []).find((entry) => entry.id === categoryId);
@@ -493,17 +611,19 @@
       const startMonth = localDay(options.now ? new Date(options.now) : new Date()).slice(0, 7);
       const end = new Date(`${startMonth}-01T00:00:00Z`); end.setUTCMonth(end.getUTCMonth() + 18);
       const product = { id: productId, name, codename, price: null, priceLabel: "", imageAssetId: "", tier: "", ...Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, ""])), ascm: null, partSkus: [], laneId, order: category.board.products.filter((entry) => entry.laneId === laneId).length, statusType: "new", statusLabel: "NEW PRODUCT", variantLabel: "", variantColor: "#526564", highlightEnabled: false, highlightColor: "#526564", specs: [], featuredVariantId: "", variantGroups: [], roadmap: { family: "Other", startMonth, launchMonth: startMonth, endMonth: end.toISOString().slice(0, 7), status: "in-planning", confidence: "low", predecessorId: "", successorId: "" } };
+      if (request.separateProduct === true) product.plc = { version, createdFromSource: { key, productId, separateProduct: true }, identities: [] };
       category.board.products.push(product);
       selections[key] = productId;
-      createdProducts.push({ key, productId, name, codename, categoryId, laneId });
+      createdProducts.push({ key, productId, name, codename, categoryId, laneId, ...(request.separateProduct === true ? { separateProduct: true } : {}) });
     }
     return { portfolio: prepared, selections, createdProducts };
   }
 
   function buildPlan(dataset, portfolio, options = {}) {
     const creations = prepareProductCreations(dataset, portfolio, options);
-    const matchingPortfolio = creations.portfolio;
-    const matchingOptions = { ...options, selections: { ...options.selections, ...creations.selections } };
+    const variants = prepareVariantAssignments(dataset, creations.portfolio, options);
+    const matchingPortfolio = variants.portfolio;
+    const matchingOptions = { ...options, selections: { ...options.selections, ...creations.selections }, variantAssignments: { ...options.variantAssignments, ...variants.assignments } };
     // Identical bytes retain their original collection date on every re-drop.
     const knownRun = !options.review && (portfolio.plcImports || []).find((run) => run.type !== "review" && run.fingerprint === dataset.metadata?.fingerprint);
     const proposedReportDate = knownRun?.reportDate || options.reportDate || dataset.metadata?.reportDate || localDay(options.now ? new Date(options.now) : new Date());
@@ -512,7 +632,20 @@
     const reportDate = reportParsed.value;
     const products = new Map(identities(matchingPortfolio).map((entry) => [entry.productId, entry.product]));
     const items = dataset.rows.map((row) => {
-      const key = sourceKey(row), match = matchProduct(row, matchingPortfolio, matchingOptions), product = products.get(match.productId);
+      const key = sourceKey(row), match = matchProduct(row, matchingPortfolio, matchingOptions), parent = products.get(match.productId);
+      const sourceColorway = colorwayIdentity(row), separate = parent?.plc?.createdFromSource?.key === key && parent.plc.createdFromSource.separateProduct;
+      const colorway = separate ? { ...sourceColorway, detected: false, reason: "Reviewed separate hardware product" } : sourceColorway;
+      const assignment = variants.assignments[key], remembered = parent && rememberedVariant(parent, key);
+      const chosenId = colorway.detected ? assignment?.variantId || remembered || "" : "";
+      const chosen = chosenId && !hardwareConflict(colorway.baseName, extractIdentity(parent.name).marketingName) && colorVariants(parent).find((variant) => variant.id === chosenId && sourceColorMatches(variant, colorway.color));
+      const variantTarget = chosen ? { productId: parent.id, variantId: chosen.id, groupId: chosen.groupId, name: variantName(chosen), create: Boolean(variants.variantChanges.find((entry) => entry.sourceKey === key)?.created) } : null;
+      const variantBindingNeeded = colorway.detected && !variantTarget;
+      const product = variantBindingNeeded && parent ? { ...parent, ...Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, ""])), plc: {} } : variantProduct(parent, variantTarget?.variantId);
+      const sourceSkus = (row.skus || row.partNumbers || []).map((value) => clean(value).toUpperCase());
+      const variantCandidates = colorVariants(parent).map((variant) => {
+        const exactSku = sourceSkus.some((code) => clean(variant.code).toUpperCase() === code || (parent.partSkus || []).some((part) => clean(part.code).toUpperCase() === code && part.variantId === variant.id));
+        return { variantId: variant.id, name: variantName(variant), colorCode: variant.code, reason: exactSku ? "Exact supplied HP SKU" : colorway.color && sourceColorMatches(variant, colorway.color) ? "Exact source color" : "Existing color option", suggested: exactSku || Boolean(colorway.color && sourceColorMatches(variant, colorway.color)) };
+      }).sort((a, b) => Number(b.suggested) - Number(a.suggested) || a.name.localeCompare(b.name));
       const metadata = row._plcMetadata || dataset.metadata || {};
       // The operator's import date controls collection freshness. Explicit
       // workbook periods still control field ordering, including older sections.
@@ -527,6 +660,7 @@
         const current = clean(product?.[field]), incoming = parsed.value || "", previous = product?.plc?.fields?.[field];
         const period = normalizePeriod(parsed.period, incoming), oldPeriod = currentPeriod(product, field), usable = parsed.kind === "exact" || Boolean(period);
         let status = parsed.kind === "blank" ? "blank" : usable ? current === incoming && JSON.stringify(period) === JSON.stringify(oldPeriod) ? "unchanged" : "update" : "review", reason = parsed.reason || "";
+        if (variantBindingNeeded && status !== "blank") { status = "review"; reason = "Select the product's color option before updating its milestones"; }
         if (row.cancelled) { status = "review"; reason = "Cancelled project; current dates stay unchanged"; }
         else if ((row.supporting || parsed.source?.supporting) && !(previous?.reviewed && !previous.supersededAt && usable && previous.value === incoming && current === incoming && JSON.stringify(period) === JSON.stringify(oldPeriod) && previous.raw === parsed.raw && previous.source?.sheet === parsed.source?.sheet)) { status = "review"; reason = "Supporting sheet is not a current dated authority"; }
         else if (parsed.source?.currentFfsFromOtherColumn) { status = "review"; reason = "Current FFS inherits another column; verify the source date"; }
@@ -539,11 +673,11 @@
         if (previous?.reportDate && sourceDate < previous.reportDate) { status = "stale"; reason = "An older source cannot replace a newer accepted observation"; }
         else if (previous && sourceDate === previous.reportDate && incoming && (incoming !== previous.value || JSON.stringify(period) !== JSON.stringify(oldPeriod))) { status = "review"; reason = "Different value or date precision for the same report date"; }
         else if (previous?.value && (current !== previous.value || previous.supersededAt) && current !== incoming && status === "update") { status = "review"; reason = "PPC date was edited after the previous PLC import"; }
-        if (!previous && product && status === "update") {
+        if (!variantTarget && !previous && product && status === "update") {
           const accepted = root.PortfolioMasterModel?.dateEditsForProduct?.(portfolio, product.id)?.[field];
           if (accepted?.at && accepted.at.slice(0, 10) >= sourceDate) { status = "review"; reason = "The master has an accepted date change on or after this source report"; }
         }
-        const localEdit = portfolio.dateLocalEdits?.[product?.id]?.[field];
+        const localEdit = !variantTarget && portfolio.dateLocalEdits?.[product?.id]?.[field];
         const localEditTime = localEdit?.at ? new Date(localEdit.at) : null;
         if (status === "update" && localEdit?.source !== "plc" && clean(localEdit?.value) === current && localEditTime && Number.isFinite(localEditTime.getTime()) && localDay(localEditTime) >= sourceDate) {
           status = "review"; reason = "PPC has a local date edit on or after this source report; verify the incoming date";
@@ -557,16 +691,18 @@
       const plannedGa = gaProposal?.incoming || product?.generalAvailabilityDate, plannedEm = emProposal?.incoming || product?.endManufacturingDate;
       if (plannedGa && plannedEm && plannedEm < plannedGa) for (const field of [gaProposal, emProposal].filter(Boolean)) { field.status = "review"; field.reason = "The proposed GA and end of manufacturing dates conflict"; }
       let action = match.status !== "matched" ? match.status === "unmatched" ? "unmatched" : "review" : fields.some((field) => field.status === "review") ? "review" : fields.some((field) => field.status === "update") ? "update" : fields.every((field) => field.status === "stale") ? "stale" : "unchanged";
-      return { key, row, metadata, reportDate: sourceDate, match, matchedProductId: match.productId || "", fields, action };
+      if (variantBindingNeeded && match.status === "matched") action = "review";
+      return { key, row, metadata, reportDate: sourceDate, match, matchedProductId: match.productId || "", matchedVariantId: variantTarget?.variantId || "", variantTarget, variantBindingNeeded, variantCandidates, colorway, fields, action };
     });
-    const byProduct = new Map(); for (const item of items.filter((item) => item.matchedProductId)) { const list = byProduct.get(item.matchedProductId) || []; list.push(item); byProduct.set(item.matchedProductId, list); }
+    const byProduct = new Map(); for (const item of items.filter((item) => item.matchedProductId && !item.variantBindingNeeded)) { const scope = `${item.matchedProductId}/${item.matchedVariantId || "base"}`, list = byProduct.get(scope) || []; list.push(item); byProduct.set(scope, list); }
     for (const list of byProduct.values()) if (list.length > 1) for (const item of list) {
       item.action = "review";
       for (const field of item.fields) if (["update", "unchanged"].includes(field.status)) { field.status = "review"; field.reason = "Multiple source products or variants map to one PPC product"; }
     }
     const summary = { total: items.length, matched: items.filter((i) => i.match.status === "matched").length, update: items.filter((i) => i.action === "update").length, review: items.filter((i) => i.action === "review").length, unmatched: items.filter((i) => i.action === "unmatched").length, stale: items.filter((i) => i.action === "stale").length, unchanged: items.filter((i) => i.action === "unchanged").length, fields: summarizeFields(items) };
     summary.created = creations.createdProducts.length;
-    return { version, dataset, reportDate, reportDateBasis: knownRun?.reportDateBasis || options.reportDateBasis || (dataset.metadata?.reportDate ? reportDate !== dataset.metadata.reportDate ? "User supplied report date" : dataset.metadata.reportDateBasis : "Import date fallback"), items, summary, options: { ...options, reportDate }, createdProducts: clone(creations.createdProducts), baseline: [...products].map(([productId, p]) => ({ productId, fields: Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, clean(p[field])])), plc: clone(p.plc || null) })) };
+    summary.colorwaysCreated = variants.variantChanges.filter((entry) => entry.created).length;
+    return { version, dataset, reportDate, reportDateBasis: knownRun?.reportDateBasis || options.reportDateBasis || (dataset.metadata?.reportDate ? reportDate !== dataset.metadata.reportDate ? "User supplied report date" : dataset.metadata.reportDateBasis : "Import date fallback"), items, summary, options: { ...options, reportDate }, createdProducts: clone(creations.createdProducts), variantChanges: clone(variants.variantChanges), baseline: [...products].map(([productId, p]) => ({ productId, fields: Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, clean(p[field])])), plc: clone(p.plc || null) })) };
   }
   function summarizeFields(items) {
     const fields = {};
@@ -607,7 +743,7 @@
       if (earlier && earlier.reportDate > item.reportDate) continue;
       entries = entries.filter((entry) => entry.key !== item.key);
       if (item.row.cancelled || options.skippedKeys?.includes(item.key)) continue;
-      const product = products.get(item.matchedProductId), matchNeeded = item.match.status !== "matched";
+      const product = variantProduct(products.get(item.matchedProductId), item.matchedVariantId), matchNeeded = item.match.status !== "matched" || item.variantBindingNeeded;
       const fields = item.fields.filter((field) => !options.skippedFields?.[item.key]?.includes(field.field) && !options.resolutions?.[item.key]?.[field.field] && (field.status === "review" || options.deferredFields?.[item.key]?.includes(field.field))
         && !(product?.plc?.fields?.[field.field]?.reviewed && product.plc.fields[field.field].fingerprint === item.metadata.fingerprint && product.plc.fields[field.field].raw === field.raw)).map((field) => field.field);
       if (!matchNeeded && !fields.length) continue;
@@ -615,7 +751,7 @@
       // Current raw data, conflicts and all date sources are sufficient to resolve
       // an exception. Supporting tables remain in collected product evidence.
       delete row.observations;
-      entries.push({ key: item.key, row, metadata: { fileName: item.metadata.fileName, fingerprint: item.metadata.fingerprint, reportDate: item.reportDate, reportDateBasis: !effective.options.review && item.reportDate === effective.reportDate ? effective.reportDateBasis : item.metadata.reportDateBasis || effective.reportDateBasis }, reportDate: item.reportDate, fields, matchNeeded, createdAt: earlier?.createdAt || now, observedAt: earlier?.metadata.fingerprint === item.metadata.fingerprint ? earlier.observedAt : now });
+      entries.push({ key: item.key, row, metadata: { fileName: item.metadata.fileName, fingerprint: item.metadata.fingerprint, reportDate: item.reportDate, reportDateBasis: !effective.options.review && item.reportDate === effective.reportDate ? effective.reportDateBasis : item.metadata.reportDateBasis || effective.reportDateBasis }, reportDate: item.reportDate, fields, matchNeeded, variantBindingNeeded: item.variantBindingNeeded, variantId: item.matchedVariantId, createdAt: earlier?.createdAt || now, observedAt: earlier?.metadata.fingerprint === item.metadata.fingerprint ? earlier.observedAt : now });
     }
     if (entries.length > 2000 || JSON.stringify(entries).length > 1500000) throw new Error("The saved review queue is full. Resolve or export older exceptions before importing more files.");
     next.plcReview = { version, entries };
@@ -623,12 +759,14 @@
   }
   function applyPlan(portfolio, plan, options = {}) {
     const now = new Date(options.now || new Date()).toISOString();
-    const combinedOptions = { ...plan.options, ...options, now, selections: { ...plan.options?.selections, ...options.selections }, createProducts: { ...plan.options?.createProducts, ...options.createProducts } };
+    const combinedOptions = { ...plan.options, ...options, now, selections: { ...plan.options?.selections, ...options.selections }, createProducts: { ...plan.options?.createProducts, ...options.createProducts }, variantAssignments: { ...plan.options?.variantAssignments, ...options.variantAssignments } };
     const creations = prepareProductCreations(plan.dataset, portfolio, combinedOptions);
-    const next = creations.portfolio === portfolio ? clone(portfolio) : creations.portfolio;
+    const variants = prepareVariantAssignments(plan.dataset, creations.portfolio, combinedOptions);
+    const next = variants.portfolio === portfolio ? clone(portfolio) : variants.portfolio;
+    const variantChanges = variants.variantChanges.map((record) => ({ ...record, at: now }));
     const createdProducts = creations.createdProducts.map((record) => ({ ...record, at: now }));
-    const result = { imported: 0, datesUpdated: 0, unchanged: 0, skipped: 0, review: 0, duplicate: false, created: createdProducts.length };
-    const effective = buildPlan(plan.dataset, next, { ...combinedOptions, createProducts: {}, selections: { ...combinedOptions.selections, ...creations.selections } });
+    const result = { imported: 0, datesUpdated: 0, unchanged: 0, skipped: 0, review: 0, duplicate: false, created: createdProducts.length, colorwaysCreated: variantChanges.filter((entry) => entry.created).length };
+    const effective = buildPlan(plan.dataset, next, { ...combinedOptions, createProducts: {}, variantAssignments: variants.assignments, selections: { ...combinedOptions.selections, ...creations.selections } });
     result.fields = clone(effective.summary.fields);
     const products = new Map(identities(next).map((entry) => [entry.productId, entry.product]));
     const originalProducts = new Map(identities(next).map((entry) => [entry.productId, clone(entry.product)]));
@@ -651,9 +789,13 @@
         }
         result.skipped++; continue;
       }
-      if (item.match.status !== "matched") { result.skipped++; continue; }
-      const product = products.get(item.matchedProductId), original = originalProducts.get(item.matchedProductId), baseline = baselines.get(item.matchedProductId);
-      if (baseline && (JSON.stringify(baseline.plc) !== JSON.stringify(original.plc || null) || Object.keys(fieldLabels).some((field) => baseline.fields[field] !== clean(original[field])))) throw new Error("PPC changed since the preview. Reload the preview before applying PLC updates.");
+      if (item.match.status !== "matched" || item.variantBindingNeeded) {
+        if (item.variantBindingNeeded && Object.keys(options.resolutions?.[item.key] || {}).length) throw new Error("Select the product's color option before applying colorway dates.");
+        result.skipped++; continue;
+      }
+      const parent = products.get(item.matchedProductId), originalParent = originalProducts.get(item.matchedProductId), baseline = baselines.get(item.matchedProductId);
+      if (baseline && (JSON.stringify(baseline.plc) !== JSON.stringify(originalParent.plc || null) || Object.keys(fieldLabels).some((field) => baseline.fields[field] !== clean(originalParent[field])))) throw new Error("PPC changed since the preview. Reload the preview before applying PLC updates.");
+      const product = variantProduct(parent, item.matchedVariantId), original = variantProduct(originalParent, item.matchedVariantId);
       const previous = product.plc || {};
       const metadata = item.metadata;
       const olderObservation = previous.reportDate && item.reportDate < previous.reportDate;
@@ -672,31 +814,46 @@
           continue;
         }
         const proposal = JSON.stringify({ value: incoming, period: selectedPeriod });
-        if (proposals.has(`${product.id}/${field.field}`) && proposals.get(`${product.id}/${field.field}`) !== proposal) throw new Error("Two source rows propose different dates for one PPC product. Keep one source date and apply again.");
-        proposals.set(`${product.id}/${field.field}`, proposal);
+        const proposalKey = `${product.id}/${item.matchedVariantId || "base"}/${field.field}`;
+        if (proposals.has(proposalKey) && proposals.get(proposalKey) !== proposal) throw new Error("Two source rows propose different dates for one PPC product or color option. Keep one source date and apply again.");
+        proposals.set(proposalKey, proposal);
         const oldEvidence = fieldEvidence[field.field];
         const fieldStats = result.fields[field.field];
         const oldPeriod = currentPeriod(product, field.field), semanticChange = product[field.field] !== incoming || JSON.stringify(oldPeriod) !== JSON.stringify(selectedPeriod);
-        if (semanticChange) { patch[field.field] = incoming; result.datesUpdated++; fieldStats.updated++; history.push({ at: now, productId: product.id, field: field.field, before: clean(product[field.field]), after: incoming, beforePeriod: oldPeriod, afterPeriod: selectedPeriod, reportDate: field.reportDate, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint, source: field.source, raw: field.raw, reviewed: Boolean(resolution) }); }
+        if (semanticChange) { patch[field.field] = incoming; result.datesUpdated++; fieldStats.updated++; history.push({ at: now, productId: product.id, ...(item.matchedVariantId ? { variantId: item.matchedVariantId, variantName: item.variantTarget.name } : {}), field: field.field, before: clean(product[field.field]), after: incoming, beforePeriod: oldPeriod, afterPeriod: selectedPeriod, reportDate: field.reportDate, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint, source: field.source, raw: field.raw, reviewed: Boolean(resolution) }); }
         else if (field.status !== "unchanged") fieldStats.unchanged++;
         if (resolution && field.status === "review") {
           clearBlockedCount(item, field);
         }
-        const localChange = next.dateLocalEdits?.[product.id]?.[field.field];
+        const localChange = !item.matchedVariantId && next.dateLocalEdits?.[product.id]?.[field.field];
         const selectedCandidates = resolution ? (field.candidates || []).filter((candidate) => candidate.kind === "exact" && candidate.value === incoming) : [];
         const selectedScope = selectedCandidates.length ? [...new Set(selectedCandidates.map((candidate) => candidate.region).filter(Boolean))].join(", ") : (resolution || field.source?.authoritativeCurrentFfs) && incoming === field.incoming && field.region ? field.region : oldEvidence?.scope || "";
         fieldEvidence[field.field] = { value: incoming, ...(selectedPeriod ? { period: clone(selectedPeriod) } : {}), reportDate: field.reportDate, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint, changedAt: semanticChange ? now : localChange?.value === incoming && localChange.at > (oldEvidence?.changedAt || "") ? localChange.at : oldEvidence?.changedAt || "", observedAt: !semanticChange && !oldEvidence?.supersededAt && oldEvidence?.fingerprint === metadata.fingerprint && oldEvidence.value === incoming ? oldEvidence.observedAt : now, raw: field.raw, source: field.source, scope: selectedScope, reviewed: Boolean(resolution) || oldEvidence?.reviewed && oldEvidence.raw === field.raw && oldEvidence.value === incoming && !semanticChange || false, ...(field.revision ? { revision: clone(field.revision) } : {}), ...(field.candidates ? { candidates: clone(field.candidates) } : {}), ...(selectedCandidates.length ? { selectedCandidates: clone(selectedCandidates) } : {}) };
       }
       const ga = patch.generalAvailabilityDate || product.generalAvailabilityDate, em = patch.endManufacturingDate || product.endManufacturingDate;
       if ((Object.hasOwn(patch, "generalAvailabilityDate") || Object.hasOwn(patch, "endManufacturingDate")) && ga && em && em < ga) throw new Error("A selected date places GA after end of manufacturing. Correct the review dates first.");
-      const already = previous.fingerprint === metadata.fingerprint && (previous.rows || []).some((row) => row.key === item.key) && !Object.keys(patch).length && !Object.keys(options.resolutions?.[item.key] || {}).length && JSON.stringify(fieldEvidence) === JSON.stringify(previous.fields || {});
+      const reviewedBinding = item.matchedVariantId && variantChanges.find((record) => record.sourceKey === item.key);
+      const approvedColorway = item.matchedVariantId ? reviewedBinding || !previous.colorway ? colorwaySnapshot(colorVariants(parent).find((variant) => variant.id === item.matchedVariantId)) : clone(previous.colorway) : null;
+      const already = previous.fingerprint === metadata.fingerprint && (previous.rows || []).some((row) => row.key === item.key) && !Object.keys(patch).length && !Object.keys(options.resolutions?.[item.key] || {}).length && JSON.stringify(fieldEvidence) === JSON.stringify(previous.fields || {}) && (!item.matchedVariantId || JSON.stringify(approvedColorway) === JSON.stringify(previous.colorway));
       if (already) { result.unchanged++; continue; }
-      const merged = root.PortfolioModel?.mergeProductUpdate ? root.PortfolioModel.mergeProductUpdate(product, patch) : { ...product, ...patch };
+      const merged = item.matchedVariantId ? { ...product, ...patch } : root.PortfolioModel?.mergeProductUpdate ? root.PortfolioModel.mergeProductUpdate(product, patch) : { ...product, ...patch };
       const rowRecord = { ...clone(item.row), importedAt: now, reportDate: item.reportDate, fingerprint: metadata.fingerprint }; delete rowRecord._plcMetadata;
+      if (item.matchedVariantId) delete rowRecord.observations;
       const currentRows = previous.fingerprint === metadata.fingerprint ? previous.rows || [] : [];
       merged.plc = { version, sourceFile: olderObservation ? previous.sourceFile : metadata.fileName, fingerprint: olderObservation ? previous.fingerprint : metadata.fingerprint, reportDate: olderObservation ? previous.reportDate : item.reportDate, reportDateBasis: olderObservation ? previous.reportDateBasis : effective.options.review || item.reportDate !== effective.reportDate ? item.row.reportDateBasis || metadata.reportDateBasis : effective.reportDateBasis, importedAt: olderObservation ? previous.importedAt : now, changedAt: Object.keys(patch).length ? now : previous.changedAt || "", fields: fieldEvidence, rows: olderObservation ? previous.rows || [] : [...currentRows.filter((row) => row.key !== item.key), rowRecord], identities: [...(previous.identities || []).filter((identity) => identity.key !== item.key), { key: item.key, name: item.row.name, codename: item.row.codename || "", confirmed: item.match.reason === "Selected product" }].slice(-200), history: [...(previous.history || []), ...history.slice(historyStart)].slice(-100) };
       if (previous.createdFromSource) merged.plc.createdFromSource = clone(previous.createdFromSource);
-      Object.assign(product, merged); result.imported++;
+      if (item.matchedVariantId) {
+        const originalPlc = parent.plc || { version }, variantId = item.matchedVariantId;
+        merged.plc.variantId = variantId; merged.plc.variantName = item.variantTarget.name; merged.plc.codename = item.row.codename || ""; merged.plc.colorway = approvedColorway;
+        merged.plc.history = merged.plc.history.slice(-50);
+        const addition = variantChanges.find((record) => record.sourceKey === item.key && record.created);
+        if (addition) merged.plc.createdFromSource = { key: item.key, productId: parent.id, variantId, groupId: addition.groupId, at: now, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint };
+        parent.plc = { ...originalPlc, variantProjects: { ...(originalPlc.variantProjects || {}), [variantId]: merged.plc }, identities: [...(originalPlc.identities || []).filter((identity) => identity.key !== item.key), { key: item.key, name: item.row.name, codename: item.row.codename || "", confirmed: true, variantId }].slice(-200), history: [...(originalPlc.history || []), ...history.slice(historyStart)].slice(-100) };
+      } else {
+        if (previous.variantProjects) merged.plc.variantProjects = clone(previous.variantProjects);
+        Object.assign(parent, merged);
+      }
+      result.imported++;
     }
     for (const record of createdProducts) {
       const item = effective.items.find((entry) => entry.key === record.key);
@@ -724,11 +881,11 @@
       next.plcCollection = { version, importedAt: now, metadata: clone(effective.dataset.metadata), primaryRows, supportingRows: clone(effective.dataset.supportingRows || []) };
       if (JSON.stringify(next.plcCollection).length > 3000000) throw new Error("The collected source evidence is too large for this workspace. The previous collection remains intact.");
     }
-    const run = { at: now, type: plan.review || effective.options.review ? "review" : "import", reportDate: effective.reportDate, reportDateBasis: effective.reportDateBasis, sourceFile: effective.dataset.metadata.fileName, fingerprint: effective.dataset.metadata.fingerprint, metadata: clone(effective.dataset.metadata), summary: result, createdProducts: clone(createdProducts), diagnostics: effective.dataset.diagnostics || [], rows: effective.items.map((item) => ({ key: item.key, name: item.row.name, productId: item.matchedProductId, action: item.action, observation: Object.fromEntries(Object.entries(clone(item.row)).filter(([key]) => !["observations", "_plcMetadata"].includes(key))), fields: item.fields.map((field) => ({ field: field.field, status: field.status, raw: field.raw, reason: field.reason, source: field.source })) })) };
-    if (!result.created && !result.imported && !history.length && (next.plcImports || []).some((entry) => entry.fingerprint === run.fingerprint) && JSON.stringify(next.plcReview) === JSON.stringify(portfolio.plcReview) && JSON.stringify(next.plcCollection) === JSON.stringify(portfolio.plcCollection)) { result.duplicate = true; return { portfolio: clone(portfolio), summary: result, history: [], createdProducts: [] }; }
+    const run = { at: now, type: plan.review || effective.options.review ? "review" : "import", reportDate: effective.reportDate, reportDateBasis: effective.reportDateBasis, sourceFile: effective.dataset.metadata.fileName, fingerprint: effective.dataset.metadata.fingerprint, metadata: clone(effective.dataset.metadata), summary: result, createdProducts: clone(createdProducts), variantChanges: clone(variantChanges), diagnostics: effective.dataset.diagnostics || [], rows: effective.items.map((item) => ({ key: item.key, name: item.row.name, productId: item.matchedProductId, ...(item.matchedVariantId ? { variantId: item.matchedVariantId, variantName: item.variantTarget.name } : {}), action: item.action, observation: Object.fromEntries(Object.entries(clone(item.row)).filter(([key]) => !["observations", "_plcMetadata"].includes(key))), fields: item.fields.map((field) => ({ field: field.field, status: field.status, raw: field.raw, reason: field.reason, source: field.source })) })) };
+    if (!result.created && !result.imported && !history.length && !variantChanges.some((entry) => entry.created) && (next.plcImports || []).some((entry) => entry.fingerprint === run.fingerprint) && JSON.stringify(next.plcReview) === JSON.stringify(portfolio.plcReview) && JSON.stringify(next.plcCollection) === JSON.stringify(portfolio.plcCollection)) { result.duplicate = true; return { portfolio: clone(portfolio), summary: result, history: [], createdProducts: [], variantChanges }; }
     next.plcImports = [...(next.plcImports || []), run].slice(-52);
     while (next.plcImports.length > 1 && JSON.stringify(next.plcImports).length > 1500000) next.plcImports.shift();
-    return { portfolio: next, summary: result, history, createdProducts };
+    return { portfolio: next, summary: result, history, createdProducts, variantChanges };
   }
   function freshness(metadata, today = localDay()) {
     const day = today instanceof Date ? localDay(today) : String(today).slice(0, 10), stamp = dateStamp(day);
@@ -780,5 +937,6 @@
     const period = currentPeriod(product, field);
     return { value, period, displayValue: dateLabel(value, period), populated: Boolean(value), changedAt, changeAgeDays: clocks.changeAgeDays, observedAt, observedAgeDays: clocks.importAgeDays, acceptedAt, acceptedAgeDays: freshness({ changedAt: acceptedAt }, today).changeAgeDays, sourceReportDate: evidence?.reportDate || "", sourceAgeDays: clocks.ageDays, sourceFile: evidence?.sourceFile || "", source: evidence?.source || null };
   }
-  root.PLCImporter = Object.freeze({ version, fieldLabels, parseDate, dateLabel, normalizePeriod, normalizeName, matchProduct, parseWorkbook, buildPlan, buildReviewPlan, applyPlan, freshness, localDay, snapshotDateValues, recordDateChanges, getFieldAge });
+  function getVariantFieldAge(product, variantId, field, today = localDay()) { return getFieldAge(variantProduct(product, variantId), field, today); }
+  root.PLCImporter = Object.freeze({ version, fieldLabels, parseDate, dateLabel, normalizePeriod, normalizeName, matchProduct, colorwayIdentity, parseWorkbook, buildPlan, buildReviewPlan, applyPlan, freshness, localDay, snapshotDateValues, recordDateChanges, getFieldAge, getVariantProject, getVariantFieldAge });
 })(globalThis);

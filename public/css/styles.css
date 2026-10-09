@@ -720,6 +720,18 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .product-detail-page .split-spec-copy strong { font-size: 10px; line-height: 1.35; }
 .product-detail-page .split-spec-copy small { font-size: 8px; }
 .product-detail-sku-content { display: grid; flex: 0 0 auto; align-content: start; gap: 12px; min-width: 0; }
+.product-detail-colorway-note { margin: -6px 0 0; color: var(--color-text-secondary); font-size: 11px; }
+.product-detail-colorway-schedules { display: grid; gap: 8px; }
+.product-detail-colorway-schedule { min-width: 0; padding: 10px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface, #1b1b1b); }
+.product-detail-colorway-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.product-detail-colorway-heading > span { color: var(--color-text-secondary); font-size: 11px; }
+.product-detail-colorway-date { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 6px 0; }
+.product-detail-colorway-date > span, .product-detail-colorway-schedule summary { color: var(--color-text-secondary); font-size: 11px; }
+.product-detail-colorway-date > strong { font-size: 12px; }
+.product-detail-colorway-date > small { grid-column: 1 / -1; color: var(--color-text-muted, #929292); font-size: 10px; line-height: 1.5; }
+.product-detail-colorway-schedule details { margin-top: 6px; }
+.product-detail-colorway-schedule summary { cursor: pointer; }
+.product-detail-colorway-schedule details > small { display: block; margin-top: 8px; color: var(--color-text-secondary); font-size: 10px; overflow-wrap: anywhere; }
 .hp-sku-grid { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .hp-sku-entry, .hp-sku-option { display: grid; grid-template-columns: minmax(0, 1fr) 52px; align-items: center; gap: 12px; min-width: 0; min-height: 64px; padding: 10px; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-shell); }
 .hp-sku-option { grid-template-columns: minmax(0, 1fr); }

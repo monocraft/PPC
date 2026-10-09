@@ -328,6 +328,35 @@
     return JSON.stringify([code, tone(""), tone("2")]);
   }
 
+  function variantMatchIdentity(row) {
+    const normalize = value => String(value ?? "").trim().normalize("NFKC").replace(/\s+/g, " ").toUpperCase();
+    const aliases = { BK: "BK", BLK: "BK", BLACK: "BK", RD: "RED", RED: "RED", WHT: "WHT", WT: "WHT", WH: "WHT", WHITE: "WHT", PNK: "PNK", PINK: "PNK", BLU: "BLU", BLUE: "BLU", LBLU: "LBLU", LIGHTBLUE: "LBLU", LVR: "LVR", LAVENDER: "LVR", GRY: "GRY", GY: "GRY", GRAY: "GRY", GREY: "GRY", NV: "NVY", NVB: "NVY", NVY: "NVY", NAVY: "NVY", NAVYBLUE: "NVY", SVR: "SLV", SLV: "SLV", SILVER: "SLV", FRS: "FRS", FROST: "FRS", MULTI: "MULTI", HXR: "HXR", HXRED: "HXR", HXBL: "HXBL", HXBLUE: "HXBL", HXAQ: "HXAQ", AQU: "HXAQ", AQUA: "HXAQ", HXAQUA: "HXAQ", ORG: "ORG", ORANGE: "ORG", YLW: "YLW", YELLOW: "YLW", GRN: "GRN", GREEN: "GRN", CYN: "CYN", CYAN: "CYN", PUR: "PUR", PURPLE: "PUR", BRN: "BRN", BROWN: "BRN", BGE: "BGE", BEIGE: "BGE", GLD: "GLD", GOLD: "GLD" };
+    const pairs = { BKBLU: ["BK", "BLU"], BKLVR: ["BK", "LVR"], BLKBLU: ["BK", "BLU"], BLKRED: ["BK", "RED"], GYRED: ["GRY", "RED"], GRYRED: ["GRY", "RED"], WHBLU: ["WHT", "BLU"], WHPNK: ["WHT", "PNK"], WHTPNK: ["WHT", "PNK"] };
+    const expression = value => {
+      const raw = normalize(value).replace(/HOUS(?:ING)?\b/g, ""), token = raw.replace(/[^A-Z0-9]/g, "");
+      if (aliases[token]) return [aliases[token]];
+      if (pairs[token]) return pairs[token];
+      const parts = raw.split(/\s*(?:\/|\+|-|_)\s*|\s+/).filter(Boolean).map(part => aliases[part]);
+      return parts.length && parts.length <= 2 && parts.every(Boolean) ? parts : [];
+    };
+    const codes = expression(row?.code), names = expression(row?.colorName);
+    const tone = (suffix, index) => {
+      const name = expression(row?.[`colorName${suffix}`])[0] || names[index], key = expression(row?.[`colorKey${suffix}`])[0], known = codes[index] || name || key;
+      if (known) {
+        const family = value => ({ FRS: "WHT", HXR: "RED", HXBL: "BLU", HXAQ: "CYN", LBLU: "BLU" })[value] || value;
+        const mismatches = [name, key].filter(value => value && family(value) !== family(known));
+        return mismatches.length ? JSON.stringify([known, ...mismatches]) : known;
+      }
+      let hex = normalize(row?.[`colorHex${suffix}`]);
+      if (/^#[0-9A-F]{3}$/.test(hex)) hex = `#${[...hex.slice(1)].map(digit => digit.repeat(2)).join("")}`;
+      return JSON.stringify([normalize(row?.[`colorName${suffix}`]), normalize(row?.[`colorKey${suffix}`]), hex]);
+    };
+    const secondary = Boolean(row?.colorKey2 || row?.colorName2 || row?.colorHex2 || names[1] || codes[1]);
+    // Known color identity survives cosmetic names and swatch refinements. The
+    // presence/order of a secondary color and the canonical code remain binding.
+    return JSON.stringify([codes.length ? codes.join("/") : normalize(row?.code), tone("", 0), secondary ? tone("2", 1) : ""]);
+  }
+
   function duplicateSkus(tree) {
     const buckets = [{ prefix: "partSkus", records: Object.entries(tree.partSkus || {}).map(([id, row]) => ({ path: `partSkus/${segment(id)}`, row })) }];
     const variantBuckets = new Map();
@@ -390,6 +419,28 @@
       conflicts.push(conflict(mineItem.path, baseTree, mineTree, masterTree, { reason: "duplicate-sku", label: `Duplicate ${issue.type === "color" ? "colorway" : "SKU code"} ${issue.code} — choose the final variant`, conflictingPath: masterItem.path, master: clone(masterItem.row), masterExists: true, masterText: describeNode(masterItem.row), duplicateCode: issue.code }));
       setNode(mergedTree, mineItem.path, getNode(masterTree, mineItem.path), masterTree);
     }
+    if (operations.some(operation => operation.path === "plc" && operation.valueExists)) {
+      // Existing orphan evidence remains readable. A new or changed colorway
+      // binding must still have its row after all concurrent merges, including
+      // a deletion that arrived after the client checked the latest master.
+      const previous = baseTree.plc || {}, incoming = mineTree.plc || {}, changed = new Set();
+      for (const [variantId, project] of Object.entries(object(incoming.variantProjects) ? incoming.variantProjects : {})) if (object(project) && !equal(project, previous.variantProjects?.[variantId])) changed.add(variantId);
+      const oldIdentities = new Set((Array.isArray(previous.identities) ? previous.identities : []).map(identity => JSON.stringify(identity)));
+      for (const identity of Array.isArray(incoming.identities) ? incoming.identities : []) if (object(identity) && identity.variantId && identity.confirmed === true && !oldIdentities.has(JSON.stringify(identity))) changed.add(identity.variantId);
+      const colors = tree => new Map(Object.values(tree.variantGroups || {}).filter(group => group.type === "color").flatMap(group => Object.entries(group.items || {}).map(([variantId, row]) => [variantId, { groupId: group.id, row }])));
+      const expectedColors = colors(mineTree), mergedColors = colors(mergedTree);
+      const missing = [...changed].filter(variantId => !mergedColors.has(variantId));
+      const altered = [...changed].filter(variantId => {
+        if (!mergedColors.has(variantId)) return false;
+        const expected = expectedColors.get(variantId), accepted = mergedColors.get(variantId), reviewed = incoming.variantProjects?.[variantId]?.colorway;
+        return !expected || expected.groupId !== accepted.groupId || variantMatchIdentity(object(reviewed) ? reviewed : expected.row) !== variantMatchIdentity(accepted.row);
+      });
+      if (missing.length || altered.length) {
+        for (let index = conflicts.length - 1; index >= 0; index -= 1) if (conflicts[index].path === "plc") conflicts.splice(index, 1);
+        conflicts.push(conflict("plc", baseTree, mineTree, masterTree, { reason: missing.length ? "removed-colorway" : "changed-colorway", label: "PLC colorway match — review the removed or changed colorway", variantIds: [...missing, ...altered] }));
+        setNode(mergedTree, "plc", getNode(masterTree, "plc"), masterTree);
+      }
+    }
     const mergedValues = fromTree(mergedTree);
     const dateConflicts = conflicts.filter((item) => ["@launch", "@end"].includes(item.path));
     let unsafeDateChoice = !validDateOrder(mergedValues);
@@ -407,11 +458,13 @@
     return { values: mergedValues, conflicts, operations, _tree: mergedTree, _mineTree: mineTree, _masterTree: masterTree };
   }
 
-  function resolveConflicts(plan, choices = {}) {
+  function resolveConflicts(plan, choices = {}, { preserveDrafts = false } = {}) {
     const tree = clone(plan._tree || toTree(canonicalValues(plan.values)));
     for (const item of plan.conflicts || []) {
       const choice = choices[item.path] || "mine";
       if (!["mine", "master"].includes(choice)) throw new TypeError("Choose your change or the master value for every conflict.");
+      const sourceMismatch = ["removed-colorway", "changed-colorway"].includes(item.reason);
+      if (sourceMismatch && choice === "mine" && !preserveDrafts) throw new RangeError("This colorway no longer matches its PLC source. Keep the master value and review the source match again before sharing.");
       if (item.path === "@lifecycle") {
         tree["@launch"] = clone(item[choice].launch);
         tree["@end"] = clone(item[choice].end);
@@ -424,6 +477,16 @@
           setNode(tree, item.conflictingPath, { exists: true, value: item.master }, plan._masterTree || tree);
         }
       } else setNode(tree, item.path, { exists: item[`${choice}Exists`], value: item[choice] }, choice === "mine" ? plan._mineTree || tree : plan._masterTree || tree);
+      if (sourceMismatch && choice === "mine" && preserveDrafts) {
+        // A read-only preview can retain a stale draft. Seal legacy evidence to
+        // its original row so refreshing the row cannot change its source match.
+        for (const variantId of item.variantIds || []) {
+          const project = tree.plc?.variantProjects?.[variantId];
+          if (!object(project) || object(project.colorway)) continue;
+          const row = Object.values(plan._mineTree?.variantGroups || {}).filter(group => group.type === "color").map(group => group.items?.[variantId]).find(Boolean);
+          if (row) project.colorway = Object.fromEntries(["code", "colorKey", "colorName", "colorHex", "colorKey2", "colorName2", "colorHex2"].map(field => [field, String(row[field] || "")]));
+        }
+      }
     }
     return validateValues(fromTree(tree));
   }
@@ -1051,5 +1114,5 @@
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: updates.length, history };
   }
 
-  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, latestPackageInfo, dateEditsForProduct, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
+  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, variantMatchIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, latestPackageInfo, dateEditsForProduct, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
 })(globalThis);
