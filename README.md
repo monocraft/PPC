@@ -14,6 +14,7 @@ A browser-based workspace for organizing product portfolios and planning product
 - Review updates and warnings through Messages beside the shared data action.
 - Locate duplicate SKU assignments within a portfolio and open the field to correct them. The same name or SKU can appear in different portfolios, including PC Gaming Audio and Console Gaming Audio.
 - Import and export project packages.
+- Drop biweekly HyperX PLC workbooks into PPC to collect evidence and update reliable milestones automatically. Track independent timestamps and aging for all six dates, resolve saved exceptions when needed, and automatically share importer changes when connected with editing access. See [PLC import module](docs/PLC-IMPORT-MODULE.md).
 - Create PowerPoint presentations from portfolios and roadmaps.
 
 ## Getting started

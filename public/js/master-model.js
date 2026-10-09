@@ -6,7 +6,7 @@
   const PRODUCT_FIELDS = Object.freeze(["name", "codename", "price", "priceLabel", "tier", "statusType", "statusLabel", "variantLabel"]);
   const ROADMAP_FIELDS = Object.freeze({ startMonth: "startMonth", endMonth: "endMonth", roadmapFamily: "family", roadmapStatus: "status", roadmapConfidence: "confidence", roadmapPredecessorId: "predecessorId", roadmapSuccessorId: "successorId" });
   const COLLECTIONS = Object.freeze(["specs", "partSkus", "variantGroups"]);
-  const SHARED_FIELDS = Object.freeze([...DATE_FIELDS, ...PRODUCT_FIELDS, ...Object.keys(ROADMAP_FIELDS), ...COLLECTIONS]);
+  const SHARED_FIELDS = Object.freeze([...DATE_FIELDS, ...PRODUCT_FIELDS, ...Object.keys(ROADMAP_FIELDS), ...COLLECTIONS, "plc"]);
   const SPEC_FIELDS = Object.freeze(["label", "value"]);
   const PART_FIELDS = Object.freeze(["code", "variantId", "colorCode"]);
   const VARIANT_FIELDS = Object.freeze(["code", "label", "colorKey", "colorName", "colorHex", "colorKey2", "colorName2", "colorHex2"]);
@@ -88,6 +88,33 @@
     result.specs = records(source.specs, "Specifications", SPEC_FIELDS);
     result.partSkus = records(source.partSkus, "HP SKUs", PART_FIELDS);
     result.variantGroups = records(source.variantGroups, "Variant groups", ["type", "label"], true);
+    result.plc = plcMetadata(source.plc);
+    return result;
+  }
+
+  // Treat one bounded evidence record as an atomic shared fact. Dates still merge
+  // independently, while provenance cannot be spliced between different imports.
+  function plcMetadata(value) {
+    if (value === undefined || value === null) return null;
+    let nodes = 0;
+    const safe = (node, depth = 0) => {
+      if (++nodes > 16000 || depth > 14) throw new TypeError("PLC evidence exceeds the allowed size.");
+      if (node === null || typeof node === "boolean" || typeof node === "number" && Number.isFinite(node)) return node;
+      if (typeof node === "string" && node.length <= 32768) return node;
+      if (Array.isArray(node) && node.length <= 1000) return node.map((entry) => safe(entry, depth + 1));
+      if (object(node)) {
+        const result = {};
+        for (const [key, entry] of Object.entries(node)) {
+          if (["__proto__", "prototype", "constructor"].includes(key) || key.length > 200) throw new TypeError("Invalid PLC evidence key.");
+          result[key] = safe(entry, depth + 1);
+        }
+        return result;
+      }
+      throw new TypeError("PLC evidence must contain plain bounded data.");
+    };
+    if (!object(value) || value.version !== 1) throw new TypeError("Unsupported PLC evidence version.");
+    const result = safe(value);
+    if (JSON.stringify(result).length > 180000) throw new TypeError("PLC evidence exceeds 180,000 characters per product.");
     return result;
   }
 
@@ -106,7 +133,7 @@
 
   function productValues(product = {}) {
     const source = {};
-    for (const field of [...DATE_FIELDS, ...PRODUCT_FIELDS, ...COLLECTIONS]) source[field] = product[field];
+    for (const field of [...DATE_FIELDS, ...PRODUCT_FIELDS, ...COLLECTIONS, "plc"]) source[field] = product[field];
     for (const [field, property] of Object.entries(ROADMAP_FIELDS)) source[field] = product.roadmap?.[property];
     if (!source.startMonth) source.startMonth = product.roadmap?.launchMonth || "";
     return canonicalValues(source);
@@ -125,6 +152,8 @@
     const values = canonicalValues({ ...productValues(product), ...supplied });
     const result = { ...product, roadmap: { ...(product.roadmap || {}) } };
     for (const field of [...DATE_FIELDS, ...PRODUCT_FIELDS]) result[field] = values[field];
+    if (values.plc !== null) result.plc = clone(values.plc);
+    else if (own(product, "plc")) delete result.plc;
     for (const [field, property] of Object.entries(ROADMAP_FIELDS)) result.roadmap[property] = values[field];
     result.roadmap.launchMonth = values.startMonth;
     result.specs = preserveRecords(product.specs, values.specs);
@@ -215,6 +244,7 @@
 
   function operationLabel(path, baseTree, mineTree) {
     const keys = parts(path);
+    if (keys[0] === "plc") return "PLC source and milestone evidence";
     if (keys.length === 1) return LABELS[keys[0]] || keys[0];
     const recordPath = keys[0] === "variantGroups" && keys.length >= 4 ? keys.slice(0, 4).map(segment).join("/") : keys.slice(0, 2).map(segment).join("/");
     const row = getNode(mineTree, recordPath).value || getNode(baseTree, recordPath).value;
@@ -226,7 +256,7 @@
     const operations = [];
     function walk(base, mine, path, baseExists = true, mineExists = true) {
       if (baseExists === mineExists && equal(base, mine)) return;
-      if (!baseExists || !mineExists || !object(base) || !object(mine) || ["@launch", "@end"].includes(path)) {
+      if (!baseExists || !mineExists || !object(base) || !object(mine) || ["@launch", "@end", "plc"].includes(path)) {
         operations.push({ path, base: clone(baseExists ? base : null), value: clone(mineExists ? mine : null), baseExists, valueExists: mineExists, kind: !baseExists ? "add" : !mineExists ? "remove" : "update", label: operationLabel(path, baseTree, mineTree) });
         return;
       }

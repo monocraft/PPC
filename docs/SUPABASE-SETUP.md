@@ -88,6 +88,14 @@ An unexpected replacement of `master_ppc.pkg` should be reconciled deliberately 
 
 If an unlock key or publisher secret is rotated, update both sides privately and test the connection before reopening team saving. The database password is separate from the package unlock key and is not used by teammates or this publisher.
 
+### PLC/date-evidence deployment status
+
+On October 9, 2026, the production `ppc-master` function in `PPCDB` was updated through the signed-in Supabase dashboard. Only `shared/master-model.js` changed. The deployed source was read back after reload and its SHA-256 matched the generated local model: `ed5b6a2b383a0c9557cda73e0af643e85e560fedcacf8a8512cf3ee5ea1b2158`. The endpoint returned HTTP 204 for the `https://monocraft.github.io` CORS preflight and HTTP 401 `INVALID_KEY` for a request without a package key.
+
+The existing package-key authentication and `verify_jwt = false` setting were preserved. This backend deployment applied no SQL migration, changed no secrets or access settings, and made no business-data writes. Frontend availability is verified separately through the corresponding Pages deployment and live resource checks. After the browser release, verify one controlled authenticated collection/save and its independent date timestamps; that check was not performed during the backend deployment.
+
+For rollback, restore the previous function deployment or its prior model while preserving the existing function settings and secrets. The retained previous model has SHA-256 `3a93b167d315e7201af8ba9ca4c2b691bf2de394b13caa644dfc840a1bc67e28`. Pause or roll back the importer frontend first if it has been released: the previous backend rejects new PLC evidence saves, which remain pending locally. A function rollback does not require resetting, reseeding, or replacing the database.
+
 ## References
 
 - [Supabase Edge Function secrets](https://supabase.com/docs/guides/functions/secrets)

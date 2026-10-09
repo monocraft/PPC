@@ -43,13 +43,64 @@
     return `${parts.join(", ")} ago`;
   }
 
+  // Date ages count local calendar boundaries, rather than blocks of 24 hours.
+  // A report's YYYY-MM-DD is already a calendar day and must never shift zones.
+  function calendarAgeDays(at, now = Date.now()) {
+    const current = timestamp(now);
+    if (!Number.isFinite(current)) return null;
+    let start;
+    if (typeof at === "string" && /^\d{4}-\d{2}-\d{2}$/.test(at)) {
+      const [year, month, date] = at.split("-").map(Number);
+      const probe = new Date(0); probe.setUTCFullYear(year, month - 1, date); probe.setUTCHours(0, 0, 0, 0);
+      if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== date) return null;
+      start = probe.getTime();
+    } else {
+      const instant = timestamp(at);
+      if (!Number.isFinite(instant) || instant > current) return null;
+      const date = new Date(instant);
+      start = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+    }
+    const end = new Date(current), today = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+    return start > today ? null : Math.round((today - start) / day);
+  }
+
   function details(history, pending = false, { now = Date.now(), locale } = {}) {
     const age = formatAge(history?.at, now);
-    if (!age) return { known: false, pending: Boolean(pending), at: null, age: null, actor: "", updated: "" };
+    if (!age) return { known: false, pending: Boolean(pending), at: null, age: null, ageDays: null, actor: "", updated: "" };
     const at = new Date(timestamp(history.at));
-    return { known: true, pending: Boolean(pending), at: at.toISOString(), age,
+    return { known: true, pending: Boolean(pending), at: at.toISOString(), age, ageDays: calendarAgeDays(at, now),
       actor: String(history.actor ?? "").trim().slice(0, 200),
-      updated: at.toLocaleString(locale, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) };
+      updated: at.toLocaleString(locale, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short" }) };
+  }
+
+  function sourceDetails(source, options = {}) {
+    if (!source || typeof source !== "object") return null;
+    const reportDate = typeof source.reportDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(source.reportDate) ? source.reportDate : "";
+    const reportAgeDays = reportDate ? calendarAgeDays(reportDate, options.now) : null;
+    const hasValue = Object.hasOwn(options, "value");
+    const location = source.source && typeof source.source === "object"
+      ? [source.source.sheet, source.source.cell].filter(Boolean).join("!") + (source.source.mergeRange ? ` (merged ${source.source.mergeRange})` : "")
+      : String(source.source ?? "");
+    return {
+      current: !source.supersededAt && (!hasValue || String(source.value ?? "") === String(options.value ?? "")),
+      value: String(source.value ?? ""),
+      changed: details({ at: source.changedAt, actor: "PLC import" }, false, options),
+      observed: details({ at: source.observedAt }, false, options),
+      reportDate, reportAgeDays,
+      sourceFile: String(source.sourceFile ?? "").trim().slice(0, 240),
+      reference: location.trim().slice(0, 240),
+    };
+  }
+
+  function timeline(history, pending = false, options = {}) {
+    const shared = details(history, pending, options), source = sourceDetails(options.source, options);
+    const draftMatches = !Object.hasOwn(options, "value") || String(options.draft?.value ?? "") === String(options.value ?? "");
+    const draft = draftMatches ? details(options.draft, pending, options) : details(null, pending, options);
+    let changed = shared, kind = "shared";
+    if (source?.current && source.changed.known) { changed = source.changed; kind = "source"; }
+    if (pending && draft.known && (!changed.known || timestamp(draft.at) > timestamp(changed.at))) { changed = draft; kind = "draft"; }
+    if (pending && kind === "shared") { changed = details(null, true, options); kind = "unknown"; }
+    return { pending: Boolean(pending), changed, kind, shared, source, draft };
   }
 
   function labelHtml(label, field, { tag = "span" } = {}) {
@@ -131,19 +182,42 @@
       if (!popup || !anchor) return;
       if (!anchor.isConnected || !container.isConnected) { close(); return; }
       const field = anchor.getAttribute("data-date-history-field");
-      const state = details(adapter.getHistory?.(field), adapter.isPending?.(field), { now: adapter.now?.() ?? Date.now(), locale: adapter.locale });
+      const factsOptions = { now: adapter.now?.() ?? Date.now(), locale: adapter.locale, source: adapter.getSource?.(field), draft: adapter.getDraft?.(field) };
+      if (adapter.getValue) factsOptions.value = adapter.getValue(field);
+      const state = timeline(adapter.getHistory?.(field), adapter.isPending?.(field), factsOptions);
       const heading = create("div", "date-history-heading", anchor.textContent.trim());
       const rows = [];
       if (state.pending) rows.push(create("span", "date-history-pending", "Unsaved change"));
-      if (state.known) {
-        const list = create("dl", "date-history-facts");
-        const time = create("time", "", state.updated); time.setAttribute("datetime", state.at);
+      const ageText = (clock) => `${plural(clock.ageDays, "day")} · ${clock.age}`;
+      const appendClock = (list, label, clock, ageLabel = "Age (days)") => {
+        if (!clock.known) return;
+        const time = create("time", "", clock.updated); time.setAttribute("datetime", clock.at);
         const timeValue = create("dd", ""); timeValue.append(time);
-        list.append(create("dt", "", "Last updated"), timeValue, create("dt", "", "Age"), create("dd", "date-history-age", state.age));
-        if (state.actor) list.append(create("dt", "", "Updated by"), create("dd", "", state.actor));
+        list.append(create("dt", "", label), timeValue, create("dt", "", ageLabel), create("dd", "date-history-age", ageText(clock)));
+      };
+      if (state.changed.known) {
+        const list = create("dl", "date-history-facts");
+        appendClock(list, "Last value changed", state.changed);
+        if (state.changed.actor) list.append(create("dt", "", "Updated by"), create("dd", "", state.changed.actor));
         rows.push(list);
       } else {
-        rows.push(create("div", "date-history-empty", "No edit history yet"), create("p", "date-history-note", "Tracking begins with the next date update."));
+        rows.push(create("div", "date-history-empty", "Change time not recorded"), create("p", "date-history-note", "Tracking begins with the next date update."));
+      }
+      if (state.shared.known && state.kind !== "shared") {
+        const list = create("dl", "date-history-facts date-history-shared");
+        appendClock(list, state.pending ? "Shared value changed" : "Saved to master", state.shared, "Shared age (days)");
+        if (state.shared.actor) list.append(create("dt", "", "Shared by"), create("dd", "", state.shared.actor));
+        rows.push(list);
+      }
+      if (state.source) {
+        const source = state.source, list = create("dl", "date-history-facts date-history-source");
+        if (!source.current) rows.push(create("p", "date-history-note", `PLC evidence belongs to the previous value (${source.value || "blank"}).`));
+        if (source.reportDate) list.append(create("dt", "", "Source report"), create("dd", "", source.reportDate));
+        if (source.reportAgeDays !== null) list.append(create("dt", "", "Source age (days)"), create("dd", "date-history-age", plural(source.reportAgeDays, "day")));
+        appendClock(list, source.current ? "Last confirmed" : "Previous value confirmed", source.observed, "Confirmation age (days)");
+        if (source.sourceFile) list.append(create("dt", "", "Source file"), create("dd", "", source.sourceFile));
+        if (source.reference) list.append(create("dt", "", "Source location"), create("dd", "", source.reference));
+        if (list.children.length) rows.push(list);
       }
       popup.replaceChildren(heading, ...rows);
       position();
@@ -241,5 +315,5 @@
     return controller;
   }
 
-  root.PortfolioDateHistory = Object.freeze({ labelHtml, bind, formatAge, details });
+  root.PortfolioDateHistory = Object.freeze({ labelHtml, bind, formatAge, calendarAgeDays, details, sourceDetails, timeline });
 })(globalThis);
