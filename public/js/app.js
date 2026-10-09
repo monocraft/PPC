@@ -3666,6 +3666,28 @@ function productDetailsModel(product) {
   };
 }
 
+function productDateHistoryOptions(productId) {
+  const state = () => {
+    const product = portfolio.categories.flatMap((category) => category.board.products).find((item) => item.id === productId);
+    const shared = globalThis.PortfolioMasterUI?.getSession?.()?.getState()?.snapshot?.products?.find((item) => item.productId === productId)
+      || portfolio.masterLocalBaseline?.find((item) => item.productId === productId);
+    const acceptedProduct = { id: productId, ...(shared?.values || product || {}) };
+    const edits = globalThis.PortfolioMasterModel?.dateEditsForProduct?.({ categories: [{ board: { products: [acceptedProduct] } }], masterSync: portfolio.masterSync }, productId) || {};
+    return { product, shared, edits };
+  };
+  return {
+    getHistory(field) { return state().edits[field] || null; },
+    isPending(field) {
+      const { product, shared } = state();
+      return Boolean(product && (shared ? (product[field] || "") !== (shared.values[field] || "") : product[field]));
+    },
+  };
+}
+
+function productDateHistoryLabel(label, field) {
+  return globalThis.PortfolioDateHistory?.labelHtml(label, field) || escapeHtml(label);
+}
+
 function renderSplitProduct() {
   if (!splitProduct) return;
   const product = selectedProduct();
@@ -3684,7 +3706,7 @@ function renderSplitProduct() {
       </div>
       <div class="split-product-body">${PortfolioDetails.render(productDetailsModel(product), { surface: 'split' })}</div>
     </article>`;
-  PortfolioDetails.bind(splitProduct, { onCopy: copyTextToClipboard });
+  PortfolioDetails.bind(splitProduct, { onCopy: copyTextToClipboard, dateHistory: productDateHistoryOptions(product.id) });
 }
 function updateLinkedViewButton() {
   const hasSelection = Boolean(selectedProduct());
@@ -4066,7 +4088,7 @@ function renderViewerInfo() {
   }
   viewerInfo.innerHTML = `<div class="viewer-info-body"><div class="viewer-detail-heading"><div class="viewer-detail-title"><span class="viewer-detail-eyebrow">Product details</span><h2>${escapeHtml(product.name)}</h2></div><button type="button" class="icon-button viewer-detail-close" data-detail-close aria-label="Close product information">×</button></div>${PortfolioDetails.render(productDetailsModel(product), { surface: 'viewer' })}</div>`;
   setViewerInfoSize(viewerInfoVisualWidth(), viewerInfoVisualHeight());
-  PortfolioDetails.bind(viewerInfo, { onCopy: copyTextToClipboard, onClose: closeViewerInfo });
+  PortfolioDetails.bind(viewerInfo, { onCopy: copyTextToClipboard, onClose: closeViewerInfo, dateHistory: productDateHistoryOptions(product.id) });
 }
 function positionViewerInfo() {
   if (!viewerInfo || !viewerInfoProductId || activeView !== "products" || viewerInfoProgress <= 0) return null;
@@ -4632,39 +4654,39 @@ function renderInspector() {
           <label>Product tier<select id="fieldProductTier">${productTierOptionsHtml(product.tier)}</select></label>
         </div>
         <div class="portfolio-date-grid">
-          <label class="portfolio-date-field">General availability (GA)
+          <label class="portfolio-date-field">${productDateHistoryLabel("General availability (GA)", "generalAvailabilityDate")}
             <span class="portfolio-date-control">
-              <input id="fieldGeneralAvailabilityDate" type="date" value="${escapeHtml(product.generalAvailabilityDate || "")}">
+              <input id="fieldGeneralAvailabilityDate" type="date" aria-label="General availability (GA)" value="${escapeHtml(product.generalAvailabilityDate || "")}">
               <button id="fieldGeneralAvailabilityDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
-          <label class="portfolio-date-field">End of manufacturing (EM)
+          <label class="portfolio-date-field">${productDateHistoryLabel("End of manufacturing (EM)", "endManufacturingDate")}
             <span class="portfolio-date-control">
-              <input id="fieldEndManufacturingDate" type="date" value="${escapeHtml(product.endManufacturingDate || "")}">
+              <input id="fieldEndManufacturingDate" type="date" aria-label="End of manufacturing (EM)" value="${escapeHtml(product.endManufacturingDate || "")}">
               <button id="fieldEndManufacturingDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
-          <label class="portfolio-date-field">FFS date
+          <label class="portfolio-date-field">${productDateHistoryLabel("FFS date", "ffsDate")}
             <span class="portfolio-date-control">
-              <input id="fieldFfsDate" type="date" value="${escapeHtml(product.ffsDate || "")}">
+              <input id="fieldFfsDate" type="date" aria-label="FFS date" value="${escapeHtml(product.ffsDate || "")}">
               <button id="fieldFfsDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
-          <label class="portfolio-date-field">Global announcement
+          <label class="portfolio-date-field">${productDateHistoryLabel("Global announcement", "globalAnnouncementDate")}
             <span class="portfolio-date-control">
-              <input id="fieldGlobalAnnouncementDate" type="date" value="${escapeHtml(product.globalAnnouncementDate || "")}">
+              <input id="fieldGlobalAnnouncementDate" type="date" aria-label="Global announcement" value="${escapeHtml(product.globalAnnouncementDate || "")}">
               <button id="fieldGlobalAnnouncementDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
-          <label class="portfolio-date-field">Web readiness
+          <label class="portfolio-date-field">${productDateHistoryLabel("Web readiness", "webReadinessDate")}
             <span class="portfolio-date-control">
-              <input id="fieldWebReadinessDate" type="date" value="${escapeHtml(product.webReadinessDate || "")}">
+              <input id="fieldWebReadinessDate" type="date" aria-label="Web readiness" value="${escapeHtml(product.webReadinessDate || "")}">
               <button id="fieldWebReadinessDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
-          <label class="portfolio-date-field">Final assets
+          <label class="portfolio-date-field">${productDateHistoryLabel("Final assets", "finalAssetsDate")}
             <span class="portfolio-date-control">
-              <input id="fieldFinalAssetsDate" type="date" value="${escapeHtml(product.finalAssetsDate || "")}">
+              <input id="fieldFinalAssetsDate" type="date" aria-label="Final assets" value="${escapeHtml(product.finalAssetsDate || "")}">
               <button id="fieldFinalAssetsDateTbd" class="date-tbd-button" type="button" title="Clear the date and mark it TBD">TBD</button>
             </span>
           </label>
@@ -4811,6 +4833,7 @@ function renderInspector() {
   bindProductDate("#fieldGlobalAnnouncementDate", "#fieldGlobalAnnouncementDateTbd", "globalAnnouncementDate");
   bindProductDate("#fieldWebReadinessDate", "#fieldWebReadinessDateTbd", "webReadinessDate");
   bindProductDate("#fieldFinalAssetsDate", "#fieldFinalAssetsDateTbd", "finalAssetsDate");
+  globalThis.PortfolioDateHistory?.bind(inspector, productDateHistoryOptions(product.id));
 
   const categorySelectField = $("#fieldProductCategory");
   const moveCategoryButton = $("#moveProductCategory");

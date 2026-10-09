@@ -648,6 +648,7 @@ const paneSandbox = {
   viewerInfo: viewerPane, viewerInfoOutline: viewerOutline, renderedCards: [],
   selectedProduct: () => null,
   productDetailsModel: (product) => ({ ...longModel, id: product.id, specs: product.specs }),
+  productDateHistoryOptions: () => ({}),
   escapeHtml: decode,
   inspectorOpen: false, inspector: { offsetWidth: 0 },
   canvasScroll: { clientWidth: 360, clientHeight: 76 },

@@ -337,6 +337,8 @@ Exit condition: a clean checkout serves and validates without private data.
 
 ### Phase 1 — Correctness, safety, and deployability
 
+Date labels now expose per-date history using `public/js/date-history.js` and `public/css/date-history.css` on the editor, product details and Roadmap details. `productDateHistoryOptions` reads accepted snapshot/baseline values independently of local drafts. The shared model derives valid legacy audit records and retains six durable `{at, actor, value}` entries under `masterSync.products[id].dateEdits`; only accepted exact-date changes advance a clock, including fills/clears and merge/import changes. Never substitute package timestamps or source-import dates for missing field history. After changing the canonical shared model, regenerate `supabase/functions/ppc-master/shared` with `scripts/build-supabase-master.mjs` and verify the Edge Function deployment as well as Pages. Dedicated checks are `date-edit-metadata.mjs`, `date-history-ui.mjs` and `date-history-workspace.mjs`.
+
 - Guarantee all runtime dependencies are in the Pages artifact.
 - Preserve package validation, isolated image staging, failed-commit rollback, and cleanup only after successful metadata and workspace activation; strengthen cross-store failure and browser-quota verification. Use downloaded packages for backups.
 - Report save/storage errors and current save status.

@@ -6,6 +6,7 @@
   const tone = (value) => /^#[\da-f]{6}$/i.test(value || "") ? value : "#393c40";
   const tabs = [["overview", "Overview"], ["skus", "HP SKUs"], ["more", "More"]];
   const dateKinds = new Set(["general-availability", "end-manufacturing", "ffs", "global-announcement", "web-readiness", "final-assets"]);
+  const dateFields = { "general-availability": "generalAvailabilityDate", "end-manufacturing": "endManufacturingDate", ffs: "ffsDate", "global-announcement": "globalAnnouncementDate", "web-readiness": "webReadinessDate", "final-assets": "finalAssetsDate" };
   const lifecycleKinds = new Set(["launch", "lifecycle-end", "stage", "confidence"]);
   const kindAttribute = (name, key, kinds) => kinds.has(key) ? ` data-${name}-kind="${key}"` : "";
 
@@ -66,7 +67,7 @@
     surface = surface === "viewer" ? "viewer" : "split";
     const state = stateFor(surface, model.id);
     const prefix = `product-detail-${surface}`;
-    const field = (item) => `<div class="product-detail-date"${kindAttribute("date", item.key, dateKinds)}><span>${escape(item.label)}</span><strong class="${item.empty ? "is-muted" : ""}">${escape(item.value)}</strong></div>`;
+    const field = (item) => `<div class="product-detail-date"${kindAttribute("date", item.key, dateKinds)}>${dateFields[item.key] && root.PortfolioDateHistory ? root.PortfolioDateHistory.labelHtml(item.label, dateFields[item.key]) : `<span>${escape(item.label)}</span>`}<strong class="${item.empty ? "is-muted" : ""}">${escape(item.value)}</strong></div>`;
     function pages(name, entries, size, itemHtml, empty) {
       const total = Math.max(1, Math.ceil(entries.length / size));
       const current = Math.min(state.pages[name] || 0, total - 1);
@@ -88,9 +89,10 @@
     return `<div class="product-details product-detail-workspace" data-detail-surface="${surface}" data-detail-product="${escape(model.id)}"><div class="product-detail-tabs" role="tablist" aria-label="Product details">${tabs.map(([key, label]) => `<button type="button" role="tab" id="${prefix}-${key}-tab" data-detail-tab="${key}" aria-controls="${prefix}-${key}" aria-selected="${state.tab === key}" tabindex="${state.tab === key ? 0 : -1}" class="${state.tab === key ? "is-active" : ""}">${label}</button>`).join("")}</div>${tabs.map(([key]) => `<section id="${prefix}-${key}" class="product-detail-panel ${state.tab === key ? "" : "hidden"}" role="tabpanel" aria-labelledby="${prefix}-${key}-tab" data-detail-panel="${key}" tabindex="0">${panels[key]}</section>`).join("")}<span class="visually-hidden" role="status" aria-live="polite" aria-atomic="true" data-detail-copy-status></span></div>`;
   }
 
-  function bind(container, { onCopy, onClose } = {}) {
+  function bind(container, { onCopy, onClose, dateHistory } = {}) {
     const workspace = container.querySelector("[data-detail-surface]");
     if (!workspace) return;
+    if (dateHistory) root.PortfolioDateHistory?.bind(container, dateHistory);
     const state = stateFor(workspace.dataset.detailSurface, workspace.dataset.detailProduct);
     function bindTabs(selector, panelSelector, key, attribute) {
       const buttons = [...workspace.querySelectorAll(selector)];
