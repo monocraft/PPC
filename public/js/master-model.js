@@ -516,6 +516,78 @@
 
   function updateSummary(productCount) { return `${productCount} ${productCount === 1 ? "product" : "products"} updated.`; }
 
+  function dateEdit(record, field, currentValue) {
+    if (!object(record) || record.unknown || !own(record, "value")) return null;
+    const at = updateTimestamp(record.at);
+    if (!at) return null;
+    try {
+      const value = exactDate(record.value, field);
+      if (value !== currentValue) return null;
+      return { at, actor: typeof record.actor === "string" ? record.actor.slice(0, 160) : "", value };
+    } catch { return null; }
+  }
+
+  // Retained audit records recover older clocks without treating a planned
+  // month, another field, or an import's package date as an exact-date edit.
+  function legacyDateEdits(manifest) {
+    const sync = object(manifest?.masterSync) ? manifest.masterSync : null;
+    const maximumRevision = Number.isSafeInteger(sync?.revision) && sync.revision >= 0 ? sync.revision : Number.MAX_SAFE_INTEGER;
+    const byProduct = new Map();
+    for (const record of Array.isArray(sync?.history) ? sync.history.slice(-1000) : []) {
+      const accepted = acceptedUpdate(record, maximumRevision);
+      if (!accepted || record.afterExists === false || record.kind === "delete") continue;
+      const path = record.path ?? record.field;
+      const fields = DATE_FIELDS.includes(path) ? [path] : path === "@launch" ? ["generalAvailabilityDate"] : path === "@end" ? ["endManufacturingDate"] : path === "@product" ? DATE_FIELDS : [];
+      for (const field of fields) {
+        try {
+          if (record.valueTruncated) {
+            const dates = byProduct.get(accepted.productId) || dictionary();
+            if (!dates[field] || accepted.revision > dates[field].revision) dates[field] = { revision: accepted.revision, at: accepted.at, unknown: true };
+            byProduct.set(accepted.productId, dates);
+            continue;
+          }
+          const scalar = path === field;
+          if (!own(record, "after") || !scalar && (!object(record.after) || !own(record.after, field))) continue;
+          const value = exactDate(scalar ? record.after : record.after[field], field);
+          const initial = path === "@product" && record.before === null && record.beforeExists !== true;
+          if (initial && !value) continue;
+          if (!initial && (!own(record, "before") || !scalar && (!object(record.before) || !own(record.before, field)))) continue;
+          const before = initial ? "" : exactDate(scalar ? record.before : record.before[field], field);
+          if (before === value) continue;
+          const dates = byProduct.get(accepted.productId) || dictionary();
+          const previous = dates[field];
+          if (!previous || accepted.revision > previous.revision || accepted.revision === previous.revision && accepted.at > previous.at) {
+            dates[field] = { revision: accepted.revision, at: accepted.at, actor: typeof record.actor === "string" ? record.actor.slice(0, 160) : "", value };
+            byProduct.set(accepted.productId, dates);
+          }
+        } catch { /* An invalid legacy date cannot supply a clock. */ }
+      }
+    }
+    return byProduct;
+  }
+
+  function dateEditsForValues(manifest, productId, values, legacy = legacyDateEdits(manifest)) {
+    const result = dictionary();
+    const stored = manifest?.masterSync?.products?.[productId]?.dateEdits;
+    for (const field of DATE_FIELDS) {
+      const saved = dateEdit(object(stored) && own(stored, field) ? stored[field] : null, field, values[field]);
+      const recovered = dateEdit(legacy.get(productId)?.[field], field, values[field]);
+      const latest = saved && recovered && recovered.at > saved.at ? recovered : saved || recovered;
+      if (latest) result[field] = latest;
+    }
+    return result;
+  }
+
+  function dateEditsForProduct(manifest, productId) {
+    try {
+      identity(productId, "Product");
+      const entry = entriesFromManifest(manifest).find((item) => item.productId === productId);
+      if (!entry) return dictionary();
+      const values = Object.fromEntries(DATE_FIELDS.map((field) => [field, exactDate(entry.product[field], field)]));
+      return dateEditsForValues(manifest, productId, values);
+    } catch { return dictionary(); }
+  }
+
   // Older masters already hold the accepted business edits in their audit
   // history, even when their package information still describes the seed.
   function latestPackageInfo(manifest) {
@@ -821,6 +893,7 @@
     const nextManifest = clone(manifest);
     const nextEntries = new Map(entriesFromManifest(nextManifest).map((entry) => [entry.productId, entry]));
     const previousMeta = object(nextManifest.masterSync) ? nextManifest.masterSync : {};
+    const recoveredDateEdits = legacyDateEdits(manifest);
     const metadata = { ...previousMeta, version: 1, revision: Number.isSafeInteger(previousMeta.revision) && previousMeta.revision >= 0 ? previousMeta.revision : 0, products: dictionary(), history: Array.isArray(previousMeta.history) ? previousMeta.history.slice(-1000) : [] };
     for (const [productId, previous] of Object.entries(previousMeta.products || {})) {
       identity(productId, "Product");
@@ -828,6 +901,7 @@
     }
     for (const entry of [...currentSnapshot.products, ...currentSnapshot.tombstones]) {
       metadata.products[entry.productId] = { ...(metadata.products[entry.productId] || {}), revisions: safeRevisions(entry.revisions) };
+      if (entry.values) metadata.products[entry.productId].dateEdits = dateEditsForValues(manifest, entry.productId, entry.values, recoveredDateEdits);
       for (const revision of Object.values(entry.revisions)) metadata.revision = Math.max(metadata.revision, revision);
     }
     if (metadata.revision > Number.MAX_SAFE_INTEGER - updates.reduce((sum, entry) => sum + entry.operations.length + (entry.kind === "merge" ? 1 + (nextEntries.size + updates.length) * 2 : 0), 0)) throw new RangeError("The change counter needs attention from the portfolio owner before another save.");
@@ -884,6 +958,16 @@
         Object.assign(entry.product, nextProduct);
       }
       const revisions = metadata.products[update.productId].revisions;
+      if (update.kind !== "delete") {
+        const dates = update.kind === "create" ? dictionary() : metadata.products[update.productId].dateEdits || dictionary();
+        const previousValues = known.get(update.productId)?.values;
+        for (const field of DATE_FIELDS) {
+          if (previousValues ? previousValues[field] !== update.values[field] : Boolean(update.values[field])) {
+            dates[field] = { at: now, actor: String(context.actor || "Team member").slice(0, 160), value: update.values[field] };
+          }
+        }
+        metadata.products[update.productId].dateEdits = dates;
+      }
       for (const op of update.operations) {
         metadata.revision += 1;
         revisions[op.path] = metadata.revision;
@@ -909,5 +993,5 @@
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: updates.length, history };
   }
 
-  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, latestPackageInfo, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
+  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, productValues, values: productValues, productVersion, variantSkuIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, latestPackageInfo, dateEditsForProduct, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
 })(globalThis);

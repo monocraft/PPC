@@ -285,7 +285,7 @@ Object.assign(presentationSandbox, {
   splitProduct: { innerHTML: "" }, selectedProduct: () => consoleProduct,
   escapeHtml: (text) => String(text || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
   contrastTextColor: () => "#111111", productDetailsModel: () => ({}),
-  PortfolioDetails: { render: () => "Details", bind() {} }, copyTextToClipboard() {},
+  PortfolioDetails: { render: () => "Details", bind() {} }, productDateHistoryOptions: () => ({}), copyTextToClipboard() {},
 });
 vm.runInContext(
   appSource.slice(appSource.indexOf("function drawCard("), appSource.indexOf("function roadmapRange(")) +

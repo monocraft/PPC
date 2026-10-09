@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-10-08 — date edit history and aging
+
+- Add an unobtrusive hover, focus or tap popup to each of the six date labels in product details, Roadmap details and the editable date fields. Show the localized last update, elapsed age and optional updater name; indicate unsaved date changes separately.
+- Retain independent accepted-date timestamps in shared product metadata. Genuine date edits, imports, consolidation and TBD clears update the appropriate clock; no-op saves, conflicts and unrelated changes preserve it.
+- Recover trustworthy retained history for older data, preserve clocks after audit-history pruning, and display an honest empty state for dates without recorded history. Keep popups above scrolling panes without increasing the date layout height.
+
 ## 2026-10-08 — development and sunsetting presets
 
 - Add In development and Sunsetting to the product Status dropdown with fixed blue `#7aa2cc` and amber `#d4a56a` accents. Render IN-DEVELOPMENT and SUNSETTING banners with readable dark text.
