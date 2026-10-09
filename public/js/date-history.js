@@ -84,11 +84,12 @@
     return {
       current: !source.supersededAt && (!hasValue || String(source.value ?? "") === String(options.value ?? "")),
       value: String(source.value ?? ""),
-      changed: details({ at: source.changedAt, actor: "PLC import" }, false, options),
+      changed: details({ at: source.changedAt, actor: source.sourceType === "local" ? "Manual edit" : "PLC import" }, false, options),
       observed: details({ at: source.observedAt }, false, options),
       reportDate, reportAgeDays,
       sourceFile: String(source.sourceFile ?? "").trim().slice(0, 240),
       reference: location.trim().slice(0, 240),
+      period: root.PortfolioDatePrecision?.normalizePeriod(source.period, source.value) || null,
     };
   }
 
@@ -212,6 +213,7 @@
       if (state.source) {
         const source = state.source, list = create("dl", "date-history-facts date-history-source");
         if (!source.current) rows.push(create("p", "date-history-note", `PLC evidence belongs to the previous value (${source.value || "blank"}).`));
+        if (source.period) list.append(create("dt", "", "Date precision"), create("dd", "", `${source.period.label} · calendar quarter (${source.period.start} to ${source.period.end})`));
         if (source.reportDate) list.append(create("dt", "", "Source report"), create("dd", "", source.reportDate));
         if (source.reportAgeDays !== null) list.append(create("dt", "", "Source age (days)"), create("dd", "date-history-age", plural(source.reportAgeDays, "day")));
         appendClock(list, source.current ? "Last confirmed" : "Previous value confirmed", source.observed, "Confirmation age (days)");
