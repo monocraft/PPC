@@ -334,12 +334,26 @@
         }
         if (result.saved) {
           lastError = "";
+          notices?.resolve("plc-master-sharing");
           notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Latest values kept" : "Changes saved", message: "Your team will see these updates automatically.", revision: String(Date.now()), toast: true });
         }
       } catch (error) {
         if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
         close(null); lastError = friendlyError(error, true);
         updateStatus(); notices?.show("master-sync-error");
+      } finally { running = false; updateStatus(); }
+    }
+
+    async function saveScoped(options) {
+      if (running || discarding || refreshRunning || dialog.open || session.getState().busy || adapter.hasPendingPackageOperation?.()) return { status: "pending", saved: false, code: "MASTER_BUSY", message: "PLC data is saved on this device. Sharing will resume when the current update finishes." };
+      if (typeof session.saveScoped !== "function") return { status: "local", saved: false, code: "SCOPED_SAVE_UNAVAILABLE", message: "PLC data is saved on this device. Shared saving needs an updated connection." };
+      running = true;
+      try {
+        const result = await session.saveScoped(options);
+        if (Number.isFinite(result.retryUntil)) retryUntil = Math.max(retryUntil, result.retryUntil);
+        if (result.status === "saved") notices?.resolve("plc-master-sharing");
+        else notices?.publish({ id: "plc-master-sharing", severity: result.status === "pending" ? "warning" : "info", title: result.status === "pending" ? "PLC sharing needs attention" : "PLC data collected", message: result.status === "pending" ? "Your PLC data is saved on this device. Review the pending changes to share them." : "Your PLC data is saved on this device. Connect with editing access to share it automatically.", toast: false, actions: [{ label: "Review changes", onClick: saveFlow }] });
+        return result;
       } finally { running = false; updateStatus(); }
     }
 
@@ -361,11 +375,11 @@
     }
     const timer = root.setInterval(refreshQuietly, githubMode ? 60000 : 45000);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "hidden") refreshQuietly(); });
-    active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow,
+    active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow, saveScoped,
       reviewConflicts(conflicts) { if (running || discarding || session.getState().busy || !Array.isArray(conflicts) || !conflicts.length) return null; return resolveConflicts(conflicts); },
       markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
       disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; updateStatus(); },
-      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-publication", "master-discard-result", "master-discard-undone"]) notices?.resolve(id); dialog.remove(); },
+      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-publication", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); dialog.remove(); },
     });
     updateStatus();
     if (teamMode && configured && session.getState().hasKey) refreshQuietly();
@@ -390,6 +404,6 @@
     }
     return active;
   }
-  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
+  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
   if (root.PortfolioMasterAdapter) initialize({ adapter: root.PortfolioMasterAdapter });
 })(globalThis);

@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="css/product-merge.css">
   <link rel="stylesheet" href="css/portfolio-search.css">
   <link rel="stylesheet" href="css/date-history.css">
+  <link rel="stylesheet" href="css/plc-import.css">
 </head>
 <body>
   <main class="app-shell">
@@ -28,6 +29,7 @@
           <button class="view-tab" data-view="roadmap" role="tab" aria-selected="false">Roadmap</button>
         </div>
         <div class="toolbar-actions">
+          <button id="openPlcUpdates" class="plc-toolbar-trigger" type="button" title="Drop the biweekly HyperX workbook to collect updates and date aging"><span aria-hidden="true">↻</span> PLC updates<span id="plcToolbarStatus" class="plc-toolbar-status"></span></button>
           <button id="pullLatestData" class="shared-data-trigger" title="Load the shared portfolio and roadmap with your package key">Pull latest data</button>
           <button id="exportPptx" class="primary-button" title="Export Product Portfolio, Roadmap, or both to PowerPoint">Export PPTX</button>
           <button id="workspaceSettingsButton" class="settings-trigger" aria-haspopup="dialog" aria-controls="workspaceSettingsDialog" aria-expanded="false"><span aria-hidden="true">⚙</span> Settings</button>
@@ -169,7 +171,8 @@
             <button id="categorySettings"><span>Category settings</span><small>Edit protected titles, labels, and lanes</small></button></div></section>
           <section id="settingsDataPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabData" data-settings-panel="data">
             <div class="settings-section-heading"><h3>Data & export</h3><span class="scope-badge">Entire portfolio</span></div>
-            <p class="settings-note">ASCM adds and updates products. Package and data imports replace the workspace.</p>
+            <p class="settings-note">PLC reports update project milestones. ASCM adds and updates products. Package and data imports replace the workspace.</p>
+            <section class="plc-settings-summary" aria-label="PLC update freshness"><div><h4>HyperX project updates</h4><p id="plcSettingsStatus" class="settings-note">Drop in the biweekly PLC workbook. Reliable dates update automatically with timestamps and aging days.</p></div><button id="settingsPlcUpdates" type="button">Open PLC updates</button></section>
             <div class="shared-package-settings"><div><h4>Portfolio access</h4><p id="sharedPackageStatus" class="settings-note"></p></div><button id="settingsPullLatestData" type="button">Open portfolio</button></div>
             <section class="package-info" aria-label="Loaded package information"><dl><dt>Package updated</dt><dd><time id="sharedPackageUpdated"></time></dd><dt>Updater comments</dt><dd id="sharedPackageComments" class="package-info-comments"></dd></dl></section>
             <div id="dataMenu" class="popup-menu settings-action-list data-action-menu" aria-label="Import and export">
@@ -177,6 +180,7 @@
                 <section class="data-direction-panel data-import-panel" aria-labelledby="dataImportTitle">
                   <div class="data-direction-heading"><svg class="data-direction-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><div><h4 id="dataImportTitle">Import</h4><p>Bring files into this workspace.</p></div></div>
                   <button id="importAscm" class="data-action menu-primary" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import ASCM report</strong><small>Preview additions and updates; keep specs, prices, and images.</small></span></button>
+                  <button id="importPlcReport" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import HyperX PLC report</strong><small>Drop Excel to update matched products, date timestamps, and aging days.</small></span></button>
                   <button id="importPackage" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import project package</strong><small>Replace products, settings, and the image library from a .pkg backup.</small></span></button>
                   <button id="importJson" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import data file</strong><small>Replace workspace data from .data or legacy .json; image files are not included.</small></span></button>
                 </section>
@@ -348,6 +352,8 @@
   <script src="vendor/pptxgen.bundle.js"></script>
   <script src="js/catalog-data.js"></script>
   <script src="js/ascm-import.js"></script>
+  <script src="js/plc-import.js"></script>
+  <script src="js/plc-import-ui.js"></script>
   <script src="js/pptx-pagination.js"></script>
   <script src="js/pptx-editable.js"></script>
   <script src="js/portfolio-model.js"></script>

@@ -23,6 +23,38 @@ const metadata = historyUI.details({ at: "2026-10-08T16:45:00Z", actor: "  Team 
 assert.equal(metadata.at, "2026-10-08T16:45:00.000Z");
 assert.equal(metadata.actor, "Team <name>"); assert.equal(metadata.pending, true);
 assert.equal(metadata.age, "1 hour, 15 minutes ago"); assert.match(metadata.updated, /2026/);
+assert.equal(metadata.ageDays, 0); assert.match(metadata.updated, /:00/);
+const localMidnight = new Date(2026, 9, 9, 0, 5, 0);
+assert.equal(historyUI.calendarAgeDays(new Date(2026, 9, 8, 23, 55, 0), localMidnight), 1, "A date ages across a local calendar boundary even when only ten minutes elapsed.");
+assert.equal(historyUI.calendarAgeDays("2026-10-08", localMidnight), 1, "Report days retain their date instead of shifting through UTC.");
+assert.equal(historyUI.calendarAgeDays("2026-10-09", localMidnight), 0);
+for (const invalid of [null, "", "invalid", "2026-02-30", "2026-10-10", new Date(2026, 9, 9, 1, 0, 0)]) assert.equal(historyUI.calendarAgeDays(invalid, localMidnight), null);
+const evidence = { value: "2027-01-21", changedAt: "2026-10-01T16:45:00Z", observedAt: "2026-10-08T16:45:00Z", reportDate: "2026-10-08", sourceFile: "Biweekly.xlsx", source: { sheet: "Projects", cell: "G12", mergeRange: "G12:G13" } };
+const sourceMetadata = historyUI.sourceDetails(evidence, { now: instant, value: "2027-01-21", locale: "en-US" });
+assert.equal(sourceMetadata.current, true); assert.equal(sourceMetadata.reportAgeDays, 0);
+assert.equal(sourceMetadata.changed.ageDays, 7); assert.equal(sourceMetadata.observed.ageDays, 0);
+assert.equal(sourceMetadata.reference, "Projects!G12 (merged G12:G13)");
+const acceptedHistory = { at: "2026-10-08T17:45:00Z", value: "2027-01-21", actor: "Planning" };
+const confirmed = historyUI.timeline(acceptedHistory, false, { now: instant, value: "2027-01-21", source: evidence });
+assert.equal(confirmed.kind, "source"); assert.equal(confirmed.changed.at, "2026-10-01T16:45:00.000Z", "A newly confirmed date retains the original date-change clock.");
+assert.equal(confirmed.shared.at, "2026-10-08T17:45:00.000Z", "Saving is an independent timestamp.");
+const superseded = historyUI.timeline(acceptedHistory, false, { now: instant, value: evidence.value, source: { ...evidence, supersededAt: "2026-10-08T17:00:00Z" } });
+assert.equal(superseded.source.current, false, "Manually changing a date away and back does not revive superseded PLC provenance even when its value matches again.");
+assert.equal(superseded.kind, "shared");
+assert.equal(superseded.changed.at, "2026-10-08T17:45:00.000Z", "The newer saved manual date clock remains authoritative after returning to an old imported value.");
+const changedDraft = historyUI.timeline(acceptedHistory, true, { now: instant, value: "2027-02-01", source: evidence, draft: { at: "2026-10-08T17:50:00Z", value: "2027-02-01", actor: "Planning" } });
+assert.equal(changedDraft.kind, "draft"); assert.equal(changedDraft.source.current, false);
+assert.equal(changedDraft.changed.at, "2026-10-08T17:50:00.000Z");
+const unknownDraft = historyUI.timeline(acceptedHistory, true, { now: instant, value: "2027-02-01", source: evidence, draft: { at: "2026-10-08T17:50:00Z", value: "2027-03-01" } });
+assert.equal(unknownDraft.changed.known, false, "Stale draft or imported evidence cannot fabricate the current date's timestamp.");
+assert.equal(unknownDraft.shared.known, true);
+assert.equal(historyUI.timeline(null, false, { now: instant, value: evidence.value, source: { ...evidence, changedAt: "" } }).changed.known, false, "First observing an existing legacy date cannot claim when it changed.");
+for (const field of ["generalAvailabilityDate", "ffsDate", "endManufacturingDate", "globalAnnouncementDate", "webReadinessDate", "finalAssetsDate"]) {
+  const ownSource = { ...evidence, source: { sheet: "Milestones", cell: field }, changedAt: "2026-10-06T16:45:00Z" };
+  const ownClock = historyUI.timeline(null, true, { now: instant, source: ownSource, value: evidence.value });
+  assert.equal(ownClock.changed.ageDays, 2, `${field} keeps its own imported date-change timestamp before the master is saved.`);
+  assert.equal(ownClock.kind, "source");
+}
 const label = historyUI.labelHtml('GA <test> "label"', 'ga" onclick="bad');
 assert.match(label, /role="button"/); assert.match(label, /tabindex="0"/);
 assert.match(label, /GA &lt;test&gt; &quot;label&quot;/); assert.doesNotMatch(label, / onclick="/);
@@ -138,7 +170,7 @@ ui.ga.fire("pointerover", { pointerType: "mouse" }); ui.flush(450);
 const firstPopup = ui.popup();
 assert.ok(firstPopup, "A deliberate pause opens history."); assert.equal(firstPopup.parentNode, ui.document.body, "The popup is outside the date pane to avoid clipping.");
 assert.equal(firstPopup.getAttribute("role"), "tooltip"); assert.equal(firstPopup.popoverShown, true);
-assert.match(firstPopup.textContent, /General availability.*Last updated.*2026.*Age.*1 hour, 15 minutes ago.*Updated by.*<team>/);
+assert.match(firstPopup.textContent, /General availability.*Last value changed.*2026.*Age \(days\).*0 days.*1 hour, 15 minutes ago.*Updated by.*<team>/);
 assert.match(ui.ga.getAttribute("aria-describedby"), new RegExp(`existing-description ${firstPopup.id}`));
 assert.equal(ui.ga.getAttribute("aria-expanded"), "true"); assert.equal(ui.timers.size, 1);
 assert.ok(firstPopup.getBoundingClientRect().bottom < ui.ga.getBoundingClientRect().top, "History prefers the space above the label, away from the input below.");
@@ -149,7 +181,7 @@ assert.equal(ui.timers.size, 1, "A transparent popup stays visible while the poi
 ui.setNow(instant + 60000); ui.flush(60000);
 assert.match(ui.popup().textContent, /1 hour, 16 minutes ago/); assert.equal(ui.timers.size, 1, "Only one live age timer runs while open.");
 ui.setPending(true); ui.controller.refresh();
-assert.match(ui.popup().textContent, /Unsaved change.*Last updated.*Age.*1 hour, 16 minutes ago/, "A draft does not reset the accepted edit age.");
+assert.match(ui.popup().textContent, /Unsaved change.*Change time not recorded.*Shared value changed.*Shared age \(days\).*1 hour, 16 minutes ago/, "A draft does not reset the accepted edit age or borrow it as its own age.");
 ui.document.fire("pointermove", { target: ui.document.body, clientX: 700, clientY: 500 }); ui.flush(150);
 assert.equal(ui.popup(), null); assert.equal(ui.timers.size, 0); assert.equal(ui.observers.size, 0);
 assert.equal(ui.ga.getAttribute("aria-describedby"), "existing-description"); assert.equal(ui.ga.getAttribute("aria-expanded"), null);
@@ -189,8 +221,8 @@ ui.document.activeElement = ui.outside; ui.outside.fire("focusin");
 assert.equal(ui.popup(), null); assert.equal(ui.timers.size, 0, "Keyboard focus outside the date label closes even a pinned popup.");
 ui.document.activeElement = ui.document.body;
 
-ui.end.fire("click"); assert.match(ui.popup().textContent, /End of manufacturing.*Unsaved change.*No edit history yet.*Tracking begins with the next date update\./);
-assert.doesNotMatch(ui.popup().textContent, /Last updated|Age|ago/);
+ui.end.fire("click"); assert.match(ui.popup().textContent, /End of manufacturing.*Unsaved change.*Change time not recorded.*Tracking begins with the next date update\./);
+assert.doesNotMatch(ui.popup().textContent, /Last value changed|Age|ago/);
 ui.document.fire("pointerdown", { target: ui.outside }); assert.equal(ui.popup(), null);
 ui.document.popoverThrows = true; ui.ga.fire("click"); assert.equal(ui.popup().getAttribute("popover"), null, "An unavailable top layer falls back to a visible body portal.");
 ui.ga.rect = { left: 20, right: 120, top: 35, bottom: 50, width: 100, height: 15 };
@@ -222,6 +254,18 @@ const pendingDestroy = documentFixture(); pendingDestroy.ga.fire("pointerover", 
 assert.equal(pendingDestroy.timers.size, 1); pendingDestroy.controller.destroy(); pendingDestroy.flush(450);
 assert.equal(pendingDestroy.popup(), null); assert.equal(pendingDestroy.timers.size, 0, "Destroying a pending hover cannot leave a delayed orphan popup.");
 for (const listeners of pendingDestroy.document.events.values()) assert.equal(listeners.length, 0);
+
+const plcUi = documentFixture();
+let plcValue = evidence.value, plcSource = evidence;
+const plcOptions = { ...plcUi.options, getValue: () => plcValue, getSource: () => plcSource };
+plcUi.controller.update(plcOptions); plcUi.ga.fire("click");
+assert.match(plcUi.popup().textContent, /Last value changed.*7 days.*Saved to master.*Source report2026-10-08.*Source age \(days\)0 days.*Last confirmed.*Confirmation age \(days\)0 days.*Biweekly.xlsx.*Projects!G12/, "The frontend separates when a milestone changed from when its source confirmed it and when it was saved.");
+plcUi.setPending(true); plcValue = "2027-02-01";
+plcUi.controller.update({ ...plcOptions, getDraft: () => ({ at: "2026-10-08T17:50:00Z", value: plcValue, actor: "Planning" }) });
+assert.match(plcUi.popup().textContent, /Unsaved change.*Last value changed.*10 minutes ago.*Shared value changed.*PLC evidence belongs to the previous value \(2027-01-21\).*Previous value confirmed/);
+plcSource = null; plcUi.controller.refresh();
+assert.doesNotMatch(plcUi.popup().textContent, /Source report|Biweekly/);
+plcUi.controller.destroy();
 
 const css = await readFile(new URL("../../public/css/date-history.css", import.meta.url), "utf8");
 assert.match(css, /\.date-history-popup\s*\{[^}]*position:\s*fixed;/);
