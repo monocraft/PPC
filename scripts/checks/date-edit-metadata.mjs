@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
 import '../../public/js/master-model.js';
 import '../../public/js/product-merge.js';
 import '../../public/js/package-codec.js';
+import '../../public/js/date-precision.js';
 
 const model = globalThis.PortfolioMasterModel, merge = globalThis.PortfolioProductMerge, codec = globalThis.PortfolioPackage;
 const copy = (value) => structuredClone(value), plain = (value) => JSON.parse(JSON.stringify(value));
@@ -114,4 +117,166 @@ const unpacked = JSON.parse(decoder.decode(codec.readZip(await codec.decrypt(pac
 assert.deepEqual(dates(unpacked), dates(independent.manifest), 'Date clocks survive an encrypted package round trip.');
 const detached = model.dateEditsForProduct(unpacked, 'one'); detached.ffsDate.actor = 'Mutated returned data';
 assert.equal(dates(unpacked).ffsDate.actor, 'Planner');
-console.log('Date edit metadata checks passed: independent clocks, genuine exact-date changes, accepted saves, no-op/conflict stability, TBD clears, legacy recovery, imported creation, consolidation, bounded history, malformed data, immutable reads and encrypted package round trips.');
+
+// Exercise the actual editor binding. Native date controls emit intermediate
+// change events while a year segment is being typed; assigning .value in those
+// events resets the selected segment in Chromium-based browsers.
+const appSource = fs.readFileSync(new URL('../../public/js/app.js', import.meta.url), 'utf8');
+const bindingStart = appSource.indexOf('  const bindProductDate = (inputSelector, tbdButtonSelector, fieldName) => {');
+const bindingEnd = appSource.indexOf('\n  bindProductDate("#fieldFfsDate"', bindingStart);
+assert(bindingStart >= 0 && bindingEnd > bindingStart, 'The real product date binding is available to verify.');
+const normalizeDate = /function normalizeProductInfoDate\(value\) \{[\s\S]*?\n\}/.exec(appSource)?.[0];
+assert(normalizeDate, 'Use the same exact-date normalization as the editor.');
+function editorElement(initial = '') {
+  let value = initial;
+  const attributes = new Map(), classes = new Set(), listeners = new Map();
+  return {
+    assignments: 0, focused: false, validity: { valid: true }, textContent: '',
+    get value() { return value; },
+    set value(next) { value = String(next); this.assignments += 1; },
+    userValue(next) { value = String(next); },
+    getAttribute(name) { return attributes.get(name) ?? null; },
+    setAttribute(name, next) { attributes.set(name, String(next)); },
+    removeAttribute(name) { attributes.delete(name); },
+    classList: { toggle(name, force) { if (force) classes.add(name); else classes.delete(name); }, contains(name) { return classes.has(name); } },
+    addEventListener(name, handler) { const handlers = listeners.get(name) || []; handlers.push(handler); listeners.set(name, handlers); },
+    focus() { this.focused = true; },
+    fire(name, options = {}) {
+      const event = { key: '', altKey: false, ctrlKey: false, metaKey: false, prevented: false,
+        preventDefault() { this.prevented = true; }, ...options };
+      for (const handler of listeners.get(name) || []) handler(event);
+      return event;
+    },
+  };
+}
+function dateEditor() {
+  let manifest = save(copy(seed), { ffsDate: '2027-03-15' }, firstAt).manifest;
+  const writes = [], fields = new Map(), feedback = editorElement();
+  const elements = new Map([['#productDateFeedback', feedback]]);
+  const context = vm.createContext({
+    product: product(manifest), $: (selector) => elements.get(selector),
+    selectedProduct: () => product(manifest), PortfolioDatePrecision: globalThis.PortfolioDatePrecision,
+    updateProductMilestone(id, field, value, period = null) {
+      const result = model.mergeChanges(manifest, [change(manifest, { [field]: value }, id)], { now: secondAt, actor: 'Date editor' });
+      assert.equal(result.conflicts.length, 0);
+      manifest = result.manifest;
+      // Retain precision evidence exactly as the UI expects when changing modes.
+      if (period) {
+        const current = product(manifest);
+        current.plc ??= { version: 1 }; current.plc.fields ??= {};
+        current.plc.fields[field] = { value, period: plain(period) };
+      } else if (product(manifest).plc?.fields?.[field]) delete product(manifest).plc.fields[field];
+      writes.push({ field, value, period: plain(period), savedFields: result.savedFields });
+    },
+  });
+  vm.runInContext(`${normalizeDate}\n${appSource.slice(bindingStart, bindingEnd)}\nglobalThis.bindDate = bindProductDate;`, context);
+  for (const [inputId, field] of [
+    ['FfsDate', 'ffsDate'], ['GeneralAvailabilityDate', 'generalAvailabilityDate'],
+    ['EndManufacturingDate', 'endManufacturingDate'], ['FinalAssetsDate', 'finalAssetsDate'],
+  ]) {
+    const selector = `#field${inputId}`;
+    const controls = { input: editorElement(product(manifest)[field] || ''), tbd: editorElement(),
+      precision: editorElement('exact'), quarter: editorElement() };
+    elements.set(selector, controls.input); elements.set(`${selector}Tbd`, controls.tbd);
+    elements.set(`${selector}Precision`, controls.precision); elements.set(`${selector}Quarter`, controls.quarter);
+    fields.set(field, controls); context.bindDate(selector, `${selector}Tbd`, field);
+  }
+  return { fields, writes, feedback, current: () => product(manifest), clocks: () => dates(manifest) };
+}
+const typed = dateEditor(), ffs = typed.fields.get('ffsDate'), originalClock = typed.clocks().ffsDate;
+assert.equal(ffs.input.min, '1900-01-01'); assert.equal(ffs.input.max, '9999-12-31');
+for (const [key, intermediate] of [['2', '0002-04-01'], ['0', '0020-04-01'], ['2', '0202-04-01'], ['8', '2028-04-01']]) {
+  ffs.input.fire('keydown', { key }); ffs.input.userValue(intermediate); ffs.input.fire('change');
+  assert.equal(typed.writes.length, 0, 'Each intermediate year stays staged while typing.');
+  assert.equal(ffs.input.assignments, 0, 'Year typing must not reset the native date segment.');
+  assert.deepEqual(typed.clocks().ffsDate, originalClock, 'Intermediate years cannot change the saved clock.');
+}
+ffs.input.fire('blur');
+assert.equal(typed.current().ffsDate, '2028-04-01'); assert.equal(typed.writes.length, 1);
+assert.equal(ffs.input.assignments, 0, 'A complete typed date also keeps its native segment intact.');
+assert.deepEqual(typed.clocks().ffsDate, { at: secondAt, actor: 'Date editor', value: '2028-04-01' });
+ffs.input.fire('blur');
+assert.equal(typed.writes.length, 1, 'A later untouched blur makes no additional update call.'); assert.equal(ffs.input.assignments, 0);
+assert.deepEqual(typed.clocks().ffsDate, { at: secondAt, actor: 'Date editor', value: '2028-04-01' }, 'Repeated blur is a no-op for date aging.');
+
+for (const [invalid, validity] of [
+  ['1899-12-31', true], ['10000-01-01', true], ['2027-02-29', true], ['2028-02-30', true], ['', false],
+]) {
+  const invalidEditor = dateEditor(), control = invalidEditor.fields.get('ffsDate');
+  control.input.fire('keydown', { key: 'Backspace' }); control.input.userValue(invalid); control.input.validity.valid = validity;
+  control.input.fire('change'); control.input.fire('blur');
+  assert.equal(invalidEditor.writes.length, 0, `Invalid exact date ${invalid || 'an incomplete native segment'} cannot be committed.`);
+  assert.equal(invalidEditor.current().ffsDate, '2027-03-15');
+  assert.equal(control.input.value, invalid, 'Invalid input remains available to correct.');
+  assert.equal(control.input.assignments, 0, 'Validation must not force the native control back to the saved date.');
+  assert.equal(control.input.getAttribute('aria-invalid'), 'true'); assert.match(invalidEditor.feedback.textContent, /four-digit year/i);
+  assert.equal(invalidEditor.clocks().ffsDate.at, firstAt);
+}
+const enterEditor = dateEditor(), enterFfs = enterEditor.fields.get('ffsDate');
+enterFfs.input.fire('keydown', { key: '2' }); enterFfs.input.userValue('2028-02-29'); enterFfs.input.fire('change');
+assert(enterFfs.input.fire('keydown', { key: 'Enter' }).prevented);
+assert.equal(enterEditor.writes.length, 1); assert.equal(enterEditor.current().ffsDate, '2028-02-29');
+enterFfs.input.fire('blur'); assert.equal(enterEditor.writes.length, 1, 'Enter followed by blur commits once.');
+assert.equal(enterFfs.input.assignments, 0);
+
+const calendarEditor = dateEditor(), calendarFfs = calendarEditor.fields.get('ffsDate');
+calendarFfs.input.fire('keydown', { key: '2' }); calendarFfs.input.userValue('0002-04-01'); calendarFfs.input.fire('change');
+calendarFfs.input.fire('pointerdown'); calendarFfs.input.userValue('2028-05-20'); calendarFfs.input.fire('change');
+assert.equal(calendarEditor.current().ffsDate, '2028-05-20', 'Opening the calendar after typing allows an immediate calendar selection.');
+assert.equal(calendarEditor.writes.length, 1); assert.equal(calendarFfs.input.assignments, 0);
+calendarFfs.input.fire('blur'); assert.equal(calendarEditor.writes.length, 1, 'Calendar selection followed by blur commits once.');
+assert.equal(calendarEditor.clocks().ffsDate.at, secondAt);
+
+for (const [field, invalid] of [['generalAvailabilityDate', '2031-01-01'], ['endManufacturingDate', '2026-01-01']]) {
+  const rangeEditor = dateEditor(), control = rangeEditor.fields.get(field), before = rangeEditor.current()[field];
+  control.input.fire('keydown', { key: '2' }); control.input.userValue(invalid); control.input.fire('change'); control.input.fire('blur');
+  assert.equal(rangeEditor.writes.length, 0); assert.equal(rangeEditor.current()[field], before);
+  assert.equal(control.input.value, invalid); assert.equal(control.input.assignments, 0);
+  assert.equal(control.input.getAttribute('aria-invalid'), 'true'); assert.match(rangeEditor.feedback.textContent, /manufacturing.*general availability/i);
+}
+const quarterEditor = dateEditor(), quarterFfs = quarterEditor.fields.get('ffsDate');
+quarterFfs.input.fire('keydown', { key: '2' }); quarterFfs.input.userValue('0002-04-01'); quarterFfs.input.fire('change');
+quarterFfs.precision.userValue('quarter'); quarterFfs.precision.fire('change'); quarterFfs.input.validity.valid = false;
+quarterFfs.quarter.userValue('Q2 2028'); quarterFfs.quarter.fire('change');
+assert.equal(quarterEditor.current().ffsDate, '2028-04-01'); assert.equal(quarterEditor.writes.length, 1);
+assert.equal(quarterEditor.writes[0].period.label, 'Q2 2028', 'The keyboard fix keeps quarter precision and its roadmap anchor.');
+quarterFfs.quarter.userValue('Q2 1899'); quarterFfs.quarter.fire('change');
+assert.equal(quarterEditor.writes.length, 1); assert.equal(quarterFfs.quarter.value, 'Q2 1899');
+assert.equal(quarterFfs.quarter.getAttribute('aria-invalid'), 'true');
+const savedQuarter = plain(quarterEditor.current().plc.fields.ffsDate), savedQuarterClock = quarterEditor.clocks().ffsDate;
+quarterFfs.input.validity.valid = true;
+quarterFfs.precision.userValue('exact'); quarterFfs.precision.fire('change');
+assert.equal(quarterFfs.input.value, '', 'Replacing a quarter asks for a verified exact day.');
+assert(quarterFfs.input.focused); quarterFfs.input.fire('blur');
+assert.equal(quarterEditor.writes.length, 1, 'Focusing and leaving an empty exact field cannot erase the saved quarter.');
+assert.equal(quarterEditor.current().ffsDate, '2028-04-01');
+assert.deepEqual(plain(quarterEditor.current().plc.fields.ffsDate), savedQuarter);
+assert.deepEqual(quarterEditor.clocks().ffsDate, savedQuarterClock);
+quarterFfs.input.fire('keydown', { key: 'Enter' }); quarterFfs.input.fire('blur');
+assert.equal(quarterEditor.writes.length, 1, 'Enter in an untouched empty exact field preserves the quarter.');
+quarterFfs.input.fire('change');
+assert.equal(quarterEditor.writes.length, 1, 'Even an empty native change cannot replace a saved quarter with TBD.');
+assert.equal(quarterEditor.current().ffsDate, '2028-04-01');
+assert.deepEqual(plain(quarterEditor.current().plc.fields.ffsDate), savedQuarter);
+assert.deepEqual(quarterEditor.clocks().ffsDate, savedQuarterClock);
+quarterFfs.input.fire('keydown', { key: '2' }); quarterFfs.input.userValue('2028-05-10'); quarterFfs.input.fire('change');
+assert.equal(quarterEditor.writes.length, 1, 'A replacement exact day stages while typing.');
+quarterFfs.input.fire('blur');
+assert.equal(quarterEditor.writes.length, 2); assert.equal(quarterEditor.current().ffsDate, '2028-05-10');
+assert.equal(quarterEditor.current().plc.fields.ffsDate, undefined, 'A verified exact replacement removes quarter evidence.');
+assert.equal(quarterEditor.clocks().ffsDate.value, '2028-05-10');
+
+const untouchedEditor = dateEditor(), untouchedFfs = untouchedEditor.fields.get('ffsDate');
+untouchedFfs.input.focus(); untouchedFfs.input.fire('blur');
+assert.equal(untouchedEditor.writes.length, 0, 'Simply focusing a saved exact date and leaving does not update it.');
+assert.equal(untouchedFfs.input.assignments, 0); assert.equal(untouchedEditor.clocks().ffsDate.at, firstAt);
+
+const independentEditor = dateEditor(), independentFfs = independentEditor.fields.get('ffsDate'), assets = independentEditor.fields.get('finalAssetsDate');
+independentFfs.input.fire('keydown', { key: '2' }); independentFfs.input.userValue('0020-04-01'); independentFfs.input.fire('change');
+assets.input.fire('pointerdown'); assets.input.userValue('2028-03-20'); assets.input.fire('change');
+assert.equal(independentEditor.current().finalAssetsDate, '2028-03-20'); assert.equal(independentEditor.current().ffsDate, '2027-03-15');
+assert.equal(independentEditor.clocks().ffsDate.at, firstAt); assert.equal(independentEditor.clocks().finalAssetsDate.at, secondAt);
+independentFfs.tbd.fire('click'); assert.equal(independentEditor.current().ffsDate, ''); assert.equal(independentFfs.input.value, '');
+independentFfs.input.fire('pointerdown'); independentFfs.input.userValue('2028-04-20'); independentFfs.input.fire('change');
+assert.equal(independentEditor.current().ffsDate, '2028-04-20', 'Explicit TBD clears pending typing and a later calendar date can be selected.');
+console.log('Date edit metadata checks passed: durable clocks, accepted saves, no-op/conflict stability, legacy recovery, package round trips, staged four-digit native year typing, correction-preserving validation, single calendar and Enter commits, empty exact-mode quarter protection, range protection and independent fields.');

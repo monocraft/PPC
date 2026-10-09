@@ -251,7 +251,8 @@ let roadmapFilterScrollResetPending = false;
 let roadmapMonthWidth = ROADMAP_DEFAULT_MONTH_WIDTH;
 let roadmapHitRegions = new Map();
 let roadmapRowRegions = new Map();
-let roadmapHoveredProductId = null;
+const roadmapHoveredProductIds = new Map();
+const roadmapLaneHovers = new Map();
 let roadmapDragState = null;
 let roadmapPanState = null;
 let roadmapInteractionMode = "pan";
@@ -1400,6 +1401,7 @@ function scheduleSave() {
 function activateCategory(categoryId, { render = true, fitVertical = true } = {}) {
   const category = portfolio?.categories?.find((item) => item.id === categoryId) || portfolio?.categories?.[0];
   if (!category) throw new Error("The portfolio contains no usable categories.");
+  roadmapLaneHovers.forEach((hover) => hover.clear({ immediate: true }));
   finishProductReorder({ render: false });
 
   // Viewer details belong to the current category. Clear them before the
@@ -2843,7 +2845,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         }
 
         const handleWidth = Math.min(14, barWidth / 2);
-        const editingThisSlot = includeSelection && !exportMode && roadmapInteractionMode === "dates" && (selected || roadmapHoveredProductId === product.id);
+        const editingThisSlot = includeSelection && !exportMode && roadmapInteractionMode === "dates" && (selected || roadmapHoveredProductIds.get(targetCanvas) === product.id);
         const startVisible = monthIndex(roadmap.startMonth) >= range.start;
         const endVisible = monthIndex(roadmap.endMonth) <= range.end;
 
@@ -2934,7 +2936,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
           context.fillStyle = "rgba(174,198,181,.09)";
           context.fillRect(stickyX + 48, y, ROADMAP_LEFT_WIDTH - 48, ROADMAP_ROW_HEIGHT);
         }
-        const activeRow = product.id === selectedId || product.id === roadmapHoveredProductId;
+        const activeRow = product.id === selectedId || roadmapHoveredProductIds.get(targetCanvas) === product.id;
         context.fillStyle = activeRow ? "rgba(195,200,197,.55)" : "rgba(149,155,151,.22)";
         for (let column = 0; roadmapInteractionMode === "dates" && column < 2; column += 1) {
           for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 54 + column * 3.5, y + 14 + dot * 4.5, 1.4, 1.4);
@@ -3115,7 +3117,10 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.stroke();
 
   roadmapHitRegions.set(targetCanvas, regions);
-  if (includeSelection && !exportMode) roadmapRowRegions.set(targetCanvas, rows);
+  if (includeSelection && !exportMode) {
+    roadmapRowRegions.set(targetCanvas, rows);
+    roadmapLaneHovers.get(targetCanvas)?.sync();
+  }
 }
 
 function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
@@ -3351,6 +3356,18 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   feedback.className = "roadmap-drag-feedback hidden";
   document.body.append(feedback);
   let frame = null;
+  const laneHover = RoadmapLaneHover.create(targetCanvas, targetScroll, {
+    headerHeight: ROADMAP_HEADER_HEIGHT,
+    getRows: () => roadmapRowRegions.get(targetCanvas) || [],
+    getOwner: () => `${activeCategoryId}:${activeView}`,
+    isSuspended: () => Boolean(roadmapDragState || roadmapPanState || targetCanvas.closest(".hidden")),
+    onChange: (productId) => {
+      roadmapHoveredProductIds.set(targetCanvas, productId);
+      targetCanvas.title = productId ? board.products.find((product) => product.id === productId)?.name || "" : "";
+      paintInteraction();
+    },
+  });
+  roadmapLaneHovers.set(targetCanvas, laneHover);
 
   function paintInteraction() {
     const dimensions = roadmapDimensions();
@@ -3494,15 +3511,8 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     }
     const point = roadmapPoint(event, targetCanvas);
     const hit = hitRoadmapBar(targetCanvas, point);
-    const row = hitRoadmapRow(targetCanvas, point);
-    const hoveredId = hit?.productId || row?.productId || null;
-    targetCanvas.title = hoveredId ? board.products.find((product) => product.id === hoveredId)?.name || "" : "";
     const within = (handle) => handle && point.x >= handle.x && point.x < handle.x + handle.width;
     targetCanvas.style.cursor = roadmapInteractionMode === "dates" && hit && (within(hit.leftHandle) || within(hit.rightHandle)) ? "ew-resize" : "grab";
-    if (roadmapHoveredProductId !== hoveredId) {
-      roadmapHoveredProductId = hoveredId;
-      paintInteraction();
-    }
   });
 
   function finishRoadmapPointer(event, cancelled = false) {
@@ -3555,8 +3565,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   targetCanvas.addEventListener("lostpointercapture", (event) => finishRoadmapPointer(event, true));
   targetCanvas.addEventListener("pointerleave", () => {
     if (roadmapDragState || roadmapPanState) return;
-    roadmapHoveredProductId = null;
-    paintInteraction();
+    laneHover.clear();
   });
   targetCanvas.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && (roadmapInteractionMode === "dates" || roadmapDragState || roadmapPanState)) {
@@ -3920,6 +3929,7 @@ function syncRoadmapDetailsVisibility() {
 
 function setView(view, { focusSelected = false } = {}) {
   closePopupMenus();
+  roadmapLaneHovers.forEach((hover) => hover.clear({ immediate: true }));
   roadmapPanState?.cancel?.();
   roadmapInteractionMode = "pan";
   if (view === "split") roadmapDetailsOpen = true;
@@ -4846,6 +4856,8 @@ function renderInspector() {
     const precision = $(`${inputSelector}Precision`);
     const quarterInput = $(`${inputSelector}Quarter`);
     if (!input || !tbdButton || !precision || !quarterInput) return;
+    input.min = "1900-01-01"; input.max = "9999-12-31";
+    let typingExactDate = false;
 
     const syncTbdState = () => {
       const isTbd = !normalizeProductInfoDate(selectedProduct()?.[fieldName]);
@@ -4857,28 +4869,41 @@ function renderInspector() {
       const current = selectedProduct();
       if (!current || current.id !== product.id) return;
       const value = period?.start || normalizeProductInfoDate(input.value);
+      if (!period && !input.value && globalThis.PortfolioDatePrecision?.currentPeriod(current, fieldName)) return;
       const ga = fieldName === "generalAvailabilityDate" ? value : current.generalAvailabilityDate;
       const em = fieldName === "endManufacturingDate" ? value : current.endManufacturingDate;
       const invalidRange = ["generalAvailabilityDate", "endManufacturingDate"].includes(fieldName) && ga && em && em < ga;
-      if (!input.validity.valid || invalidRange) {
-        $("#productDateFeedback").textContent = invalidRange ? "End of manufacturing must be on or after general availability. The previous date was kept." : "Enter a complete, valid date. The previous date was kept.";
-        input.value = current[fieldName] || "";
-        quarterInput.value = globalThis.PortfolioDatePrecision?.currentPeriod(current, fieldName)?.label || "";
+      const invalidExact = !period && (!input.validity.valid || input.value && (!value || Number(value.slice(0, 4)) < 1900 || Number(value.slice(0, 4)) > 9999));
+      if (invalidExact || invalidRange) {
+        $("#productDateFeedback").textContent = invalidRange ? "End of manufacturing must be on or after general availability. The previous date was kept." : "Enter a complete, valid date with a four-digit year from 1900 to 9999. The previous date was kept.";
+        input.setAttribute("aria-invalid", "true");
         syncTbdState();
         return;
       }
+      input.removeAttribute("aria-invalid");
       $("#productDateFeedback").textContent = "";
       updateProductMilestone(product.id, fieldName, value, period);
-      input.value = value; if (period) quarterInput.value = period.label;
+      // Reassigning even the same value resets the native date control's active
+      // segment in some browsers. Leave the focused field untouched after typing.
+      if (input.value !== value) input.value = value;
+      if (period && quarterInput.value !== period.label) quarterInput.value = period.label;
       syncTbdState();
     };
-    input.addEventListener("change", () => { if (precision.value === "exact") commit(); });
+    input.addEventListener("keydown", (event) => {
+      if (precision.value !== "exact") return;
+      if (event.key === "Enter") { event.preventDefault(); if (typingExactDate || input.value) commit(); typingExactDate = false; }
+      else if (!event.altKey && !event.ctrlKey && !event.metaKey && (/^\d$/.test(event.key) || ["Backspace", "Delete", "ArrowUp", "ArrowDown", "PageUp", "PageDown"].includes(event.key))) typingExactDate = true;
+    });
+    input.addEventListener("pointerdown", () => { typingExactDate = false; });
+    input.addEventListener("change", () => { if (precision.value === "exact" && !typingExactDate) commit(); });
+    input.addEventListener("blur", () => { if (precision.value === "exact" && typingExactDate) commit(); typingExactDate = false; });
     quarterInput.addEventListener("change", () => {
       const period = globalThis.PortfolioDatePrecision?.parseQuarter(quarterInput.value);
       if (!period) { $("#productDateFeedback").textContent = "Enter one calendar quarter and year, such as Q2 2028. The previous date was kept."; quarterInput.setAttribute("aria-invalid", "true"); return; }
       quarterInput.removeAttribute("aria-invalid"); commit(period);
     });
     precision.addEventListener("change", () => {
+      typingExactDate = false; input.removeAttribute("aria-invalid");
       const current = selectedProduct();
       if (!current || current.id !== product.id) return;
       const period = globalThis.PortfolioDatePrecision?.currentPeriod(current, fieldName);
@@ -4890,6 +4915,7 @@ function renderInspector() {
     });
 
     tbdButton.addEventListener("click", () => {
+      typingExactDate = false; input.removeAttribute("aria-invalid");
       input.value = ""; quarterInput.value = ""; quarterInput.removeAttribute("aria-invalid");
       $("#productDateFeedback").textContent = "";
       updateProductMilestone(product.id, fieldName, "");

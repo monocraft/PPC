@@ -285,6 +285,11 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .canvas-scroll.is-panning, .canvas-scroll.is-panning canvas { cursor: grabbing !important; }
 #boardCanvas.is-layout-editing { cursor: move; }
 .roadmap-scroll { background: #171717; }
+.roadmap-view, .split-roadmap-shell { position: relative; }
+.roadmap-lane-hover-clip { position: absolute; z-index: 2; overflow: hidden; pointer-events: none; contain: layout paint; }
+.roadmap-lane-hover-frame { position: absolute; inset: 0 0 auto 0; border: 1px dashed rgba(195, 200, 197, .68); border-radius: 5px; background: rgba(195, 200, 197, .035); opacity: 0; pointer-events: none; transition: transform 160ms cubic-bezier(.22, 1, .36, 1), opacity 120ms ease; }
+.roadmap-lane-hover-frame.is-immediate { transition-property: opacity; }
+@media (prefers-reduced-motion: reduce) { .roadmap-lane-hover-frame { transition: none; } }
 .roadmap-edit-controls { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; font-size: 10px; }
 .roadmap-edit-controls > button { min-height: 32px; padding: 6px 8px; font-size: 10px; white-space: nowrap; }
 .roadmap-edit-controls label { display: flex; align-items: center; gap: 5px; color: #a6b4aa; }
