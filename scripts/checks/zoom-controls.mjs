@@ -3,6 +3,11 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 const source = (await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+function appConstant(name) {
+  const match = source.match(new RegExp(`^const ${name} = ([\\d.]+);(?:[ \\t]*//.*)?$`, "m"));
+  assert.ok(match, `The real ${name} zoom bound is available.`);
+  return Number(match[1]);
+}
 function appFunction(name) {
   const start = source.indexOf(`function ${name}(`);
   const end = source.indexOf("\n}\n", start);
@@ -26,8 +31,9 @@ const products = [{ id: "one", order: 4, manualPosition: { x: 400, y: 90 }, laun
 const unchangedProducts = JSON.stringify(products);
 const sandbox = {
   $: element, zoom: 1, roadmapMonthWidth: 82, activeView: "products", board: { products },
-  PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 1.5,
-  ROADMAP_LEFT_WIDTH: 190, ROADMAP_DEFAULT_MONTH_WIDTH: 82, ROADMAP_MIN_MONTH_WIDTH: 8, ROADMAP_MAX_MONTH_WIDTH: 112,
+  PRODUCT_MIN_ZOOM: appConstant("PRODUCT_MIN_ZOOM"), PRODUCT_MAX_ZOOM: appConstant("PRODUCT_MAX_ZOOM"),
+  ROADMAP_LEFT_WIDTH: 190, ROADMAP_DEFAULT_MONTH_WIDTH: appConstant("ROADMAP_DEFAULT_MONTH_WIDTH"),
+  ROADMAP_MIN_MONTH_WIDTH: appConstant("ROADMAP_MIN_MONTH_WIDTH"), ROADMAP_MAX_MONTH_WIDTH: appConstant("ROADMAP_MAX_MONTH_WIDTH"),
   selectedProduct: () => products[0], getCanvasDimensions: () => ({ width: contentWidth, height: contentHeight }),
   productView: { clientHeight: 648 },
   roadmapRange: () => ({ count: months }),
@@ -50,6 +56,8 @@ const productCenter = () => ({
   y: (sandbox.canvasScroll.scrollTop + sandbox.canvasScroll.clientHeight / 2) / sandbox.zoom,
 });
 const timelineCenter = (scroll) => (scroll.scrollLeft + (scroll.clientWidth - 190) / 2) / sandbox.roadmapMonthWidth;
+assert.equal(sandbox.PRODUCT_MAX_ZOOM, 2, "Products support 200% magnification.");
+assert.equal(sandbox.ROADMAP_MAX_MONTH_WIDTH / sandbox.ROADMAP_DEFAULT_MONTH_WIDTH, 2, "Roadmap supports the same 200% maximum.");
 
 // Every scale, including either lower bound, advances by ten percentage points.
 sandbox.zoom = .2;
@@ -70,8 +78,8 @@ assert.equal(element("#roadmapZoomOut").disabled, true);
 
 // Every button press makes visible progress, and either bound is reachable.
 for (const [view, minimum, maximum, percentSelector, plus, minus] of [
-  ["products", .2, 1.5, "#zoomReset", "#zoomIn", "#zoomOut"],
-  ["roadmap", .1, 1.3, "#roadmapZoomReset", "#roadmapZoomIn", "#roadmapZoomOut"],
+  ["products", .2, 2, "#zoomReset", "#zoomIn", "#zoomOut"],
+  ["roadmap", .1, 2, "#roadmapZoomReset", "#roadmapZoomIn", "#roadmapZoomOut"],
 ]) {
   sandbox.activeView = view;
   if (view === "products") sandbox.zoom = minimum; else sandbox.roadmapMonthWidth = minimum * 82;
@@ -88,6 +96,9 @@ for (const [view, minimum, maximum, percentSelector, plus, minus] of [
   }
   assert.ok(count < 30, "The maximum does not require excessive clicks.");
   near(scale(), maximum, "Plus reaches the view's upper bound.");
+  assert.equal(element(percentSelector).textContent, "200%", "The maximum is displayed consistently in both views.");
+  element(plus).onclick();
+  near(scale(), maximum, "An extra plus press cannot exceed 200%.");
   count = 0;
   while (!element(minus).disabled && count++ < 30) {
     element(minus).onclick();
@@ -98,6 +109,37 @@ for (const [view, minimum, maximum, percentSelector, plus, minus] of [
     previous = scale(); previousLabel = nextLabel;
   }
   near(scale(), minimum, "Minus reaches the view's lower bound.");
+}
+
+// The upper stop preserves the viewport focus and remains usable when a view
+// is rendered again, including the roadmap shown beside product details.
+for (const view of ["products", "roadmap", "split"]) {
+  sandbox.activeView = view;
+  sandbox.zoom = 1.9;
+  sandbox.roadmapMonthWidth = 1.9 * 82;
+  const scroll = view === "split" ? sandbox.splitRoadmapScroll : sandbox.roadmapScroll;
+  sandbox.canvasScroll.scrollLeft = 800; sandbox.canvasScroll.scrollTop = 600;
+  scroll.scrollLeft = 800;
+  const productFocus = productCenter(), calendarFocus = timelineCenter(scroll);
+  const plus = view === "products" ? "#zoomIn" : "#roadmapZoomIn";
+  const minus = view === "products" ? "#zoomOut" : "#roadmapZoomOut";
+  element(plus).onclick();
+  if (view === "products") {
+    assert.equal(sandbox.zoom, 2);
+    near(productCenter().x, productFocus.x, "The 200% product stop preserves horizontal focus.");
+    near(productCenter().y, productFocus.y, "The 200% product stop preserves vertical focus.");
+    near(sandbox.roadmapMonthWidth, 1.9 * 82, "Product magnification leaves the calendar scale intact.");
+  } else {
+    near(sandbox.roadmapMonthWidth, 164, "Both roadmap surfaces reach 200%.");
+    near(timelineCenter(scroll), calendarFocus, "The 200% roadmap stop preserves calendar focus.");
+    assert.equal(sandbox.zoom, 1.9, "Roadmap magnification leaves the product scale intact.");
+  }
+  sandbox.syncViewZoomControls();
+  assert.equal(element(plus).disabled, true, "Rendering the upper stop keeps plus disabled.");
+  assert.equal(element(minus).disabled, false, "Minus remains available at 200%.");
+  element(minus).onclick();
+  assert.equal(element(plus).disabled, false, "A single minus press makes plus available again.");
+  near(view === "products" ? sandbox.zoom : sandbox.roadmapMonthWidth / 82, 1.9, "A single minus press returns to 190%.");
 }
 
 // Product zoom preserves both axes of the visible area instead of jumping away.
@@ -172,14 +214,18 @@ assert.ok((sandbox.roadmapMonthWidth + 8.2) * 12 > available, "Roadmap Fit choos
 }
 
 // Off-grid Fit values and legacy tiny/invalid scales remain recoverable.
-for (const restored of [.88, .85, .63, .652, 1.25, 9]) {
+for (const restored of [.88, .85, .63, .652, 1.25, 1.9, 2, 2.01, 9]) {
   sandbox.zoom = restored;
   sandbox.roadmapMonthWidth = restored * 82;
   sandbox.syncViewZoomControls();
   assert.equal(parseInt(element("#zoomReset").textContent, 10) % 10, 0, "Restored product zoom never retains irregular percentages.");
   assert.equal(parseInt(element("#roadmapZoomReset").textContent, 10) % 10, 0, "Restored timeline zoom never retains irregular percentages.");
-  assert.ok(sandbox.zoom >= .2 && sandbox.zoom <= 1.5);
-  assert.ok(sandbox.roadmapMonthWidth >= 8 && sandbox.roadmapMonthWidth <= 112, "Clean timeline stops remain within existing safe pixel limits.");
+  assert.ok(sandbox.zoom >= .2 && sandbox.zoom <= 2);
+  assert.ok(sandbox.roadmapMonthWidth >= 8 && sandbox.roadmapMonthWidth <= 164, "Clean timeline stops remain within the 200% pixel limit.");
+  if (restored >= 2) {
+    assert.equal(element("#zoomReset").textContent, "200%", "Restored upper product zoom is retained or bounded at 200%.");
+    assert.equal(element("#roadmapZoomReset").textContent, "200%", "Restored upper roadmap zoom is retained or bounded at 200%.");
+  }
 }
 sandbox.canvasScroll.scrollLeft = 800; sandbox.canvasScroll.scrollTop = 600;
 sandbox.zoom = .85;
@@ -218,4 +264,4 @@ sandbox.setProductZoom(.2);
 assert.ok(sandbox.canvasScroll.scrollLeft >= 0 && sandbox.canvasScroll.scrollTop >= 0, "Product zoom never scrolls outside the origin.");
 assert.equal(JSON.stringify(products), unchangedProducts, "View zoom/Fit/reset cannot alter product dates, order, or saved layout.");
 
-console.log("Zoom controls checks passed: clean ten-point steps at every scale, rounded readable Fit, focal anchors, independent views, safe recovery, and unchanged product data.");
+console.log("Zoom controls checks passed: clean ten-point steps through 200%, upper-bound focal anchors and redraws, rounded readable Fit, independent views, safe recovery, and unchanged product data.");

@@ -692,7 +692,7 @@ for (const scenario of paneScenarios) {
   const layout = paneSandbox.productCardLayout();
   assert.equal(layout.detailed, scenario.full, "pane scenarios must retain automatic supported-category and compact multi-lane parent geometry");
   if (scenario.full) assert.ok(layout.detailed && layout.cardHeight > 552, "full-spec parent geometry must be exercised above the compact maximum");
-  for (const drawZoom of [.2, .5, .65, 1, 1.5]) {
+  for (const drawZoom of [.2, .5, .65, 1, 1.5, 2]) {
     paneSandbox.zoom = drawZoom;
     paneSandbox.viewerInfoProgress = 0;
     const closedDimensions = paneSandbox.getCanvasDimensions();

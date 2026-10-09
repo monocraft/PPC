@@ -415,7 +415,7 @@ const baseGeometry = model.layoutProductLanes(geometryLanes, geometryLayout);
 const closeTo = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 1e-8, `${message}: ${actual} versus ${expected}`);
 assert.deepEqual(baseGeometry.rows.map((row) => row.top), [34, 404, 774]);
 assert.equal(baseGeometry.height, 1110);
-for (const drawZoom of [.65, 1, 1.5]) {
+for (const drawZoom of [.65, 1, 1.5, 2]) {
   const detailHeight = 520 / drawZoom;
   const extra = Math.max(0, detailHeight - geometryLayout.cardHeight);
   for (const [expandedIndex, expandedLane] of geometryLanes.entries()) {
@@ -425,7 +425,7 @@ for (const drawZoom of [.65, 1, 1.5]) {
       assert.equal(row.lane, geometryLanes[index]);
       assert.equal(row.index, index);
       closeTo(row.top, baseGeometry.rows[index].top + (index > expandedIndex ? extra : 0), "only following lanes move down");
-      closeTo(row.contentHeight, index === expandedIndex ? detailHeight : 300, "only the selected lane expands");
+      closeTo(row.contentHeight, index === expandedIndex ? Math.max(detailHeight, 300) : 300, "only the selected lane expands without shrinking below its cards");
       closeTo(row.height - row.contentHeight, 70, "the original row gap remains exact");
       if (index > 0) closeTo(row.top - result.rows[index - 1].top - result.rows[index - 1].contentHeight, 70, "the next lane never overlaps cards or the details pane");
     });
@@ -480,7 +480,7 @@ vm.runInContext(
   laneSandbox,
 );
 const laneContext = { clearRect() {} };
-for (const drawZoom of [.2, .65, 1, 1.5]) {
+for (const drawZoom of [.2, .65, 1, 1.5, 2]) {
   laneSandbox.zoom = drawZoom;
   for (const lane of geometryLanes) {
     laneSandbox.viewerInfoProductId = `p-${lane.id}`;
@@ -598,8 +598,8 @@ const viewBoard = { settings: { freeMove: true }, lanes: [{ id: "audio" }, { id:
 ] };
 const viewSandbox = {
   $: viewElement, zoom: 1, roadmapMonthWidth: 82, activeView: "products", board: viewBoard,
-  ROADMAP_DEFAULT_MONTH_WIDTH: 82, ROADMAP_MIN_MONTH_WIDTH: 8, ROADMAP_MAX_MONTH_WIDTH: 112, ROADMAP_LEFT_WIDTH: 190,
-  PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 1.5,
+  ROADMAP_DEFAULT_MONTH_WIDTH: 82, ROADMAP_MIN_MONTH_WIDTH: 8, ROADMAP_MAX_MONTH_WIDTH: 164, ROADMAP_LEFT_WIDTH: 190,
+  PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 2,
   selectedProduct: () => viewSelectedProduct,
   canvasScroll: { clientWidth: 900, clientHeight: 520, scrollLeft: 120, scrollTop: 80,
     scrollTo(options) { if (options.left != null) this.scrollLeft = options.left; if (options.top != null) this.scrollTop = options.top; } },
@@ -651,11 +651,11 @@ for (const activeView of ["roadmap", "split"]) {
   closeTo(viewSandbox.roadmapMonthWidth, 82, "timeline minus returns to the previous ten-point zoom stop");
   closeTo(timelineCenterMonth(targetScroll), originalMonth, "inverse timeline zoom retains the anchored month");
   viewSandbox.setRoadmapZoom(200);
-  closeTo(viewSandbox.roadmapMonthWidth, 106.6, "timeline zoom uses the highest ten-point stop within its safe maximum width");
-  assert.equal(viewElement("#roadmapZoomReset").textContent, "130%");
+  closeTo(viewSandbox.roadmapMonthWidth, 164, "timeline zoom reaches the 200% stop within its safe maximum width");
+  assert.equal(viewElement("#roadmapZoomReset").textContent, "200%");
   assert.equal(viewElement("#roadmapZoomIn").disabled, true);
   viewElement("#roadmapZoomIn").onclick();
-  closeTo(viewSandbox.roadmapMonthWidth, 106.6, "plus cannot exceed the timeline maximum");
+  closeTo(viewSandbox.roadmapMonthWidth, 164, "plus cannot exceed the timeline maximum");
   viewSandbox.setRoadmapZoom(1);
   closeTo(viewSandbox.roadmapMonthWidth, 8.2, "timeline zoom uses the lowest ten-point stop within its safe minimum width");
   assert.equal(viewElement("#roadmapZoomReset").textContent, "10%");
@@ -674,7 +674,7 @@ for (const activeView of ["roadmap", "split"]) {
 }
 timelineFitMonths = 3;
 viewElement("#roadmapFit").onclick();
-closeTo(viewSandbox.roadmapMonthWidth, 106.6, "fitting a short timeline respects the maximum clean ten-point stop");
+closeTo(viewSandbox.roadmapMonthWidth, 155.8, "fitting a short timeline chooses the largest clean ten-point stop that fits");
 timelineFitMonths = 120;
 viewElement("#roadmapFit").onclick();
 closeTo(viewSandbox.roadmapMonthWidth, 32.8, "fitting a long timeline retains a readable40% overview and allows horizontal scrolling");
@@ -689,9 +689,9 @@ assert.equal(viewSandbox.zoom, .9);
 assert.equal(viewElement("#zoomReset").textContent, "90%");
 viewElement("#zoomIn").onclick();
 assert.equal(viewSandbox.zoom, 1);
-viewSandbox.zoom = 1.5;
+viewSandbox.zoom = 2;
 viewElement("#zoomIn").onclick();
-assert.equal(viewSandbox.zoom, 1.5, "product plus cannot exceed its maximum scale");
+assert.equal(viewSandbox.zoom, 2, "product plus cannot exceed its 200% maximum scale");
 assert.equal(viewElement("#zoomIn").disabled, true);
 viewElement("#fitProducts").onclick();
 assert.equal(viewSandbox.zoom, .7, "Fit products keeps a long lane readable at a clean percentage");

@@ -30,13 +30,13 @@ const ROADMAP_BOTTOM_PADDING = 24;
 const ROADMAP_MIN_BODY_HEIGHT = 156;
 const ROADMAP_CATEGORY_LABEL_FONT_SIZE = 13;
 const ROADMAP_MIN_MONTH_WIDTH = 8;
-const ROADMAP_MAX_MONTH_WIDTH = 112;
+const ROADMAP_MAX_MONTH_WIDTH = 164; // 200% of the default month width.
 const ROADMAP_DEFAULT_MONTH_WIDTH = 82;
 const {
   paginateRoadmapGroups: paginateRoadmapGroupsForPptx,
 } = globalThis.PPTXPagination;
 const PRODUCT_MIN_ZOOM = 0.2;
-const PRODUCT_MAX_ZOOM = 1.5;
+const PRODUCT_MAX_ZOOM = 2;
 const VIEWER_INFO_GAP = 0;
 const VIEWER_INFO_ANIMATION_MS = 240;
 const INFO_BUTTON_WIDTH = 54;

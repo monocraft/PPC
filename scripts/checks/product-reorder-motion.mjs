@@ -55,7 +55,7 @@ function harness({ reduced = false, zoom = 1 } = {}) {
     dragState: null, panState: null, productCardMotion: null, productCardMotionFrame: null, pptxExportInProgress: false,
     canvas, canvasScroll: scroll, renderedCards: [], renderedVariantOverflow: [], renderedHeroVariantRegions: [], renderedInfoButtons: [],
     GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, LANE_TOP: 34, SIDE_PADDING: 40,
-    PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 1.5,
+    PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 2,
     viewerInfoProductId: null, viewerInfoProgress: 0, viewerInfoOpen: false, inspectorOpen: false,
     UI_PALETTE: { charcoal800: "#1b1b1b", silver: "#c3c8c5", steelTeal: "#80958f", steelTealLight: "#a7b7b1", whiteSmoke: "#eeeeec", greyOlive: "#929593" },
     performance: { now: () => clock }, devicePixelRatio: 1, matchMedia: () => ({ matches: reduced }), window: { matchMedia: () => ({ matches: reduced }) },
@@ -243,11 +243,32 @@ for (const invalidation of ["zoom", "filter", "external order", "external lane",
   assert.equal(product.name, "Latest team name"); assert.equal(product.specs[0].value, "Latest team specs"); assert.equal(product.ffsDate, "2027-01-12");
 }
 
-for (const zoom of [.7, 1.5]) {
-  const h = harness({ zoom }); h.begin(); move(h, 274, 350); h.frame();
+for (const zoom of [.7, 1.5, 2]) {
+  const h = harness({ zoom }); h.begin();
+  // At 200% the user scrolls to the destination while the pointer is captured.
+  // Keep that destination in the viewport so this check isolates scale mapping
+  // from the separately tested edge-scrolling behavior.
+  if (zoom === 2) { h.scroll.scrollLeft = 200; h.scroll.scrollTop = 500; }
+  move(h, 274, 350); h.frame();
   near(h.cards.at(-1).x, 274, "Dragged positions retain logical horizontal geometry at different scales");
   near(h.cards.at(-1).y, 350, "Dragged positions retain logical lane geometry at different scales");
   h.context.stopProductCardDrag(); assert.equal(h.frames.size, 0);
+}
+
+{
+  const h = harness({ zoom: 2 }), before = h.snapshot(); h.begin();
+  h.scroll.scrollLeft = 200; h.scroll.scrollTop = 500;
+  move(h, 274, 500); h.frame(); assertLiftedLast(h);
+  const ghost = h.cards.find((value) => value.id === "a" && value.alpha < .5);
+  near(ghost.x, 18, "The 200% source ghost retains its saved horizontal slot.");
+  near(ghost.y, 34, "The 200% source ghost retains its saved lane.");
+  h.context.finishDrag({ pointerId: 7, type: "pointerup" }); h.settle();
+  assert.deepEqual(h.order("first"), ["b", "c"]);
+  assert.deepEqual(h.order("second"), ["d", "a", "e"], "A scrolled 200% drop targets the intended destination slot.");
+  near(h.cards.find((value) => value.id === "a").x, 274, "The 200% drop settles at the intended horizontal slot.");
+  near(h.cards.find((value) => value.id === "a").y, 500, "The 200% drop settles at the intended lane position.");
+  assert.equal(h.counts.writes, 1, "A 200% drop saves the reorder once.");
+  assert.deepEqual(facts(h.snapshot()), facts(before), "A 200% drop preserves all product facts and dates.");
 }
 
 {
