@@ -91,6 +91,26 @@ for (const raw of [
   assert.notEqual(result.kind, 'exact', `Narrative and competing dates need review: ${raw}.`);
   assert.equal(result.value || '', '', 'An unresolved date must not expose an automatic master-date value.');
 }
+for (const arrow of ['=>', '→', '->']) {
+  const revision = importer.parseDate(`10/1 ${arrow} 10/22/2026(CN)`, { currentFfs: true });
+  assert.equal(revision.kind, 'exact', 'Only explicit Current FFS revision notation selects its complete final date.');
+  assert.equal(revision.value, '2026-10-22');
+  assert.equal(revision.region, 'CN');
+  assert.deepEqual(revision.revision.previous, ['10/1']);
+  assert.equal(revision.raw, `10/1 ${arrow} 10/22/2026(CN)`, 'The selected revision retains the original cell text.');
+}
+for (const raw of ['10/1/2026 => 10/22', '10/1/2026 => Q4 2026', '10/1/2026 => October 2026', '10/1/2026 => 10/22/2026?', '10/1/2026 ~ 10/22/2026', '10/1/2026 to 10/22/2026', 'Risk => 10/22/2026']) {
+  assert.notEqual(importer.parseDate(raw, { currentFfs: true }).kind, 'exact', `Current FFS never invents a day or reads a narrative arrow as a date revision: ${raw}.`);
+}
+const regionalRevision = importer.parseDate('10/1=>10/22/2026(CN), 11/5/2026(VN)', { currentFfs: true });
+assert.equal(regionalRevision.kind, 'multiple', 'Different regional days remain a review choice after a revision arrow.');
+assert.equal(regionalRevision.value, '');
+assert.deepEqual(regionalRevision.candidates.map((date) => [date.value, date.region]), [['2026-10-22', 'CN'], ['2026-11-05', 'VN']]);
+const regionalAgreement = importer.parseDate('10/22/2026(CN), 10/22/2026(VN)', { currentFfs: true });
+assert.equal(regionalAgreement.kind, 'exact', 'Several explicit regional dates can populate the one PPC date only when all agree.');
+assert.equal(regionalAgreement.value, '2026-10-22');
+assert.equal(regionalAgreement.candidates.length, 2);
+assert.equal(importer.parseDate('10/22(CN), 10/22(VN)', { currentFfs: true }).kind, 'multiple', 'Agreement on month and day cannot supply a missing year.');
 
 function row({ key = 'fixture-row-1', name = 'Fixture Cloud III', codename = 'Fixture Harvester', categoryId = 'pc-gaming-audio', reportDate = '2026-10-08', ffsDate = '2026-11-05', dates = {}, ...extras } = {}) {
   return {
@@ -181,6 +201,8 @@ const recentlyEditedMaster = model.mergeChanges(initial, [{ productId: 'fixture-
 const firstImportOldSource = planFor([incoming], recentlyEditedMaster);
 assert.equal(fieldDecision(firstImportOldSource).status, 'review', 'The first PLC import respects an accepted master date edit newer than its source.');
 assert.equal(product(importer.applyPlan(recentlyEditedMaster, firstImportOldSource, { now: '2026-10-11T16:00:00.000Z' }).portfolio).ffsDate, '2026-11-06');
+const sameDayEditedMaster = model.mergeChanges(initial, [{ productId: 'fixture-one', base: datedBaseline.values, baseRevisions: datedBaseline.revisions, patch: { ffsDate: '2026-11-06' } }], { now: '2026-10-08T16:00:00.000Z', actor: 'Synthetic same-day date owner' }).manifest;
+assert.equal(fieldDecision(planFor([incoming], sameDayEditedMaster)).status, 'review', 'A day-only source cannot prove it is later than a master edit on that same day.');
 assert.equal(fieldDecision(planFor([incoming], recentlyEditedMaster, { metadata: { reportDate: '2026-10-22', fingerprint: 'synthetic-newer-than-master-edit' } })).status, 'update', 'A genuinely newer source is eligible after an older accepted master edit.');
 const firstLocalEdit = copy(initial);
 const firstLocalEditAt = '2026-10-09T18:00:00.000Z';
@@ -229,6 +251,70 @@ const regionalPlan = planFor([row({ ffsDate: '2026-11-05 (CN)' })], initial);
 assert.equal(fieldDecision(regionalPlan).status, 'review', 'A regional date needs an explicit decision before becoming global FFS.');
 const ignoredField = importer.applyPlan(initial, simple, { now: firstAt, skippedFields: { 'fixture-row-1': ['ffsDate'] } }).portfolio;
 assert.equal(product(ignoredField).ffsDate, '2026-10-01', 'The reviewer can collect evidence while excluding a date field.');
+
+const newCodeRow = row({ key: 'synthetic-new-codename', name: 'Aster', codename: 'Aster', ffsDate: '2027-11-05' });
+const newCodeDataset = dataset([newCodeRow], { fingerprint: 'synthetic-new-codename-source' });
+const creationOptions = { now: firstAt, createProducts: { [newCodeRow.key]: { name: 'Aster', codename: 'Aster', categoryId: 'pc-gaming-audio' } } };
+const creationPreview = importer.buildPlan(newCodeDataset, initial, creationOptions);
+assert.equal(creationPreview.summary.created, 1, 'Explicit creation choices show a proposed new product in the review preview.');
+assert.equal(creationPreview.items[0].match.status, 'matched');
+assert.match(creationPreview.createdProducts[0].productId, /^plc-aster-/);
+assert.deepEqual(initial, initialBefore, 'Previewing a new codename product cannot mutate the portfolio.');
+const createdFromCode = importer.applyPlan(initial, creationPreview, { now: firstAt });
+const createdId = createdFromCode.createdProducts[0].productId;
+const newCodeProduct = product(createdFromCode.portfolio, createdId);
+assert.equal(createdFromCode.summary.created, 1);
+assert.equal(createdFromCode.summary.datesUpdated, 1);
+assert.equal(newCodeProduct.name, 'Aster', 'A codename is a valid confirmed product name before a marketing name exists.');
+assert.equal(newCodeProduct.codename, 'Aster');
+assert.equal(newCodeProduct.ffsDate, '2027-11-05');
+assert.equal(newCodeProduct.generalAvailabilityDate, '', 'New PLC products never invent a general-availability date.');
+assert.equal(newCodeProduct.price, null);
+assert.equal(newCodeProduct.laneId, 'wired');
+assert.ok(Array.isArray(newCodeProduct.specs) && Array.isArray(newCodeProduct.variantGroups));
+assert.equal(newCodeProduct.roadmap.status, 'in-planning');
+assert.equal(newCodeProduct.plc.createdFromSource.key, newCodeRow.key);
+assert.equal(newCodeProduct.plc.createdFromSource.at, firstAt);
+assert.equal(newCodeProduct.plc.fields.ffsDate.changedAt, firstAt);
+assert.equal(createdFromCode.portfolio.plcImports.at(-1).createdProducts[0].productId, createdId, 'Product creation is retained in collection history.');
+assert.equal(createdFromCode.portfolio.plcReview.entries.length, 0, 'Creation resolves the missing-product exception while retaining independent date guards.');
+model.validateValues(model.productValues(newCodeProduct));
+const sharedCreation = model.mergeChanges(initial, [{ kind: 'create', productId: createdId, categoryId: 'pc-gaming-audio', laneId: newCodeProduct.laneId, mine: model.productValues(newCodeProduct) }], { now: firstAt, requestId: 'synthetic-plc-product-creation', actor: 'Synthetic PLC operator' });
+assert.equal(product(sharedCreation.manifest, createdId).codename, 'Aster');
+assert.deepEqual(product(sharedCreation.manifest, createdId).plc.createdFromSource, newCodeProduct.plc.createdFromSource, 'New-product source identity survives the shared-master creation format.');
+assert.equal(model.dateEditsForProduct(sharedCreation.manifest, createdId).ffsDate.at, firstAt);
+const repeatCreation = importer.applyPlan(createdFromCode.portfolio, importer.buildPlan(newCodeDataset, createdFromCode.portfolio, creationOptions), { now: '2026-10-23T16:00:00.000Z' });
+assert.equal(repeatCreation.summary.created, 0, 'Reapplying an accepted source never creates a second codename product.');
+assert.deepEqual(repeatCreation.portfolio, createdFromCode.portfolio, 'An identical created-product source preserves all clocks and creation history.');
+const futureCodeRow = row({ key: 'synthetic-renamed-source', name: 'Fixture New Marketing Headset', codename: 'Aster', ffsDate: '2027-12-05' });
+const futureCodePlan = planFor([futureCodeRow], createdFromCode.portfolio, { metadata: { reportDate: '2026-10-22', fingerprint: 'synthetic-future-codename-source' } });
+assert.equal(futureCodePlan.items[0].matchedProductId, createdId, 'A future marketing name still matches the product by its exact saved codename.');
+const futureCodeApplied = importer.applyPlan(createdFromCode.portfolio, futureCodePlan, { now: '2026-10-23T16:00:00.000Z' });
+assert.equal(product(futureCodeApplied.portfolio, createdId).ffsDate, '2027-12-05');
+assert.deepEqual(product(futureCodeApplied.portfolio, createdId).plc.createdFromSource, newCodeProduct.plc.createdFromSource, 'Later dates preserve the original product-creation evidence.');
+const newGuardSource = (extras = {}) => dataset([row({ ...newCodeRow, ...extras })]);
+assert.throws(() => importer.buildPlan(newGuardSource(), initial, { createProducts: { [newCodeRow.key]: { name: 'Aster', codename: '', categoryId: 'pc-gaming-audio' } } }), /codename/);
+assert.throws(() => importer.buildPlan(newGuardSource(), initial, { createProducts: { [newCodeRow.key]: { name: 'Aster', codename: 'Aster', categoryId: 'missing-category' } } }), /existing portfolio category/);
+assert.throws(() => importer.buildPlan(newGuardSource(), initial, { createProducts: { [newCodeRow.key]: { name: 'Aster', codename: 'Aster', categoryId: 'pc-gaming-audio', laneId: 'missing-lane' } } }), /product lane/);
+assert.throws(() => importer.buildPlan(newGuardSource({ cancelled: true }), initial, creationOptions), /Cancelled/);
+assert.throws(() => importer.buildPlan(newGuardSource(), portfolio([{ id: 'different-source-product', name: 'Existing Aster project', codename: 'Aster' }]), creationOptions), /already belongs/);
+assert.throws(() => importer.buildPlan(dataset([newCodeRow, copy(newCodeRow)]), initial, creationOptions), /unique PLC source record/);
+const duplicateCodeRows = [newCodeRow, row({ key: 'second-source-variant', name: 'Aster revision', codename: 'Aster' })];
+assert.throws(() => importer.buildPlan(dataset(duplicateCodeRows), initial, { createProducts: { ...creationOptions.createProducts, 'second-source-variant': { name: 'Aster revision', codename: 'Aster', categoryId: 'pc-gaming-audio' } } }), /already belongs/);
+const nearNewCode = row({ key: 'synthetic-fuzzy-new-code', name: 'Fixture Cloud V', codename: 'New Synthetic Codename' });
+const fuzzyCreation = importer.buildPlan(dataset([nearNewCode]), initial, { createProducts: { [nearNewCode.key]: { name: 'Fixture Cloud V', codename: nearNewCode.codename, categoryId: 'pc-gaming-audio' } } });
+assert.notEqual(fuzzyCreation.items[0].matchedProductId, 'fixture-one', 'Creating a reviewed new product cannot turn a fuzzy suggestion into a merge.');
+const blankNewCode = row({ key: 'synthetic-blank-new-code', name: 'Beryl', codename: 'Beryl', ffsDate: '' });
+const blankCreation = importer.applyPlan(initial, planFor([blankNewCode], initial), { now: firstAt, createProducts: { [blankNewCode.key]: { name: 'Beryl', codename: 'Beryl', categoryId: 'pc-gaming-audio' } } });
+assert.equal(blankCreation.summary.created, 1);
+assert.equal(blankCreation.summary.datesUpdated, 0);
+assert.equal(product(blankCreation.portfolio, blankCreation.createdProducts[0].productId).ffsDate, '', 'A new codename product can retain blank milestone evidence without an invented date.');
+const categoryCorrectedRow = row({ key: 'synthetic-category-corrected', name: 'Cerulean', codename: 'Cerulean', categoryId: 'mice' });
+const categoryCorrectedDataset = dataset([categoryCorrectedRow]);
+const categoryCorrected = importer.applyPlan(initial, importer.buildPlan(categoryCorrectedDataset, initial), { now: firstAt, createProducts: { [categoryCorrectedRow.key]: { name: 'Cerulean', codename: 'Cerulean', categoryId: 'pc-gaming-audio' } } });
+assert.equal(importer.buildPlan(categoryCorrectedDataset, categoryCorrected.portfolio).items[0].matchedProductId, categoryCorrected.createdProducts[0].productId, 'A confirmed creation category remains remembered when the next workbook has the same category guess.');
+assert.throws(() => importer.applyPlan(initial, creationPreview, { now: firstAt, resolutions: { [newCodeRow.key]: { ffsDate: 'not-a-date' } } }), /Reviewed dates/);
+assert.deepEqual(initial, initialBefore, 'Rejected and accepted creation decisions always leave the input portfolio intact.');
 
 const duplicateRows = planFor([incoming, row({ key: 'fixture-row-2' })], initial);
 assert.ok(duplicateRows.items.some((item) => item.fields.some((field) => field.status === 'review')), 'Two source rows claiming one master field must remain visible as a collision.');
@@ -378,6 +464,94 @@ assert.equal(horizontalReport.rows[0].dates.ffsDate.value, '2026-10-01');
 assert.equal(horizontalReport.rows[0].dates.ffsDate.source.cell, 'E4');
 assert.equal(horizontalReport.rows[0].dates.ffsDate.source.inherited, true);
 assert.equal(horizontalReport.rows[0].dates.ffsDate.source.crossProduct, false, 'A horizontal merge within one product does not imply several product identities.');
+assert.equal(horizontalReport.rows[0].dates.ffsDate.source.authoritativeCurrentFfs, false, 'A Target FFS origin cannot become authoritative merely because its merge reaches Current FFS.');
+assert.equal(fieldDecision(importer.buildPlan(horizontalReport, initial), horizontalReport.rows[0].key).status, 'review', 'A Current FFS inherited from another column stays reviewable.');
+
+const authorityPrimary = (current = '2026-11-05 (CN)', status = 'Status in WK41/2026') => ({
+  name: 'Bi-Weekly Update(2026)', merges: [], rows: [
+    ['Synthetic current-date authority'],
+    ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '10/5~10/8/2026'],
+    ['', 'No', 'Headset', 'Stage', 'Target FFS', 'Current FFS', '', '', '', '', '', '', '', '', '', '', status],
+    ['', 1, '"Fixture Harvester" Fixture Cloud III Headset', 'Development', '2026-10-01', current],
+  ],
+});
+const authoritySupporting = (current, status = 'Status in WK41/2026') => ({
+  name: 'New Project in PLC', rows: [
+    ['', '', 'Development', '', 'CA', 'MRR', 'CO', 'POR', 'Actual FFS', '', '', '', '', 'TU_SM', 'TW_SM'],
+    ['', '', '', '', '', '', '', '', '', status],
+    ['', '', 1, '"Fixture Harvester" Fixture Cloud III Headset', '', '', '', '', current],
+  ],
+});
+const primaryScopedDataset = await importer.parseWorkbook(workbook([authorityPrimary(), authoritySupporting('2026-11-01 (CN)')]));
+assert.equal(primaryScopedDataset.rows[0].dates.ffsDate.source.authoritativeCurrentFfs, true);
+assert.equal(primaryScopedDataset.rows[0].conflicts.length, 0, 'A supporting ISO week overlapping an exact primary as-of date cannot outrank it by deriving the coming Sunday.');
+assert.equal(primaryScopedDataset.rows[0].ffsAuthorityNotes.length, 1, 'An overlapping supporting discrepancy remains visible as evidence.');
+assert.equal(primaryScopedDataset.rows[0].observations[0].reportPeriodStart, '2026-10-05');
+assert.equal(primaryScopedDataset.rows[0].observations[0].reportPeriodEnd, '2026-10-11');
+const scopedPlan = importer.buildPlan(primaryScopedDataset, initial, { reportDate: '2026-10-09', reportDateBasis: 'Import date' });
+assert.equal(fieldDecision(scopedPlan, primaryScopedDataset.rows[0].key).status, 'update', 'One explicit Current FFS region is sufficient for a uniquely matched product.');
+assert.deepEqual(scopedPlan.summary.fields.ffsDate, { source: 1, exact: 1, quarter: 0, eligible: 1, updated: 0, unchanged: 0, review: 0, unmatched: 0, blank: 0, stale: 0, preserved: 0, skipped: 0, blockedReasons: [] });
+const scopedApplied = importer.applyPlan(initial, scopedPlan, { now: firstAt });
+assert.equal(product(scopedApplied.portfolio).ffsDate, '2026-11-05');
+assert.equal(product(scopedApplied.portfolio).plc.fields.ffsDate.scope, 'CN');
+assert.equal(product(scopedApplied.portfolio).plc.fields.ffsDate.changedAt, firstAt);
+assert.equal(product(scopedApplied.portfolio).generalAvailabilityDate, '2026-12-01');
+assert.equal(scopedApplied.summary.fields.ffsDate.updated, 1);
+assert.equal(scopedApplied.portfolio.plcImports.at(-1).summary.fields.ffsDate.updated, 1, 'Saved collection runs expose actual per-field date changes.');
+const scopedRepeated = importer.applyPlan(scopedApplied.portfolio, importer.buildPlan(primaryScopedDataset, scopedApplied.portfolio, { reportDate: '2026-10-22', reportDateBasis: 'Import date' }), { now: '2026-10-23T16:00:00.000Z' });
+assert.equal(scopedRepeated.summary.fields.ffsDate.updated, 0);
+assert.equal(scopedRepeated.summary.fields.ffsDate.unchanged, 1);
+assert.deepEqual(scopedRepeated.portfolio, scopedApplied.portfolio, 'Re-dropping a scoped Current FFS file preserves all accepted clocks.');
+const primaryOtherRegion = await importer.parseWorkbook(workbook([authorityPrimary(), authoritySupporting('2026-11-01 (VN)', 'Status in WK43/2026')]));
+assert.equal(primaryOtherRegion.rows[0].conflicts.length, 0, 'A schedule for another manufacturing region is supporting evidence rather than a same-scope conflict.');
+assert.match(primaryOtherRegion.rows[0].ffsAuthorityNotes[0].reason, /Different manufacturing region/);
+const primaryLaterWeek = await importer.parseWorkbook(workbook([authorityPrimary(), authoritySupporting('2026-11-01 (CN)', 'Status in WK43/2026')]));
+assert.equal(primaryLaterWeek.rows[0].conflicts.length, 1, 'A wholly later supporting week with a contradictory same-scope FFS still requires review.');
+const primaryOldSection = await importer.parseWorkbook(workbook([authorityPrimary('2026-11-05 (CN)', 'Status in WK37/2026'), authoritySupporting('2026-11-01 (CN)')]));
+assert.equal(primaryOldSection.rows[0].conflicts.length, 1, 'An older colorway section cannot outrank a later supporting period from the same workbook.');
+const primaryPreciseConflict = await importer.parseWorkbook(workbook([authorityPrimary(), authoritySupporting('2026-11-01 (CN)', '10/5~10/8/2026')]));
+assert.equal(primaryPreciseConflict.rows[0].conflicts.length, 1, 'Two same-scope sources with precise equal as-of dates retain their genuine conflict.');
+const scopedChangedDataset = await importer.parseWorkbook(workbook([authorityPrimary('2026-11-05 (VN)')]));
+const scopedChangedPlan = importer.buildPlan(scopedChangedDataset, scopedApplied.portfolio);
+assert.equal(fieldDecision(scopedChangedPlan, scopedChangedDataset.rows[0].key).status, 'review', 'A previously accepted scope change remains an explicit review choice.');
+assert.match(fieldDecision(scopedChangedPlan, scopedChangedDataset.rows[0].key).reason, /scope changed/);
+const scopeMissingDataset = await importer.parseWorkbook(workbook([authorityPrimary('2026-11-20')]));
+const scopeMissingPlan = importer.buildPlan(scopeMissingDataset, scopedApplied.portfolio, { reportDate: '2026-10-22' });
+assert.equal(fieldDecision(scopeMissingPlan, scopeMissingDataset.rows[0].key).status, 'review', 'A changed unscoped date cannot silently inherit an accepted regional meaning.');
+assert.match(fieldDecision(scopeMissingPlan, scopeMissingDataset.rows[0].key).reason, /scope changed.*unspecified/);
+const scopeSameValueDataset = await importer.parseWorkbook(workbook([authorityPrimary('2026-11-05')]));
+const scopeSameValue = importer.applyPlan(scopedApplied.portfolio, importer.buildPlan(scopeSameValueDataset, scopedApplied.portfolio, { reportDate: '2026-10-22' }), { now: '2026-10-23T16:00:00.000Z' });
+assert.equal(product(scopeSameValue.portfolio).plc.fields.ffsDate.scope, 'CN', 'An unscoped confirmation of the same date retains its already accepted scope.');
+assert.equal(product(scopeSameValue.portfolio).plc.fields.ffsDate.changedAt, firstAt);
+const choiceDataset = await importer.parseWorkbook(workbook([authorityPrimary('10/1=>11/5/2026(CN), 11/20/2026(VN)')]));
+const choicePlan = importer.buildPlan(choiceDataset, initial);
+const choiceKey = choiceDataset.rows[0].key;
+assert.equal(choicePlan.summary.fields.ffsDate.review, 1);
+const choiceAccepted = importer.applyPlan(initial, choicePlan, { now: firstAt, resolutions: { [choiceKey]: { ffsDate: '2026-11-20' } } });
+assert.equal(product(choiceAccepted.portfolio).plc.fields.ffsDate.scope, 'VN', 'A clicked exact regional choice records only the scope that supplied the selected date.');
+assert.equal(product(choiceAccepted.portfolio).plc.fields.ffsDate.selectedCandidates[0].raw, '11/20/2026(VN)');
+assert.equal(product(choiceAccepted.portfolio).plc.fields.ffsDate.candidates.length, 2);
+assert.equal(product(choiceAccepted.portfolio).plc.fields.ffsDate.revision.previous[0], '10/1');
+assert.equal(choiceAccepted.summary.fields.ffsDate.review, 0, 'A resolved FFS is not reported as still needing review.');
+assert.equal(choiceAccepted.summary.fields.ffsDate.updated, 1);
+assert.deepEqual(choiceAccepted.summary.fields.ffsDate.blockedReasons, []);
+const choiceKept = importer.applyPlan(initial, choicePlan, { now: firstAt, skippedFields: { [choiceKey]: ['ffsDate'] } });
+assert.equal(choiceKept.summary.fields.ffsDate.review, 0, 'A consciously skipped FFS exception is absent from the remaining-review receipt.');
+assert.equal(choiceKept.summary.review, 0);
+assert.equal(choiceKept.summary.fields.ffsDate.skipped, 1);
+const preservedCancelled = importer.applyPlan(initial, cancelledPlan, { now: firstAt });
+assert.equal(preservedCancelled.summary.fields.ffsDate.preserved, 1);
+assert.equal(preservedCancelled.summary.fields.ffsDate.review, 0, 'Cancelled products stay preserved rather than appearing as unresolved update work.');
+const missingProductPlan = importer.buildPlan(primaryScopedDataset, portfolio([]));
+assert.equal(missingProductPlan.summary.fields.ffsDate.unmatched, 1);
+assert.equal(missingProductPlan.summary.fields.ffsDate.eligible, 0, 'Exact dates never become eligible without a unique master product.');
+const heldOldRelease = copy(initial);
+heldOldRelease.plcImports = [{ at: firstAt, type: 'import', reportDate: '2026-10-09', reportDateBasis: 'Import date', fingerprint: primaryScopedDataset.metadata.fingerprint }];
+product(heldOldRelease).plc = { version: 1, fingerprint: primaryScopedDataset.metadata.fingerprint, reportDate: '2026-10-08', importedAt: firstAt, fields: {}, rows: [{ key: primaryScopedDataset.rows[0].key }], identities: [], history: [] };
+const releasedSameBytes = importer.applyPlan(heldOldRelease, importer.buildPlan(primaryScopedDataset, heldOldRelease, { reportDate: '2026-10-23', reportDateBasis: 'Import date' }), { now: '2026-10-23T16:00:00.000Z' });
+assert.equal(product(releasedSameBytes.portfolio).ffsDate, '2026-11-05', 'The same previously held workbook can collect a newly eligible FFS after the authority fix.');
+assert.equal(releasedSameBytes.summary.fields.ffsDate.updated, 1);
+assert.equal(product(releasedSameBytes.portfolio).plc.fields.ffsDate.reportDate, '2026-10-08', 'Re-running old bytes cannot change the original source date.');
 await assert.rejects(() => importer.parseWorkbook(new Uint8Array([1, 2, 3]), { fileName: 'broken.xlsx' }), 'A corrupt archive must fail before exposing importable rows.');
 
 const storedBytes = codec.createZip([{ name: 'portfolio.json', data: new TextEncoder().encode(JSON.stringify(confirmed.portfolio)) }]);

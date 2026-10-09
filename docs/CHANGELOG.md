@@ -1,5 +1,15 @@
 # Change Log
 
+## 2026-10-09 — FFS collection and product navigation
+
+- Put FFS dates and aging in a compact searchable product table with category and date-status filters, bounded pages, and details for one selected product. Keep tabs accessible while the content scrolls; apply the same navigation to reviews and history.
+- Accept one explicit Current FFS date from the dated primary report, retaining its country scope. Hold scope changes, competing regional dates, incomplete precision, shared product cells, and uncertain product identities for review.
+- Compare supporting ISO weeks as periods so an overlapping week cannot outrank an explicit dated primary snapshot by its derived Sunday. Retain supporting schedules as evidence, and hold genuinely newer compatible disagreements.
+- Show FFS-specific collection results and reasons for dates needing review. Keep source values, update timestamps, confirmation clocks, and shared-save protections independent.
+- Preserve calendar quarter labels such as Q2 2028 with April 1 placement anchors and complete intervals. Offer quarter precision in all six milestone editors and retain semantic change clocks, raw evidence and package/shared compatibility.
+- Replace large product-matching dropdowns with searchable suggestion cards. Create reviewed codename-only projects with stable identities, reject duplicates, and share only those confirmed creations.
+- Show sourced date choices and batch confirmation across pages. Keep untouched suggestions queued and protected newer dates held for verification. Match the portfolio's neutral theme and reserve green for small success indicators.
+
 ## 2026-10-09 — complete save comments and Settings-only PLC access
 
 - List every accepted product's full saved name in automatic save comments, including automatic PLC saves. Count each product once, retain distinct products with the same name, and preserve comments typed by the user.

@@ -14,6 +14,27 @@
     return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : "";
   }
   const yearNumber = (text) => Number(text) < 100 ? 2000 + Number(text) : Number(text);
+  function normalizePeriod(period, value) {
+    if (!period || period.precision !== "quarter" || period.basis !== "calendar" || !Number.isInteger(period.year) || period.year < 1900 || period.year > 9999 || ![1, 2, 3, 4].includes(period.quarter)) return null;
+    const startMonth = (period.quarter - 1) * 3 + 1;
+    const canonical = { precision: "quarter", basis: "calendar", year: period.year, quarter: period.quarter, start: exact(period.year, startMonth, 1), end: new Date(Date.UTC(period.year, startMonth + 2, 0)).toISOString().slice(0, 10), label: `Q${period.quarter} ${period.year}` };
+    return value === canonical.start && period.start === canonical.start && period.end === canonical.end ? canonical : null;
+  }
+  function currentPeriod(product, field) {
+    const evidence = product?.plc?.fields?.[field];
+    return evidence && !evidence.supersededAt && evidence.value === product?.[field] ? normalizePeriod(evidence.period, product[field]) : null;
+  }
+  function dateLabel(value, period) { return normalizePeriod(period, value)?.label || value || "TBD"; }
+  function parseQuarterDate(text, basis) {
+    if (/\?|\b(?:FY|fiscal|risk|maybe|tentative)\b/i.test(text)) return null;
+    const plain = text.replace(/^(?:PM\s+adjusted\s+(?:(?:FFS|GA)\s+)?to\s+|(?:current\s+)?FFS\s+(?:to\s+)?)/i, "").replace(/^calendar\s+/i, "").trim();
+    const match = plain.match(/^Q([1-4])\s*[/ '-]*(\d{4}|\d{2})$/i) || plain.match(/^(\d{4})\s*Q([1-4])$/i)?.map((v, i, a) => i === 1 ? a[2] : i === 2 ? a[1] : v);
+    if (!match) return null;
+    const year = yearNumber(match[2]), quarter = Number(match[1]), startMonth = (quarter - 1) * 3 + 1;
+    if (year < 1900 || year > 9999) return null;
+    const start = exact(year, startMonth, 1), end = new Date(Date.UTC(year, startMonth + 2, 0)).toISOString().slice(0, 10);
+    return { year, quarter, periodBasis: basis || "unspecified", ...(basis === "calendar" ? { value: start, start, end, period: { precision: "quarter", basis: "calendar", year, quarter, start, end, label: `Q${quarter} ${year}` } } : {}), reason: basis === "calendar" ? "Calendar quarter; first day is a roadmap placement anchor" : "Quarter calendar requires review" };
+  }
   function parseDate(raw, options = {}) {
     const original = raw instanceof Date ? raw.toISOString() : clean(raw);
     const result = (kind, extra = {}) => ({ raw: original, kind, value: "", reason: kind, ...extra });
@@ -26,13 +47,21 @@
       return result("exact", { value: date.toISOString().slice(0, 10), reason: "Excel date serial" });
     }
     const text = original.replace(/[’‘`]/g, "'").replace(/\s+/g, " ");
+    const calendarQuarter = parseQuarterDate(text, options.quarterBasis);
+    if (calendarQuarter) return result("quarter", calendarQuarter);
+    if (options.currentFfs && /=>|→|->/.test(text) && !/\?|[~～]|\bto\b/i.test(text)) {
+      const parts = text.split(/\s*(?:=>|→|->)\s*/);
+      const priorDates = parts.slice(0, -1).map((part) => parseDate(part));
+      const dateOnly = (part) => /^(?:FFS\s*)?(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\s*'?\d{2,4})?)(?:\s*\((?:[A-Za-z /,]+)\))?$/i.test(part);
+      if (parts.length <= 10 && parts.slice(0, -1).every(dateOnly) && priorDates.every((date) => ["exact", "missing-year"].includes(date.kind))) {
+        const latest = parseDate(parts.at(-1), { ...options, currentFfs: false });
+        const selected = latest.kind === "multiple" ? parseCurrentFfsChoices(parts.at(-1), options, latest) : latest;
+        return { ...selected, raw: original, revision: { previous: parts.slice(0, -1), current: parts.at(-1) }, reason: selected.kind === "exact" ? "Latest explicit date in Current FFS revision" : selected.reason };
+      }
+    }
     if (/=>|→|->|\bto\b|[~～]/i.test(text)) return result("range", { reason: "Revision or date range requires an explicit selected date" });
     if (/\?/.test(text)) return result("unknown", { reason: "Unconfirmed date" });
-    const quarter = text.match(/\bQ([1-4])\s*[/ '-]*(\d{4}|\d{2})\b/i) || text.match(/\b(\d{4})\s*Q([1-4])\b/i)?.map((v, i, a) => i === 1 ? a[2] : i === 2 ? a[1] : v);
-    if (quarter) {
-      const year = yearNumber(quarter[2]), startMonth = (Number(quarter[1]) - 1) * 3 + 1;
-      return result("quarter", { year, quarter: Number(quarter[1]), periodBasis: options.quarterBasis || "unspecified", ...(options.quarterBasis === "calendar" ? { start: exact(year, startMonth, 1), end: new Date(Date.UTC(year, startMonth + 2, 0)).toISOString().slice(0, 10) } : {}), reason: "Quarter precision and calendar/fiscal basis require review" });
-    }
+    if (/\bQ[1-4]\b/i.test(text)) return result("quarter", { reason: "Multiple, fiscal, or unsupported quarter text requires review" });
     const monthNames = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
     const namedDay = text.match(/^([A-Za-z]{3,9})\s+(\d{1,2})(?:,\s*|\s+)'?(\d{4})$/) || text.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/)?.map((v, i, a) => i === 1 ? a[2] : i === 2 ? a[1] : v);
     if (namedDay && monthNames[namedDay[1].slice(0, 3).toLowerCase()]) {
@@ -52,7 +81,10 @@
     // A standalone explicit year above a month/day is common in timeline cells.
     stripped = stripped.replace(/^(\d{4})\s+(\d{1,2}\/\d{1,2})$/, "$1/$2");
     const dateTokens = stripped.match(/\d{4}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}\/\d{1,2}\/\s*'?\d{2,4}/g) || [];
-    if (dateTokens.length > 1 || /[,;]/.test(stripped) && /\d/.test(stripped)) return result("multiple", { region, reason: "Multiple regional dates must be selected explicitly" });
+    if (dateTokens.length > 1 || /[,;]/.test(stripped) && /\d/.test(stripped)) {
+      const multiple = result("multiple", { region, reason: "Multiple regional dates must be selected explicitly" });
+      return options.currentFfs ? parseCurrentFfsChoices(text, options, multiple) : multiple;
+    }
     let match = stripped.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:T00:00:00(?:\.000Z|Z)?)?$/);
     let value = match ? exact(Number(match[1]), Number(match[2]), Number(match[3])) : "";
     if (!match) {
@@ -63,6 +95,21 @@
     if (/\b\d{1,2}\/\d{1,2}\b/.test(stripped) && !/\d{4}|\/'\d{2}/.test(stripped)) return result("missing-year", { region, reason: "No explicit year; the report year is not assumed" });
     return result("unknown", { region, reason: "Notes or unsupported date text retained without guessing" });
   }
+
+  function parseCurrentFfsChoices(text, options, fallback) {
+    const tokens = [...text.matchAll(/(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\s*'?\d{2,4})?)(?:\s*\((?:CN|TH|VN|RSB|PC|US|UK|CHINA|THAILAND|VIETNAM)(?:\s*\/\s*(?:CN|TH|VN|RSB|US|UK))*\))?/gi)];
+    let remainder = text;
+    for (const token of tokens) remainder = remainder.replace(token[0], "");
+    if (tokens.length < 2 || tokens.length > 20 || !/^[\s,;]*$/.test(remainder)) return fallback;
+    const candidates = tokens.map((token) => parseDate(token[0], { ...options, currentFfs: false }));
+    const values = new Set(candidates.filter((candidate) => candidate.kind === "exact").map((candidate) => candidate.value));
+    if (candidates.every((candidate) => candidate.kind === "exact") && values.size === 1) return { ...fallback, kind: "exact", value: candidates[0].value, region: [...new Set(candidates.map((candidate) => candidate.region).filter(Boolean))].join(", "), candidates, reason: "All explicit regional Current FFS dates agree" };
+    return { ...fallback, candidates };
+  }
+
+  const scopeTokens = (region) => clean(region).toUpperCase().split(/[\s,\/]+/).filter(Boolean).map((token) => ({ CHINA: "CN", THAILAND: "TH", VIETNAM: "VN" })[token] || token);
+  const sameScope = (a, b) => scopeTokens(a).sort().join("/") === scopeTokens(b).sort().join("/");
+  const compatibleScope = (a, b) => !a || !b || scopeTokens(a).some((token) => scopeTokens(b).includes(token));
 
   function normalizeName(raw) {
     return clean(raw).toLowerCase().replace(/[“”"]/g, "").replace(/\bhyperx\b/g, "").replace(/\biii\b/g, "3").replace(/\biv\b/g, "4").replace(/\bii\b/g, "2")
@@ -104,6 +151,7 @@
       const product = entry.product;
       let score = 0, reason = "";
       if (explicit === entry.productId) { score = 100; reason = "Selected product"; }
+      else if (product.plc?.createdFromSource?.key === key && product.plc?.identities?.some((identity) => identity.key === key)) { score = 99; reason = "Confirmed PLC source identity"; }
       else if (!compatible(entry)) continue;
       else if (/\b(?:xbox|ps5|ps4|playstation)\b/i.test(row.name) && /\b(?:xbox|ps5|ps4|playstation)\b/i.test(product.name)
         && /xbox/i.test(row.name) !== /xbox/i.test(product.name)) continue;
@@ -191,13 +239,16 @@
   function reportWindow(raw) {
     const text = clean(raw).replace(/[’‘]/g, "'");
     const window = text.match(/\b(\d{1,2})\/(\d{1,2})\s*[~～-]\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
-    if (window) return { value: exact(Number(window[5]), Number(window[3]), Number(window[4])), basis: "Report window end" };
+    if (window) return { value: exact(Number(window[5]), Number(window[3]), Number(window[4])), basis: "Report window end", precision: "day" };
     const week = text.match(/\bWK\s*(\d{1,2})\/(\d{4})\b/i);
-    if (week && Number(week[1]) >= 1 && Number(week[1]) <= 53) return { value: isoWeekEnd(Number(week[1]), Number(week[2])), basis: "ISO week end (approximate)" };
+    if (week && Number(week[1]) >= 1 && Number(week[1]) <= 53) {
+      const end = isoWeekEnd(Number(week[1]), Number(week[2]));
+      return { value: end, basis: "ISO week end (approximate)", precision: "week", start: new Date(dateStamp(end) - 6 * dayMs).toISOString().slice(0, 10), end };
+    }
     return null;
   }
-  function parseCellDate(cell, date1904) {
-    let parsed = parseDate(cell.value, { date1904, numeric: cell.numeric });
+  function parseCellDate(cell, date1904, options = {}) {
+    let parsed = parseDate(cell.value, { date1904, numeric: cell.numeric, ...options });
     if (cell.error) parsed = { raw: cell.value, kind: "invalid", value: "", reason: "Excel error cell" };
     if (cell.numeric && cell.precision === "month" && parsed.value) {
       const [year, month] = parsed.value.split("-").map(Number);
@@ -285,7 +336,10 @@
       const identity = extractIdentity(nameCell.value), currentCol = header["current ffs"], targetCol = Object.entries(header).find(([name]) => /^(target|original) ffs/.test(name))?.[1];
       const current = cellAt(primary, rowNumber, currentCol), target = cellAt(primary, rowNumber, targetCol);
       const statusColumn = Object.entries(header).find(([label]) => /^status\b/.test(label))?.[1] || 17, forecastColumn = Object.entries(header).find(([label]) => /fcst|forecast/i.test(label))?.[1] || 18;
-      const row = { name: nameCell.value, ...identity, projectId: cellAt(primary, rowNumber, Object.entries(header).find(([label]) => /^no\.?$/i.test(label))?.[1] || nameColumn - 1).value, categoryId: categoryFor(nameCell.value, section), section, stage: cellAt(primary, rowNumber, header.stage).value, status: cellAt(primary, rowNumber, statusColumn).value, forecast: cellAt(primary, rowNumber, forecastColumn).value, reportDate: sectionDate, reportDateBasis: sectionBasis, dates: { ffsDate: parseCellDate(current, date1904) }, milestones: { targetFfs: parseCellDate(target, date1904) }, data: {}, sources: [{ sheet: primary.name, cell: nameCell.coordinate }], sourceRow: rowNumber };
+      const currentFfs = parseCellDate(current, date1904, { currentFfs: true, quarterBasis: "calendar" });
+      currentFfs.source.authoritativeCurrentFfs = current.column === currentCol;
+      if (current.column !== currentCol) currentFfs.source.currentFfsFromOtherColumn = true;
+      const row = { name: nameCell.value, ...identity, projectId: cellAt(primary, rowNumber, Object.entries(header).find(([label]) => /^no\.?$/i.test(label))?.[1] || nameColumn - 1).value, categoryId: categoryFor(nameCell.value, section), section, stage: cellAt(primary, rowNumber, header.stage).value, status: cellAt(primary, rowNumber, statusColumn).value, forecast: cellAt(primary, rowNumber, forecastColumn).value, reportDate: sectionDate, reportDateBasis: sectionBasis, dates: { ffsDate: currentFfs }, milestones: { targetFfs: parseCellDate(target, date1904) }, data: {}, sources: [{ sheet: primary.name, cell: nameCell.coordinate }], sourceRow: rowNumber };
       row.key = `${normalizeName(identity.codename)}|${normalizeName(identity.marketingName)}|${/colorway/i.test(section) ? "colorway" : /cancelled/i.test(section) ? "cancelled" : "base"}`;
       for (const cell of cells) if (cell.column > nameColumn && cell.value) row.data[`${Object.keys(header).find((key) => header[key] === cell.column) || `column ${cell.column}`} (${cell.coordinate})`] = cell.value;
       const health = cellAt(primary, rowNumber, Object.entries(header).find(([label]) => /^health\b/.test(label))?.[1] || 8); if (health.value) row.health = health.value; else if (healthShapes.has(rowNumber)) row.health = healthShapes.get(rowNumber);
@@ -324,19 +378,19 @@
         continue;
       }
       if (/^New Project in PLC$/i.test(sheet.name)) {
-        let stageHeaders = [], context = "", contextDate = "", contextBasis = "";
+        let stageHeaders = [], context = "", contextDate = "", contextBasis = "", contextPeriod = null;
         for (const [r, cells] of sheet.rows) {
           if (cells.some((cell) => cell.column === 9 && /FFS/.test(cell.value)) && cells.some((cell) => cell.column === 14 && /SM/i.test(cell.value))) {
             stageHeaders = cells.filter((cell) => cell.column >= 5 && cell.column <= 15); context = cells.find((cell) => cell.column === 3)?.value || context;
             const sectionWindow = cells.map((cell) => reportWindow(cell.value)).find(Boolean);
-            if (sectionWindow) { contextDate = sectionWindow.value; contextBasis = sectionWindow.basis; }
+            if (sectionWindow) { contextDate = sectionWindow.value; contextBasis = sectionWindow.basis; contextPeriod = sectionWindow; }
             continue;
           }
           const sectionWindow = cells.filter((cell) => cell.column === 10).map((cell) => reportWindow(cell.value)).find(Boolean);
-          if (sectionWindow) { contextDate = sectionWindow.value; contextBasis = sectionWindow.basis; }
+          if (sectionWindow) { contextDate = sectionWindow.value; contextBasis = sectionWindow.basis; contextPeriod = sectionWindow; }
           const name = cellAt(sheet, r, 4);
           if (!stageHeaders.length || !name.value || !/["“]/.test(name.value) || name.source.inherited) continue;
-          const identity = extractIdentity(name.value), observation = { name: name.value, ...identity, section: context, data: {}, dates: {}, milestones: {}, sources: [name.source], reportDate: contextDate, reportDateBasis: contextBasis || "Supporting section has no as-of date", supporting: true, cancelled: /cancel|paused/i.test(context), owners: { tu: cellAt(sheet, r, 14).value, tw: cellAt(sheet, r, 15).value } };
+          const identity = extractIdentity(name.value), observation = { name: name.value, ...identity, section: context, data: {}, dates: {}, milestones: {}, sources: [name.source], reportDate: contextDate, reportDateBasis: contextBasis || "Supporting section has no as-of date", reportDatePrecision: contextPeriod?.precision || "", reportPeriodStart: contextPeriod?.start || "", reportPeriodEnd: contextPeriod?.end || "", supporting: true, cancelled: /cancel|paused/i.test(context), owners: { tu: cellAt(sheet, r, 14).value, tw: cellAt(sheet, r, 15).value } };
           for (const h of stageHeaders) {
             const cell = cellAt(sheet, r, h.column); if (!cell.value) continue;
             observation.data[`${h.value} (${cell.source.cell})`] = cell.value;
@@ -381,7 +435,10 @@
     for (const row of rows) {
       row.observations = supportingRows.filter((observation) => row.codename && normalizeCode(observation.codename) === normalizeCode(row.codename) || normalizeName(observation.marketingName) === normalizeName(row.marketingName));
       row.skus = [...new Set(row.observations.flatMap((observation) => observation.skus || []))];
-      row.conflicts = row.observations.filter((observation) => observation.currentFfs?.value && row.dates.ffsDate.value && observation.currentFfs.value !== row.dates.ffsDate.value && observation.reportDate && metadata.reportDate && observation.reportDate >= metadata.reportDate && !observation.cancelled).map((observation) => ({ field: "ffsDate", value: observation.currentFfs.value, raw: observation.currentFfs.raw, source: observation.currentFfs.source, reason: "Different FFS in a current stage-gate table" }));
+      const differentFfs = row.observations.filter((observation) => observation.currentFfs?.value && row.dates.ffsDate.value && observation.currentFfs.value !== row.dates.ffsDate.value && !observation.cancelled);
+      const newerAuthority = (observation) => Boolean(observation.reportDate && row.reportDate && (observation.reportDatePrecision === "week" ? observation.reportPeriodStart && observation.reportPeriodStart > row.reportDate : observation.reportDate >= row.reportDate));
+      row.conflicts = differentFfs.filter((observation) => compatibleScope(observation.currentFfs.region, row.dates.ffsDate.region) && newerAuthority(observation)).map((observation) => ({ field: "ffsDate", value: observation.currentFfs.value, raw: observation.currentFfs.raw, source: observation.currentFfs.source, reason: "Different FFS in a current stage-gate table" }));
+      row.ffsAuthorityNotes = differentFfs.filter((observation) => !compatibleScope(observation.currentFfs.region, row.dates.ffsDate.region) || !newerAuthority(observation)).map((observation) => ({ value: observation.currentFfs.value, raw: observation.currentFfs.raw, source: observation.currentFfs.source, reportDate: observation.reportDate, reportDateBasis: observation.reportDateBasis, reason: !compatibleScope(observation.currentFfs.region, row.dates.ffsDate.region) ? "Different manufacturing region retained as supporting evidence; primary Current FFS is used" : "Supporting reporting period does not establish a newer date; primary Current FFS is used" }));
       const gaObservations = row.observations.filter((observation) => observation.dates.generalAvailabilityDate);
       if (gaObservations.length === 1) row.dates.generalAvailabilityDate = { ...gaObservations[0].dates.generalAvailabilityDate, source: { ...gaObservations[0].dates.generalAvailabilityDate.source, supporting: true }, reason: "Explicit GA from an undated supporting sheet requires review" };
       const noteFfs = row.status.match(/FFS\s*\/?(?:CN|TH|VN)?\s*\((\d{1,2})\/(\d{1,2})\)/i);
@@ -392,36 +449,95 @@
     return { version, metadata, rows, supportingRows, diagnostics };
   }
 
+  function prepareProductCreations(dataset, portfolio, options = {}) {
+    const requests = options.createProducts || {};
+    if (!requests || typeof requests !== "object" || Array.isArray(requests)) throw new Error("New PLC products need reviewed product details.");
+    const requested = Object.entries(requests).filter(([, request]) => request);
+    if (requested.length > 200) throw new Error("Review at most 200 new PLC products in one collection.");
+    if (!requested.length) return { portfolio, selections: Object.create(null), createdProducts: [] };
+    const prepared = clone(portfolio), selections = Object.create(null), createdProducts = [];
+    const text = (value, label) => {
+      if (typeof value !== "string" || !clean(value) || clean(value).length > 2048) throw new Error(`Confirm the ${label} before creating a PLC product.`);
+      return clean(value);
+    };
+    for (const [key, request] of requested) {
+      if (options.skippedKeys?.includes(key)) continue;
+      if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("Confirm the new PLC product name, codename and category.");
+      const rows = (dataset.rows || []).filter((row) => sourceKey(row) === key);
+      if (rows.length !== 1) throw new Error("A new product must come from one unique PLC source record. Resolve duplicate source records first.");
+      const row = rows[0];
+      if (row.cancelled) throw new Error("Cancelled PLC projects cannot create new portfolio products.");
+      const name = text(request.name, "product name"), codename = text(request.codename, "codename"), categoryId = text(request.categoryId, "portfolio category");
+      if (!normalizeCode(codename)) throw new Error("Confirm a codename containing letters or digits so future PLC imports can identify this product.");
+      const category = (prepared.categories || []).find((entry) => entry.id === categoryId);
+      if (!category || !Array.isArray(category.board?.products) || !Array.isArray(category.board?.lanes) || !category.board.lanes.length) throw new Error("Choose an existing portfolio category with a product lane.");
+      const laneId = request.laneId ? text(request.laneId, "product lane") : category.board.lanes[0].id;
+      if (!category.board.lanes.some((lane) => lane.id === laneId)) throw new Error("Choose a product lane in the confirmed portfolio category.");
+      const sourceCode = row.codename || extractIdentity(row.name).codename;
+      if (sourceCode && normalizeCode(sourceCode) !== normalizeCode(codename)) throw new Error("The confirmed codename must identify the selected PLC source project.");
+      const all = identities(prepared);
+      const remembered = all.filter((entry) => entry.product.plc?.identities?.some((identity) => identity.key === key));
+      if (remembered.length === 1 && normalizeCode(remembered[0].product.codename) === normalizeCode(codename)) {
+        selections[key] = remembered[0].productId;
+        continue;
+      }
+      if (remembered.length || all.some((entry) => normalizeCode(entry.product.codename || entry.product.codeName || extractIdentity(entry.name).codename) === normalizeCode(codename))) throw new Error("This PLC codename already belongs to a portfolio product. Match the existing product instead of creating a duplicate.");
+      if (all.some((entry) => entry.categoryId === categoryId && normalizeName(entry.name) === normalizeName(name))) throw new Error("This product name already exists in the selected category. Match that product or confirm a distinct product name.");
+      const existingMatch = matchProduct(row, prepared, options);
+      if (existingMatch.status === "matched") throw new Error("This PLC source already matches a portfolio product. Use its existing match instead of creating a duplicate.");
+      let hash = 2166136261;
+      for (const character of `${normalizeCode(codename)}|${key}`) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619) >>> 0; }
+      const slug = normalizeCode(codename).replace(/\s+/g, "-").slice(0, 40) || "project";
+      const productId = `plc-${slug}-${hash.toString(36)}`;
+      if (all.some((entry) => entry.productId === productId) || portfolio.masterSync?.products?.[productId]?.deleted || portfolio.masterLocalRemovedProducts?.[productId]) throw new Error("The PLC product ID is already reserved. Resolve the existing or removed product before creating this source again.");
+      const startMonth = localDay(options.now ? new Date(options.now) : new Date()).slice(0, 7);
+      const end = new Date(`${startMonth}-01T00:00:00Z`); end.setUTCMonth(end.getUTCMonth() + 18);
+      const product = { id: productId, name, codename, price: null, priceLabel: "", imageAssetId: "", tier: "", ...Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, ""])), ascm: null, partSkus: [], laneId, order: category.board.products.filter((entry) => entry.laneId === laneId).length, statusType: "new", statusLabel: "NEW PRODUCT", variantLabel: "", variantColor: "#526564", highlightEnabled: false, highlightColor: "#526564", specs: [], featuredVariantId: "", variantGroups: [], roadmap: { family: "Other", startMonth, launchMonth: startMonth, endMonth: end.toISOString().slice(0, 7), status: "in-planning", confidence: "low", predecessorId: "", successorId: "" } };
+      category.board.products.push(product);
+      selections[key] = productId;
+      createdProducts.push({ key, productId, name, codename, categoryId, laneId });
+    }
+    return { portfolio: prepared, selections, createdProducts };
+  }
+
   function buildPlan(dataset, portfolio, options = {}) {
+    const creations = prepareProductCreations(dataset, portfolio, options);
+    const matchingPortfolio = creations.portfolio;
+    const matchingOptions = { ...options, selections: { ...options.selections, ...creations.selections } };
     // Identical bytes retain their original collection date on every re-drop.
     const knownRun = !options.review && (portfolio.plcImports || []).find((run) => run.type !== "review" && run.fingerprint === dataset.metadata?.fingerprint);
     const proposedReportDate = knownRun?.reportDate || options.reportDate || dataset.metadata?.reportDate || localDay(options.now ? new Date(options.now) : new Date());
     const reportParsed = parseDate(proposedReportDate);
     if (reportParsed.kind !== "exact") throw new Error("The report date must be an exact calendar date.");
     const reportDate = reportParsed.value;
-    const products = new Map(identities(portfolio).map((entry) => [entry.productId, entry.product]));
+    const products = new Map(identities(matchingPortfolio).map((entry) => [entry.productId, entry.product]));
     const items = dataset.rows.map((row) => {
-      const key = sourceKey(row), match = matchProduct(row, portfolio, options), product = products.get(match.productId);
+      const key = sourceKey(row), match = matchProduct(row, matchingPortfolio, matchingOptions), product = products.get(match.productId);
       const metadata = row._plcMetadata || dataset.metadata || {};
       // The operator's import date controls collection freshness. Explicit
       // workbook periods still control field ordering, including older sections.
       const sourceDate = options.review ? row.reportDate || metadata.reportDate || reportDate : options.reportDateBasis === "Import date" ? row.reportDate || metadata.reportDate || reportDate : row.reportDate && row.reportDate !== dataset.metadata?.reportDate ? row.reportDate : reportDate;
       const fields = Object.entries(row.dates || {}).filter(([field]) => fieldLabels[field]).map(([field, supplied]) => {
-        const parsed = typeof supplied === "object" && supplied ? supplied : parseDate(supplied);
+        const suppliedDate = typeof supplied === "object" && supplied ? supplied : parseDate(supplied, { quarterBasis: "calendar" });
+        const parsed = suppliedDate.kind === "quarter" && !suppliedDate.period ? { ...parseDate(suppliedDate.raw, { quarterBasis: "calendar" }), source: suppliedDate.source } : suppliedDate;
         const current = clean(product?.[field]), incoming = parsed.value || "", previous = product?.plc?.fields?.[field];
-        let status = parsed.kind === "blank" ? "blank" : parsed.kind === "exact" ? current === incoming ? "unchanged" : "update" : "review", reason = parsed.reason || "";
+        const period = normalizePeriod(parsed.period, incoming), oldPeriod = currentPeriod(product, field), usable = parsed.kind === "exact" || Boolean(period);
+        let status = parsed.kind === "blank" ? "blank" : usable ? current === incoming && JSON.stringify(period) === JSON.stringify(oldPeriod) ? "unchanged" : "update" : "review", reason = parsed.reason || "";
         if (row.cancelled) { status = "review"; reason = "Cancelled project; current dates stay unchanged"; }
-        else if ((row.supporting || parsed.source?.supporting) && !(previous?.reviewed && !previous.supersededAt && parsed.kind === "exact" && previous.value === incoming && current === incoming && previous.raw === parsed.raw && previous.source?.sheet === parsed.source?.sheet)) { status = "review"; reason = "Supporting sheet is not a current dated authority"; }
+        else if ((row.supporting || parsed.source?.supporting) && !(previous?.reviewed && !previous.supersededAt && usable && previous.value === incoming && current === incoming && JSON.stringify(period) === JSON.stringify(oldPeriod) && previous.raw === parsed.raw && previous.source?.sheet === parsed.source?.sheet)) { status = "review"; reason = "Supporting sheet is not a current dated authority"; }
+        else if (parsed.source?.currentFfsFromOtherColumn) { status = "review"; reason = "Current FFS inherits another column; verify the source date"; }
         else if (parsed.source?.formula) { status = "review"; reason = "Cached formula dates require review; formulas are not evaluated"; }
         else if (parsed.source?.crossProduct) { status = "review"; reason = "Date merged across distinct product rows"; }
-        else if (parsed.kind === "exact" && parsed.region && previous?.scope !== parsed.region && current !== incoming) { status = "review"; reason = `Regional ${parsed.region} date: choose which date represents PPC FFS`; }
+        else if (usable && previous?.scope && !sameScope(previous.scope, parsed.region) && (parsed.region || current !== incoming)) { status = "review"; reason = `FFS manufacturing scope changed from ${previous.scope} to ${parsed.region || "unspecified"}; verify the incoming date`; }
+        else if (usable && parsed.region && !previous?.scope && !parsed.source?.authoritativeCurrentFfs && current !== incoming) { status = "review"; reason = `Regional ${parsed.region} date: choose which date represents PPC FFS`; }
+        if (period && current && !oldPeriod && status === "update") { status = "review"; reason = "PPC has an exact day; confirm before replacing it with quarter precision"; }
         if (row.conflicts?.some((conflict) => conflict.field === field)) { status = "review"; reason = row.conflicts.filter((conflict) => conflict.field === field).map((conflict) => conflict.reason).join(". "); }
         if (previous?.reportDate && sourceDate < previous.reportDate) { status = "stale"; reason = "An older source cannot replace a newer accepted observation"; }
-        else if (previous && sourceDate === previous.reportDate && incoming && incoming !== previous.value) { status = "review"; reason = "Different value for the same report date"; }
+        else if (previous && sourceDate === previous.reportDate && incoming && (incoming !== previous.value || JSON.stringify(period) !== JSON.stringify(oldPeriod))) { status = "review"; reason = "Different value or date precision for the same report date"; }
         else if (previous?.value && (current !== previous.value || previous.supersededAt) && current !== incoming && status === "update") { status = "review"; reason = "PPC date was edited after the previous PLC import"; }
         if (!previous && product && status === "update") {
           const accepted = root.PortfolioMasterModel?.dateEditsForProduct?.(portfolio, product.id)?.[field];
-          if (accepted?.at && accepted.at.slice(0, 10) > sourceDate) { status = "review"; reason = "The master has an accepted date change newer than this source report"; }
+          if (accepted?.at && accepted.at.slice(0, 10) >= sourceDate) { status = "review"; reason = "The master has an accepted date change on or after this source report"; }
         }
         const localEdit = portfolio.dateLocalEdits?.[product?.id]?.[field];
         const localEditTime = localEdit?.at ? new Date(localEdit.at) : null;
@@ -430,7 +546,7 @@
         }
         const ga = field === "generalAvailabilityDate" ? incoming : product?.generalAvailabilityDate, em = field === "endManufacturingDate" ? incoming : product?.endManufacturingDate;
         if (ga && em && em < ga && status === "update") { status = "review"; reason = "GA would fall after end of manufacturing"; }
-        return { field, label: fieldLabels[field], current, incoming, raw: parsed.raw || "", region: parsed.region || "", kind: parsed.kind, status, reason, source: parsed.source || row.sources?.[0] || {}, reportDate: sourceDate };
+        return { field, label: fieldLabels[field], current, incoming, currentPeriod: oldPeriod, period, displayCurrent: dateLabel(current, oldPeriod), displayIncoming: dateLabel(incoming, period), raw: parsed.raw || "", region: parsed.region || "", kind: parsed.kind, status, reason, source: parsed.source || row.sources?.[0] || {}, reportDate: sourceDate, ...(parsed.revision ? { revision: clone(parsed.revision) } : {}), ...(parsed.candidates ? { candidates: clone(parsed.candidates) } : {}) };
       });
       const gaProposal = fields.find((field) => field.field === "generalAvailabilityDate" && field.status === "update");
       const emProposal = fields.find((field) => field.field === "endManufacturingDate" && field.status === "update");
@@ -444,8 +560,32 @@
       item.action = "review";
       for (const field of item.fields) if (["update", "unchanged"].includes(field.status)) { field.status = "review"; field.reason = "Multiple source products or variants map to one PPC product"; }
     }
-    const summary = { total: items.length, matched: items.filter((i) => i.match.status === "matched").length, update: items.filter((i) => i.action === "update").length, review: items.filter((i) => i.action === "review").length, unmatched: items.filter((i) => i.action === "unmatched").length, stale: items.filter((i) => i.action === "stale").length, unchanged: items.filter((i) => i.action === "unchanged").length };
-    return { version, dataset, reportDate, reportDateBasis: knownRun?.reportDateBasis || options.reportDateBasis || (dataset.metadata?.reportDate ? reportDate !== dataset.metadata.reportDate ? "User supplied report date" : dataset.metadata.reportDateBasis : "Import date fallback"), items, summary, options: { ...options, reportDate }, baseline: [...products].map(([productId, p]) => ({ productId, fields: Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, clean(p[field])])), plc: clone(p.plc || null) })) };
+    const summary = { total: items.length, matched: items.filter((i) => i.match.status === "matched").length, update: items.filter((i) => i.action === "update").length, review: items.filter((i) => i.action === "review").length, unmatched: items.filter((i) => i.action === "unmatched").length, stale: items.filter((i) => i.action === "stale").length, unchanged: items.filter((i) => i.action === "unchanged").length, fields: summarizeFields(items) };
+    summary.created = creations.createdProducts.length;
+    return { version, dataset, reportDate, reportDateBasis: knownRun?.reportDateBasis || options.reportDateBasis || (dataset.metadata?.reportDate ? reportDate !== dataset.metadata.reportDate ? "User supplied report date" : dataset.metadata.reportDateBasis : "Import date fallback"), items, summary, options: { ...options, reportDate }, createdProducts: clone(creations.createdProducts), baseline: [...products].map(([productId, p]) => ({ productId, fields: Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, clean(p[field])])), plc: clone(p.plc || null) })) };
+  }
+  function summarizeFields(items) {
+    const fields = {};
+    for (const item of items) for (const field of item.fields) {
+      const stats = fields[field.field] ||= { source: 0, exact: 0, quarter: 0, eligible: 0, updated: 0, unchanged: 0, review: 0, unmatched: 0, blank: 0, stale: 0, preserved: 0, skipped: 0, blockedReasons: [] };
+      stats.source++;
+      if (field.kind === "exact") stats.exact++;
+      if (field.period) stats.quarter++;
+      const outcome = item.row.cancelled ? "preserved" : item.match.status !== "matched" ? "unmatched" : field.status === "update" ? "eligible" : field.status;
+      if (Object.hasOwn(stats, outcome)) stats[outcome]++;
+      if (["review", "unmatched", "stale"].includes(outcome)) {
+        const reason = clean(outcome === "unmatched" ? item.match.reason : field.reason).slice(0, 240) || "Verify this source date";
+        const existing = stats.blockedReasons.find((entry) => entry.reason === reason);
+        if (existing) existing.count++;
+        else if (stats.blockedReasons.length < 12) stats.blockedReasons.push({ reason, count: 1 });
+        else {
+          const other = stats.blockedReasons.find((entry) => entry.reason === "Other review reasons");
+          if (other) other.count++;
+          else { const last = stats.blockedReasons.pop(); stats.blockedReasons.push({ reason: "Other review reasons", count: last.count + 1 }); }
+        }
+      }
+    }
+    return fields;
   }
   function buildReviewPlan(portfolio, options = {}) {
     const entries = portfolio.plcReview?.version === 1 ? portfolio.plcReview.entries || [] : [];
@@ -464,7 +604,7 @@
       entries = entries.filter((entry) => entry.key !== item.key);
       if (item.row.cancelled || options.skippedKeys?.includes(item.key)) continue;
       const product = products.get(item.matchedProductId), matchNeeded = item.match.status !== "matched";
-      const fields = item.fields.filter((field) => !options.skippedFields?.[item.key]?.includes(field.field) && !options.resolutions?.[item.key]?.[field.field] && field.status === "review"
+      const fields = item.fields.filter((field) => !options.skippedFields?.[item.key]?.includes(field.field) && !options.resolutions?.[item.key]?.[field.field] && (field.status === "review" || options.deferredFields?.[item.key]?.includes(field.field))
         && !(product?.plc?.fields?.[field.field]?.reviewed && product.plc.fields[field.field].fingerprint === item.metadata.fingerprint && product.plc.fields[field.field].raw === field.raw)).map((field) => field.field);
       if (!matchNeeded && !fields.length) continue;
       const row = clone(item.row); delete row._plcMetadata;
@@ -478,15 +618,36 @@
     return entries.length;
   }
   function applyPlan(portfolio, plan, options = {}) {
-    const now = new Date(options.now || new Date()).toISOString(), next = clone(portfolio), result = { imported: 0, datesUpdated: 0, unchanged: 0, skipped: 0, review: 0, duplicate: false };
-    const effective = buildPlan(plan.dataset, portfolio, { ...plan.options, selections: { ...plan.options?.selections, ...options.selections } });
+    const now = new Date(options.now || new Date()).toISOString();
+    const combinedOptions = { ...plan.options, ...options, now, selections: { ...plan.options?.selections, ...options.selections }, createProducts: { ...plan.options?.createProducts, ...options.createProducts } };
+    const creations = prepareProductCreations(plan.dataset, portfolio, combinedOptions);
+    const next = creations.portfolio === portfolio ? clone(portfolio) : creations.portfolio;
+    const createdProducts = creations.createdProducts.map((record) => ({ ...record, at: now }));
+    const result = { imported: 0, datesUpdated: 0, unchanged: 0, skipped: 0, review: 0, duplicate: false, created: createdProducts.length };
+    const effective = buildPlan(plan.dataset, next, { ...combinedOptions, createProducts: {}, selections: { ...combinedOptions.selections, ...creations.selections } });
+    result.fields = clone(effective.summary.fields);
     const products = new Map(identities(next).map((entry) => [entry.productId, entry.product]));
-    const originalProducts = new Map(identities(portfolio).map((entry) => [entry.productId, entry.product]));
+    const originalProducts = new Map(identities(next).map((entry) => [entry.productId, clone(entry.product)]));
     const baselines = new Map((plan.baseline || []).map((entry) => [entry.productId, entry]));
     const history = [], proposals = new Map();
+    const clearBlockedCount = (item, field, outcome = "review") => {
+      const stats = result.fields[field.field];
+      stats[outcome] = Math.max(0, stats[outcome] - 1);
+      const text = clean(outcome === "unmatched" ? item.match.reason : field.reason).slice(0, 240);
+      const reason = stats.blockedReasons.find((entry) => entry.reason === text);
+      if (reason) reason.count = Math.max(0, reason.count - 1);
+      stats.blockedReasons = stats.blockedReasons.filter((entry) => entry.count > 0);
+    };
     // Validate every resolution before constructing mutations. Older reports cannot be forced through review.
     for (const item of effective.items) {
-      if (options.skippedKeys?.includes(item.key) || item.match.status !== "matched") { result.skipped++; continue; }
+      if (options.skippedKeys?.includes(item.key)) {
+        for (const field of item.fields) {
+          result.fields[field.field].skipped++;
+          if (item.match.status !== "matched") clearBlockedCount(item, field, "unmatched"); else if (field.status === "review") clearBlockedCount(item, field);
+        }
+        result.skipped++; continue;
+      }
+      if (item.match.status !== "matched") { result.skipped++; continue; }
       const product = products.get(item.matchedProductId), original = originalProducts.get(item.matchedProductId), baseline = baselines.get(item.matchedProductId);
       if (baseline && (JSON.stringify(baseline.plc) !== JSON.stringify(original.plc || null) || Object.keys(fieldLabels).some((field) => baseline.fields[field] !== clean(original[field])))) throw new Error("PPC changed since the preview. Reload the preview before applying PLC updates.");
       const previous = product.plc || {};
@@ -494,18 +655,33 @@
       const olderObservation = previous.reportDate && item.reportDate < previous.reportDate;
       const patch = {}, fieldEvidence = { ...(previous.fields || {}) }, historyStart = history.length;
       for (const field of item.fields) {
-        const skipped = options.skippedFields?.[item.key]?.includes(field.field), resolution = options.resolutions?.[item.key]?.[field.field];
+        const skipped = options.skippedFields?.[item.key]?.includes(field.field), deferred = options.deferredFields?.[item.key]?.includes(field.field), resolution = options.resolutions?.[item.key]?.[field.field];
         if (resolution && field.status === "stale") throw new Error("Older reports cannot overwrite newer dates.");
-        if (resolution && parseDate(resolution).kind !== "exact") throw new Error("Reviewed dates must use a valid YYYY-MM-DD calendar date.");
-        let incoming = resolution || field.incoming;
-        const allowed = !skipped && !item.row.cancelled && (resolution || field.status === "update" || field.status === "unchanged");
-        if (!allowed || !incoming || field.status === "stale") { if (field.status === "review") result.review++; continue; }
-        if (proposals.has(`${product.id}/${field.field}`) && proposals.get(`${product.id}/${field.field}`) !== incoming) throw new Error("Two source rows propose different dates for one PPC product. Keep one source date and apply again.");
-        proposals.set(`${product.id}/${field.field}`, incoming);
+        const resolutionValue = typeof resolution === "object" ? resolution.value : resolution;
+        const selectedPeriod = resolution && typeof resolution === "object" ? normalizePeriod(resolution.period, resolutionValue) : resolution ? null : field.period;
+        if (resolution && (parseDate(resolutionValue).kind !== "exact" || typeof resolution === "object" && resolution.period && !selectedPeriod)) throw new Error("Reviewed dates must use a valid calendar day or a validated calendar quarter.");
+        let incoming = resolutionValue || field.incoming;
+        const allowed = !skipped && !deferred && !item.row.cancelled && (resolution || field.status === "update" || field.status === "unchanged");
+        if (!allowed || !incoming || field.status === "stale") {
+          if (skipped) result.fields[field.field].skipped++;
+          if (field.status === "review" && skipped) clearBlockedCount(item, field); else if (field.status === "review" && !item.row.cancelled) result.review++;
+          continue;
+        }
+        const proposal = JSON.stringify({ value: incoming, period: selectedPeriod });
+        if (proposals.has(`${product.id}/${field.field}`) && proposals.get(`${product.id}/${field.field}`) !== proposal) throw new Error("Two source rows propose different dates for one PPC product. Keep one source date and apply again.");
+        proposals.set(`${product.id}/${field.field}`, proposal);
         const oldEvidence = fieldEvidence[field.field];
-        if (product[field.field] !== incoming) { patch[field.field] = incoming; result.datesUpdated++; history.push({ at: now, productId: product.id, field: field.field, before: clean(product[field.field]), after: incoming, reportDate: field.reportDate, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint, source: field.source, raw: field.raw, reviewed: Boolean(resolution) }); }
+        const fieldStats = result.fields[field.field];
+        const oldPeriod = currentPeriod(product, field.field), semanticChange = product[field.field] !== incoming || JSON.stringify(oldPeriod) !== JSON.stringify(selectedPeriod);
+        if (semanticChange) { patch[field.field] = incoming; result.datesUpdated++; fieldStats.updated++; history.push({ at: now, productId: product.id, field: field.field, before: clean(product[field.field]), after: incoming, beforePeriod: oldPeriod, afterPeriod: selectedPeriod, reportDate: field.reportDate, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint, source: field.source, raw: field.raw, reviewed: Boolean(resolution) }); }
+        else if (field.status !== "unchanged") fieldStats.unchanged++;
+        if (resolution && field.status === "review") {
+          clearBlockedCount(item, field);
+        }
         const localChange = next.dateLocalEdits?.[product.id]?.[field.field];
-        fieldEvidence[field.field] = { value: incoming, reportDate: field.reportDate, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint, changedAt: product[field.field] !== incoming ? now : localChange?.value === incoming && localChange.at > (oldEvidence?.changedAt || "") ? localChange.at : oldEvidence?.changedAt || "", observedAt: !oldEvidence?.supersededAt && oldEvidence?.fingerprint === metadata.fingerprint && oldEvidence.value === incoming ? oldEvidence.observedAt : now, raw: field.raw, source: field.source, scope: resolution && incoming === field.incoming ? field.region : oldEvidence?.scope || "", reviewed: Boolean(resolution) || oldEvidence?.reviewed && oldEvidence.raw === field.raw && oldEvidence.value === incoming || false };
+        const selectedCandidates = resolution ? (field.candidates || []).filter((candidate) => candidate.kind === "exact" && candidate.value === incoming) : [];
+        const selectedScope = selectedCandidates.length ? [...new Set(selectedCandidates.map((candidate) => candidate.region).filter(Boolean))].join(", ") : (resolution || field.source?.authoritativeCurrentFfs) && incoming === field.incoming && field.region ? field.region : oldEvidence?.scope || "";
+        fieldEvidence[field.field] = { value: incoming, ...(selectedPeriod ? { period: clone(selectedPeriod) } : {}), reportDate: field.reportDate, sourceFile: metadata.fileName, fingerprint: metadata.fingerprint, changedAt: semanticChange ? now : localChange?.value === incoming && localChange.at > (oldEvidence?.changedAt || "") ? localChange.at : oldEvidence?.changedAt || "", observedAt: !semanticChange && !oldEvidence?.supersededAt && oldEvidence?.fingerprint === metadata.fingerprint && oldEvidence.value === incoming ? oldEvidence.observedAt : now, raw: field.raw, source: field.source, scope: selectedScope, reviewed: Boolean(resolution) || oldEvidence?.reviewed && oldEvidence.raw === field.raw && oldEvidence.value === incoming && !semanticChange || false, ...(field.revision ? { revision: clone(field.revision) } : {}), ...(field.candidates ? { candidates: clone(field.candidates) } : {}), ...(selectedCandidates.length ? { selectedCandidates: clone(selectedCandidates) } : {}) };
       }
       const ga = patch.generalAvailabilityDate || product.generalAvailabilityDate, em = patch.endManufacturingDate || product.endManufacturingDate;
       if ((Object.hasOwn(patch, "generalAvailabilityDate") || Object.hasOwn(patch, "endManufacturingDate")) && ga && em && em < ga) throw new Error("A selected date places GA after end of manufacturing. Correct the review dates first.");
@@ -515,9 +691,26 @@
       const rowRecord = { ...clone(item.row), importedAt: now, reportDate: item.reportDate, fingerprint: metadata.fingerprint }; delete rowRecord._plcMetadata;
       const currentRows = previous.fingerprint === metadata.fingerprint ? previous.rows || [] : [];
       merged.plc = { version, sourceFile: olderObservation ? previous.sourceFile : metadata.fileName, fingerprint: olderObservation ? previous.fingerprint : metadata.fingerprint, reportDate: olderObservation ? previous.reportDate : item.reportDate, reportDateBasis: olderObservation ? previous.reportDateBasis : effective.options.review || item.reportDate !== effective.reportDate ? item.row.reportDateBasis || metadata.reportDateBasis : effective.reportDateBasis, importedAt: olderObservation ? previous.importedAt : now, changedAt: Object.keys(patch).length ? now : previous.changedAt || "", fields: fieldEvidence, rows: olderObservation ? previous.rows || [] : [...currentRows.filter((row) => row.key !== item.key), rowRecord], identities: [...(previous.identities || []).filter((identity) => identity.key !== item.key), { key: item.key, name: item.row.name, codename: item.row.codename || "", confirmed: item.match.reason === "Selected product" }].slice(-200), history: [...(previous.history || []), ...history.slice(historyStart)].slice(-100) };
+      if (previous.createdFromSource) merged.plc.createdFromSource = clone(previous.createdFromSource);
       Object.assign(product, merged); result.imported++;
     }
+    for (const record of createdProducts) {
+      const item = effective.items.find((entry) => entry.key === record.key);
+      record.sourceFile = item?.metadata.fileName || effective.dataset.metadata.fileName;
+      record.fingerprint = item?.metadata.fingerprint || effective.dataset.metadata.fingerprint;
+      products.get(record.productId).plc.createdFromSource = clone(record);
+    }
     result.pendingReview = updateReviewQueue(next, effective, options, now);
+    // Receipts count exceptions that still exist after selections, verified
+    // dates and explicit keep-current decisions have been applied.
+    const pending = new Map(next.plcReview.entries.map((entry) => [entry.key, entry]));
+    for (const [field, stats] of Object.entries(result.fields)) {
+      const remaining = effective.items.filter((item) => !item.row.cancelled && pending.has(item.key) && item.fields.some((entry) => entry.field === field));
+      stats.unmatched = remaining.filter((item) => pending.get(item.key).matchNeeded).length;
+      stats.review = remaining.filter((item) => !pending.get(item.key).matchNeeded && pending.get(item.key).fields.includes(field)).length;
+      const blocked = summarizeFields(remaining.map((item) => ({ ...item, fields: item.fields.filter((entry) => entry.field === field && (pending.get(item.key).matchNeeded || pending.get(item.key).fields.includes(field))) })))[field]?.blockedReasons || [];
+      stats.blockedReasons = blocked;
+    }
     const previousCollection = next.plcCollection;
     const olderCollection = previousCollection?.metadata?.reportDate && effective.dataset.metadata.reportDate && effective.dataset.metadata.reportDate < previousCollection.metadata.reportDate;
     if (!effective.options.review && !olderCollection && previousCollection?.metadata?.fingerprint !== effective.dataset.metadata.fingerprint) {
@@ -527,11 +720,11 @@
       next.plcCollection = { version, importedAt: now, metadata: clone(effective.dataset.metadata), primaryRows, supportingRows: clone(effective.dataset.supportingRows || []) };
       if (JSON.stringify(next.plcCollection).length > 3000000) throw new Error("The collected source evidence is too large for this workspace. The previous collection remains intact.");
     }
-    const run = { at: now, type: plan.review || effective.options.review ? "review" : "import", reportDate: effective.reportDate, reportDateBasis: effective.reportDateBasis, sourceFile: effective.dataset.metadata.fileName, fingerprint: effective.dataset.metadata.fingerprint, metadata: clone(effective.dataset.metadata), summary: result, diagnostics: effective.dataset.diagnostics || [], rows: effective.items.map((item) => ({ key: item.key, name: item.row.name, productId: item.matchedProductId, action: item.action, observation: Object.fromEntries(Object.entries(clone(item.row)).filter(([key]) => !["observations", "_plcMetadata"].includes(key))), fields: item.fields.map((field) => ({ field: field.field, status: field.status, raw: field.raw, reason: field.reason, source: field.source })) })) };
-    if (!result.imported && !history.length && (next.plcImports || []).some((entry) => entry.fingerprint === run.fingerprint) && JSON.stringify(next.plcReview) === JSON.stringify(portfolio.plcReview) && JSON.stringify(next.plcCollection) === JSON.stringify(portfolio.plcCollection)) { result.duplicate = true; return { portfolio: clone(portfolio), summary: result, history: [] }; }
+    const run = { at: now, type: plan.review || effective.options.review ? "review" : "import", reportDate: effective.reportDate, reportDateBasis: effective.reportDateBasis, sourceFile: effective.dataset.metadata.fileName, fingerprint: effective.dataset.metadata.fingerprint, metadata: clone(effective.dataset.metadata), summary: result, createdProducts: clone(createdProducts), diagnostics: effective.dataset.diagnostics || [], rows: effective.items.map((item) => ({ key: item.key, name: item.row.name, productId: item.matchedProductId, action: item.action, observation: Object.fromEntries(Object.entries(clone(item.row)).filter(([key]) => !["observations", "_plcMetadata"].includes(key))), fields: item.fields.map((field) => ({ field: field.field, status: field.status, raw: field.raw, reason: field.reason, source: field.source })) })) };
+    if (!result.created && !result.imported && !history.length && (next.plcImports || []).some((entry) => entry.fingerprint === run.fingerprint) && JSON.stringify(next.plcReview) === JSON.stringify(portfolio.plcReview) && JSON.stringify(next.plcCollection) === JSON.stringify(portfolio.plcCollection)) { result.duplicate = true; return { portfolio: clone(portfolio), summary: result, history: [], createdProducts: [] }; }
     next.plcImports = [...(next.plcImports || []), run].slice(-52);
     while (next.plcImports.length > 1 && JSON.stringify(next.plcImports).length > 1500000) next.plcImports.shift();
-    return { portfolio: next, summary: result, history };
+    return { portfolio: next, summary: result, history, createdProducts };
   }
   function freshness(metadata, today = localDay()) {
     const day = today instanceof Date ? localDay(today) : String(today).slice(0, 10), stamp = dateStamp(day);
@@ -547,18 +740,25 @@
     return { ageDays: valid ? ageDays : null, importAgeDays, changeAgeDays, status: !valid ? "unknown" : dateStamp(metadata.reportDate) > stamp ? "future" : ageDays > 14 ? "overdue" : ageDays === 14 ? "due" : "current", nextDueDate: valid ? new Date(dateStamp(metadata.reportDate) + 14 * dayMs).toISOString().slice(0, 10) : "" };
   }
   function snapshotDateValues(portfolio) {
-    return Object.fromEntries(identities(portfolio).map(({ productId, product }) => [productId, Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, clean(product[field])]))]));
+    return Object.fromEntries(identities(portfolio).map(({ productId, product }) => {
+      const values = Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, clean(product[field])]));
+      const periods = Object.fromEntries(Object.keys(fieldLabels).map((field) => [field, currentPeriod(product, field)]).filter(([, period]) => period));
+      if (Object.keys(periods).length) values._periods = periods;
+      return [productId, values];
+    }));
   }
   // Call only for actual local mutations, never to reconstruct missing history.
   function recordDateChanges(before, portfolio, { now = new Date(), source = "local" } = {}) {
     const at = new Date(now).toISOString();
     for (const { productId, product } of identities(portfolio)) for (const field of Object.keys(fieldLabels)) {
       const value = clean(product[field]), previous = before?.[productId]?.[field] || "";
-      if (value === previous) continue;
+      const period = currentPeriod(product, field), previousPeriod = before?.[productId]?._periods?.[field] || null;
+      if (value === previous && JSON.stringify(period) === JSON.stringify(previousPeriod)) continue;
       portfolio.dateLocalEdits ||= {};
       portfolio.dateLocalEdits[productId] ||= {};
       portfolio.dateLocalEdits[productId][field] = { at, value, source };
-      if (source !== "plc" && product.plc?.fields?.[field]) product.plc.fields[field].supersededAt = at;
+      const evidence = product.plc?.fields?.[field];
+      if (source !== "plc" && evidence && !(evidence.sourceType === "local" && evidence.value === value && evidence.changedAt && !evidence.supersededAt)) evidence.supersededAt = at;
     }
     return snapshotDateValues(portfolio);
   }
@@ -573,7 +773,8 @@
     const changedAt = value ? [evidence?.changedAt || "", localAt, evidence || localAt ? "" : acceptedAt].filter(Boolean).sort().at(-1) || "" : "";
     const observedAt = value ? evidence?.observedAt || localAt || acceptedAt : "";
     const clocks = freshness({ reportDate: evidence?.reportDate, importedAt: observedAt, changedAt }, today);
-    return { value, populated: Boolean(value), changedAt, changeAgeDays: clocks.changeAgeDays, observedAt, observedAgeDays: clocks.importAgeDays, acceptedAt, acceptedAgeDays: freshness({ changedAt: acceptedAt }, today).changeAgeDays, sourceReportDate: evidence?.reportDate || "", sourceAgeDays: clocks.ageDays, sourceFile: evidence?.sourceFile || "", source: evidence?.source || null };
+    const period = currentPeriod(product, field);
+    return { value, period, displayValue: dateLabel(value, period), populated: Boolean(value), changedAt, changeAgeDays: clocks.changeAgeDays, observedAt, observedAgeDays: clocks.importAgeDays, acceptedAt, acceptedAgeDays: freshness({ changedAt: acceptedAt }, today).changeAgeDays, sourceReportDate: evidence?.reportDate || "", sourceAgeDays: clocks.ageDays, sourceFile: evidence?.sourceFile || "", source: evidence?.source || null };
   }
-  root.PLCImporter = Object.freeze({ version, fieldLabels, parseDate, normalizeName, matchProduct, parseWorkbook, buildPlan, buildReviewPlan, applyPlan, freshness, localDay, snapshotDateValues, recordDateChanges, getFieldAge });
+  root.PLCImporter = Object.freeze({ version, fieldLabels, parseDate, dateLabel, normalizePeriod, normalizeName, matchProduct, parseWorkbook, buildPlan, buildReviewPlan, applyPlan, freshness, localDay, snapshotDateValues, recordDateChanges, getFieldAge });
 })(globalThis);

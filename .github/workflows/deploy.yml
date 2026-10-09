@@ -47,7 +47,7 @@ jobs:
           cp public/css/styles.css public/css/workspace-notifications.css public/css/product-issues.css public/css/product-merge.css public/css/portfolio-search.css _site/css/
           cp public/js/workspace-notifications.js public/js/product-issues.js public/js/product-merge.js public/js/product-merge-ui.js _site/js/
           cp public/js/portfolio-search.js public/js/portfolio-search-ui.js _site/js/
-          cp public/js/date-history.js _site/js/
+          cp public/js/date-history.js public/js/date-precision.js _site/js/
           cp public/css/date-history.css _site/css/
           cp public/js/plc-import.js public/js/plc-import-ui.js _site/js/
           cp public/css/plc-import.css _site/css/
@@ -67,6 +67,7 @@ jobs:
           test ! -e _site/server
           test -f _site/data/master_ppc.pkg
           test -f _site/js/date-history.js
+          test -f _site/js/date-precision.js
           test -f _site/css/date-history.css
           test -f _site/js/plc-import.js
           test -f _site/js/plc-import-ui.js

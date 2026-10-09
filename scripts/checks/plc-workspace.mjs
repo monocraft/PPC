@@ -147,4 +147,93 @@ function harness({ initial = seed, failStorage = false } = {}) {
   assert.equal(h.calls.saves.length, 1); await h.retry(); assert.equal(h.calls.saves.length, 1, 'A cleared sharing queue cannot issue a second save.');
 }
 
-console.log('PLC workspace checks passed: atomic durable collection and quota rollback, real scoped master sharing without manual drafts, independent date/history adapters, duplicate clocks, original source ordering despite later collection, and persisted retry receipts without reimport.');
+{
+  const h = harness(); await h.connect();
+  currentProduct(h.workspace).name = 'Unrelated existing local name';
+  const data = dataset({ fingerprint: 'synthetic-create-source' });
+  Object.assign(data.rows[0], { key: 'create-source', productId: '', name: 'Synthetic Codeword', codename: 'Synthetic Codeword' });
+  delete data.rows[0].dates.generalAvailabilityDate;
+  const result = await h.commit(h.plan(data), { createProducts: { 'create-source': { name: 'Synthetic Codeword', codename: 'Synthetic Codeword', categoryId: 'pc-gaming-audio' } } });
+  assert.equal(result.summary.created, 1); assert.equal(result.sharing.status, 'saved');
+  const created = h.workspace.categories[0].board.products.find(product => product.id !== 'synthetic-product');
+  assert.ok(created); assert.equal(created.ffsDate, '2026-11-05'); assert.equal(created.generalAvailabilityDate, '');
+  const sharedCreated = h.remote.categories[0].board.products.find(product => product.id === created.id);
+  assert.ok(sharedCreated, 'Explicit PLC product creation is sent through the real master create protocol.');
+  assert.equal(sharedCreated.codename, 'Synthetic Codeword'); assert.equal(sharedCreated.plc.fields.ffsDate.changedAt, firstAt);
+  assert.equal(h.calls.saves[0].changes.length, 1); assert.equal(h.calls.saves[0].changes[0].kind, 'create');
+  assert.equal(currentProduct(h.remote).name, 'Synthetic headset', 'Creating a PLC product cannot publish unrelated existing drafts.');
+  assert.equal(currentProduct(h.workspace).name, 'Unrelated existing local name');
+  assert.equal(h.workspace.plcSharePending, undefined);
+  assert.equal(h.session.track().length, 1);
+}
+
+{
+  const h = harness();
+  const data = dataset({ fingerprint: 'synthetic-create-retry' });
+  Object.assign(data.rows[0], { key: 'create-retry-source', productId: '', name: 'Synthetic Retryword', codename: 'Synthetic Retryword' });
+  delete data.rows[0].dates.generalAvailabilityDate;
+  await h.commit(h.plan(data), { createProducts: { 'create-retry-source': { name: 'Synthetic Retryword', codename: 'Synthetic Retryword', categoryId: 'pc-gaming-audio' } } });
+  const created = h.workspace.categories[0].board.products.find(product => product.id !== 'synthetic-product');
+  assert.equal(h.workspace.plcSharePending.patches[0].kind, 'create');
+  created.name = 'Changed after review';
+  await h.connect();
+  const blocked = await h.retry();
+  assert.equal(blocked.status, 'pending'); assert.equal(blocked.code, 'SCOPED_UPDATE_CHANGED'); assert.equal(h.calls.saves.length, 0);
+  assert.ok(h.workspace.plcSharePending, 'Changed creation drafts remain durable for explicit review.');
+  created.name = 'Synthetic Retryword';
+  assert.equal((await h.retry()).status, 'saved'); assert.equal(h.calls.saves[0].changes[0].kind, 'create');
+}
+
+// A manual precision edit can keep the same scalar placement anchor. Its
+// metadata is still a draft and must not ride along with an automatic FFS save.
+for (const [kind, scalar, period] of [
+  ['same-anchor quarter', '2028-04-01', { precision: 'quarter', basis: 'calendar', year: 2028, quarter: 2, start: '2028-04-01', end: '2028-06-30', label: 'Q2 2028' }],
+  ['different-anchor quarter', '2028-07-01', { precision: 'quarter', basis: 'calendar', year: 2028, quarter: 3, start: '2028-07-01', end: '2028-09-30', label: 'Q3 2028' }],
+  ['manual exact day', '2028-04-05', null],
+]) {
+  const h = harness();
+  currentProduct(h.workspace).finalAssetsDate = '2028-04-01';
+  currentProduct(h.remote).finalAssetsDate = '2028-04-01';
+  await h.connect();
+  const manual = currentProduct(h.workspace);
+  manual.finalAssetsDate = scalar;
+  manual.plc = { fields: { finalAssetsDate: { value: scalar, sourceType: 'local', changedAt: firstAt, observedAt: firstAt, raw: period?.label || scalar, source: { kind: 'manual' }, ...(period ? { period: clone(period) } : {}) } } };
+  h.sandbox.scheduleSave();
+  const evidenceBefore = clone(manual.plc.fields.finalAssetsDate);
+  const result = await h.commit(h.plan());
+  assert.equal(result.sharing.status, 'saved', `FFS remains shareable while an unrelated ${kind} is a local draft.`);
+  assert.equal(currentProduct(h.remote).ffsDate, '2026-11-05');
+  assert.equal(currentProduct(h.remote).finalAssetsDate, '2028-04-01');
+  assert.equal(currentProduct(h.remote).plc.fields.finalAssetsDate, undefined, `An automatic FFS import cannot publish an unrelated ${kind} clock or precision.`);
+  assert.equal(currentProduct(h.workspace).finalAssetsDate, scalar);
+  assert.deepEqual(currentProduct(h.workspace).plc.fields.finalAssetsDate, evidenceBefore, `The unrelated ${kind} remains intact locally after the FFS snapshot arrives.`);
+  assert.ok(h.session.track().some((entry) => entry.productId === 'synthetic-product'), `The ${kind} remains an explicit unsaved product draft.`);
+  assert.equal((await h.session.save({ reason: 'Explicit synthetic manual milestone save' })).saved, true);
+  assert.equal(currentProduct(h.remote).finalAssetsDate, scalar);
+  assert.deepEqual(currentProduct(h.remote).plc.fields.finalAssetsDate, evidenceBefore, `An explicit save can publish the reviewed ${kind} after the independent FFS update.`);
+  assert.equal(h.session.track().length, 0);
+}
+
+// Persisted queues from the preceding release have no milestone metadata scope.
+// A subsequent import must carry forward their imported date evidence together
+// with the already queued scalar, while continuing to exclude manual evidence.
+{
+  const h = harness();
+  const older = dataset({ fingerprint: 'legacy-pending-assets', ffsDate: '2026-10-01' });
+  delete older.rows[0].dates.generalAvailabilityDate;
+  older.rows[0].dates.finalAssetsDate = { ...importer.parseDate('2026-10-30'), source: { sheet: 'Synthetic PLC', cell: 'J4' } };
+  await h.commit(h.plan(older));
+  for (const queued of h.workspace.plcSharePending.patches) delete queued.plcFields;
+  const originalEvidence = clone(currentProduct(h.workspace).plc.fields.finalAssetsDate);
+  h.clock.value = '2026-10-23T16:00:00.000Z';
+  const newer = dataset({ fingerprint: 'newer-pending-ffs', reportDate: '2026-10-22', ffsDate: '2026-11-06' });
+  delete newer.rows[0].dates.generalAvailabilityDate;
+  await h.commit(h.plan(newer, { reportDate: '2026-10-23' }));
+  await h.connect();
+  assert.equal((await h.retry()).status, 'saved');
+  assert.equal(currentProduct(h.remote).finalAssetsDate, '2026-10-30');
+  assert.deepEqual(currentProduct(h.remote).plc.fields.finalAssetsDate, originalEvidence, 'A migrated pending date keeps its source and aging clocks when a newer FFS import joins the sharing queue.');
+  assert.equal(h.session.track().length, 0);
+}
+
+console.log('PLC workspace checks passed: atomic durable collection and quota rollback, real scoped master sharing without manual scalar/precision drafts, independent date/history adapters, duplicate clocks, original source ordering, persisted retries, reviewed codename creation with shared clocks, and guarded changes after creation review.');
