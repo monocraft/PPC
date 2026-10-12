@@ -162,4 +162,28 @@ const mutableResult = searchModel.search(portfolio, sku).results[0];
 mutableResult.productName = "Changed result only";
 assert.equal(searchModel.search(portfolio, sku).results[0].productName, "HyperX Cloud II", "result mutations must not alter records or future searches");
 
+const organizedLaunch = freezeTree({
+  id: "organized-tracker", name: "Organized headset", specs: [{ id: "battery", label: "Battery", value: "80 hours" }],
+  plc: { launchAvailability: { sourceFile: "private-tracker-filename.xlsx", fingerprint: "private-fingerprint-987", updateDate: "2099-12-31", records: [{
+    id: "private-record-id", skus: ["BS1T8AA"],
+    identity: { productName: "Tracker headset black", codename: "Sugar Glider", sourceCategory: "PC Audio", skuText: "BS1T8AA", tier: "Star" },
+    pricing: { usd: "89.99 (NA) / 99.99 (RoW)", eur: 99.99 },
+    milestones: [{ label: "FFS", value: "2026-04-14" }],
+    regions: [{ label: "LATAM", value: "Phase 2 September" }], notes: [{ value: "Japan online channel" }],
+  }], organization: { relocatedMetadata: [{ label: "private-audit-marker", value: "private-history-value" }] } } },
+});
+for (const query of ["Sugar Glider", "89.99", "EUR", "LATAM September", "2026-04-14", "Japan online", "80 hours"]) {
+  assert.ok(searchModel.matchProduct(organizedLaunch, query), `organized source detail must remain searchable: ${query}`);
+}
+assert.equal(searchModel.matchProduct(organizedLaunch, "BS1T8AA").matchType, "sku-exact", "organized SKU search retains its exact identifier ranking");
+for (const query of ["private-tracker-filename", "private-fingerprint-987", "2099-12-31", "private-record-id", "private-audit-marker", "private-history-value"]) {
+  assert.equal(searchModel.matchProduct(organizedLaunch, query), null, "source bookkeeping must not become search content");
+}
+const legacyLaunch = { name: "Legacy source", plc: { launchAvailability: { rows: [{ skus: ["6N0A7AA"], values: [59.99, 69.99, "Black mouse", "Yamazaki", "Mice", "6N0A7AA", null, "2026-04-14T00:00:00", null, null, null, "Phase 2 July"] }] } } };
+assert.ok(searchModel.matchProduct(legacyLaunch, "Yamazaki"));
+assert.ok(searchModel.matchProduct(legacyLaunch, "2026-04-14"), "legacy exact source dates use searchable day precision");
+assert.ok(searchModel.matchProduct(legacyLaunch, "July"));
+const getterLaunch = { name: "safe", plc: { get launchAvailability() { getterCalls++; throw new Error("Do not call source getters"); } } };
+assert.equal(searchModel.matchProduct(getterLaunch, "private-source"), null);
+assert.equal(getterCalls, 0, "organized search must retain the no-getter contract");
 console.log("Portfolio search checks passed.");
