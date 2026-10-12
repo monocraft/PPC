@@ -1550,19 +1550,19 @@ function detailedSpecRowHeight(row) {
 }
 
 function detailedSpecsHeight(product) {
-  return detailedSpecRows(product?.specs).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
+  return detailedSpecRows(globalThis.PortfolioLaunchRecords?.specifications(product) || product?.specs).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
 }
 
 function productCardLayout(targetBoard = board, definition = categoryDefinition()) {
   const lanes = targetBoard === board ? sortedLanes() : [...targetBoard.lanes].sort((a, b) => a.order - b.order);
   const supportsDetailedCards = lanes.length === 1 || definition.fullSpecCards === true;
   const products = targetBoard.products;
-  const detailed = supportsDetailedCards && products.some((product) => product.specs.length);
+  const detailed = supportsDetailedCards && products.some((product) => (globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs).length);
   if (!detailed) {
     // Size the category together so filtering never moves cards or their hit regions.
     const rowsTop = TITLE_BLOCK_TOP + DETAILS_TOP_OFFSET + 9;
     const maxContentHeight = Math.max(0, ...products.map((product) => (
-      rowsTop + product.specs.length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
+      rowsTop + (globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs).length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
     )));
     const cardHeight = Math.max(300, Math.min(CARD_HEIGHT, maxContentHeight));
     return {
@@ -2310,7 +2310,7 @@ function drawDetailedSpecLabel(context, label, x, y, maxWidth) {
 }
 
 function drawDetailedSpecs(context, product, x, startY) {
-  const rows = detailedSpecRows(product.specs);
+  const rows = detailedSpecRows(globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs);
   let cursorY = startY;
 
   rows.forEach((row) => {
@@ -2456,11 +2456,12 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     const rowsTop = detailsTop + 9;
     const overflowNoteHeight = 24;
     const availableHeight = Math.max(0, detailsBottom - rowsTop);
+    const featureSpecs = globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs;
     let visibleSpecCount = Math.max(0, Math.floor(availableHeight / rowHeight));
-    if (product.specs.length > visibleSpecCount) {
+    if (featureSpecs.length > visibleSpecCount) {
       visibleSpecCount = Math.max(0, Math.floor((availableHeight - overflowNoteHeight - 8) / rowHeight));
     }
-    const visibleSpecs = product.specs.slice(0, visibleSpecCount);
+    const visibleSpecs = featureSpecs.slice(0, visibleSpecCount);
     visibleSpecs.forEach((item, index) => {
       const rowY = rowsTop + index * rowHeight;
       // Align with the first line's visual center, retaining room for a second line.
@@ -2473,7 +2474,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
       context.beginPath(); context.moveTo(x + 10, rowY + 26); context.lineTo(x + CARD_WIDTH - 10, rowY + 26); context.stroke();
     });
 
-    const hiddenSpecCount = product.specs.length - visibleSpecs.length;
+    const hiddenSpecCount = featureSpecs.length - visibleSpecs.length;
     if (hiddenSpecCount > 0) {
       const noteY = detailsBottom - overflowNoteHeight - 7;
       context.fillStyle = UI_PALETTE.greyOlive;
@@ -3661,7 +3662,9 @@ function productDetailsModel(product) {
       { key: "confidence", label: "Confidence", value: roadmap.confidence || "Not set" },
     ],
     skus: productPartSkus(product).map((sku) => ({ code: sku.code, colors: PortfolioModel.resolveSkuColors(sku, product) })),
-    specs: product.specs,
+    specs: globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs,
+    launch: globalThis.PortfolioLaunchRecords?.details(product) || null,
+    priceText: globalThis.PortfolioModel?.msrpText(product) || product.price || "",
     identity: [
       { label: "Category", value: activeCategoryRecord()?.name || categoryDefinition().name },
       { label: "Lane", value: lane?.label || "Unassigned" },
@@ -4125,7 +4128,7 @@ function infoProduct() {
 }
 
 function productSpecValue(product, patterns) {
-  const specs = Array.isArray(product?.specs) ? product.specs : [];
+  const specs = globalThis.PortfolioLaunchRecords?.specifications(product) || (Array.isArray(product?.specs) ? product.specs : []);
   const matchers = patterns.map((pattern) => pattern instanceof RegExp ? pattern : new RegExp(String(pattern), "i"));
   const found = specs.find((item) => matchers.some((pattern) => pattern.test(String(item.label || ""))));
   return found?.value ? String(found.value) : "";
@@ -4674,6 +4677,7 @@ function renderInspector() {
   }
   applyInspectorState(false);
   editSelectedButton.disabled = false;
+  const featureSpecs = globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs;
   const imageAssetSummary = imageAssetSummaryHtml(product.imageAssetId, "No product image · category placeholder is used");
   inspector.innerHTML = `
     <div class="inspector-heading">
@@ -4843,7 +4847,7 @@ function renderInspector() {
         <label>Category common set<select id="specSetSelect">${categorySpecSets().map((set) => `<option value="${escapeHtml(set.id)}">${escapeHtml(set.label)}</option>`).join("")}</select></label>
         <button id="addSpecSet" class="small-button" type="button">+ Add missing fields</button>
       </div>
-      <div class="stack-list">${product.specs.length ? product.specs.map((item, index) => `
+      <div class="stack-list">${featureSpecs.length ? featureSpecs.map((item, index) => `
         <div class="editable-row" data-spec-id="${escapeHtml(item.id)}">
           <input data-spec-field="label" value="${escapeHtml(item.label)}" aria-label="Specification ${index + 1} label">
           <input data-spec-field="value" value="${escapeHtml(item.value)}" aria-label="Specification ${index + 1} value">

@@ -107,6 +107,12 @@ function fixtureFor(html) {
   const moreTabs = tagElements("button", "data-detail-more");
   const panels = tagElements("section", "data-detail-panel");
   const morePanels = tagElements("div", "data-detail-more-panel");
+  const launchPickerTag = html.match(/<select\b[^>]*\bdata-detail-launch-record(?:="[^"]*")?[^>]*>/)?.[0];
+  const launchPicker = launchPickerTag ? elementFromTag(launchPickerTag) : null;
+  if (launchPicker) launchPicker.value = decode(html.match(/<option\b[^>]*value="([^"]*)"[^>]*\bselected[^>]*>/)?.[1] || "");
+  const launchContents = tagElements("div", "data-detail-launch-content");
+  const availabilityTabs = tagElements("button", "data-detail-availability");
+  const availabilityPanels = tagElements("div", "data-detail-availability-panel");
   const copies = tagElements("button", "data-detail-copy");
   const rows = [...html.matchAll(/<li\b[^>]*\bclass="hp-sku-entry[^\"]*"[^>]*>/g)].map((match) => elementFromTag(match[0]));
   for (const [index, button] of copies.entries()) {
@@ -136,11 +142,11 @@ function fixtureFor(html) {
     group.querySelector = (selector) => selector === "[data-detail-page-label]" ? group.label : group.buttons.find((button) => selector.includes(`="${button.dataset.detailPageStep}"`));
     return group;
   });
-  workspace.querySelectorAll = (selector) => ({ "[data-detail-tab]": tabs, "[data-detail-more]": moreTabs, "[data-detail-panel]": panels, "[data-detail-more-panel]": morePanels, "[data-detail-page-group]": groups, "[data-detail-copy]": copies })[selector] || [];
-  workspace.querySelector = (selector) => selector === "[data-detail-copy-status]" ? copyStatus : null;
+  workspace.querySelectorAll = (selector) => ({ "[data-detail-tab]": tabs, "[data-detail-more]": moreTabs, "[data-detail-panel]": panels, "[data-detail-more-panel]": morePanels, "[data-detail-page-group]": groups, "[data-detail-copy]": copies, "[data-detail-launch-content]": launchContents, "[data-detail-availability]": availabilityTabs, "[data-detail-availability-panel]": availabilityPanels })[selector] || [];
+  workspace.querySelector = (selector) => selector === "[data-detail-copy-status]" ? copyStatus : selector === "[data-detail-launch-record]" ? launchPicker : null;
   const close = elementFromTag("<button>");
   const container = { querySelector: (selector) => selector === "[data-detail-surface]" ? workspace : selector === "[data-detail-close]" ? close : null };
-  return { container, workspace, tabs, moreTabs, panels, morePanels, copies, rows, copyStatus, groups, close };
+  return { container, workspace, tabs, moreTabs, panels, morePanels, copies, rows, copyStatus, groups, close, launchPicker, launchContents, availabilityTabs, availabilityPanels };
 }
 const fixture = fixtureFor(initialHtml);
 function assertKeyboardScrollAccess(html, surface) {
@@ -177,7 +183,7 @@ let closed = false;
 details.bind(fixture.container, { onCopy: async (value) => { copiedSku = value; return true; }, onClose: () => { closed = true; } });
 const expectedPageCounts = { SKUs: 3, options: 3, "source records": 4 };
 assert.deepEqual(fixture.tabs.map((button) => button.dataset.detailTab), ["overview", "skus", "more"], "only Overview, HP SKUs and More should remain as primary tabs");
-assert.deepEqual(fixture.moreTabs.map((button) => button.dataset.detailMore), ["identity", "source"], "More must retain identity and source without a redundant Variants tab");
+assert.deepEqual(fixture.moreTabs.map((button) => button.dataset.detailMore), ["identity", "pricing", "availability", "source"], "More must organize identity, pricing, availability and source without a redundant Variants tab");
 assert.deepEqual(fixture.groups.map((group) => group.dataset.detailPageGroup), ["SKUs", "options", "source records"], "paging must retain SKUs, additional options and source records");
 for (const group of fixture.groups) {
   const count = expectedPageCounts[group.dataset.detailPageGroup];
@@ -351,6 +357,67 @@ assert.ok(hostileHtml.includes("&lt;img") && hostileHtml.includes("&amp;") && ho
 assert.ok(!hostileHtml.includes("url(javascript:") && !hostileHtml.includes("--sku-primary:red"), "swatch styles must reject arbitrary CSS and URL values");
 assert.match(hostileHtml, /data-detail-surface="split"/, "unrecognized surface options must use a valid state and ID namespace");
 assert.ok(!hostileHtml.includes("data-date-kind") && !hostileHtml.includes("data-lifecycle-kind"), "unknown or injected semantic keys must never create styling attributes");
+
+const launchModel = {
+  id: "many-launch-variants", priceText: "$99.99", identity: [{ label: "Category", value: "Keyboards" }], specs: [{ label: "Switches", value: "Mechanical" }],
+  launch: { sourceFile: "Launch tracker.xlsx", sourceSheet: "WW", checkedDate: "2026-10-12", canonicalRow: 2, organizedAt: "2026-10-12T18:00:00Z",
+    records: Array.from({ length: 100 }, (_, index) => ({ id: `launch-${index}`, row: index + 1, canonical: index === 1, skus: [`SKU-${index}`],
+      identity: { productName: `Variant ${index}`, codename: `Codename ${index}`, sourceCategory: "Keyboards", skuText: `SKU-${index}`, tier: "Star" },
+      pricing: { usd: index + 100, eur: index === 1 ? "Pending" : index + 90 },
+      regions: ["US/Canada", "LATAM", "Europe/North Africa", "Middle East/Central/South Africa", "GA", "GC", "GI"].map((label, region) => ({ key: `region-${region}`, label, value: ["2026-04-28", "Phase 2 September", "TBD", "October–November 2026", "2027-03-20", "Pending", ""][region] })),
+      milestones: ["FFS", "Global announcement", "Web readiness", "Final assets"].map((label) => ({ key: label, label, value: "2026-04-14" })),
+      notes: [{ column: "Notes", value: `Private source note ${index}`, cell: `V${index + 1}` }],
+      source: { file: "Launch tracker.xlsx", sheet: "WW", range: `A${index + 1}:V${index + 1}`, checkedDate: "2026-10-12", observedAt: "2026-10-12T16:00:00Z" },
+    })) },
+  source: { records: [{ code: "ASCM-KEEP", description: "Separate ASCM source", ga: "TBD", em: "TBD" }] },
+};
+const launchBefore = structuredClone(launchModel);
+const launchHtml = details.render(launchModel, { surface: "split" });
+assert.equal(occurrences(launchHtml, "data-detail-launch-record"), 1, "one native selector must choose the tracker variant across all More sections");
+assert.match(launchHtml, /<option value="launch-1" selected>/, "the canonical tracker row must be selected initially");
+assert.equal(occurrences(launchHtml, "<dt>US/Canada</dt>"), 1, "only the selected record's seven market rows may be rendered");
+assert.equal(occurrences(launchHtml, "<dt>FFS</dt>"), 1, "milestones must render once for the selected variant");
+assert.ok(!launchHtml.includes("Private source note 99"), "a hundred variants must not become a hundred source-detail blocks");
+for (const text of ["Apr 28, 2026", "Mar 20, 2027", "Phase 2 September", "October–November 2026", "TBD", "Pending", "$101.00", "$99.99", "Tracker MSRP · EUR"]) assert.ok(launchHtml.includes(text), `selected tracker details must preserve ${text}`);
+assert.match(launchHtml, /data-detail-availability-panel="markets"[^>]*class=""/, "compact markets must be the initial Availability view");
+assert.match(launchHtml, /data-detail-availability-panel="milestones"[^>]*class="hidden"/, "four tracker milestones must not extend the market list");
+assert.match(launchHtml, /<details class="product-detail-source-disclosure"><summary>Source notes/, "source notes must begin collapsed");
+assert.match(launchHtml, /<details class="product-detail-source-disclosure"><summary>Record history/, "record history must begin collapsed");
+assert.match(launchHtml, /<details class="product-detail-source-disclosure product-detail-ascm-source"><summary>ASCM source records/, "existing ASCM records must remain separately collapsed beside tracker provenance");
+const launchFixture = fixtureFor(launchHtml);
+details.bind(launchFixture.container);
+await launchFixture.availabilityTabs[0].fire("keydown", { key: "ArrowRight" });
+assert.equal(launchFixture.availabilityTabs[1].getAttribute("aria-selected"), "true", "keyboard arrows must select tracker milestones");
+assert.ok(launchFixture.availabilityTabs[1].focused, "keyboard tracker navigation must keep focus on the selected control");
+assert.ok(launchFixture.availabilityPanels[0].classList.contains("hidden"));
+assert.ok(!launchFixture.availabilityPanels[1].classList.contains("hidden"));
+const launchViewerFixture = fixtureFor(details.render(launchModel, { surface: "viewer" }));
+details.bind(launchViewerFixture.container);
+const launchSurfaceIds = [...`${launchHtml}${details.render(launchModel, { surface: "viewer" })}`.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+assert.equal(new Set(launchSurfaceIds).size, launchSurfaceIds.length, "variant selectors and Availability tabs need distinct IDs on split and viewer surfaces");
+for (const button of launchFixture.availabilityTabs) {
+  assert.ok(button.getAttribute("aria-controls"), "Availability controls must identify the panel they reveal");
+  assert.ok(button.getAttribute("id"));
+}
+launchFixture.launchPicker.value = "launch-99";
+await launchFixture.launchPicker.fire("change", { target: launchFixture.launchPicker });
+assert.equal(launchViewerFixture.launchPicker.value, "launch-99", "open split and viewer surfaces must synchronize the selected variant");
+assert.ok(launchFixture.launchContents.find((panel) => panel.dataset.detailLaunchContent === "pricing").innerHTML.includes("$199.00"), "changing the native selector must update price content immediately");
+assert.ok(launchViewerFixture.launchContents.find((panel) => panel.dataset.detailLaunchContent === "identity").innerHTML.includes("Variant 99"), "changing the native selector must update the other open surface immediately");
+assert.match(details.render(launchModel, { surface: "split" }), /<option value="launch-99" selected>/, "selection must survive a product rerender");
+assert.match(details.render(launchModel, { surface: "viewer" }), /<option value="launch-99" selected>/, "selection must survive a render on the second surface");
+details.render({ id: "another-launch-product" }, { surface: "split" });
+assert.match(details.render(launchModel, { surface: "split" }), /<option value="launch-1" selected>/, "changing products must reset to the canonical tracker variant");
+assert.deepEqual(launchModel, launchBefore, "selector rendering and navigation must leave saved source data intact");
+const hostileLaunch = structuredClone(launchModel);
+hostileLaunch.id = "hostile-launch";
+hostileLaunch.launch.overrides = [{ id: "edited-source", row: 2, label: hostile, value: hostile, original: { label: "Tracker metadata", value: "Earlier value" } }];
+hostileLaunch.launch.records = [{ ...hostileLaunch.launch.records[1], id: hostile, identity: { productName: hostile, codename: hostile, sourceCategory: hostile, skuText: hostile, tier: hostile }, pricing: { usd: hostile, eur: hostile }, regions: [{ label: hostile, value: hostile }], notes: [{ column: hostile, value: hostile }], source: { file: hostile, sheet: hostile, range: hostile, checkedDate: hostile } }];
+const hostileLaunchHtml = details.render(hostileLaunch);
+assert.ok(!hostileLaunchHtml.includes("<img") && !hostileLaunchHtml.includes("<script>"), "all tracker values, option IDs, source labels, prices and notes must be escaped");
+assert.ok(hostileLaunchHtml.includes("&lt;img"));
+assert.match(hostileLaunchHtml, /<details class="product-detail-source-disclosure"><summary>Preserved edits \(1\)/, "manual edits to imported metadata must remain accessible in a collapsed Source disclosure");
+
 const knownKindsHtml = details.render({
   id: "known-semantic-kinds",
   dates: dateKeys.map((key) => ({ key, label: "Custom label", value: "TBD", empty: true })),

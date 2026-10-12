@@ -2,9 +2,13 @@
 (function (root) {
   "use strict";
   const states = new Map();
+  const renderedModels = new Map();
+  const mountedWorkspaces = new Map();
+  let launchSelection = { productId: "", id: "", availability: "markets" };
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
   const tone = (value) => /^#[\da-f]{6}$/i.test(value || "") ? value : "#393c40";
   const tabs = [["overview", "Overview"], ["skus", "HP SKUs"], ["more", "More"]];
+  const moreTabs = [["identity", "Identity"], ["pricing", "Pricing"], ["availability", "Availability"], ["source", "Source"]];
   const dateKinds = new Set(["general-availability", "end-manufacturing", "ffs", "global-announcement", "web-readiness", "final-assets"]);
   const dateFields = { "general-availability": "generalAvailabilityDate", "end-manufacturing": "endManufacturingDate", ffs: "ffsDate", "global-announcement": "globalAnnouncementDate", "web-readiness": "webReadinessDate", "final-assets": "finalAssetsDate" };
   const lifecycleKinds = new Set(["launch", "lifecycle-end", "stage", "confidence"]);
@@ -14,8 +18,76 @@
     let state = states.get(surface);
     if (!state) states.set(surface, state = { tab: "overview", more: "identity", pages: {}, productId });
     if (state.productId !== productId) { state.productId = productId; state.pages = {}; }
-    if (!["identity", "source"].includes(state.more)) state.more = "identity";
+    if (!moreTabs.some(([key]) => key === state.more)) state.more = "identity";
     return state;
+  }
+
+  function readableDate(value) {
+    const text = String(value ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    const date = new Date(`${text}T00:00:00Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== text) return text;
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(date);
+  }
+
+  function launchRecord(model) {
+    const records = model.launch?.records || [];
+    if (launchSelection.productId !== model.id) launchSelection = { productId: model.id, id: "", availability: "markets" };
+    let record = records.find((item) => item.id === launchSelection.id);
+    if (!record) record = records.find((item) => item.canonical || item.row === model.launch?.canonicalRow) || records[0];
+    launchSelection.id = record?.id || "";
+    return record;
+  }
+
+  function recordLabel(record) {
+    const sku = (record.skus || []).join(" / ") || record.identity?.skuText;
+    return [sku, record.identity?.productName || `Tracker row ${record.row}`].filter(Boolean).join(" · ");
+  }
+
+  function launchContent(model, record, panel, surface = "split") {
+    const empty = (label) => `<div class="product-detail-empty">${escape(label)}</div>`;
+    if (!record) return panel === "pricing" ? `<div class="product-detail-price-cards"><div><span>Saved MSRP</span><strong>${escape(model.priceText || "Not recorded")}</strong></div></div>` : empty("No launch tracker record attached.");
+    const identity = record.identity || {}, source = record.source || {};
+    const rows = (items, className = "") => `<dl class="product-detail-launch-rows ${className}">${items.map((item) => `<div><dt>${escape(item.label || item.column)}</dt><dd>${escape(item.value === null || item.value === undefined || item.value === "" ? "Not recorded" : readableDate(item.value))}</dd></div>`).join("")}</dl>`;
+    if (panel === "identity") return `<div class="product-detail-tracker-identity"><h3 class="product-detail-section-title">Tracker identity</h3><strong>${escape(identity.productName || "Name not recorded")}</strong>${rows([{ label: "Codename", value: identity.codename }, { label: "Product tier", value: identity.tier }])}<details class="product-detail-source-disclosure"><summary>Source category and SKU text</summary>${rows([{ label: "Source category", value: identity.sourceCategory }, { label: "SKU text", value: identity.skuText }])}</details></div>`;
+    if (panel === "pricing") {
+      const price = (value, currency) => typeof value === "number" && Number.isFinite(value) ? new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value) : value === null || value === undefined || value === "" ? "Not recorded" : String(value);
+      return `<div class="product-detail-price-cards"><div><span>Saved MSRP</span><strong>${escape(model.priceText || "Not recorded")}</strong><small>Product record</small></div><div><span>Tracker MSRP · USD</span><strong>${escape(price(record.pricing?.usd, "USD"))}</strong><small>Selected variant</small></div><div><span>Tracker MSRP · EUR</span><strong>${escape(price(record.pricing?.eur, "EUR"))}</strong><small>Selected variant</small></div></div><p class="product-detail-launch-note">Tracker prices are recorded for this variant. The saved product MSRP is shown separately.</p>`;
+    }
+    if (panel === "availability") {
+      const prefix = `product-detail-${surface}-launch`;
+      return `<div class="product-detail-availability-tabs" role="tablist" aria-label="Tracker availability"><button type="button" role="tab" id="${prefix}-markets-tab" data-detail-availability="markets" aria-controls="${prefix}-markets" aria-selected="${launchSelection.availability === "markets"}" tabindex="${launchSelection.availability === "markets" ? 0 : -1}">Markets</button><button type="button" role="tab" id="${prefix}-milestones-tab" data-detail-availability="milestones" aria-controls="${prefix}-milestones" aria-selected="${launchSelection.availability === "milestones"}" tabindex="${launchSelection.availability === "milestones" ? 0 : -1}">Milestones</button></div><div id="${prefix}-markets" data-detail-availability-panel="markets" role="tabpanel" aria-labelledby="${prefix}-markets-tab" aria-label="Tracker market availability" class="${launchSelection.availability === "markets" ? "" : "hidden"}">${rows(record.regions || [], "product-detail-market-rows")}</div><div id="${prefix}-milestones" data-detail-availability-panel="milestones" role="tabpanel" aria-labelledby="${prefix}-milestones-tab" aria-label="Tracker launch milestones" class="${launchSelection.availability === "milestones" ? "" : "hidden"}">${rows(record.milestones || [])}<p class="product-detail-launch-note">These are tracker dates. Accepted product dates and their update history are in Overview.</p></div>`;
+    }
+    const provenance = [{ label: "Workbook", value: source.file || model.launch?.sourceFile }, { label: "Sheet / range", value: [source.sheet || model.launch?.sourceSheet, source.range || (record.row ? `Row ${record.row}` : "")].filter(Boolean).join(" · ") }, { label: "Checked", value: source.checkedDate || model.launch?.checkedDate }];
+    const notes = record.notes || [];
+    const overrides = (model.launch?.overrides || []).filter((item) => !item.row || item.row === record.row);
+    const organized = model.launch?.organizedAt;
+    return `${rows(provenance, "product-detail-provenance")}<details class="product-detail-source-disclosure"><summary>Source notes${notes.length ? ` (${notes.length})` : ""}</summary>${notes.length ? rows(notes) : '<p class="product-detail-launch-note">No additional notes in this tracker row.</p>'}</details>${overrides.length ? `<details class="product-detail-source-disclosure"><summary>Preserved edits (${overrides.length})</summary>${rows(overrides)}<p class="product-detail-launch-note">Edits made after the tracker import are retained with the source record.</p></details>` : ""}<details class="product-detail-source-disclosure"><summary>Record history</summary><p class="product-detail-launch-note">Launch tracker identity, prices, dates and regional schedules are stored separately from product specifications.${organized ? ` Organized ${escape(readableDate(String(organized).slice(0, 10)))}.` : ""}</p>${source.observedAt || model.launch?.observedAt ? rows([{ label: "Source observed", value: source.observedAt || model.launch.observedAt }]) : ""}</details>`;
+  }
+
+  function bindAvailability(workspace) {
+    const buttons = [...workspace.querySelectorAll("[data-detail-availability]")];
+    function select(button, focus = false) {
+      launchSelection.availability = button.dataset.detailAvailability;
+      for (const entry of mountedWorkspaces.values()) {
+        if (entry.model.id !== launchSelection.productId || !entry.workspace.isConnected) continue;
+        for (const item of entry.workspace.querySelectorAll("[data-detail-availability]")) {
+          const selected = item.dataset.detailAvailability === launchSelection.availability;
+          item.setAttribute("aria-selected", String(selected)); item.tabIndex = selected ? 0 : -1;
+        }
+        for (const panel of entry.workspace.querySelectorAll("[data-detail-availability-panel]")) panel.classList.toggle("hidden", panel.dataset.detailAvailabilityPanel !== launchSelection.availability);
+      }
+      if (focus) button.focus();
+    }
+    buttons.forEach((button, index) => {
+      button.addEventListener("click", () => select(button));
+      button.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowLeft" ? -1 : 1) + buttons.length) % buttons.length;
+        select(buttons[next], true);
+      });
+    });
   }
 
   function colorIdentity(color) {
@@ -65,8 +137,10 @@
 
   function render(model, { surface = "split" } = {}) {
     surface = surface === "viewer" ? "viewer" : "split";
+    renderedModels.set(surface, model);
     const state = stateFor(surface, model.id);
     const prefix = `product-detail-${surface}`;
+    const selectedLaunch = launchRecord(model);
     const field = (item) => `<div class="product-detail-date"${kindAttribute("date", item.key, dateKinds)}>${dateFields[item.key] && root.PortfolioDateHistory ? root.PortfolioDateHistory.labelHtml(item.label, dateFields[item.key]) : `<span>${escape(item.label)}</span>`}<strong class="${item.empty ? "is-muted" : ""}">${escape(item.value)}</strong></div>`;
     function pages(name, entries, size, itemHtml, empty) {
       const total = Math.max(1, Math.ceil(entries.length / size));
@@ -83,10 +157,19 @@
     const colorwayDate = (date) => `<div class="product-detail-colorway-date"><span>${escape(date.label)}</span><strong>${escape(date.value || "TBD")}</strong><small>${date.changed ? `Updated ${escape(date.changed)}${date.ageDays !== null && date.ageDays !== undefined ? ` · ${escape(date.ageDays)} days old` : ""}` : "Update date not recorded"}${date.observed ? ` · Last confirmed ${escape(date.observed)}` : ""}</small></div>`;
     const colorwaySchedules = model.colorwaySchedules?.length ? `<div class="product-detail-list-heading"><h3 class="product-detail-section-title">Colorway schedules<span class="product-detail-count">${model.colorwaySchedules.length}</span></h3></div><p class="product-detail-colorway-note">Each color keeps its own PLC dates and update history.</p>${pages("colorway schedules", model.colorwaySchedules, 6, (items) => `<div class="product-detail-colorway-schedules">${items.map((item) => `<article class="product-detail-colorway-schedule" data-colorway-id="${escape(item.id)}"><div class="product-detail-colorway-heading">${colorsHtml(item.colors)}<span>${escape(item.code)}</span></div>${(item.dates || []).filter((date) => date.field === "ffsDate").map(colorwayDate).join("")}<details><summary>Other milestones${item.codename ? ` · ${escape(item.codename)}` : ""}</summary>${(item.dates || []).filter((date) => date.field !== "ffsDate").map(colorwayDate).join("")}${item.sourceFile ? `<small>Source: ${escape(item.sourceFile)}</small>` : ""}</details></article>`).join("")}</div>`, "")}` : "";
     const sourcePages = pages("source records", model.source?.records || [], 2, (items) => `<div class="product-detail-source-records">${items.map((item) => `<div><strong>${escape(item.code)}</strong><span>${escape(item.description)}</span><small>GA ${escape(item.ga)} · EM ${escape(item.em)}</small></div>`).join("")}</div>`, "No ASCM source attached.");
+    const trackerRecords = model.launch?.records || [];
+    const launchPicker = trackerRecords.length ? `<div class="product-detail-launch-picker"><label for="${prefix}-launch-record">Variant / SKU</label><select id="${prefix}-launch-record" data-detail-launch-record aria-label="Launch tracker variant or SKU">${trackerRecords.map((record) => `<option value="${escape(record.id)}" ${record.id === selectedLaunch?.id ? "selected" : ""}>${escape(recordLabel(record))}</option>`).join("")}</select><span data-detail-launch-check>Tracker · Checked ${escape(readableDate(selectedLaunch?.source?.checkedDate || model.launch?.checkedDate || "date not recorded"))}</span></div>` : "";
+    const ascmContent = `${model.source?.records?.length ? `<p class="product-detail-source-meta">${escape(model.source.category)} · Imported ${escape(model.source.imported)}<br>${model.source.records.length} source records</p>` : ""}${sourcePages}`;
+    const morePanels = {
+      identity: `<div class="product-detail-identity">${(model.identity || []).map(field).join("")}</div>${trackerRecords.length ? `<div data-detail-launch-content="identity">${launchContent(model, selectedLaunch, "identity")}</div>` : ""}`,
+      pricing: `<div data-detail-launch-content="pricing">${launchContent(model, selectedLaunch, "pricing")}</div>`,
+      availability: `<div data-detail-launch-content="availability">${launchContent(model, selectedLaunch, "availability", surface)}</div>`,
+      source: `${trackerRecords.length ? `<div data-detail-launch-content="source">${launchContent(model, selectedLaunch, "source")}</div>${model.source?.records?.length ? `<details class="product-detail-source-disclosure product-detail-ascm-source"><summary>ASCM source records (${model.source.records.length})</summary>${ascmContent}</details>` : ""}` : ascmContent}`,
+    };
     const panels = {
       overview: `<div class="product-detail-overview-grid"><div class="product-detail-calendar" role="group" tabindex="0" aria-label="Key dates and lifecycle"><h3 class="product-detail-section-title">Key dates</h3><div class="product-detail-dates">${(model.dates || []).map(field).join("")}</div><div class="product-detail-lifecycle-summary"><h3 class="product-detail-section-title">Lifecycle</h3><div class="product-detail-lifecycle">${(model.lifecycle || []).map((item) => `<span${kindAttribute("lifecycle", item.key, lifecycleKinds)}><small>${escape(item.label)}</small><strong>${escape(item.value)}</strong></span>`).join("")}</div></div></div><div class="product-detail-all-specs"><h3 class="product-detail-section-title">Specifications<span class="product-detail-count">${model.specs?.length || 0}</span></h3><div class="product-detail-spec-scroll" role="group" tabindex="0" aria-label="All product specifications">${specs}</div></div></div>`,
       skus: `<div class="product-detail-list-heading"><h3 class="product-detail-section-title">HP part numbers<span class="product-detail-count">${model.skus?.length || 0}</span></h3><span>Copy a SKU to use it elsewhere</span></div><div class="product-detail-sku-content">${skuPages}${optionPages}${colorwaySchedules}</div>`,
-      more: `<div class="product-detail-more-tabs" role="tablist" aria-label="Additional product information">${[["identity", "Identity"], ["source", "Source"]].map(([key, label]) => `<button type="button" role="tab" id="${prefix}-${key}-tab" data-detail-more="${key}" aria-controls="${prefix}-${key}" aria-selected="${state.more === key}" tabindex="${state.more === key ? 0 : -1}">${label}</button>`).join("")}</div><div id="${prefix}-identity" role="tabpanel" aria-labelledby="${prefix}-identity-tab" data-detail-more-panel="identity" class="${state.more === "identity" ? "" : "hidden"}"><div class="product-detail-identity">${(model.identity || []).map(field).join("")}</div></div><div id="${prefix}-source" role="tabpanel" aria-labelledby="${prefix}-source-tab" data-detail-more-panel="source" class="${state.more === "source" ? "" : "hidden"}">${model.source?.records?.length ? `<p class="product-detail-source-meta">${escape(model.source.category)} · Imported ${escape(model.source.imported)}<br>${model.source.records.length} source records</p>` : ""}${sourcePages}</div>`,
+      more: `<div class="product-detail-more-tabs" role="tablist" aria-label="Additional product information">${moreTabs.map(([key, label]) => `<button type="button" role="tab" id="${prefix}-${key}-tab" data-detail-more="${key}" aria-controls="${prefix}-${key}" aria-selected="${state.more === key}" tabindex="${state.more === key ? 0 : -1}">${label}</button>`).join("")}</div>${launchPicker}${moreTabs.map(([key]) => `<div id="${prefix}-${key}" role="tabpanel" aria-labelledby="${prefix}-${key}-tab" data-detail-more-panel="${key}" class="${state.more === key ? "" : "hidden"}">${morePanels[key]}</div>`).join("")}`,
     };
     return `<div class="product-details product-detail-workspace" data-detail-surface="${surface}" data-detail-product="${escape(model.id)}"><div class="product-detail-tabs" role="tablist" aria-label="Product details">${tabs.map(([key, label]) => `<button type="button" role="tab" id="${prefix}-${key}-tab" data-detail-tab="${key}" aria-controls="${prefix}-${key}" aria-selected="${state.tab === key}" tabindex="${state.tab === key ? 0 : -1}" class="${state.tab === key ? "is-active" : ""}">${label}</button>`).join("")}</div>${tabs.map(([key]) => `<section id="${prefix}-${key}" class="product-detail-panel ${state.tab === key ? "" : "hidden"}" role="tabpanel" aria-labelledby="${prefix}-${key}-tab" data-detail-panel="${key}" tabindex="0">${panels[key]}</section>`).join("")}<span class="visually-hidden" role="status" aria-live="polite" aria-atomic="true" data-detail-copy-status></span></div>`;
   }
@@ -96,6 +179,8 @@
     if (!workspace) return;
     if (dateHistory) root.PortfolioDateHistory?.bind(container, dateHistory);
     const state = stateFor(workspace.dataset.detailSurface, workspace.dataset.detailProduct);
+    const model = renderedModels.get(workspace.dataset.detailSurface);
+    if (model?.id === workspace.dataset.detailProduct) mountedWorkspaces.set(workspace.dataset.detailSurface, { workspace, model });
     function bindTabs(selector, panelSelector, key, attribute) {
       const buttons = [...workspace.querySelectorAll(selector)];
       function select(button, focus = false) {
@@ -124,6 +209,23 @@
     }
     bindTabs("[data-detail-tab]", "[data-detail-panel]", "tab", "detailTab");
     bindTabs("[data-detail-more]", "[data-detail-more-panel]", "more", "detailMore");
+    bindAvailability(workspace);
+    workspace.querySelector("[data-detail-launch-record]")?.addEventListener("change", (event) => {
+      const id = event.target.value;
+      if (!model?.launch?.records?.some((record) => record.id === id)) return;
+      launchSelection.id = id;
+      launchSelection.productId = model.id;
+      for (const entry of mountedWorkspaces.values()) {
+        if (entry.model.id !== model.id || !entry.workspace.isConnected) continue;
+        const record = launchRecord(entry.model);
+        const picker = entry.workspace.querySelector("[data-detail-launch-record]");
+        if (picker) picker.value = launchSelection.id;
+        const checked = entry.workspace.querySelector("[data-detail-launch-check]");
+        if (checked) checked.textContent = `Tracker · Checked ${readableDate(record?.source?.checkedDate || entry.model.launch?.checkedDate || "date not recorded")}`;
+        for (const panel of entry.workspace.querySelectorAll("[data-detail-launch-content]")) panel.innerHTML = launchContent(entry.model, record, panel.dataset.detailLaunchContent, entry.workspace.dataset.detailSurface);
+        bindAvailability(entry.workspace);
+      }
+    });
     workspace.querySelectorAll("[data-detail-page-group]").forEach((group) => {
       const name = group.dataset.detailPageGroup;
       const entries = [...group.querySelectorAll("[data-detail-page-index]")];

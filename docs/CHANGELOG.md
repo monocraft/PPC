@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-10-12 — readable launch records and genuine specifications
+
+- Move launch tracker identity, currency prices, regional schedules and source evidence into structured launch records. Preserve original cells, relocated values and amendments without changing saved dates or date history.
+- Show one variant at a time across Identity, Pricing, Availability and Source. Separate markets from milestones, use compact price cards, and collapse supporting notes and audit history.
+- Keep cards, specification editors and visual exports focused on product features. Retain useful tracker facts in search while excluding provenance and internal bookkeeping.
+- Verify lossless and repeatable migration, date and asset preservation, accessible navigation, synchronized variant selection and bounded rendering for large record collections.
+
 ## 2026-10-09 — quarter selection and stable PLC review editing
 
 - Offer Exact day and Calendar quarter in PLC exception review, with Q1–Q4, validated four-digit years, quarter labels and qualified roadmap anchors. Preserve precision, source evidence and independent timestamps through confirmation and sharing.
