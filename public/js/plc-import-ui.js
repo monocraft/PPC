@@ -140,6 +140,7 @@
       state.busy = true; state.phase = "Reading workbook…"; state.error = ""; state.tab = "overview"; state.dataset = null; rebuild(); render();
       let collected = false;
       try {
+        if (Number.isFinite(Number(file.size)) && Number(file.size) > 40 * 1024 * 1024) throw new Error("The selected PLC file exceeds the 40 MiB size limit.");
         const dataset = await importer.parseWorkbook(await file.arrayBuffer(), { fileName: file.name });
         if (destroyed || generation !== fileGeneration) return false;
         state.dataset = dataset; state.reportDate = localDay(); resetChoices(); state.result = null; rebuild();

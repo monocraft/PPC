@@ -7,6 +7,7 @@ const model = globalThis.PortfolioMasterModel;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 5 * 1024 * 1024;
 const MAX_RPC_BYTES = 9 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 12 * 1024 * 1024 - 64 * 1024;
 const SESSION_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -142,10 +143,10 @@ function requireState(state) {
   return state;
 }
 
-export function publicSnapshot(state) {
+export function publicSnapshot(state, snapshotFormat) {
   requireState(state);
   const masterSync = model.publicMetadata(state.manifest);
-  return {
+  const snapshot = {
     ...model.snapshot(state.manifest), revision: `supabase:${state.storageRevision}`,
     storageRevision: Number(state.storageRevision), packageInfo: model.latestPackageInfo(state.manifest),
     masterSync,
@@ -153,6 +154,16 @@ export function publicSnapshot(state) {
     canWrite: true, requiresEditorToken: false, requiresGitHubToken: false, namesAreSelfReported: true,
     publication: safePublication(state.publication),
   };
+  return ['compact-v1', 'compact-conflict-v1'].includes(snapshotFormat) ? model.compactSnapshot(snapshot) : snapshot;
+}
+
+function requireReadableManifest(manifest) {
+  const state = { manifest, storageRevision: Number.MAX_SAFE_INTEGER,
+    publication: { requestedRevision: Number.MAX_SAFE_INTEGER, publishedRevision: 0, status: 'pending' } };
+  const snapshot = publicSnapshot(state, 'compact-v1');
+  if (snapshot.products.length > 30000 || encodedSize({ snapshot }) > MAX_SNAPSHOT_BYTES) {
+    throw problem(413, 'MASTER_TOO_LARGE', 'The master exceeds its readable response limit. Export a backup and ask the portfolio owner to reduce retained data.');
+  }
 }
 
 function revisionFrom(body) {
@@ -238,7 +249,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       requireState(state);
       if (state.receipt) {
         if (!sameSecret(state.receipt.fingerprint, fingerprint)) throw problem(409, 'REQUEST_ID_MISMATCH', 'This save request was already used for different changes. Try saving again.');
-        return { snapshot: publicSnapshot(state), savedFields: state.receipt.savedFields, savedProducts: state.receipt.savedProducts, alreadySaved: true, requestId: body.requestId };
+        return { snapshot: publicSnapshot(state, body.snapshotFormat), savedFields: state.receipt.savedFields, savedProducts: state.receipt.savedProducts, alreadySaved: true, requestId: body.requestId };
       }
       let merged;
       try { merged = model.mergeChanges(state.manifest, body.changes, {
@@ -246,23 +257,30 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
         team: 'Team', reason: body.reason || '', requestId: body.requestId, now: now(),
       }); }
       catch { throw problem(400, 'INVALID_CHANGE', 'These changes could not be saved. Check the product details and try again.'); }
-      if (merged.conflicts.length) return { status: 409, code: 'MASTER_CONFLICT',
-        error: 'The master changed while you were editing. Choose which values to keep.',
-        conflicts: merged.conflicts, snapshot: publicSnapshot(state), requestId: body.requestId };
+      if (merged.conflicts.length) {
+        const response = { status: 409, code: 'MASTER_CONFLICT',
+          error: 'The master changed while you were editing. Choose which values to keep.',
+          ...(body.snapshotFormat === 'compact-conflict-v1' ? { conflictPlan: model.conflictPlan(merged.conflicts) } : { conflicts: merged.conflicts }),
+          snapshot: publicSnapshot(state, body.snapshotFormat), requestId: body.requestId };
+        if (body.snapshotFormat === 'compact-conflict-v1' && encodedSize(response) > 16 * 1024 * 1024) throw problem(413, 'CONFLICT_TOO_LARGE', 'The complete conflict review exceeds its response limit. Your local draft is safe. Export a backup and ask the portfolio owner to reduce retained data.');
+        return response;
+      }
       const changed = merged.savedFields > 0;
       if (changed) {
         for (const entry of merged.history) entry.actorSource = 'self-reported';
       }
       if (encodedSize(merged.manifest) > MAX_MANIFEST_BYTES) throw problem(413, 'MASTER_TOO_LARGE', 'The updated master exceeds its data limit.');
+      if (changed) requireReadableManifest(merged.manifest);
       const committed = await database('commit', {
         expectedRevision: Number(state.storageRevision), manifest: merged.manifest,
         sessionId, requestId: body.requestId, fingerprint, changed,
         savedFields: merged.savedFields, savedProducts: merged.savedProducts,
       });
+      if (committed.status === 'manifest_too_large') throw problem(413, 'MASTER_TOO_LARGE', 'The updated master exceeds its database data limit. Export a backup and ask the portfolio owner to reduce retained data.');
       if (committed.status === 'raced') { state = committed; continue; }
       if (committed.status === 'request_mismatch') throw problem(409, 'REQUEST_ID_MISMATCH', 'This save request was already used for different changes. Try saving again.');
       if (!['saved', 'already_saved'].includes(committed.status)) throw unavailable();
-      const snapshot = publicSnapshot(committed);
+      const snapshot = publicSnapshot(committed, body.snapshotFormat);
       let dispatchAccepted = false;
       if (changed && snapshot.publication.status !== 'current') dispatchAccepted = await dispatchPublication();
       return { snapshot, savedFields: committed.savedFields, savedProducts: committed.savedProducts,
@@ -280,7 +298,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     if (operation === 'save') return await save(body, request);
     if (operation === 'latest') {
       await enforceRate(request, 'latest', true, SESSION_PATTERN.test(body.sessionId || '') ? body.sessionId : '');
-      return { snapshot: publicSnapshot(await database('read', {})) };
+      return { snapshot: publicSnapshot(await database('read', {}), body.snapshotFormat) };
     }
     if (operation === 'review') {
       if (![body.productId, body.sourceProductId].every((value) => typeof value === 'string' && value.length > 0 && value.length <= 180 && !/[\u0000-\u001f]/.test(value) && !['__proto__', 'constructor', 'prototype'].includes(value)) || body.productId === body.sourceProductId) throw problem(400, 'INVALID_REQUEST', 'Choose two different products to review.');
@@ -290,7 +308,9 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       const selected = [body.productId, body.sourceProductId].map((productId) => entries.find((entry) => entry.productId === productId));
       const available = selected.filter(Boolean);
       if (!available.length || (available.length === 2 && available[0].categoryId !== available[1].categoryId)) throw problem(409, 'MERGE_REVIEW_REQUIRED', 'These products changed. Review the current products before combining them.');
-      return { snapshot: publicSnapshot(state), products: available.map((entry) => ({ product: entry.product, categoryId: entry.categoryId })) };
+      const review = { snapshot: publicSnapshot(state, body.snapshotFormat), products: available.map((entry) => ({ product: entry.product, categoryId: entry.categoryId })) };
+      if (encodedSize(review) > 20 * 1024 * 1024) throw problem(413, 'REVIEW_TOO_LARGE', 'These complete product details exceed the review response limit. Your local draft is safe. Export a backup and ask the portfolio owner to reduce retained data.');
+      return review;
     }
     const sessionId = String(body.sessionId || '');
     if (!SESSION_PATTERN.test(sessionId) || (body.displayName !== undefined && typeof body.displayName !== 'string') ||
@@ -325,10 +345,12 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
   async function publisherOperation(operation, body) {
     if (operation === 'bootstrap') {
       validateManifest(body.manifest);
+      requireReadableManifest(body.manifest);
       const sourceSha = String(body.sourceSha || body.githubSha || '');
       if (!SHA_PATTERN.test(sourceSha)) throw problem(400, 'INVALID_REQUEST', 'The source package revision is invalid.');
       const fingerprint = await sha256(canonicalJson({ manifest: body.manifest, sourceSha }), cryptoImpl);
       const state = await database('bootstrap', { manifest: body.manifest, sourceSha, fingerprint });
+      if (state.status === 'manifest_too_large') throw problem(413, 'MASTER_TOO_LARGE', 'The master exceeds its database data limit. Export a backup and reduce retained data before initialization.');
       if (state.status === 'already_initialized') throw problem(409, 'ALREADY_INITIALIZED', 'The online master has already been initialized. It cannot be replaced by a new bootstrap.');
       return { ...state, publication: safePublication(state.publication) };
     }
@@ -372,15 +394,16 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       const body = await boundedJson(request, MAX_REQUEST_BYTES);
       if (!record(body)) throw problem(400, 'INVALID_REQUEST', 'The master request is invalid.');
       const allowed = new Set(operation === 'save'
-        ? ['key', 'editorToken', 'sessionId', 'displayName', 'actor', 'team', 'requestId', 'changes', 'reason']
+        ? ['key', 'editorToken', 'sessionId', 'displayName', 'actor', 'team', 'requestId', 'changes', 'reason', 'snapshotFormat']
         : operation === 'presence' ? ['key', 'editorToken', 'sessionId', 'displayName', 'categoryId', 'productId', 'editing', 'leave']
-        : operation === 'latest' ? ['key', 'editorToken', 'sessionId', 'displayName']
-        : operation === 'review' ? ['key', 'editorToken', 'sessionId', 'productId', 'sourceProductId']
+        : operation === 'latest' ? ['key', 'editorToken', 'sessionId', 'displayName', 'snapshotFormat']
+        : operation === 'review' ? ['key', 'editorToken', 'sessionId', 'productId', 'sourceProductId', 'snapshotFormat']
         : operation === 'bootstrap' ? ['publisherSecret', 'manifest', 'sourceSha', 'githubSha']
         : operation === 'export' ? ['publisherSecret']
         : operation === 'ack' ? ['publisherSecret', 'storageRevision', 'revision', 'githubSha']
         : ['publisherSecret', 'storageRevision', 'revision', 'message', 'safeMessage', 'code']);
       if (Object.keys(body).some((field) => !allowed.has(field))) throw problem(400, 'INVALID_REQUEST', 'The master request contains an unsupported field.');
+      if (body.snapshotFormat !== undefined && !['compact-v1', 'compact-conflict-v1'].includes(body.snapshotFormat)) throw problem(400, 'INVALID_REQUEST', 'The snapshot format is unsupported.');
       let result;
       if (PRIVATE_OPERATIONS.has(operation)) {
         const secret = request.headers.get('x-ppc-publisher-secret') || body.publisherSecret || '';

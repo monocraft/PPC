@@ -30,7 +30,7 @@
       return slot.input.isConnected !== false;
     };
     const search = (query, limit, offset = 0) => model.search(adapter.getPortfolio?.(), query, {
-      activeCategoryId: adapter.getActiveCategoryId?.(), limit, offset,
+      activeCategoryId: adapter.getActiveCategoryId?.(), limit, offset, completeIndex: true,
     });
     function close(slot) {
       slot.open = false; slot.activeIndex = -1;

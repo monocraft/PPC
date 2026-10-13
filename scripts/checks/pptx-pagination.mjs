@@ -207,7 +207,7 @@ for (const property of stateProperties) assert.equal(rendererSandbox[property], 
 assert.equal(JSON.stringify(renderCategory), categoryBeforeRender, "failed rendering does not mutate saved category data");
 
 const sectionStart = appSource.indexOf("function addPptxPortfolioSlide(");
-const sectionEnd = appSource.indexOf("function exportPng(", sectionStart);
+const sectionEnd = appSource.indexOf("async function exportPng(", sectionStart);
 assert.ok(sectionStart >= 0 && sectionEnd > sectionStart);
 const productPagesStart = appSource.indexOf("function productPagesForPptx(");
 const productPagesEnd = appSource.indexOf("async function renderCategoryImageForPptx(", productPagesStart);
