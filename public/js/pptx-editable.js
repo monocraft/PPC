@@ -124,7 +124,6 @@
       type: match[0].match(/\bContentType="([^"]+)"/)?.[1],
     }));
     const missing = overrides.filter((entry) => entry.partName && !archive.file(entry.partName.replace(/^\//, "")));
-    if (!missing.length) return xml;
     // PptxGenJS 4 declares a slide master for every slide but writes one shared
     // master. Drop only those unused declarations, never a referenced part.
     const referencedParts = new Set();
@@ -144,13 +143,19 @@
         referencedParts.add(parts.join("/"));
       }
     }
+    // A broken relationship can name a master that was never declared, even
+    // in a one-slide file with no missing content-type entries.
+    for (const part of referencedParts) {
+      if (/^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(part) && !archive.file(part)) {
+        throw new Error("PowerPoint could not find a referenced slide master.");
+      }
+    }
     for (const entry of missing) {
       const part = entry.partName.slice(1);
       if (!/^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(part) ||
           entry.type !== "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml") {
         throw new Error("PowerPoint could not find a declared presentation part.");
       }
-      if (referencedParts.has(part)) throw new Error("PowerPoint could not find a referenced slide master.");
       xml = xml.replace(entry.xml, "");
     }
     return xml;

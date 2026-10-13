@@ -696,6 +696,14 @@ await assert.rejects(alteredExport(async (archive) => {
   const filename = "_rels/.rels";
   archive.file(filename, (await archive.file(filename).async("string")).replace("</Relationships>", '<Relationship Id="broken-master" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="/ppt/slideMasters/slideMaster3.xml"/></Relationships>'));
 }), /referenced slide master/, "absolute root relationship targets are also protected");
+const undeclaredMasterArchive = await librarySandbox.JSZip.loadAsync(serializedPptx);
+const singleLayoutRelationships = "ppt/slideLayouts/_rels/slideLayout1.xml.rels";
+undeclaredMasterArchive.file(singleLayoutRelationships, (await undeclaredMasterArchive.file(singleLayoutRelationships).async("string"))
+  .replace("../slideMasters/slideMaster1.xml", "../slideMasters/slideMaster99.xml"));
+assert.deepEqual(await missingDeclaredParts(undeclaredMasterArchive), [], "the one-slide regression has no missing Override entries");
+assert.ok(!(await declaredParts(undeclaredMasterArchive)).includes("ppt/slideMasters/slideMaster99.xml"), "the referenced missing master was never declared");
+const undeclaredMasterBytes = await undeclaredMasterArchive.generateAsync({ type: "arraybuffer" });
+await assert.rejects(librarySandbox.PPTXEditable.serialize({ write: async () => undeclaredMasterBytes }), /referenced slide master/, "a one-slide file referencing an undeclared missing master must also fail");
 await assert.rejects(alteredExport(async (archive) => {
   archive.remove("ppt/slides/slide2.xml");
 }), /declared presentation part/, "missing real slide content cannot be masked by the compatibility pass");
