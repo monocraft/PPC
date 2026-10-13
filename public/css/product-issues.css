@@ -1,4 +1,4 @@
-.product-issues-dialog { color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: var(--corner-control); width: min(760px, calc(100vw - 36px)); max-height: min(86vh, 900px); padding: 0; box-shadow: var(--shadow-overlay); }
+.product-issues-dialog { color: var(--color-text); background: var(--color-surface); border: 1px solid transparent; border-radius: var(--corner-control); width: min(760px, calc(100vw - 36px)); max-height: min(86vh, 900px); padding: 0; box-shadow: var(--shadow-overlay); }
 .product-issues-dialog::backdrop { background: #050a08ad; backdrop-filter: blur(4px); }
 .product-issues-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 26px 16px;  background: var(--color-header);  margin-bottom: 14px; }
 .product-issues-header h2 { margin: 6px 0 0; font-size: 24px; line-height: 1.25; }
@@ -7,7 +7,7 @@
 .product-issues-feedback { margin: 0; padding: 0 26px; color: var(--color-danger-text); font-size: 13px; line-height: 1.5; }
 .product-issues-feedback:not(:empty) { padding-bottom: 14px; }
 .product-issues-list { overflow: auto; padding: 0 26px 22px; max-height: min(58vh, 610px); overscroll-behavior: contain; }
-.product-issue-card { padding: 18px; border: 1px solid var(--color-border); border-radius: var(--corner-control); margin-top: 14px; background: var(--color-surface); }
+.product-issue-card { padding: 18px; border: 1px solid transparent; border-radius: var(--corner-control); margin-top: 14px; background: var(--color-surface); }
 .product-issue-card:first-child { margin-top: 0; }
 .product-issue-heading h3 { margin: 7px 0 9px; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
 .product-issue-severity { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; color: var(--color-text-secondary); }
@@ -16,7 +16,7 @@
 .product-issue-card p { margin: 8px 0; color: var(--color-text-secondary); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
 .product-issue-card .product-issue-guidance { color: var(--color-text-secondary); }
 .product-issue-locations { list-style: none; padding: 0; margin: 16px 0 0; }
-.product-issue-locations li { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--color-border); padding: 13px 0; }
+.product-issue-locations li { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid transparent; padding: 13px 0; }
 .product-issue-locations li:last-child { padding-bottom: 0; }
 .product-issue-locations li > div { min-width: 0; }
 .product-issue-locations strong, .product-issue-locations span, .product-issue-locations small { display: block; overflow-wrap: anywhere; }
@@ -25,7 +25,7 @@
 .product-issue-locations small { color: var(--color-text-secondary); margin-top: 4px; }
 .product-issue-locations button { flex-shrink: 0; }
 .product-issue-locations button span { display: inline; margin: 0; color: inherit; }
-.product-issues-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--color-border); padding: 17px 26px; background: var(--color-surface); }
+.product-issues-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px solid transparent; padding: 17px 26px; background: var(--color-surface); }
 .product-issues-footer > span { margin-right: auto; max-width: 350px; color: var(--color-text-secondary); font-size: 11px; line-height: 1.5; }
 .product-issues-empty { padding: 40px 24px; text-align: center; color: var(--color-text-secondary); }
 .product-issues-empty > span { display: inline-grid; place-items: center; width: 42px; height: 42px; background: var(--color-surface); color: var(--color-text); border-radius: 50%; font-size: 22px; }

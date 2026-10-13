@@ -120,7 +120,7 @@ Object.assign(sandbox, { UI_PALETTE: theme.uiPalette, UI_FONT_FACE: theme.fontFa
   drawSpecIcon() {}, drawProductInfoButton() {}, variantFooterLayout: () => ({ height: 32 }), drawVariantFooter(context, product, x, y) { context.font = `700 9px ${theme.fontFace}`; context.fillStyle = theme.colors.label; context.fillText(product.partSkus[0].code, x + 20, y + 18); },
 });
 sandbox.document.createElement = (tag) => { assert.equal(tag, "canvas"); return canvas(); };
-vm.runInContext(["roundRect", "wrapText", "productCardTitle", "cardSpecifications", "productPriceText", "drawDetailedFamilyHeaders", "drawCard", "recordCardElementsForPptx", "containRect", "addPptxPortfolioSlide"].map(definition).join("\n"), sandbox);
+vm.runInContext(["roundRect", "wrapText", "productCardTitle", "cardSpecifications", "productPriceText", "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedValueColor", "drawDetailedSpecLabel", "drawDetailedSpecs", "drawDetailedFamilyHeaders", "drawCard", "recordCardElementsForPptx", "containRect", "addPptxPortfolioSlide"].map(definition).join("\n"), sandbox);
 const familyLabels = [], familyContext = canvas().getContext("2d");
 familyContext.fillText = (text) => familyLabels.push({ text, color: familyContext.fillStyle });
 sandbox.cardXForDisplayIndex = (_products, index) => 20 + index * 264;
@@ -141,6 +141,17 @@ assert.ok(texts.some((element) => element.text.includes("USB mode only")), "tech
 assert.ok(texts.some((element) => element.text === "TEST123"));
 assert.ok(elements.some((element) => element.kind === "image"), "product artwork remains a separate export object");
 assert.ok(elements.some((element) => element.kind === "shape" && element.fill === theme.colors.surface));
+const cardPanels = elements.filter((element) => element.kind === "shape" && element.width === 246 && element.height === 552);
+assert.equal(cardPanels.length, 1, "the unselected card is one filled panel rather than repeated frames");
+assert.ok(!elements.some((element) => element.kind === "shape" && (element.lineWidth > 0 || element.shape === "line")), "unselected cards and specification rows have no decorative strokes");
+for (const detailed of [false, true]) {
+  const context = canvas().getContext("2d"), strokes = [];
+  context.stroke = () => strokes.push({ color: context.strokeStyle, width: context.lineWidth });
+  sandbox.drawCard(context, microphone, 0, 0, false, { ...layout, detailed }, false);
+  assert.deepEqual(strokes, [], "compact and detailed unselected cards use spacing without row rules or outer frames");
+  sandbox.drawCard(context, microphone, 0, 0, true, { ...layout, detailed }, false);
+  assert.deepEqual(strokes, [{ color: theme.colors.text, width: 1.25 }], "the selected product retains one clear outline in both layouts");
+}
 assert.equal(JSON.stringify(microphone), productBefore, "rendering never rewrites full specifications, lane, product color, image or SKU bindings");
 
 vm.runInContext(await read("vendor/pptxgen.bundle.js"), sandbox, { timeout: 5000 });
@@ -152,6 +163,9 @@ const bytes = await sandbox.PPTXEditable.serialize(deck);
 const archive = await sandbox.JSZip.loadAsync(bytes, { checkCRC32: true });
 const slide = await archive.file("ppt/slides/slide1.xml").async("string");
 assert.match(slide, /<p:grpSp>/, "a product remains an editable group");
+const nativeCardGroup = slide.match(/<p:grpSp>[\s\S]*?<\/p:grpSp>/)?.[0];
+const nativeCardLines = [...nativeCardGroup.matchAll(/<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/g)].map((match) => match[0]);
+assert.ok(nativeCardLines.every((line) => /^<a:ln>\s*<\/a:ln>$/.test(line) || /<a:noFill\s*\/?>|<a:alpha\b[^>]*\bval="0"/.test(line)), `the delivered editable card group has no visible decorative perimeter or row rules: ${nativeCardLines.join(" | ")}`);
 assert.ok(slide.includes('<a:latin typeface="Jost"'), "actual PPTX native text retains the shared font");
 assert.ok(slide.includes('<a:srgbClr val="1A1B1C"') && slide.includes('<a:srgbClr val="242527"') && slide.includes('<a:srgbClr val="F2F4F8"'));
 assert.ok(slide.includes("<a:t>USB-C</a:t>") && slide.includes("<a:t>TEST123</a:t>") && slide.includes("<p:pic>"));

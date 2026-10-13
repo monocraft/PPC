@@ -420,7 +420,7 @@ for (const [statusType, label, color] of standardStatusCases) {
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
         assert.equal(consoleShapes[2][6], color, "the variant badge matches the status banner color");
-        assert.equal(consoleShapes[2][7], color, "the variant badge border matches its fill");
+        assert.equal(consoleShapes[2][7], undefined, "the variant badge uses its fill without a decorative border");
         assert.equal(consoleTextColors[1], consoleTextColors[0], "status and variant labels share readable text contrast");
         assert.ok(consoleShapes[2][1] + consoleShapes[2][3] < 246 - 54 - 8, "the platform badge leaves room for Details");
       }
