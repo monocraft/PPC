@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/card-specs.js");
 await import("../../public/js/portfolio-model.js");
 const model = globalThis.PortfolioModel;
 
@@ -229,10 +230,11 @@ for (const years of [3, 5, 10]) {
 }
 
 // Exercise the real canvas geometry: compact empty cards, stable category heights,
-// bounded overflow, and fully expanded detailed specifications.
+// ranked summaries, duplicate suppression, and complete SKU footer space.
 let layoutLaneCount = 2;
 let supportedFullSpecCategory = false;
 const layoutSandbox = {
+  activeCategoryId: "pc-gaming-audio", PortfolioCardSpecs: globalThis.PortfolioCardSpecs,
   board: { products: [], settings: { showSkus: true, fullSingleLaneSpecs: false } },
   sortedLanes: () => Array.from({ length: layoutLaneCount }, (_, index) => ({ id: `lane-${index}` })),
   categoryDefinition: () => ({ fullSpecCards: supportedFullSpecCategory }),
@@ -243,22 +245,22 @@ vm.createContext(layoutSandbox);
 vm.runInContext(
   appSource.slice(appSource.indexOf("const CARD_WIDTH"), appSource.indexOf("const PLACEHOLDER_IMAGE")) +
   appSource.slice(appSource.indexOf("const FULL_SPEC_MIN_CARD_HEIGHT"), appSource.indexOf("// Canvas colors")) +
-  appSource.slice(appSource.indexOf("function normalizedSpecLabel("), appSource.indexOf("function viewerInfoVisualWidth(")),
+  appSource.slice(appSource.indexOf("function cardSpecifications("), appSource.indexOf("function viewerInfoVisualWidth(")),
   layoutSandbox,
 );
 layoutSandbox.board.products = [{ specs: [], footerHeight: 50 }];
 assert.equal(layoutSandbox.productCardLayout().cardHeight, 300, "empty spec space collapses");
 layoutSandbox.board.products.push({ specs: Array.from({ length: 4 }, () => ({ label: "Connection", value: "USB" })), footerHeight: 50 });
-assert.equal(layoutSandbox.productCardLayout().cardHeight, 415, "all products determine aligned category height");
+assert.equal(layoutSandbox.productCardLayout().cardHeight, 319, "equivalent saved rows occupy one front summary row");
 layoutSandbox.board.products.push({ specs: Array.from({ length: 20 }, () => ({ label: "Connection", value: "USB" })), footerHeight: 104 });
-assert.equal(layoutSandbox.productCardLayout().cardHeight, 552, "compact overflow remains bounded");
-assert.equal(layoutSandbox.productCardLayout().laneHeight, 622);
+assert.equal(layoutSandbox.productCardLayout().cardHeight, 373, "stored duplicate rows cannot inflate cards; full SKU footer space survives");
+assert.equal(layoutSandbox.productCardLayout().laneHeight, 443);
 const compactLayout = layoutSandbox.productCardLayout();
 layoutSandbox.board.settings.fullSingleLaneSpecs = true;
 assert.deepEqual(layoutSandbox.productCardLayout(), compactLayout, "a legacy true preference must not expand unsupported multi-lane cards");
 layoutLaneCount = 1;
 const singleLaneLayout = layoutSandbox.productCardLayout();
-assert.ok(singleLaneLayout.detailed && singleLaneLayout.cardHeight > 552, "single-lane cards automatically expand full specifications without clipping");
+assert.ok(singleLaneLayout.detailed && singleLaneLayout.cardHeight < 552, "single-lane cards retain their image and detailed styling with bounded summary height");
 layoutSandbox.board.settings.fullSingleLaneSpecs = false;
 assert.deepEqual(layoutSandbox.productCardLayout(), singleLaneLayout, "a legacy false preference must not suppress automatic full specifications");
 assert.equal(layoutSandbox.board.settings.fullSingleLaneSpecs, false, "layout rendering must preserve inert legacy preferences");
@@ -322,6 +324,7 @@ const consoleTextColors = [];
 const consoleShapes = [];
 let consoleProduct;
 Object.assign(presentationSandbox, {
+  cardSpecifications: (product) => globalThis.PortfolioCardSpecs.select(product, { categoryId: "console-gaming-audio" }),
   board: { settings: { showPrices: false, showSkus: false } }, portfolio: { settings: {} },
   UI_PALETTE: { charcoal600: "#2c2c2c", charcoal700: "#222222", charcoal500: "#333333", silver: "#cccccc" },
   CARD_WIDTH: 246, STATUS_BANNER_HEIGHT: 24, INFO_BUTTON_WIDTH: 54,
@@ -404,6 +407,7 @@ const pricePortfolio = { settings: { showRoadmapMsrp: false }, categories: [{ id
 const controls = new Map([["#showPrices", {}], ["#roadmapShowMsrp", {}]]);
 let savedPriceChanges = 0;
 const priceSandbox = {
+  cardSpecifications: (product) => globalThis.PortfolioCardSpecs.select(product, { categoryId: "pc-gaming-audio" }),
   PortfolioModel: model, board: priceBoard, portfolio: pricePortfolio,
   $: (selector) => controls.get(selector), scheduleSave: () => { savedPriceChanges += 1; },
   syncControls: () => {}, renderActiveView: () => {}, renderRoadmaps: () => {},
