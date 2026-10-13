@@ -195,8 +195,7 @@ assert.ok(renderProducts.every((product) => !paintedLabels.includes(product.name
 assert.deepEqual(Array.from(renderedRoadmap.products, (product) => product.id), ["normal", "concept", "embargo"], "the renderer creates one overlay per visible product and omits dates outside the export range");
 assert.deepEqual(Array.from(renderedRoadmap.products, (product) => product.label), ["RELEASED PRODUCT", "CONCEPT PRODUCT", "EMBARGO PRODUCT"]);
 assert.equal(renderedRoadmap.products[1].concept, true);
-assert.equal(renderedRoadmap.products[1].lineColor, "#999999");
-assert.equal(renderedRoadmap.products[2].lineColor, "#E85270", "embargo outline colors remain distinct");
+assert.ok(renderedRoadmap.products.every((product) => !Object.hasOwn(product, "lineColor")), "ordinary roadmap products carry no decorative outline, including concept and embargo stages");
 assert.equal(renderedRoadmap.products[2].textColor, "#1A1B1C", "The editable roadmap export preserves readable dark labels on the bright red embargo fill.");
 assert.equal(renderedRoadmap.products[0].textColor, "#171717", "Ordinary product labels keep their existing contrast choice.");
 assert.equal(renderedRoadmap.products[0].y, 121);
@@ -486,8 +485,9 @@ for (const [scope, expectedKinds, expectedFilename] of [
       assert.equal(options.shape, "roundRect");
       assert.equal(options.fill.color, expectedProduct.fill.slice(1));
       assert.equal(options.color, expectedProduct.textColor.slice(1));
-      assert.equal(options.line.color, expectedProduct.lineColor.slice(1));
-      assert.equal(options.line.dashType || "solid", expectedProduct.concept ? "dash" : "solid", "concept products retain their dashed border");
+      assert.equal(options.line.width, 0);
+      assert.equal(options.line.transparency, 100, "all native roadmap borders are invisible, including legacy concept products");
+      assert.equal(options.line.dashType, undefined);
     });
   });
   const productSlides = deck.slides.filter((_, index) => renderCalls[index].kind === "products");
@@ -550,9 +550,9 @@ productShapeXml.forEach((xml, index) => {
   assert.match(xml, /<a:prstGeom\b[^>]*\bprst="roundRect"/, "the product label and bar are one native rounded shape");
   assert.ok(xml.includes(`<a:t>${product.label.replaceAll("&", "&amp;")}</a:t>`), "the saved product label is editable text rather than raster content");
   assert.ok(xml.includes(`<a:srgbClr val="${product.fill.slice(1)}"`), "saved product fills retain lifecycle colors");
-  assert.ok(xml.includes(`<a:srgbClr val="${product.lineColor.slice(1)}"`), "saved product outlines retain their original status color");
-  if (product.concept) assert.ok(xml.includes('<a:prstDash val="dash"'), "saved concept borders remain dashed");
-  else assert.ok(!/<a:prstDash\b[^>]*\bval="(?!solid")[^"]+"/.test(xml), "saved regular borders retain the default solid stroke");
+  const productLine = xml.match(/<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/)?.[0];
+  assert.ok(productLine && /<a:alpha\b[^>]*\bval="0"/.test(productLine), "the delivered native product shape has a fully transparent outline");
+  assert.ok(!/<a:prstDash\b[^>]*\bval="dash"/.test(xml), "concept metadata does not create a dashed perimeter");
   const transform = xml.match(/<a:xfrm[^>]*>\s*<a:off x="(\d+)" y="(\d+)"\/>\s*<a:ext cx="(\d+)" cy="(\d+)"\/>/);
   assert.ok(transform, "saved products have native placement and dimensions");
   const expectedTransform = [

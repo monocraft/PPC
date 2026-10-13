@@ -1,16 +1,16 @@
 /* Search suggestions sit above the board without taking up toolbar space. */
 .portfolio-search-shell { position: relative; flex: 0 1 auto; width: min(310px, 32vw); min-width: 160px; max-width: 100%; }
 .portfolio-search-shell > .search-shell { width: 100%; min-width: 0; }
-.portfolio-search-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 55; width: max(100%, 380px); max-width: calc(100vw - 40px); max-height: min(320px, var(--portfolio-search-height, 320px)); padding: 0 0 5px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid var(--color-border-strong); border-radius: var(--corner-control); background: var(--color-surface); box-shadow: var(--shadow-overlay); color: var(--color-text, #F2F4F8); }
+.portfolio-search-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 55; width: max(100%, 380px); max-width: calc(100vw - 40px); max-height: min(320px, var(--portfolio-search-height, 320px)); padding: 0 0 5px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); box-shadow: var(--shadow-overlay); color: var(--color-text, #F2F4F8); }
 .portfolio-search-panel[hidden], .portfolio-search-panel [hidden] { display: none; }
-.portfolio-search-header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--color-border); background: var(--color-header); font-size: 10px; line-height: 1.4; }
+.portfolio-search-header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 9px 11px; border-bottom: 1px solid transparent; background: var(--color-header); font-size: 10px; line-height: 1.4; }
 .portfolio-search-heading { color: var(--color-text); font-weight: 600; }
 .portfolio-search-summary { flex: 0 0 auto; color: var(--color-text-secondary); font-size: 9px; }
 .portfolio-search-results { margin: 0; padding: 3px 4px; list-style: none; }
 .portfolio-search-option { display: grid; gap: 3px; min-width: 0; padding: 8px 7px; border: 1px solid transparent; border-radius: var(--corner-control); cursor: pointer; line-height: 1.4; overflow-wrap: anywhere; scroll-margin-top: 36px; }
 .portfolio-search-option + .portfolio-search-option { margin-top: 2px; }
 .portfolio-search-option:hover { background: var(--color-header); }
-.portfolio-search-option[aria-selected="true"] { border-color: var(--color-accent); background: var(--color-header); }
+.portfolio-search-option[aria-selected="true"] { border-color: transparent; background: var(--color-header);  box-shadow: inset 2px 0 0 var(--color-accent); }
 .portfolio-search-product-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 8px; min-width: 0; }
 .portfolio-search-product-name { flex: 1 1 auto; min-width: 0; font-size: 11px; font-weight: 600; color: var(--color-text); }
 .portfolio-search-current { flex: 0 0 auto; color: var(--color-text-secondary); font-size: 8px; }
@@ -19,7 +19,7 @@
 .portfolio-search-sku-code { min-width: 0; color: var(--color-text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .portfolio-search-variant, .portfolio-search-location { min-width: 0; color: var(--color-text-secondary); font-size: 10px; }
 .portfolio-search-feedback, .portfolio-search-bound { margin: 0; padding: 10px 11px; color: var(--color-text-secondary); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-.portfolio-search-more { display: block; width: calc(100% - 16px); min-height: 29px; margin: 3px 8px; padding: 5px 8px; border-color: var(--color-border-strong); background: var(--color-surface); color: var(--color-text); font-size: 10px; }
+.portfolio-search-more { display: block; width: calc(100% - 16px); min-height: 29px; margin: 3px 8px; padding: 5px 8px; border-color: transparent; background: var(--color-surface); color: var(--color-text); font-size: 10px; }
 .portfolio-search-more:focus-visible { outline-offset: -3px; }
 @media (max-width: 700px) {
   .portfolio-search-shell { flex: 1 1 135px; width: auto; min-width: 135px; }
