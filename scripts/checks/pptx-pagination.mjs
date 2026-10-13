@@ -337,8 +337,8 @@ const unequalPlan = sandbox.buildPptxExportPlan("products", [unequalCategory]);
 assert.deepEqual(Array.from(unequalPlan, (slide) => Array.from(slide.page.rows, (row) => [row.lane.id, row.slot, row.products.length])), [
   [["lane-0", 0, 13], ["lane-1", 1, 13]],
   [["lane-0", 0, 1], ["lane-1", 1, 13]],
-  [["lane-1", 1, 1]],
-], "the actual plan keeps wired and wireless lanes together and preserves their slots through unequal overflow");
+  [["lane-1", 0, 1]],
+], "the actual plan keeps wired and wireless together and packs occupied continuation lanes from the top");
 for (const laneId of ["lane-0", "lane-1"]) {
   assert.deepEqual(Array.from(unequalPlan).flatMap((slide) => Array.from(slide.page.rows).filter((row) => row.lane.id === laneId).flatMap((row) => Array.from(row.products, (product) => product.id))), unequalCategory.board.products.filter((product) => product.laneId === laneId).map((product) => product.id), "parallel lane continuation retains all products in each lane's saved order");
 }
@@ -759,4 +759,38 @@ const tinyCornerXml = librarySandbox.PPTXEditable.groupSlideXml('<p:sp><p:nvSpPr
   roundedCorners: { "tiny-part-0": { width: 3, height: 3, radii: [2] } },
 }]);
 assert.ok([...tinyCornerXml.matchAll(/<a:pt x="([^"]+)" y="([^"]+)"/g)].every((match) => match.slice(1).every((coordinate) => /^\d+$/.test(coordinate))), "clamped corner coordinates remain schema-valid integers for odd dimensions");
-console.log(`PPTX checks passed: pagination, category selection, grouped native portfolio cards with editable name/price/spec/SKU and preserved artwork, editable roadmap shapes, clipped date geometry, product-free backgrounds, restored export state, numberless slide chrome, and real delivered-file OOXML (${groupedBytes.byteLength} bytes).`);
+// Exercise the actual app's new dialog/renderer adapter with the real planner.
+await import("../../public/js/pptx-export-planner.js");
+Object.assign(sandbox, { PPTXExportPlanner: globalThis.PPTXExportPlanner, PortfolioModel: globalThis.PortfolioModel,
+  effectiveRoadmap: product => product.roadmap || {}, roadmapStatusColor: () => "#333538", contrastTextColor: () => "#D5D7DC",
+  standardizedStatus: () => ({ label: "" }), splitRoadmapStatusLabel: status => status || "Not set", productPriceText: product => product.price || "" });
+sandbox.portfolio.settings = { timeline: { startMonth: "2026-01", endMonth: "2028-12" }, showRoadmapMsrp: true };
+const nativeCategories = [productBoundaryCategory(26)];
+nativeCategories[0].board.products.forEach((product, index) => {
+  Object.assign(product, { family: "Headsets", price: "$99", roadmap: { startMonth: index === 25 ? "2030-01" : "2026-01", endMonth: index === 25 ? "2030-12" : "2028-12", status: "launched" } });
+});
+const nativeBefore = JSON.stringify(nativeCategories);
+const blockedPlan = sandbox.buildPptxExportPlan("roadmap", nativeCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12", overflow: "ask" });
+assert.equal(blockedPlan.roadmapPlan.requiresDecision, true, "the actual adapter blocks an unreadably dense merged slide");
+const fallbackPlan = sandbox.buildPptxExportPlan("roadmap", nativeCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12", overflow: "overview-details" });
+assert.equal(fallbackPlan.roadmapPlan.requiresDecision, false);
+assert.equal(fallbackPlan[0].kind, "roadmap-overview");
+assert.equal(fallbackPlan.roadmapPlan.outsideRangeCount, 1, "the selected period explicitly excludes dated products outside it");
+const rows = Array.from(fallbackPlan).flatMap(item => Array.from(item.roadmapSlide.rows));
+const productRows = rows.filter(row => row.kind === "product");
+assert.equal(productRows.length, 25); assert.equal(new Set(productRows.map(row => row.product.id)).size, 25);
+assert.ok(productRows.every(row => row.product.family === "Headsets" && row.product.priceLabel === "$99"));
+assert.equal(JSON.stringify(nativeCategories), nativeBefore, "the app export adapter leaves every saved product unchanged");
+const oldRenderCount = renderCalls.length;
+const originalFixtureCategories = sandbox.portfolio.categories;
+const originalSerializer = sandbox.PPTXEditable;
+try {
+  sandbox.portfolio.categories = nativeCategories;
+  sandbox.PPTXEditable = { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) };
+  await sandbox.exportPptx("roadmap", nativeCategories.map(category => category.id), { mode: "merged", startMonth: "2026-01", endMonth: "2028-12", overflow: "overview-details" });
+} finally { sandbox.portfolio.categories = originalFixtureCategories; sandbox.PPTXEditable = originalSerializer; }
+const nativeDeck = decks.at(-1);
+assert.equal(renderCalls.length, oldRenderCount, "native roadmap plans bypass the canvas image renderer");
+assert.equal(nativeDeck.slides.length, fallbackPlan.length);
+assert.ok(nativeDeck.slides.every(slide => slide.images.length === 0 && slide.texts.some(text => text.options.fontSize === 12)));
+console.log(`PPTX checks passed: pagination, category selection, grouped native portfolio cards, top-filled sparse pages, native roadmap planner/range/fallback adapter with retained prices/families and unchanged data, and real delivered-file OOXML (${groupedBytes.byteLength} bytes).`);

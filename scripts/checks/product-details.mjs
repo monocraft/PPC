@@ -56,6 +56,8 @@ for (const label of dateLabels) assert.ok(datesPanel[1].includes(`<span>${label}
 assert.deepEqual([...datesPanel[1].matchAll(/data-date-kind="([^"]+)"/g)].map((match) => match[1]), dateKeys, "each date retains its semantic hook in Dates");
 assert.ok(datesPanel[1].includes("In development"), "Dates includes the preserved lifecycle summary");
 assert.ok(!overviewPanel[1].includes("data-date-kind") && !overviewPanel[1].includes("product-detail-calendar"), "date columns cannot consume the specification reading area");
+assert.ok(!overviewPanel[1].includes("product-detail-section-title"), "the selected Specifications tab supplies the accessible title without a repeated content heading");
+assert.ok(!datesPanel[1].includes(">Key dates</h3>"), "Dates starts with its six facts rather than a duplicate tab heading");
 assert.match(initialHtml, /role="tab"[^>]*id="product-detail-split-overview-tab"[^>]*aria-controls="product-detail-split-overview"[^>]*aria-selected="true"[^>]*tabindex="0"[^>]*>Specifications<\/button>/);
 assert.match(overviewPanel[0], /role="tabpanel"[^>]*aria-labelledby="product-detail-split-overview-tab"/);
 assert.ok(!initialHtml.includes('data-detail-tab="specs"'), "Specifications retains its stable overview state key");
@@ -343,6 +345,26 @@ assert.ok(!reduced.groups.find((group) => group.dataset.detailPageGroup === "SKU
 const another = fixtureFor(details.render({ ...longModel, id: "different-product" }, { surface: "split" }));
 assert.ok(!another.groups.find((group) => group.dataset.detailPageGroup === "SKUs").entries[0].classList.contains("hidden"), "switching products must reset pagination");
 assert.equal(another.tabs.find((button) => button.dataset.detailTab === "overview").attributes.get("aria-selected"), "true", "each newly selected product must open its complete Specifications first");
+
+const directDateModel = { ...structuredClone(longModel), id: "direct-date-product" }, directDateBefore = structuredClone(directDateModel);
+assert.equal(details.openTab(directDateModel, { surface: "viewer", tab: "dates" }), true, "the closed-card Dates action can select Dates before the wing is rendered");
+const directDateHtml = details.render(directDateModel, { surface: "viewer" });
+assert.match(directDateHtml, /data-detail-tab="dates"[^>]*aria-selected="true"/, "direct Dates access must not require a second tab click");
+const directDateFixture = fixtureFor(directDateHtml);
+details.bind(directDateFixture.container);
+assert.ok(!directDateFixture.panels.find(panel => panel.dataset.detailPanel === "dates").classList.contains("hidden"));
+assert.equal(details.openTab(directDateModel, { surface: "viewer", tab: "overview" }), true, "the Specifications action can switch an already mounted wing without rebuilding its controls");
+assert.equal(directDateFixture.tabs.find(button => button.dataset.detailTab === "overview").attributes.get("aria-selected"), "true");
+assert.equal(directDateFixture.tabs.find(button => button.dataset.detailTab === "overview").tabIndex, 0);
+assert.ok(!directDateFixture.panels.find(panel => panel.dataset.detailPanel === "overview").classList.contains("hidden"));
+assert.ok(directDateFixture.panels.find(panel => panel.dataset.detailPanel === "dates").classList.contains("hidden"));
+assert.equal(details.openTab(directDateModel, { surface: "viewer", tab: "unsupported" }), false, "unrecognized action routes cannot mutate selected tab state");
+assert.equal(details.openTab(null, { surface: "viewer", tab: "dates" }), false, "a missing source card cannot open or change a reading panel");
+assert.match(details.render(directDateModel, { surface: "viewer" }), /data-detail-tab="overview"[^>]*aria-selected="true"/);
+assert.match(details.render(directDateModel, { surface: "split" }), /data-detail-tab="overview"[^>]*aria-selected="true"/, "direct viewer Dates routes retain an independent split-view state");
+details.focusMatch(directDateModel, { surface: "viewer", sku: "HP-SKU-10" });
+assert.match(details.render(directDateModel, { surface: "viewer" }), /data-detail-tab="skus"[^>]*aria-selected="true"/, "direct card actions retain the separate exact-SKU search route");
+assert.deepEqual(directDateModel, directDateBefore, "card action routing and mounted tab changes preserve every specification, date, SKU and source value");
 
 const hostile = `<img src=x onerror="alert('attack')"> & <script>attack()</script>`;
 const hostileModel = {
@@ -910,7 +932,7 @@ const openViewerDefinition = appSource.match(/^function openViewerInfo\([^]*?^\}
 assert.ok(openViewerDefinition);
 const openEvents = [];
 const openSandbox = {
-  selectedId: null, viewerInfoOpen: false, viewerInfoProductId: null,
+  selectedId: null, viewerInfoOpen: false, viewerInfoProductId: null, activeView: "products",
   infoProduct: () => ({ id: "opening-product" }), productDetailsModel: (product) => product,
   PortfolioDetails: { focusMatch(model, options) { openEvents.push(["focus", model.id, options.surface]); } },
   renderInspector() {}, renderViewerInfo() {}, renderBoard() {}, closeViewerInfo() { openEvents.push(["close"]); },

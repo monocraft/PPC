@@ -265,6 +265,18 @@ let roadmapDraft = null;
 let initialVerticalFitPending = true;
 let productLayoutEditing = false;
 let productReorderSession = null;
+const categoryZoomPreferences = globalThis.PortfolioViewRuntime?.preferences({ key: `${STORAGE_KEY}-view-state-v1`, storage: () => localStorage });
+const queueImageViewRender = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && !pptxExportInProgress) renderActiveView(); });
+const queueBoardScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && activeView === "products" && !pptxExportInProgress) renderBoard(); });
+const queuedRoadmapRenders = new Map();
+const roadmapHeaderOverlays = new Map();
+let lastWorkspaceRenderSignature = "";
+let productCardHover = null;
+let productCardActionLayer = null;
+const productCardActionRows = new Map();
+let inspectorNavigationObserver = null;
+let viewerInfoIconOrigin = null;
+let viewerInfoPendingIconFocus = null;
 
 function id() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -1460,7 +1472,16 @@ function activateCategory(categoryId, { render = true, fitVertical = true } = {}
   hoveredHeroVariant = null;
   closeVariantPopover({ force: true });
   stopRoadmapSlotEditing();
-  initialVerticalFitPending = Boolean(fitVertical);
+  const rememberedZoom = typeof categoryZoomPreferences === "undefined" ? null : categoryZoomPreferences?.get(category.id);
+  if (rememberedZoom) {
+    zoom = rememberedZoom.productZoom;
+    roadmapMonthWidth = rememberedZoom.roadmapZoom * ROADMAP_DEFAULT_MONTH_WIDTH;
+  } else {
+    zoom = 1;
+    roadmapMonthWidth = ROADMAP_DEFAULT_MONTH_WIDTH;
+  }
+  initialVerticalFitPending = Boolean(fitVertical && !rememberedZoom);
+  if (typeof productCardHover !== "undefined") productCardHover?.clear();
   scheduleSave();
   syncControls();
   renderInspector();
@@ -1507,6 +1528,7 @@ function openPortfolioSearchResult(result) {
   activateCategory(category.id, { render: false, fitVertical: true });
   selectedId = product.id;
   globalThis.PortfolioDetails.focusMatch(productDetailsModel(product), { surface: nextView === "products" ? "viewer" : "split", sku: result.matchedSku || "", variant: result.matchedVariant || "" });
+  if (nextView === "split") globalThis.PortfolioViewRuntime?.panelCache.clear(splitProduct);
   setView(nextView, { focusSelected: true });
   const focusResult = () => {
     if (activeView !== nextView || selectedId !== product.id || activeCategoryId !== category.id) return;
@@ -1596,7 +1618,12 @@ function detailedSpecsHeight(product, categoryId = activeCategoryId) {
   return detailedSpecRows(cardSpecifications(product, categoryId)).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
 }
 
-function productCardLayout(targetBoard = board, definition = categoryDefinition()) {
+function productCardLayout(targetBoard = board, definition = categoryDefinition(), { includeControls = true } = {}) {
+  const cache = globalThis.PortfolioViewRuntime?.layoutCache;
+  const actionHeight = globalThis.PortfolioViewRuntime && includeControls && targetBoard === board && activeView === "products" && !pptxExportInProgress ? 36 / zoom : 0;
+  const cacheKey = `${typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision}:${definition.id || ""}:${definition.fullSpecCards === true}:${targetBoard.settings.showSkus}:${targetBoard.products.length}:${targetBoard.lanes?.length || 0}:${actionHeight}`;
+  const cached = cache?.get(targetBoard, cacheKey);
+  if (cached) return cached;
   const lanes = targetBoard === board ? sortedLanes() : [...targetBoard.lanes].sort((a, b) => a.order - b.order);
   const supportsDetailedCards = lanes.length === 1 || definition.fullSpecCards === true;
   const products = targetBoard.products;
@@ -1608,8 +1635,10 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
     const maxContentHeight = Math.max(0, ...products.map((product) => (
       rowsTop + cardSpecifications(product, categoryId).length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
     )));
-    const cardHeight = Math.max(300, maxContentHeight);
-    return {
+    const actionTop = Math.max(300, ...products.map(product => rowsTop + cardSpecifications(product, categoryId).length * 32 + 10));
+    const reservedFooterHeight = targetBoard.settings.showSkus ? Math.max(0, ...products.map(product => variantFooterLayout(product).height)) : 0;
+    const cardHeight = actionHeight ? actionTop + actionHeight + reservedFooterHeight : Math.max(300, maxContentHeight);
+    const result = {
       detailed: false,
       categoryId,
       cardHeight,
@@ -1619,7 +1648,10 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
       titleBlockTop: TITLE_BLOCK_TOP,
       priceBaselineOffset: PRICE_BASELINE_OFFSET,
       detailsTopOffset: DETAILS_TOP_OFFSET,
+      actionHeight,
+      actionTop, reservedFooterHeight,
     };
+    return cache ? cache.set(targetBoard, cacheKey, result) : result;
   }
 
   const maxDetailsHeight = Math.max(0, ...products.map((product) => detailedSpecsHeight(product, categoryId)));
@@ -1627,8 +1659,9 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
     ? Math.max(0, ...products.map((product) => variantFooterLayout(product).height))
     : 0;
   const detailsTop = FULL_SPEC_TITLE_TOP + FULL_SPEC_DETAILS_TOP_OFFSET;
-  const cardHeight = Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + maxFooterHeight + 10);
-  return {
+  const actionTop = Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + 10);
+  const cardHeight = actionHeight ? actionTop + actionHeight + maxFooterHeight : Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + maxFooterHeight + 10);
+  const result = {
     detailed: true,
     categoryId,
     cardHeight,
@@ -1638,7 +1671,10 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
     titleBlockTop: FULL_SPEC_TITLE_TOP,
     priceBaselineOffset: PRICE_BASELINE_OFFSET,
     detailsTopOffset: FULL_SPEC_DETAILS_TOP_OFFSET,
+    actionHeight,
+    actionTop, reservedFooterHeight: maxFooterHeight,
   };
+  return cache ? cache.set(targetBoard, cacheKey, result) : result;
 }
 
 function viewerInfoVisualWidth() {
@@ -1656,10 +1692,10 @@ function viewerInfoStacked() {
 }
 
 function setViewerInfoSize(width, height) {
-  viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
-  viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
-  viewerInfo.dataset.compactHeight = "false";
-  viewerInfo.dataset.detailColumns = "1";
+  if (viewerInfo.style.getPropertyValue("--viewer-info-width") !== `${width}px`) viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
+  if (viewerInfo.style.getPropertyValue("--viewer-info-height") !== `${height}px`) viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
+  if (viewerInfo.dataset.compactHeight !== "false") viewerInfo.dataset.compactHeight = "false";
+  if (viewerInfo.dataset.detailColumns !== "1") viewerInfo.dataset.detailColumns = "1";
 }
 
 function viewerInfoReserveLogical() {
@@ -1809,7 +1845,7 @@ function startProductCardSettling(positions, liftedId, reserve = {}) {
 function getCanvasDimensions({ includeViewer = true } = {}) {
   const lanes = sortedLanes();
   const products = visibleProducts();
-  const layout = productCardLayout();
+  const layout = productCardLayout(board, typeof categoryDefinition === "function" ? categoryDefinition() : undefined, { includeControls: includeViewer });
   const maxCount = Math.max(1, ...lanes.map((lane) => products.filter((product) => product.laneId === lane.id).length + (includeViewer && dragState?.moved && dragState.dropTarget?.laneId === lane.id && board.products.find((product) => product.id === dragState.productId)?.laneId !== lane.id ? 1 : 0)));
   const editorRevealReserve = inspectorOpen && activeView === "products" && inspector?.offsetWidth
     ? Math.ceil((inspector.offsetWidth + 28) / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
@@ -1822,10 +1858,26 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
   const motion = includeViewer && productCardMotionValid(productCardMotion) ? productCardMotion : null;
   const movingWidth = motion ? Math.max(motion.widthReserve || 0, ...[...motion.positions.values()].map((position) => position.x + CARD_WIDTH + SIDE_PADDING)) : 0;
   const movingHeight = motion ? Math.max(motion.heightReserve || 0, ...[...motion.positions.values()].map((position) => position.y + layout.cardHeight + 20)) : 0;
+  const width = Math.max(1480, contentWidth, viewportLogicalWidth, movingWidth);
+  const height = Math.max(LANE_TOP + laneGeometry.height + 20, movingHeight);
+  // Allocate the final reading extent once, while card positions still glide
+  // with progress. Reallocating a wide canvas on every frame discards its pixels.
+  let allocationWidth = width, allocationHeight = height;
+  if (globalThis.PortfolioViewRuntime && includeViewer && activeView === "products" && (viewerInfoOpen || viewerInfoProgress > 0)) {
+    const product = products.find(item => item.id === viewerInfoProductId);
+    if (product) {
+      const fullWidth = viewerInfoStacked() ? Math.max(0, viewerInfoVisualWidth() - CARD_WIDTH * zoom) : viewerInfoVisualWidth();
+      allocationWidth = Math.max(1480, contentWidth - viewerInfoReserveLogical() + fullWidth / zoom, viewportLogicalWidth, movingWidth);
+      const readingHeight = viewerInfoVisualHeight() / zoom;
+      const fullHeight = viewerInfoStacked() ? layout.cardHeight + readingHeight : Math.max(layout.cardHeight, readingHeight);
+      const currentHeight = laneGeometry.rows.find(row => row.lane.id === product.laneId)?.contentHeight || layout.cardHeight;
+      allocationHeight = height + Math.max(0, fullHeight - currentHeight);
+    }
+  }
   return {
-    width: Math.max(1480, contentWidth, viewportLogicalWidth, movingWidth),
-    height: Math.max(LANE_TOP + laneGeometry.height + 20, movingHeight),
+    width, height, allocationWidth, allocationHeight,
     laneRows: laneGeometry.rows,
+    layout,
     includeViewer,
   };
 }
@@ -1833,10 +1885,11 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
 function setupCanvas(targetCanvas, drawZoom = zoom) {
   const dimensions = getCanvasDimensions();
   const dpr = window.devicePixelRatio || 1;
-  const pixelWidth = Math.round(dimensions.width * drawZoom * dpr), pixelHeight = Math.round(dimensions.height * drawZoom * dpr);
+  const allocationWidth = dimensions.allocationWidth || dimensions.width, allocationHeight = dimensions.allocationHeight || dimensions.height;
+  const pixelWidth = Math.round(allocationWidth * drawZoom * dpr), pixelHeight = Math.round(allocationHeight * drawZoom * dpr);
   if (targetCanvas.width !== pixelWidth) targetCanvas.width = pixelWidth;
   if (targetCanvas.height !== pixelHeight) targetCanvas.height = pixelHeight;
-  const cssWidth = `${dimensions.width * drawZoom}px`, cssHeight = `${dimensions.height * drawZoom}px`;
+  const cssWidth = `${allocationWidth * drawZoom}px`, cssHeight = `${allocationHeight * drawZoom}px`;
   if (targetCanvas.style.width !== cssWidth) targetCanvas.style.width = cssWidth;
   if (targetCanvas.style.height !== cssHeight) targetCanvas.style.height = cssHeight;
   const context = targetCanvas.getContext("2d");
@@ -2071,7 +2124,7 @@ function loadImage(src) {
   const image = new Image();
   image.crossOrigin = "anonymous";
   const record = { image, ready: false, failed: false };
-  image.onload = () => { record.ready = true; renderActiveView(); };
+  image.onload = () => { record.ready = true; if (typeof queueImageViewRender !== "undefined" && queueImageViewRender) queueImageViewRender(); else renderActiveView(); };
   image.onerror = () => { record.failed = true; };
   image.src = src;
   imageCache.set(src, record);
@@ -2113,7 +2166,12 @@ function drawProductBoardExportBackground(context, dimensions) {
 }
 
 function drawBoardTo(context, dimensions, includeSelection = true, includeBackground = false, includeProducts = true) {
-  context.clearRect(0, 0, dimensions.width, dimensions.height);
+  const viewportPaint = includeSelection && !dimensions.pptxPage && globalThis.PortfolioViewRuntime && canvasScroll?.clientHeight > 0;
+  if (viewportPaint) {
+    const left = canvasScroll.scrollLeft / zoom, top = canvasScroll.scrollTop / zoom;
+    context.save(); context.beginPath(); context.rect(left, top, canvasScroll.clientWidth / zoom, canvasScroll.clientHeight / zoom); context.clip();
+    context.clearRect(left, top, canvasScroll.clientWidth / zoom, canvasScroll.clientHeight / zoom);
+  } else context.clearRect(0, 0, dimensions.width, dimensions.height);
   if (includeBackground) drawProductBoardExportBackground(context, dimensions);
 
   const lanes = sortedLanes();
@@ -2185,9 +2243,12 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
           const presentation = productPresentation(product);
           if (presentation.primaryLabel) roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
         }
-        renderedCards.push({ productId: product.id, laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
+        renderedCards.push({ productId: product.id, name: product.name, laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
           ...(integrated ? { viewerIntegrated: true, viewerStacked: stacked, integrationX: position.x, integrationWidth: CARD_WIDTH + viewerInfoReserveLogical(), integrationHeight: contentHeight } : {}) });
-        drawCard(context, product, sourceX, position.y, includeSelection && product.id === selectedId, cardLayout, includeSelection && !productLayoutEditing);
+        const outsideViewport = includeSelection && !dimensions.pptxPage && !motion && canvasScroll?.clientHeight > 0 &&
+          ((sourceX + CARD_WIDTH) * zoom < canvasScroll.scrollLeft - 16 || sourceX * zoom > canvasScroll.scrollLeft + canvasScroll.clientWidth + 16 ||
+           (position.y + cardLayout.cardHeight) * zoom < canvasScroll.scrollTop - 16 || position.y * zoom > canvasScroll.scrollTop + canvasScroll.clientHeight + 16);
+        if (!outsideViewport) drawCard(context, product, sourceX, position.y, includeSelection && product.id === selectedId, cardLayout, includeSelection && !productLayoutEditing);
       });
   });
   if (includeProducts && drag) {
@@ -2212,6 +2273,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
       renderedCards.push({ productId: product.id, laneId: drag?.dropTarget?.laneId || position.laneId || product.laneId, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
     }
   }
+  if (viewportPaint) context.restore();
 }
 
 function specIconKind(label) {
@@ -2420,38 +2482,6 @@ function drawDetailedSpecs(context, product, x, startY, categoryId = activeCateg
   return cursorY;
 }
 
-function drawProductInfoButton(context, product, x, y, layout) {
-  const buttonX = x + CARD_WIDTH - INFO_BUTTON_WIDTH - 8;
-  const buttonY = y + STATUS_BANNER_HEIGHT + 7;
-  const isOpen = viewerInfoProductId === product.id && viewerInfoProgress > .01;
-  const isHovered = hoveredInfoButtonProductId === product.id;
-
-  context.save();
-  roundRect(
-    context,
-    buttonX,
-    buttonY,
-    INFO_BUTTON_WIDTH,
-    INFO_BUTTON_HEIGHT,
-    4,
-    isOpen || isHovered ? UI_PALETTE.charcoal600 : UI_PALETTE.charcoal700,
-  );
-  context.fillStyle = isOpen ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
-  context.font = `600 10px ${UI_FONT_FACE}`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(isOpen ? "Close" : "Details", buttonX + INFO_BUTTON_WIDTH / 2, buttonY + INFO_BUTTON_HEIGHT / 2 + .5);
-  context.restore();
-
-  renderedInfoButtons.push({
-    productId: product.id,
-    x: buttonX,
-    y: buttonY,
-    width: INFO_BUTTON_WIDTH,
-    height: INFO_BUTTON_HEIGHT,
-  });
-}
-
 function drawCard(context, product, x, y, selected, layout = productCardLayout(), interactive = true) {
   const presentation = productPresentation(product);
   const labelColor = presentation.primaryLabel
@@ -2542,8 +2572,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     context.restore();
   }
 
-  // Keep the explicit viewer control above the selected-card outline.
-  if (interactive) drawProductInfoButton(context, product, x, y, layout);
+  // Native text actions are mounted separately; exported cards contain no controls.
 }
 
 function roadmapRange() {
@@ -2744,7 +2773,11 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   const regions = [];
   const rows = [];
 
-  context.clearRect(0, 0, width, height);
+  const viewportPaint = includeSelection && !exportMode && globalThis.PortfolioViewRuntime && targetScroll.clientHeight > 0;
+  if (viewportPaint) {
+    context.save(); context.beginPath(); context.rect(stickyX, stickyY, targetScroll.clientWidth, targetScroll.clientHeight); context.clip();
+    context.clearRect(stickyX, stickyY, targetScroll.clientWidth, targetScroll.clientHeight);
+  } else context.clearRect(0, 0, width, height);
   context.fillStyle = UI_PALETTE.charcoal800;
   context.fillRect(0, 0, width, height);
 
@@ -3127,17 +3160,21 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     roadmapRowRegions.set(targetCanvas, rows);
     roadmapLaneHovers.get(targetCanvas)?.sync();
   }
+  if (viewportPaint) context.restore();
 }
 
 function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
   if (!targetCanvas || !targetScroll || targetCanvas.closest(".hidden")) return;
+  if (typeof queuedRoadmapRenders !== "undefined") queuedRoadmapRenders.get(targetCanvas)?.cancel?.();
   const previousLeft = targetScroll.scrollLeft;
   const previousTop = roadmapFilterScrollResetPending ? 0 : targetScroll.scrollTop;
   const dimensions = roadmapDimensions();
   const context = setupRoadmapCanvas(targetCanvas, dimensions);
-  targetScroll.scrollLeft = previousLeft;
-  targetScroll.scrollTop = previousTop;
+  // Equal assignments cancel native wheel/smooth-scroll momentum in Chromium.
+  if (targetScroll.scrollLeft !== previousLeft) targetScroll.scrollLeft = previousLeft;
+  if (targetScroll.scrollTop !== previousTop) targetScroll.scrollTop = previousTop;
   drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
+  if (typeof roadmapHeaderOverlays !== "undefined") roadmapHeaderOverlays.get(targetCanvas)?.sync();
   requestAnimationFrame(() => syncRoadmapNavigator(targetScroll, navigator));
 }
 
@@ -3230,10 +3267,12 @@ function syncViewZoomControls() {
   const roadmapMaximum = snappedViewZoom(ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH);
   const roadmapZoom = snappedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, roadmapMinimum, roadmapMaximum);
   roadmapMonthWidth = roadmapZoom * ROADMAP_DEFAULT_MONTH_WIDTH;
-  $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
+  const productLabel = `${Math.round(zoom * 100)}%`;
+  if ($("#zoomReset").textContent !== productLabel) $("#zoomReset").textContent = productLabel;
   $("#zoomOut").disabled = zoom <= PRODUCT_MIN_ZOOM;
   $("#zoomIn").disabled = zoom >= PRODUCT_MAX_ZOOM;
-  $("#roadmapZoomReset").textContent = `${Math.round(roadmapZoom * 100)}%`;
+  const roadmapLabel = `${Math.round(roadmapZoom * 100)}%`;
+  if ($("#roadmapZoomReset").textContent !== roadmapLabel) $("#roadmapZoomReset").textContent = roadmapLabel;
   $("#roadmapZoomOut").disabled = roadmapZoom <= roadmapMinimum;
   $("#roadmapZoomIn").disabled = roadmapZoom >= roadmapMaximum;
 }
@@ -3244,6 +3283,7 @@ function setRoadmapZoom(nextMonthWidth) {
   const viewportCenter = Math.max(0, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH) / 2;
   const centerMonth = (targetScroll.scrollLeft + viewportCenter) / previousMonthWidth;
   roadmapMonthWidth = snappedViewZoom(nextMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, previousMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH;
+  if (typeof categoryZoomPreferences !== "undefined") categoryZoomPreferences?.set(activeCategoryId, { productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH });
   renderRoadmaps();
   targetScroll.scrollLeft = Math.max(0, centerMonth * roadmapMonthWidth - viewportCenter);
 }
@@ -3255,6 +3295,7 @@ function setProductZoom(nextZoom) {
   const centerX = (canvasScroll.scrollLeft + viewportX) / previousZoom;
   const centerY = (canvasScroll.scrollTop + viewportY) / previousZoom;
   zoom = snappedViewZoom(nextZoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM, previousZoom);
+  if (typeof categoryZoomPreferences !== "undefined") categoryZoomPreferences?.set(activeCategoryId, { productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH });
   renderBoard();
   canvasScroll.scrollLeft = Math.max(0, centerX * zoom - viewportX);
   canvasScroll.scrollTop = Math.max(0, centerY * zoom - viewportY);
@@ -3280,6 +3321,7 @@ function fitProductLanesVertically() {
   // An overview must remain readable. Additional lanes scroll vertically
   // instead of shrinking every card down to illegible labels.
   zoom = snappedViewZoom(fittedZoom, .7, 1, 1, "down");
+  if (typeof categoryZoomPreferences !== "undefined") categoryZoomPreferences?.set(activeCategoryId, { productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH });
   renderBoard();
   requestAnimationFrame(() => {
     canvasScroll.scrollTop = 0;
@@ -3362,6 +3404,11 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   feedback.className = "roadmap-drag-feedback hidden";
   document.body.append(feedback);
   let frame = null;
+  const headerOverlay = globalThis.PortfolioViewRuntime?.stickyHeader(targetCanvas, targetScroll, ROADMAP_HEADER_HEIGHT);
+  if (headerOverlay) roadmapHeaderOverlays.set(targetCanvas, headerOverlay);
+  const queueScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory()))
+    || (() => requestAnimationFrame(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory())));
+  if (typeof queuedRoadmapRenders !== "undefined") queuedRoadmapRenders.set(targetCanvas, queueScrollPaint);
   const laneHover = RoadmapLaneHover.create(targetCanvas, targetScroll, {
     headerHeight: ROADMAP_HEADER_HEIGHT,
     getRows: () => roadmapRowRegions.get(targetCanvas) || [],
@@ -3370,7 +3417,8 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     onChange: (productId) => {
       roadmapHoveredProductIds.set(targetCanvas, productId);
       targetCanvas.title = productId ? board.products.find((product) => product.id === productId)?.name || "" : "";
-      paintInteraction();
+      // The viewport guide handles hover movement without repainting all rows.
+      if (roadmapInteractionMode === "dates") queueScrollPaint();
     },
   });
   roadmapLaneHovers.set(targetCanvas, laneHover);
@@ -3379,6 +3427,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     const dimensions = roadmapDimensions();
     const context = targetCanvas.getContext("2d");
     drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
+    headerOverlay?.sync();
     syncRoadmapNavigator(targetScroll, navigatorRefsFactory());
   }
 
@@ -3613,7 +3662,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   });
 
   targetScroll.addEventListener("scroll", () => {
-    requestAnimationFrame(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory()));
+    queueScrollPaint();
   }, { passive: true });
 
   targetScroll.addEventListener("wheel", (event) => {
@@ -3621,7 +3670,8 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
     if (max <= 0 || !horizontalIntent) return;
     event.preventDefault();
-    targetScroll.scrollLeft += event.deltaX || event.deltaY;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? targetScroll.clientWidth : 1;
+    targetScroll.scrollLeft += (event.deltaX || event.deltaY) * unit;
   }, { passive: false });
 }
 
@@ -3766,9 +3816,13 @@ function renderSplitProduct() {
   const product = selectedProduct();
   if (!product) {
     splitProduct.replaceChildren();
+    globalThis.PortfolioViewRuntime?.panelCache.clear(splitProduct);
     return;
   }
   const presentation = productPresentation(product);
+  const model = productDetailsModel(product);
+  const signature = JSON.stringify([model, product.name, productImageSource(product), presentation, portfolio.settings?.showRoadmapMsrp]);
+  if (globalThis.PortfolioViewRuntime?.panelCache.unchanged(splitProduct, signature)) return;
   const labelColor = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
   splitProduct.innerHTML = `
     <article class="split-product-card split-product-card--detail" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)}">
@@ -3777,9 +3831,10 @@ function renderSplitProduct() {
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
         <div class="split-product-title"><span class="eyebrow">${escapeHtml(product.roadmap?.family || 'Portfolio product')}</span><h2>${escapeHtml(product.name)}</h2>${presentation.secondaryLabel ? `<span class="split-platform-label">${escapeHtml(presentation.secondaryLabel)}</span>` : ''}${portfolio.settings?.showRoadmapMsrp && productPriceText(product) ? `<div class="split-price">${escapeHtml(productPriceText(product))}</div>` : ''}</div>
       </div>
-      <div class="split-product-body">${PortfolioDetails.render(productDetailsModel(product), { surface: 'split' })}</div>
+      <div class="split-product-body">${PortfolioDetails.render(model, { surface: 'split' })}</div>
     </article>`;
   PortfolioDetails.bind(splitProduct, { onCopy: copyTextToClipboard, dateHistory: productDateHistoryOptions(product.id) });
+  globalThis.PortfolioViewRuntime?.panelCache.remember(splitProduct, signature);
 }
 function updateLinkedViewButton() {
   const hasSelection = Boolean(selectedProduct());
@@ -4004,7 +4059,7 @@ function renderLaneRail(dimensions = getCanvasDimensions()) {
   const layout = productCardLayout();
   laneRailInner.style.height = `${dimensions.height * zoom}px`;
   const laneRows = dimensions.laneRows || productLaneGeometry(layout).rows;
-  laneRailInner.innerHTML = laneRows.map(({ lane, top: laneTop, contentHeight }) => {
+  const markup = laneRows.map(({ lane, top: laneTop, contentHeight }) => {
     const top = (laneTop - 4) * zoom;
     const height = (contentHeight + 8) * zoom;
     return `<div class="lane-rail-item" style="top:${top}px;height:${height}px">
@@ -4014,6 +4069,7 @@ function renderLaneRail(dimensions = getCanvasDimensions()) {
       </div>
     </div>`;
   }).join("");
+  if (laneRailInner.innerHTML !== markup) laneRailInner.innerHTML = markup;
   syncLaneRail();
 }
 
@@ -4068,22 +4124,30 @@ function renderBoard() {
   syncViewZoomControls();
   renderStatus();
   positionViewerInfo();
+  if (typeof productCardActionLayer !== "undefined") syncProductCardActions();
+  if (typeof productCardHover !== "undefined") productCardHover?.sync();
   requestAnimationFrame(syncBoardNavigator);
 }
 
 function renderStatus() {
-  $("#statusbar").innerHTML = '<div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div><span id="workspaceSummary"></span>';
+  if (!$("#statusbarPackage")) $("#statusbar").innerHTML = '<div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div><span id="workspaceSummary"></span>';
   publishWorkspaceState();
 }
 
 function publishWorkspaceState() {
   if (!portfolio || !board) return;
-  window.dispatchEvent(new CustomEvent("portfolio:render", { detail: {
+  const detail = {
     categories: portfolio.categories.map((category) => ({ id: category.id, name: category.name, count: category.board.products.length })),
     activeCategoryId, title: board.title, selectedName: selectedProduct()?.name || "", productCount: board.products.length,
     visibleCount: activeView === "products" ? visibleProducts().length : visibleRoadmapProducts().length,
     activeView: activeView === "products" ? "products" : "roadmap", roadmapDetailsOpen, timeline: portfolio.settings.timeline,
-  } }));
+  };
+  const signature = JSON.stringify([detail, typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision]);
+  if (typeof lastWorkspaceRenderSignature !== "undefined") {
+    if (signature === lastWorkspaceRenderSignature) return;
+    lastWorkspaceRenderSignature = signature;
+  }
+  window.dispatchEvent(new CustomEvent("portfolio:render", { detail }));
 }
 
 function selectedProduct() {
@@ -4149,20 +4213,23 @@ function productPartSkus(product) {
     .filter((item) => item.code);
 }
 
-function renderViewerInfo() {
+function renderViewerInfo({ force = false } = {}) {
   if (!viewerInfo) return;
   const product = infoProduct();
   const visible = Boolean(product && (viewerInfoOpen || viewerInfoProgress > .001));
   viewerInfo.classList.toggle('is-open', visible);
   viewerInfo.setAttribute('aria-hidden', String(!visible));
   if (!visible || !product) {
-    if (!viewerInfoOpen && viewerInfoProgress <= .001) viewerInfo.innerHTML = '';
+    if (!viewerInfoOpen && viewerInfoProgress <= .001) { viewerInfo.innerHTML = ''; globalThis.PortfolioViewRuntime?.panelCache.clear(viewerInfo); }
     if (viewerInfoOutline) { viewerInfoOutline.classList.remove('is-open'); viewerInfoOutline.style.width = '0px'; }
     return;
   }
-  viewerInfo.innerHTML = `<div class="viewer-info-body"><h2 class="visually-hidden">Details for ${escapeHtml(product.name)}</h2><button type="button" class="icon-button viewer-detail-close" data-detail-close aria-label="Close product information">×</button>${PortfolioDetails.render(productDetailsModel(product), { surface: 'viewer' })}</div>`;
+  const model = productDetailsModel(product), signature = JSON.stringify([model, product.name]);
   setViewerInfoSize(viewerInfoVisualWidth(), viewerInfoVisualHeight());
+  if (!force && globalThis.PortfolioViewRuntime?.panelCache.unchanged(viewerInfo, signature)) return;
+  viewerInfo.innerHTML = `<div class="viewer-info-body"><h2 class="visually-hidden">Details for ${escapeHtml(product.name)}</h2><button type="button" class="icon-button viewer-detail-close" data-detail-close aria-label="Close product information">×</button>${PortfolioDetails.render(model, { surface: 'viewer' })}</div>`;
   PortfolioDetails.bind(viewerInfo, { onCopy: copyTextToClipboard, onClose: closeViewerInfo, dateHistory: productDateHistoryOptions(product.id) });
+  globalThis.PortfolioViewRuntime?.panelCache.remember(viewerInfo, signature);
 }
 function positionViewerInfo() {
   if (!viewerInfo || !viewerInfoProductId || activeView !== "products" || viewerInfoProgress <= 0) return null;
@@ -4270,37 +4337,61 @@ function animateViewerInfo(targetProgress, onComplete) {
   viewerInfoAnimationFrame = requestAnimationFrame(step);
 }
 
-function openViewerInfo(productId = selectedId, { onReady, preserveDetailTab = false } = {}) {
+function openViewerInfo(productId = selectedId, { onReady, preserveDetailTab = false, tab = null, originButton = null } = {}) {
   if (!productId) return;
 
-  if (viewerInfoOpen && viewerInfoProductId === productId) {
+  if (viewerInfoOpen && viewerInfoProductId === productId && !tab) {
     closeViewerInfo();
     return;
   }
 
+  const wasOpen = viewerInfoOpen && viewerInfoProductId === productId;
+  const iconOrigin = originButton ? { productId, button: originButton, tab: tab || "overview" } : null;
+  if (typeof viewerInfoIconOrigin !== "undefined") viewerInfoIconOrigin = iconOrigin;
+  if (typeof viewerInfoPendingIconFocus !== "undefined") viewerInfoPendingIconFocus = null;
   viewerInfoProductId = productId;
   viewerInfoOpen = true;
   selectedId = productId;
-  if (!preserveDetailTab) {
+  if (tab) {
+    const product = infoProduct();
+    if (product) PortfolioDetails.openTab(productDetailsModel(product), { surface: "viewer", tab });
+  } else if (!preserveDetailTab) {
     const product = infoProduct();
     if (product) PortfolioDetails.focusMatch(productDetailsModel(product), { surface: "viewer" });
   }
   renderInspector();
-  renderViewerInfo();
+  renderViewerInfo({ force: true });
   renderBoard();
 
+  const ready = () => {
+    if (!viewerInfoOpen || viewerInfoProductId !== productId || activeView !== "products") return;
+    if (iconOrigin && activeView === "products" && viewerInfoOpen && viewerInfoProductId === productId && viewerInfoIconOrigin === iconOrigin) {
+      if (document.activeElement === iconOrigin.button || viewerInfo.contains(document.activeElement)) viewerInfo.querySelector(`[data-detail-tab="${iconOrigin.tab}"]`)?.focus({ preventScroll: true });
+      syncProductCardActions();
+    }
+    onReady?.();
+  };
+  if (wasOpen && viewerInfoProgress >= .999) { ready(); return; }
+
   requestAnimationFrame(() => {
-    animateViewerInfo(1, () => requestAnimationFrame(() => { revealViewerInfoBesideProduct(); onReady?.(); }));
+    if (!viewerInfoOpen || viewerInfoProductId !== productId || activeView !== "products" || (iconOrigin && viewerInfoIconOrigin !== iconOrigin)) return;
+    animateViewerInfo(1, () => requestAnimationFrame(() => { revealViewerInfoBesideProduct(); ready(); }));
   });
 }
 
 function closeViewerInfo({ render = true } = {}) {
   if (!viewerInfoProductId && viewerInfoProgress <= .001) return;
   viewerInfoOpen = false;
+  const iconOrigin = typeof viewerInfoIconOrigin === "undefined" ? null : viewerInfoIconOrigin;
+  const focusAtClose = typeof document === "undefined" ? null : document.activeElement;
+  const retainFocusedOrigin = Boolean(iconOrigin && focusAtClose === iconOrigin.button);
+  const restoreIconFocus = Boolean(iconOrigin && (retainFocusedOrigin || viewerInfo?.contains(focusAtClose)));
+  if (typeof viewerInfoIconOrigin !== "undefined") viewerInfoIconOrigin = retainFocusedOrigin && render && activeView === "products" ? iconOrigin : null;
   cancelAnimationFrame(viewerInfoAnimationFrame);
   viewerInfoAnimationFrame = null;
 
   if (!render || activeView !== "products") {
+    if (typeof viewerInfoPendingIconFocus !== "undefined") viewerInfoPendingIconFocus = null;
     viewerInfoProgress = 0;
     viewerInfoProductId = null;
     if (viewerInfoOutline) {
@@ -4313,10 +4404,34 @@ function closeViewerInfo({ render = true } = {}) {
 
   animateViewerInfo(0, () => {
     viewerInfoProductId = null;
+    if (typeof viewerInfoIconOrigin !== "undefined") viewerInfoIconOrigin = null;
     renderViewerInfo();
+    if (typeof viewerInfoPendingIconFocus !== "undefined" && restoreIconFocus) viewerInfoPendingIconFocus = { ...iconOrigin, focusAtClose, createdAt: Date.now(), allowReveal: false };
     renderBoard();
-    requestAnimationFrame(scrollSelectedIntoView);
+    requestAnimationFrame(() => {
+      scrollSelectedIntoView();
+      if (typeof viewerInfoPendingIconFocus !== "undefined" && viewerInfoPendingIconFocus) { viewerInfoPendingIconFocus.allowReveal = true; restoreViewerInfoIconFocus(); }
+    });
   });
+}
+
+function restoreViewerInfoIconFocus() {
+  const pending = typeof viewerInfoPendingIconFocus === "undefined" ? null : viewerInfoPendingIconFocus;
+  if (!pending) return;
+  if (viewerInfoOpen || activeView !== "products" || !pending.button.isConnected || Date.now() - pending.createdAt > 2000 ||
+    (document.activeElement !== pending.focusAtClose && document.activeElement !== document.body && !viewerInfo.contains(document.activeElement) && document.activeElement !== pending.button)) {
+    viewerInfoPendingIconFocus = null; return;
+  }
+  if (document.activeElement === pending.button) { viewerInfoPendingIconFocus = null; return; }
+  if (pending.button.closest("[hidden]")) return;
+  const button = pending.button.getBoundingClientRect(), viewport = canvasScroll.getBoundingClientRect();
+  const visible = button.left >= viewport.left && button.right <= viewport.right && button.top >= viewport.top && button.bottom <= viewport.bottom;
+  if (!visible) {
+    if (pending.allowReveal && !pending.revealRequested) { pending.revealRequested = true; pending.button.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" }); }
+    return;
+  }
+  pending.button.focus({ preventScroll: true });
+  viewerInfoPendingIconFocus = null;
 }
 
 function clearSelection({ render = true } = {}) {
@@ -4644,7 +4759,11 @@ function setupEditorNavigation() {
   navigation.setAttribute("role", "tablist");
   navigation.setAttribute("aria-label", "Product editor sections");
   navigation.innerHTML = definitions.map(([key, label]) => `<button type="button" role="tab" id="editor-tab-${key}" data-editor-tab="${key}" aria-controls="editor-panel-${key}">${label}</button>`).join("");
-  inspector.querySelector(".inspector-heading").after(navigation);
+  const heading = inspector.querySelector(".inspector-heading");
+  const stickyNavigation = document.createElement("div");
+  stickyNavigation.className = "inspector-navigation";
+  heading.before(stickyNavigation);
+  stickyNavigation.append(heading, navigation);
   for (const [key] of definitions) {
     const panel = document.createElement("div");
     panel.id = `editor-panel-${key}`;
@@ -4680,10 +4799,24 @@ function setupEditorNavigation() {
     };
   });
   setEditorTab(editorActiveTab);
+  const measureNavigation = () => inspector.style.setProperty("--inspector-navigation-height", `${stickyNavigation.offsetHeight}px`);
+  requestAnimationFrame(measureNavigation);
+  if (typeof inspectorNavigationObserver !== "undefined") inspectorNavigationObserver?.disconnect();
+  if (typeof ResizeObserver === "function") {
+    inspectorNavigationObserver = new ResizeObserver(measureNavigation);
+    inspectorNavigationObserver.observe(stickyNavigation);
+  }
 }
 
 function renderInspector() {
   const product = selectedProduct();
+  if (!inspectorOpen) {
+    applyInspectorState(!product);
+    editSelectedButton.disabled = !product;
+    if (inspector.childElementCount) inspector.replaceChildren();
+    if (typeof inspectorNavigationObserver !== "undefined") inspectorNavigationObserver?.disconnect();
+    return;
+  }
   if (!product) {
     applyInspectorState(true);
     inspector.innerHTML = "<h2>Product details</h2><p>Select a product, then choose Edit product to update its information.</p>";
@@ -5431,6 +5564,78 @@ function hitInfoButton(point) {
   return [...renderedInfoButtons].reverse().find((region) => point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height);
 }
 
+function productCardActionPlacement(card, layout = productCardLayout()) {
+  const width = Math.max(0, card.width * zoom - (card.width * zoom < 68 ? 0 : 16));
+  return { x: card.x * zoom + (card.width * zoom - width) / 2, y: (card.y + layout.actionTop) * zoom + 4, width };
+}
+
+function productCardActionAvailable(productId) {
+  if (viewerInfoProductId !== productId || (!viewerInfoOpen && viewerInfoProgress <= .001)) return true;
+  const origin = typeof viewerInfoIconOrigin === "undefined" ? null : viewerInfoIconOrigin;
+  // Keep a focused opener visible until the reading tab receives focus.
+  return Boolean(origin?.productId === productId && origin.button === document.activeElement);
+}
+
+function syncProductCardActions() {
+  if (!productCardActionLayer) return;
+  productCardActionLayer.hidden = activeView !== "products" || productLayoutEditing;
+  const currentIds = new Set(renderedCards.map(card => card.productId));
+  // Read viewport geometry before changing row styles. Re-hiding a focused row
+  // and flushing layout between cards both caused avoidable interaction work.
+  const viewport = { left: canvasScroll.scrollLeft, top: canvasScroll.scrollTop, width: canvasScroll.clientWidth, height: canvasScroll.clientHeight };
+  const visibleCards = productCardActionLayer.hidden ? [] : renderedCards.filter(card => productCardActionAvailable(card.productId) &&
+    (card.x + card.width) * zoom >= viewport.left && card.x * zoom <= viewport.left + viewport.width &&
+    (card.y + card.height) * zoom >= viewport.top && card.y * zoom <= viewport.top + viewport.height);
+  const visibleIds = new Set(visibleCards.map(card => card.productId));
+  for (const [productId, row] of productCardActionRows) {
+    if (!currentIds.has(productId)) { row.remove(); productCardActionRows.delete(productId); }
+    else if (row.hidden !== !visibleIds.has(productId)) row.hidden = !visibleIds.has(productId);
+  }
+  if (productCardActionLayer.hidden) return;
+  const layout = productCardLayout();
+  for (const card of visibleCards) {
+    const product = board.products.find(item => item.id === card.productId);
+    if (!product) continue;
+    let row = productCardActionRows.get(product.id);
+    if (!row) {
+      row = document.createElement("div"); row.className = "product-card-action-row";
+      row.innerHTML = '<button type="button" data-card-detail-tab="overview"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3 3v12H5zM12 2.5v3h3M8 9h4M8 12h4M8 15h3"/></svg></span></button><button type="button" data-card-detail-tab="dates"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.5"/><path d="M6.5 2.5v4M13.5 2.5v4M3 8.5h14M6.5 11.5h.1M10 11.5h.1M13.5 11.5h.1M6.5 14.5h.1M10 14.5h.1"/></svg></span></button>';
+      row.dataset.cardProductId = product.id;
+      productCardActionLayer.append(row); productCardActionRows.set(product.id, row);
+    }
+    const placement = productCardActionPlacement(card, layout);
+    const transform = `translate3d(${placement.x}px, ${placement.y}px, 0)`;
+    const width = `${placement.width}px`;
+    if (row.style.transform !== transform) row.style.transform = transform;
+    if (row.style.width !== width) row.style.width = width;
+    row.classList.toggle("is-condensed", card.width * zoom < 68); if (row.hidden) row.hidden = false;
+    for (const button of row.querySelectorAll("button")) {
+      const actionLabel = button.dataset.cardDetailTab === "dates" ? "Dates" : "Specifications";
+      const label = `${actionLabel} for ${product.name}`;
+      if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+      if (button.title !== actionLabel) button.title = actionLabel;
+      const expanded = String(viewerInfoOpen && viewerInfoProductId === product.id);
+      if (button.getAttribute("aria-expanded") !== expanded) button.setAttribute("aria-expanded", expanded);
+    }
+  }
+  restoreViewerInfoIconFocus();
+}
+
+if (globalThis.PortfolioViewRuntime) {
+  productCardActionLayer = document.createElement("div"); productCardActionLayer.className = "product-card-actions";
+  canvasScroll.append(productCardActionLayer);
+  productCardActionLayer.addEventListener("click", event => {
+    const button = event.target.closest("[data-card-detail-tab]");
+    if (!button || productLayoutEditing || packageOperationInProgress) return;
+    const productId = button.closest("[data-card-product-id]")?.dataset.cardProductId;
+    if (productId && board.products.some(product => product.id === productId)) openViewerInfo(productId, { tab: button.dataset.cardDetailTab, originButton: button });
+  });
+  productCardHover = globalThis.PortfolioViewRuntime.cardHover(canvas, canvasScroll, {
+    getCards: () => renderedCards, getOwner: () => `${activeCategoryId}:${activeView}`,
+    getZoom: () => zoom, isSuspended: () => Boolean(activeView !== "products" || productLayoutEditing || dragState || panState || !board),
+  });
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   if (event.isPrimary === false || event.button !== 0 || dragState || panState) return;
   const point = canvasPoint(event);
@@ -5531,12 +5736,6 @@ canvas.addEventListener("pointermove", (event) => {
     if (variantOverflow) scheduleVariantPopoverOpen(variantOverflow, event.clientX, event.clientY);
     else scheduleVariantPopoverClose();
     const infoButton = productLayoutEditing ? null : hitInfoButton(point);
-    const nextInfoHoverId = infoButton?.productId || "";
-    if (nextInfoHoverId !== hoveredInfoButtonProductId) {
-      hoveredInfoButtonProductId = nextInfoHoverId;
-      renderBoard();
-      return;
-    }
     const card = hitCard(point);
     canvas.style.cursor = heroVariant || variantOverflow || infoButton
       ? "pointer"
@@ -6122,7 +6321,7 @@ function recordCardElementsForPptx(cardCanvas, product, layout) {
 function productPagesForPptx(category, targetBoard = null, canvasWidth = 0) {
   const definition = categoryDefinition(category.id);
   const categoryBoard = targetBoard || ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
-  const layout = productCardLayout(categoryBoard, definition);
+  const layout = productCardLayout(categoryBoard, definition, { includeControls: false });
   return PPTXPagination.paginateProductLanes(categoryBoard.lanes, categoryBoard.products, {
     canvasWidth,
     cardWidth: CARD_WIDTH, cardGap: CARD_GAP, cardHeight: layout.cardHeight,
@@ -6350,7 +6549,7 @@ function addPptxPortfolioSlide(pptx, title, image) {
     x: .38, y: .62, w: 12.55, h: 0,
     line: { color: UI_PALETTE.charcoal600.replace(/^#/, ""), width: .4, transparency: 25 },
   });
-  const placement = containRect(image.width, image.height, .38, .74, 12.55, 6.33, "left");
+  const placement = PPTXEditable.containTop(image.width, image.height, .38, .74, 12.55, 6.33);
   slide.addImage({ data: image.data, ...placement, objectName: "Calendar and category background" });
   const scale = placement.w / image.width;
   const cardGroups = [];
@@ -6396,7 +6595,7 @@ function containRect(sourceWidth, sourceHeight, targetX, targetY, targetWidth, t
   };
 }
 
-function buildPptxExportPlan(scope, categories) {
+function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
   const includeProducts = scope === "products" || scope === "both";
   const includeRoadmap = scope === "roadmap" || scope === "both";
   const slides = [];
@@ -6421,7 +6620,7 @@ function buildPptxExportPlan(scope, categories) {
       });
     }
 
-    if (includeRoadmap) {
+    if (includeRoadmap && !globalThis.PPTXExportPlanner) {
       const groups = roadmapGroupsForProducts(targetBoard.products, targetBoard, definition);
       const pages = paginateRoadmapGroupsForPptx(groups);
       pages.forEach((pageGroups, pageIndex) => {
@@ -6430,10 +6629,32 @@ function buildPptxExportPlan(scope, categories) {
     }
   });
 
+  if (includeRoadmap && globalThis.PPTXExportPlanner) {
+    const sections = preparedCategories.map(({ category, definition, targetBoard }) => ({
+      id: category.id, name: category.name || category.id,
+      products: roadmapGroupsForProducts(targetBoard.products, targetBoard, definition).flatMap(group => group.products.map(product => {
+        const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
+        const status = standardizedStatus(product.statusType);
+        return { id: product.id, name: product.name, family: group.family, startMonth: roadmap?.startMonth || roadmap?.launchMonth || "", endMonth: roadmap?.endMonth || "",
+          fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), status: roadmap?.status || "",
+          statusLabel: status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
+      })),
+    }));
+    const options = roadmapOptions || { mode: "categories", startMonth: portfolio.settings.timeline.startMonth, endMonth: portfolio.settings.timeline.endMonth, overflow: "ask" };
+    const roadmapPlan = globalThis.PPTXExportPlanner.planRoadmap(sections, options);
+    slides.roadmapPlan = roadmapPlan;
+    slides.push(...roadmapPlan.slides.map(roadmapSlide => ({ kind: roadmapSlide.kind, roadmapSlide })));
+  }
+
   return slides;
 }
 
 function pptxPlanSlideTitle(planItem) {
+  if (planItem.roadmapSlide) {
+    const slide = planItem.roadmapSlide;
+    return slide.kind === "roadmap-overview" ? "Roadmap overview" : slide.kind === "roadmap-merged" ? "Combined roadmap"
+      : `${slide.categoryName || slide.categoryId} — Roadmap${slide.pageIndex ? " (continued)" : ""}`;
+  }
   const categoryName = planItem.category.name || planItem.category.id || `Category ${planItem.categoryIndex + 1}`;
   const viewName = planItem.kind === "products" ? "Product Portfolio" : "Roadmap";
   const pageLabel = planItem.pageIndex > 0 ? " (continued)" : "";
@@ -6479,14 +6700,16 @@ function syncPptxExportSummary() {
   const allSelected = categories.length > 0 && categories.length === available.length;
   pptxSelectedCategoryIds = allSelected ? null : categories.map((category) => category.id);
   const scope = pptxExportScope();
+  const plan = buildPptxExportPlan(scope, categories, globalThis.PPTXExportPlanner?.readOptions(pptxExportForm));
+  globalThis.PPTXExportPlanner?.syncDialog(pptxExportForm, plan.roadmapPlan || {}, { includeRoadmap: scope !== "products" });
   $("#pptxExportCategoryCount").textContent = String(categories.length);
-  $("#pptxExportSlideCount").textContent = String(pptxSlideCountForScope(scope, categories));
+  $("#pptxExportSlideCount").textContent = String(plan.length);
   $("#pptxSelectAllCategories").textContent = allSelected ? "Clear selection" : "Select all";
   $("#pptxExportSelectionHint").textContent = categories.length
     ? `${categories.length} of ${available.length} categories selected`
     : "Select at least one category to export.";
   $("#pptxExportSelectionHint").classList.toggle("is-empty", !categories.length);
-  confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length;
+  confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length || Boolean(plan.roadmapPlan?.requiresDecision);
 }
 
 function openPptxExportDialog() {
@@ -6494,6 +6717,9 @@ function openPptxExportDialog() {
   closePopupMenus();
   pptxReturnFocus = document.activeElement;
   renderPptxExportCategories();
+  const start = pptxExportForm.querySelector("#pptxRoadmapStart"), end = pptxExportForm.querySelector("#pptxRoadmapEnd");
+  if (start && !start.value) start.value = board.settings.roadmap.startMonth;
+  if (end && !end.value) end.value = board.settings.roadmap.endMonth;
   syncPptxExportSummary();
   pptxExportDialog.classList.remove("hidden");
   document.querySelector(".app-shell").inert = true;
@@ -6518,7 +6744,7 @@ function pptxExportFilename(scope) {
   return "product-portfolio-and-roadmaps.pptx";
 }
 
-async function exportPptx(scope = "both", selectedCategoryIds = null) {
+async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOptions = null) {
   await globalThis.PortfolioTheme.fontsReady();
   UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
   stopProductCardDrag();
@@ -6544,10 +6770,15 @@ async function exportPptx(scope = "both", selectedCategoryIds = null) {
       : "Product Portfolio and Roadmaps";
   pptx.lang = "en-US";
 
-  const exportPlan = buildPptxExportPlan(scope, categories);
+  const exportPlan = buildPptxExportPlan(scope, categories, roadmapOptions);
+  if (exportPlan.roadmapPlan?.requiresDecision) throw new Error(exportPlan.roadmapPlan.reason || "Choose a readable roadmap layout before exporting.");
 
   for (let index = 0; index < exportPlan.length; index += 1) {
     const planItem = exportPlan[index];
+    if (planItem.roadmapSlide) {
+      globalThis.PPTXExportPlanner.addSlide(pptx, planItem.roadmapSlide, { fontFace: UI_FONT_FACE, theme: globalThis.PortfolioTheme, title: pptxPlanSlideTitle(planItem) });
+      continue;
+    }
     const image = planItem.kind === "products"
       ? await renderCategoryImageForPptx(planItem.category, planItem.page)
       : await renderCategoryRoadmapImageForPptx(planItem.category, planItem.groups);
@@ -7238,7 +7469,10 @@ function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {})
   return { added, updated, unchanged, skipped };
 }
 
-canvasScroll.addEventListener("scroll", () => { syncBoardNavigator(); syncLaneRail(); positionViewerInfo(); }, { passive: true });
+canvasScroll.addEventListener("scroll", () => {
+  syncBoardNavigator(); syncLaneRail(); positionViewerInfo();
+  productCardHover?.sync(); queueBoardScrollPaint?.();
+}, { passive: true });
 canvasScroll.addEventListener("wheel", (event) => {
   const max = horizontalScrollMax();
   if (max <= 0) return;
@@ -7368,7 +7602,7 @@ pptxExportForm.addEventListener("submit", async (event) => {
   exportControls.forEach((control) => { control.disabled = true; });
   confirmPptxExportButton.textContent = "Exporting…";
   try {
-    await exportPptx(scope, categories.map((category) => category.id));
+    await exportPptx(scope, categories.map((category) => category.id), globalThis.PPTXExportPlanner?.readOptions(pptxExportForm));
     pptxExportInProgress = false;
     closePptxExportDialog();
   } catch (error) {

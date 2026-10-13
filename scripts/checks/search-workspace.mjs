@@ -114,6 +114,7 @@ function harness({ view = "products", transform } = {}) {
     categorySettingsDraftLanes: freezeTree([{ id: "draft-lane", label: "Unsaved category lane label" }]),
     discardedDrafts: new Map([["console-cloud", freezeTree({ name: "Discarded local draft", custom: { source: "unsaved" } })]]),
     PortfolioSearch: globalThis.PortfolioSearch,
+    ROADMAP_DEFAULT_MONTH_WIDTH: Number(appSource.match(/^const ROADMAP_DEFAULT_MONTH_WIDTH = (\d+);/m)[1]),
     PortfolioModel: { ...globalThis.PortfolioModel, syncTimelineSettings(value) { assert.equal(value, portfolio); } },
     PRODUCT_TIER_OPTIONS: ["", "Core", "Core+", "Hero", "Star", "Star+"],
     document: { querySelectorAll: (selector) => selector === ".view-tab" ? tabs : [] },

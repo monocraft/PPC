@@ -81,7 +81,7 @@
             <div id="laneRailInner" class="lane-rail-inner"></div>
           </aside>
           <div id="canvasScroll" class="canvas-scroll">
-            <canvas id="boardCanvas" tabindex="0" aria-label="Product portfolio viewer. Select a card and use its Details button to read all specifications. Dates, date history, HP SKUs and additional information are in separate tabs. Use Close to dismiss details, double-click a card to open the roadmap, hover color SKUs to preview assigned hero images, hover or click a plus-variant chip to reveal hidden variants, or drag horizontally to navigate. Editing is available from Workspace settings."></canvas>
+            <canvas id="boardCanvas" tabindex="0" aria-label="Product portfolio viewer. Use the Specifications or Dates icons at a card's right edge to open that section with one click. When a card expands, use the detail area's tabs to navigate. Dates include date history; HP SKUs and More remain available in those tabs. Use Close to dismiss details, double-click a card to open the roadmap, hover color SKUs to preview assigned hero images, hover or click a plus-variant chip to reveal hidden variants, or drag horizontally to navigate. Editing is available from Workspace settings."></canvas>
             <aside id="viewerInfo" class="viewer-info" aria-hidden="true" aria-label="Product information"></aside>
             <div id="viewerInfoOutline" class="viewer-info-outline" aria-hidden="true"></div>
           </div>
@@ -276,7 +276,7 @@
         <button id="closePptxExport" class="icon-button" type="button" aria-label="Close PowerPoint export">×</button>
       </div>
 
-        <p class="settings-note">Export selected categories using the current theme and shared timeline range. Each product is separately editable in PowerPoint. Product cards move as groups and can be ungrouped to edit their contents. Product portfolios use the same card width across all selected categories, with up to 13 products across each row. Lanes appear together when they fit and continue in the same row position; tall cards use fewer lanes per slide. Roadmaps have up to 22 products per slide.</p>
+        <p class="settings-note">Choose the categories and roadmap period to share. Product cards stay aligned to the top at the same size across categories. Cards move as editable groups. Roadmap names and timelines remain editable.</p>
 
       <div class="pptx-export-options" role="radiogroup" aria-label="PowerPoint slide content">
         <label class="pptx-export-option">
@@ -284,7 +284,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">P</span>
             <strong>Product portfolio</strong>
-            <small>One product-card slide per category</small>
+            <small>Product cards, with additional pages when needed</small>
           </span>
         </label>
 
@@ -293,7 +293,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">R</span>
             <strong>Roadmap</strong>
-            <small>Up to 22 roadmap products per slide</small>
+            <small>Category pages or a combined timeline</small>
           </span>
         </label>
 
@@ -302,7 +302,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">P+R</span>
             <strong>Both</strong>
-            <small>Product portfolio followed by paginated roadmap</small>
+            <small>Product cards and roadmap slides</small>
           </span>
         </label>
       </div>
@@ -312,6 +312,25 @@
           <div id="pptxExportCategories" class="pptx-export-categories" role="group" aria-labelledby="pptxExportCategoriesTitle" aria-describedby="pptxExportCategoriesHelp pptxExportSelectionHint"></div>
           <p id="pptxExportSelectionHint" class="pptx-export-selection-hint" role="status" aria-live="polite">Choose at least one category.</p>
         </section>
+
+      <section id="pptxRoadmapOptions" class="pptx-roadmap-options" aria-labelledby="pptxRoadmapOptionsTitle">
+        <h3 id="pptxRoadmapOptionsTitle">Roadmap layout</h3>
+        <div class="pptx-roadmap-layout" role="radiogroup" aria-label="Roadmap layout">
+          <label><input type="radio" name="pptxRoadmapLayout" value="categories" checked><span><strong>Separate category slides</strong><small>Keep every product name readable on detailed pages.</small></span></label>
+          <label><input type="radio" name="pptxRoadmapLayout" value="merged"><span><strong>Merge into one slide</strong><small>Combine the selected categories when every product fits.</small></span></label>
+        </div>
+        <div class="pptx-roadmap-period">
+          <label for="pptxRoadmapStart">Start month<input id="pptxRoadmapStart" type="month" aria-describedby="pptxRoadmapCoverage"></label>
+          <label for="pptxRoadmapEnd">End month<input id="pptxRoadmapEnd" type="month" aria-describedby="pptxRoadmapCoverage"></label>
+        </div>
+        <p id="pptxRoadmapFit" role="status" aria-live="polite"></p>
+        <fieldset id="pptxRoadmapOverflow" class="pptx-roadmap-overflow" hidden>
+          <legend>This selection needs more room</legend>
+          <label><input type="radio" name="pptxRoadmapOverflow" value="overview-details"><span><strong>One slide overview + detailed pages</strong><small>Grouped category timelines first, followed by every product name and timeline.</small></span></label>
+          <label><input type="radio" name="pptxRoadmapOverflow" value="details"><span><strong>Detailed pages</strong><small>Keep full product timelines readable. You can also select fewer categories or a shorter period above.</small></span></label>
+        </fieldset>
+        <p id="pptxRoadmapCoverage" class="pptx-roadmap-coverage"></p>
+      </section>
 
       <div class="pptx-export-summary">
           <div class="pptx-summary-item"><span>Selected categories</span><strong id="pptxExportCategoryCount">0</strong></div>
@@ -369,6 +388,7 @@
   <script src="js/plc-import-ui.js"></script>
   <script src="js/pptx-pagination.js"></script>
   <script src="js/pptx-editable.js"></script>
+  <script src="js/pptx-export-planner.js"></script>
   <script src="js/portfolio-model.js"></script>
   <script src="js/launch-records.js"></script>
   <script src="js/card-specs.js"></script>
@@ -377,6 +397,7 @@
   <script src="js/product-merge.js"></script>
   <script src="js/roadmap-interaction.js"></script>
   <script src="js/roadmap-hover.js"></script>
+  <script src="js/view-runtime.js"></script>
   <script src="js/product-details.js"></script>
   <script src="js/date-history.js"></script>
   <script src="js/package-codec.js"></script>
