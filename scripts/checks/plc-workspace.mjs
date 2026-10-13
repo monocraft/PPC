@@ -34,7 +34,8 @@ function dataset({ fingerprint = 'synthetic-biweekly-source', reportDate = '2026
 
 function harness({ initial = seed, remoteInitial = seed, failStorage = false, normalizeDraft = clone } = {}) {
   let remote = clone(remoteInitial), stored = JSON.stringify(initial), storageBlocked = failStorage, session;
-  const calls = { saves: [], writes: [], applies: 0, renders: 0, scoped: 0 }, timers = new Map(), clock = { value: firstAt };
+  const calls = { saves: [], writes: [], applies: 0, renders: 0, scoped: 0, notices: [], resolved: [] }, timers = new Map(), clock = { value: firstAt };
+  let holdWrite = false, releaseWrite;
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [clock.value])); }
     static now() { return Date.parse(clock.value); }
@@ -42,11 +43,18 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
   const sandbox = {
     Date: ClockDate, TextEncoder, MAX_PACKAGE_MANIFEST_BYTES: 16 * 1024 * 1024, STORAGE_KEY: 'synthetic-workspace', PREVIOUS_STORAGE_KEY: 'synthetic-previous',
     portfolio: clone(initial), localDateBaseline: importer.snapshotDateValues(initial), packageOperationInProgress: false, saveTimer: 0,
+    workspaceOpening: false, workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0,
     activeCategoryId: 'pc-gaming-audio', PortfolioModel: globalThis.PortfolioModel, PortfolioMasterModel: model,
     PLCImporter: { ...importer, applyPlan(...args) { calls.applies += 1; return importer.applyPlan(...args); }, recordDateChanges(before, portfolio, options = {}) { return importer.recordDateChanges(before, portfolio, { now: clock.value, ...options }); } },
     ensurePortfolioSchema: normalizeDraft, activateCategory() { calls.renders += 1; }, renderInspector() {}, renderActiveView() {},
     setTimeout(callback) { const id = timers.size + 1; timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); },
     localStorage: { setItem(key, text) { assert.equal(key, 'synthetic-workspace'); if (storageBlocked) throw new Error('Synthetic browser quota exceeded'); stored = text; calls.writes.push(JSON.parse(text)); }, removeItem() {} },
+    workspaceStorage: { async save(text) {
+      if (holdWrite) { holdWrite = false; await new Promise(resolve => { releaseWrite = resolve; }); }
+      if (storageBlocked) throw new Error('Synthetic browser quota exceeded');
+      stored = text; calls.writes.push(JSON.parse(text));
+    } },
+    PortfolioNotifications: { publish: notice => calls.notices.push(notice), resolve: id => calls.resolved.push(id) },
     PortfolioMasterUI: {
       getSession: () => session, updateStatus() {},
       async saveScoped(options) { calls.scoped += 1; return session.saveScoped(options); },
@@ -78,16 +86,32 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
     },
   });
   vm.createContext(sandbox);
-  for (const name of ['scheduleSave', 'productDateHistoryOptions', 'persistPlcDraft', 'retryPlcSharing', 'commitPlcPlan']) {
+  for (const name of ['scheduleSave', 'showLocalSaveFailure', 'flushWorkspaceSave', 'productDateHistoryOptions', 'persistPlcDraft', 'retryPlcSharing', 'commitPlcPlan']) {
     const definition = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, 'm'));
     assert.ok(definition, `Workspace must expose its ${name} integration function.`);
     vm.runInContext(definition[0], sandbox);
   }
-  return { sandbox, calls, clock, session, get workspace() { return sandbox.portfolio; }, get stored() { return JSON.parse(stored); }, get remote() { return remote; },
+  return { sandbox, calls, clock, session, timers, get workspace() { return sandbox.portfolio; }, get stored() { return JSON.parse(stored); }, get remote() { return remote; },
     connect: () => session.connect({ key: 'synthetic-unlock' }), blockStorage: (value) => { storageBlocked = value; },
     plan: (data = dataset(), options = {}) => importer.buildPlan(data, sandbox.portfolio, { reportDate: '2026-10-09', reportDateBasis: 'Import date', ...options }),
     commit: (plan, options = {}) => sandbox.commitPlcPlan(plan, { now: clock.value, ...options }), retry: () => sandbox.retryPlcSharing(),
+    holdNextWrite() { holdWrite = true; }, releaseWrite() { releaseWrite(); }, flush: () => sandbox.flushWorkspaceSave(),
   };
+}
+
+{
+  const h = harness(); await h.connect(); h.sandbox.scheduleSave(); assert.equal(h.timers.size, 1); const before = clone(h.workspace), storedBefore = h.stored;
+  h.holdNextWrite(); const committing = h.commit(h.plan());
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  assert.deepEqual(h.workspace, before, 'PLC activation waits for the full durable commit'); assert.deepEqual(h.stored, storedBefore); assert.equal(h.calls.scoped, 0); assert.equal(h.calls.saves.length, 0);
+  assert.equal(h.timers.size, 0, 'older deferred autosave is quiesced before awaiting the new reviewed PLC commit');
+  h.releaseWrite(); await committing; assert.equal(h.calls.scoped, 1); assert(h.calls.writes[0].plcSharePending.patches.length); assert.equal(h.calls.writes[0].categories[0].board.products[0].plc.fields.ffsDate.value, '2026-11-05');
+}
+{
+  const h = harness(); currentProduct(h.workspace).specs[0].value = 'Retained local draft'; h.sandbox.scheduleSave(); h.blockStorage(true);
+  assert.equal(await h.flush(), false); assert.equal(h.sandbox.workspaceSavePending, true); assert.equal(currentProduct(h.workspace).specs[0].value, 'Retained local draft'); assert.equal(currentProduct(h.stored).specs[0].value, '40 hours');
+  assert.equal(h.calls.notices.at(-1).id, 'workspace-local-save'); assert.equal(h.calls.notices.at(-1).dismissible, false);
+  h.blockStorage(false); assert.equal(await h.flush(), true); assert.equal(h.sandbox.workspaceSavePending, false); assert.equal(currentProduct(h.stored).specs[0].value, 'Retained local draft'); assert(h.calls.resolved.includes('workspace-local-save'));
 }
 
 {

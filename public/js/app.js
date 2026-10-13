@@ -2,11 +2,11 @@
 
 const STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v4-shared-demo" : "product-portfolio-canvas-v4";
 const PACKAGE_RECOVERY_KEY = `${STORAGE_KEY}-package-recovery`; // Legacy import snapshot; only read to clean up older saved data.
-const MAX_PACKAGE_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_PACKAGE_MANIFEST_BYTES = globalThis.PortfolioPackage.MAX_PACKAGE_BYTES;
 const PREVIOUS_STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v3-shared-demo" : "product-portfolio-canvas-v3";
 const LEGACY_STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v1-shared-demo" : "product-portfolio-canvas-v1";
 const IMAGE_DB_NAME = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-image-assets-v1-shared-demo" : "product-portfolio-image-assets-v1";
-const IMAGE_DB_VERSION = 1;
+const IMAGE_DB_VERSION = 2;
 const IMAGE_STORE_NAME = "images";
 const CARD_WIDTH = 246;
 const CARD_HEIGHT = 552;
@@ -171,7 +171,11 @@ const missingImageAssetIds = new Set();
 const pendingLegacyImageBlobs = [];
 let imageAssetGeneration = 0;
 let packageOperationInProgress = false;
-let imageDbPromise = null;
+const workspaceStorage = globalThis.PortfolioWorkspaceStore.create({ databaseName: IMAGE_DB_NAME, databaseVersion: IMAGE_DB_VERSION, imageStoreName: IMAGE_STORE_NAME, workspaceKey: STORAGE_KEY });
+let workspaceOpening = true;
+let workspaceSavePending = false;
+let workspaceSaveRevision = 0;
+let workspaceSaveAttempt = 0;
 const productView = $("#productView");
 const roadmapView = $("#roadmapView");
 const splitView = $("#splitView");
@@ -267,21 +271,7 @@ function id() {
 }
 
 function openImageDatabase() {
-  if (imageDbPromise) return imageDbPromise;
-  imageDbPromise = new Promise((resolve, reject) => {
-    if (!globalThis.indexedDB) {
-      reject(new Error("This browser does not support the local image library."));
-      return;
-    }
-    const request = indexedDB.open(IMAGE_DB_NAME, IMAGE_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(IMAGE_STORE_NAME)) database.createObjectStore(IMAGE_STORE_NAME, { keyPath: "id" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Unable to open the image library."));
-  });
-  return imageDbPromise;
+  return workspaceStorage.open();
 }
 
 async function imageStorePut(assetId, blob) {
@@ -1365,37 +1355,63 @@ function ensurePortfolioSchema(target) {
 }
 
 function loadPortfolio() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (parsed?.version === 4) return ensurePortfolioSchema(parsed);
-  } catch (_) {}
-  try {
-    const previous = JSON.parse(localStorage.getItem(PREVIOUS_STORAGE_KEY));
-    if (previous?.version === 3 && Array.isArray(previous.categories)) return ensurePortfolioSchema(previous);
-  } catch (_) {}
-  try {
-    const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY));
-    if (legacy?.version === 1 && Array.isArray(legacy.products) && Array.isArray(legacy.lanes)) {
+  for (const [key, version] of [[STORAGE_KEY, 4], [PREVIOUS_STORAGE_KEY, 3], [LEGACY_STORAGE_KEY, 1]]) {
+    let raw, parsed;
+    try { raw = localStorage.getItem(key); }
+    catch (_) { throw new Error("This browser could not read the previous saved workspace. It has not been replaced. Retry opening the portfolio."); }
+    if (raw === null) continue;
+    try { parsed = JSON.parse(raw); }
+    catch (_) { throw new Error("The previous saved workspace data could not be read. It has not been replaced. Restore a backup or retry opening it."); }
+    if (parsed?.version === version && [4, 3].includes(version) && Array.isArray(parsed.categories) && parsed.categories.length
+      && parsed.categories.every(category => category?.board && Array.isArray(category.board.products) && Array.isArray(category.board.lanes))) return ensurePortfolioSchema(parsed);
+    if (version === 1 && parsed?.version === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.lanes)) {
       const migrated = createDefaultPortfolio();
       const audio = migrated.categories.find((item) => item.id === "pc-gaming-audio");
-      audio.board = ensureBoardSchema(legacy, categoryDefinition("pc-gaming-audio"));
+      audio.board = ensureBoardSchema(parsed, categoryDefinition("pc-gaming-audio"));
       migrateLegacyProductImages(migrated);
       return migrated;
     }
-  } catch (_) {}
+    throw new Error("The previous saved workspace format needs recovery. It has not been replaced. Restore a backup before replacing it.");
+  }
   return createDefaultPortfolio();
 }
 
 function scheduleSave() {
   clearTimeout(saveTimer);
-  if (packageOperationInProgress) return;
+  if (packageOperationInProgress || workspaceOpening || !portfolio) return;
   if (globalThis.PLCImporter && typeof localDateBaseline !== "undefined" && localDateBaseline) localDateBaseline = globalThis.PLCImporter.recordDateChanges(localDateBaseline, portfolio);
-  saveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(portfolio));
-      localStorage.removeItem(PREVIOUS_STORAGE_KEY);
-    } catch (_) {}
-  }, 120);
+  workspaceSaveRevision += 1;
+  workspaceSavePending = true;
+  saveTimer = setTimeout(() => { void flushWorkspaceSave(); }, 120);
+}
+
+function showLocalSaveFailure(error) {
+  const message = error?.message || "This browser could not save your open changes. Export a backup before closing, then retry.";
+  if (!globalThis.PortfolioNotifications) { void PortfolioDialogs.alert(message, { title: "Changes are not saved on this device" }); return; }
+  globalThis.PortfolioNotifications.publish({ id: "workspace-local-save", severity: "error", title: "Changes are not saved on this device", message,
+    revision: error?.code || message, dismissible: false, actions: [
+      { label: "Retry saving", onClick: () => flushWorkspaceSave() },
+      { label: "Export data backup", onClick: () => downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data") },
+    ] });
+}
+
+async function flushWorkspaceSave() {
+  clearTimeout(saveTimer); saveTimer = null;
+  if (workspaceOpening || packageOperationInProgress || !portfolio) return false;
+  const revision = workspaceSaveRevision;
+  const attempt = ++workspaceSaveAttempt;
+  try {
+    const serialized = JSON.stringify(portfolio);
+    await workspaceStorage.save(serialized);
+    if (revision === workspaceSaveRevision && attempt === workspaceSaveAttempt) {
+      workspaceSavePending = false;
+      globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+    }
+    return true;
+  } catch (error) {
+    if (attempt === workspaceSaveAttempt) { workspaceSavePending = true; showLocalSaveFailure(error); }
+    return false;
+  }
 }
 
 function activateCategory(categoryId, { render = true, fitVertical = true } = {}) {
@@ -4089,9 +4105,9 @@ function selectedProduct() {
   return board.products.find((product) => product.id === selectedId) || null;
 }
 
-function showWorkspaceNotice(message, { id = "workspace-operation", title = "Notice", severity = "error", actions = [] } = {}) {
+function showWorkspaceNotice(message, { id = "workspace-operation", title = "Notice", severity = "error", actions = [], dismissible = true } = {}) {
   if (!globalThis.PortfolioNotifications) return PortfolioDialogs.alert(message, { title });
-  globalThis.PortfolioNotifications.publish({ id, title, severity, message: String(message), actions, revision: Date.now(), toast: severity === "success" });
+  globalThis.PortfolioNotifications.publish({ id, title, severity, message: String(message), actions, dismissible, revision: Date.now(), toast: severity === "success" });
   if (severity === "error") globalThis.PortfolioNotifications.show(id);
   return Promise.resolve();
 }
@@ -5705,17 +5721,17 @@ function clearPackageImageCaches() {
   missingImageAssetIds.clear();
 }
 
-async function commitPackageDraft(draft, expectedCurrent) {
+async function commitPackageDraft(draft, expectedCurrent, stagedImages = [], { cleanupImages = true } = {}) {
   if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was loading. Try again after your changes are saved.");
   const previousPortfolio = portfolio;
-  const previousStored = localStorage.getItem(STORAGE_KEY);
-  const previousRecovery = localStorage.getItem(PACKAGE_RECOVERY_KEY);
+  let previousRecovery = null;
+  try { previousRecovery = localStorage.getItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
   const serialized = JSON.stringify(draft);
-  if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+  // The manifest and incoming binary assets become durable together. Existing
+  // images remain untouched until the new record activates successfully.
+  await workspaceStorage.save(serialized, { images: stagedImages, isCurrent: () => JSON.stringify(portfolio) === expectedCurrent });
   try {
-    // Incoming images have new IDs. Preserve the original library until the
-    // replacement is saved and activated so a failed commit can roll back.
-    localStorage.setItem(STORAGE_KEY, serialized);
+    if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was loading. Your newer changes have been kept.");
     portfolio = draft;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     clearPackageImageCaches();
@@ -5723,13 +5739,20 @@ async function commitPackageDraft(draft, expectedCurrent) {
   } catch (error) {
     portfolio = previousPortfolio;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-    try { if (previousStored === null) localStorage.removeItem(STORAGE_KEY); else localStorage.setItem(STORAGE_KEY, previousStored); } catch (_) {}
+    let restored = false;
+    try { await workspaceStorage.save(JSON.stringify(previousPortfolio)); restored = true; }
+    catch (_) {
+      error.message += " The previous saved copy could not be restored. The imported package and its images remain saved; export your open changes before closing or reloading.";
+    }
+    if (restored) { try { await imageStoreDeleteBatch(stagedImages.map(entry => entry.id)); } catch (_) {} }
     clearPackageImageCaches();
     try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
     throw error;
   }
   globalThis.PortfolioProductIssues?.clearAscmIssues();
   globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
+  globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+  workspaceSavePending = false;
   // A successful replacement no longer retains a previous workspace. Also
   // collect valid legacy snapshot images, protecting every current image ID.
   let obsoleteRecovery = null;
@@ -5744,7 +5767,7 @@ async function commitPackageDraft(draft, expectedCurrent) {
   try { localStorage.removeItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
   const protectedIds = new Set(localPackageImageIds(draft));
   const obsoleteIds = [...new Set([...localPackageImageIds(previousPortfolio), ...localPackageImageIds(obsoleteRecovery)])].filter((assetId) => !protectedIds.has(assetId));
-  try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {}
+  if (cleanupImages) { try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {} }
   return {
     categoryCount: draft.categories.length,
     productCount: draft.categories.reduce((total, category) => total + category.board.products.length, 0),
@@ -5775,7 +5798,7 @@ async function buildProjectPackageBytes(packageInfo) {
     entries.push({ name: packagePath, data: new Uint8Array(await blob.arrayBuffer()) });
   }
   const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
-  if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+  if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The portfolio data exceeds the supported 64 MiB package data limit.");
   if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was being prepared. Try exporting again.");
   entries.unshift({ name: "portfolio.json", data: manifestBytes });
   return codec.createZip(entries);
@@ -5814,7 +5837,6 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
   const expectedCurrent = JSON.stringify(portfolio);
   const pendingStart = pendingLegacyImageBlobs.length;
   const stagedImages = [];
-  let staged = false;
   try {
     const input = new Uint8Array(await file.arrayBuffer());
     if (input.length > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
@@ -5824,7 +5846,7 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     const entries = codec.readZip(bytes);
     const manifestBytes = entries.get("portfolio.json");
     if (!manifestBytes) throw new Error("The project package is missing portfolio.json.");
-    if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+    if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The portfolio data exceeds the supported 64 MiB package data limit.");
     let parsed;
     try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes)); }
     catch (_) { throw new Error("The package portfolio data is damaged."); }
@@ -5858,14 +5880,11 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
       }
     }
     draft.masterLocalAssetIds = Object.fromEntries(replacements);
-    await imageStoreWriteBatch(stagedImages);
-    staged = true;
-    const result = await commitPackageDraft(draft, expectedCurrent);
+    const result = await commitPackageDraft(draft, expectedCurrent, stagedImages);
     globalThis.PortfolioMasterUI?.markImported(draft.masterLocalBaseline || [], key);
     return { ...result, encrypted };
   } catch (error) {
     pendingLegacyImageBlobs.splice(pendingStart);
-    if (staged) { try { await imageStoreDeleteBatch(stagedImages.map((entry) => entry.id)); } catch (_) {} }
     throw error;
   } finally {
     packageOperationInProgress = false;
@@ -6707,23 +6726,33 @@ function normalizeImportedPortfolio(parsed) {
 
 function importJson(file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
+    const pendingStart = pendingLegacyImageBlobs.length;
+    let importing = false;
     try {
+      if (packageOperationInProgress || workspaceOpening) throw new Error("Wait for the current workspace operation to finish before loading new data.");
       const parsed = parsePortfolioImportText(reader.result);
       if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading new data.");
-      portfolio = normalizeImportedPortfolio(parsed);
-      localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-      globalThis.PortfolioProductIssues?.clearAscmIssues();
-      globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
-      if (globalThis.PortfolioMasterModel) portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products;
+      packageOperationInProgress = true; importing = true; clearTimeout(saveTimer);
+      const expectedCurrent = JSON.stringify(portfolio);
+      const draft = normalizeImportedPortfolio(parsed);
+      if (globalThis.PortfolioMasterModel) {
+        const comparison = globalThis.PortfolioMasterModel.snapshot(draft).products;
+        // A .data file is a complete working backup, including pending edits.
+        // Rebase only inputs that did not supply their comparison baseline.
+        if (!Object.hasOwn(draft, "masterLocalBaseline")) draft.masterLocalBaseline = comparison;
+      }
+      const images = pendingLegacyImageBlobs.splice(pendingStart);
+      await commitPackageDraft(draft, expectedCurrent, images, { cleanupImages: false });
       globalThis.PortfolioMasterUI?.disconnect();
       globalThis.PortfolioMasterUI?.markImported(portfolio.masterLocalBaseline || []);
       selectedId = null;
       activateCategory(portfolio.activeCategoryId, { fitVertical: true });
-      flushPendingLegacyImages();
     } catch (error) {
-      console.error("Portfolio import failed:", error);
+      pendingLegacyImageBlobs.splice(pendingStart);
       void PortfolioDialogs.alert(error.message || "Unable to import portfolio file.", { title: "Data import failed" });
+    } finally {
+      if (importing) { packageOperationInProgress = false; scheduleSave(); globalThis.PortfolioMasterUI?.updateStatus?.(); }
     }
   };
   reader.onerror = () => { void PortfolioDialogs.alert("Unable to read the selected portfolio file.", { title: "Data import failed" }); };
@@ -7337,7 +7366,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (selectedId) clearSelection();
 });
-window.addEventListener("resize", () => { closeVariantPopover({ force: true }); renderActiveView(); });
+window.addEventListener("resize", () => { if (workspaceOpening) return; closeVariantPopover({ force: true }); renderActiveView(); });
 window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
 // Draft actions keep complete records and images until the user saves or discards.
@@ -7546,7 +7575,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   getPackageInfo: () => getCurrentPackageInfo(),
   getSelectedProductId: () => selectedId || "",
   getSelectedCategoryId: () => activeCategoryId || "",
-  hasPendingPackageOperation: () => packageOperationInProgress,
+  hasPendingPackageOperation: () => packageOperationInProgress || workspaceOpening,
   setPackageInfo: (info) => {
     portfolio.packageInfo = packageCodec().normalizePackageInfo(info);
     scheduleSave();
@@ -7613,27 +7642,72 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   },
 });
 
-portfolio = loadPortfolio();
-localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-if (globalThis.PortfolioMasterModel && !portfolio.masterLocalBaseline) {
-  try { portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products; }
-  catch (error) {
-    workspaceValidationPending = true;
-    void showWorkspaceNotice(error.message || "Some product records need review before saving to master.", { id: "workspace-product-validation", title: "Product records need review", severity: "warning", actions: [{ label: "Review duplicates", onClick: () => globalThis.PortfolioProductIssues?.reviewDuplicateIssues() }] });
+async function initializeWorkspace() {
+  workspaceOpening = true;
+  const shell = document.querySelector(".app-shell");
+  if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); }
+  const openingStatus = document.getElementById("workspaceOpeningStatus");
+  const openingMessage = document.getElementById("workspaceOpeningMessage");
+  const openingRetry = document.getElementById("workspaceOpeningRetry");
+  if (openingStatus) openingStatus.classList.remove("hidden");
+  if (openingMessage) openingMessage.textContent = "Opening the saved portfolio…";
+  if (openingRetry) { openingRetry.hidden = true; openingRetry.onclick = () => { void startWorkspace(); }; }
+  const pendingStart = pendingLegacyImageBlobs.length;
+  try {
+    const saved = await workspaceStorage.read();
+    // An unreadable database must never become an empty replacement workspace.
+    let loaded;
+    if (saved === null) loaded = loadPortfolio();
+    else {
+      const parsed = JSON.parse(saved);
+      if (![4, 3].includes(parsed?.version) || !Array.isArray(parsed.categories) || !parsed.categories.length
+        || !parsed.categories.every(category => category?.board && Array.isArray(category.board.products) && Array.isArray(category.board.lanes))) {
+        throw new Error("The saved workspace format needs recovery. It has not been replaced. Restore a backup before replacing it.");
+      }
+      loaded = ensurePortfolioSchema(parsed);
+    }
+    if (globalThis.PortfolioMasterModel && !loaded.masterLocalBaseline) {
+      try { loaded.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(loaded).products; }
+      catch (error) {
+        workspaceValidationPending = true;
+        void showWorkspaceNotice(error.message || "Some product records need review before saving to master.", { id: "workspace-product-validation", title: "Product records need review", severity: "warning", actions: [{ label: "Review duplicates", onClick: () => globalThis.PortfolioProductIssues?.reviewDuplicateIssues() }] });
+      }
+    }
+    const serialized = JSON.stringify(loaded), images = pendingLegacyImageBlobs.slice(pendingStart);
+    if (saved !== serialized || images.length) await workspaceStorage.save(serialized, { images });
+    pendingLegacyImageBlobs.splice(pendingStart);
+    // Legacy localStorage records are retained. The committed DB record takes
+    // precedence on future opens, with all operational metadata intact.
+    portfolio = loaded;
+    localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
+    workspaceOpening = false;
+    activateCategory(portfolio.categories[0]?.id, { render: false, fitVertical: true });
+    syncControls(); renderInspector(); setView("products");
+    initializeWorkspaceFeatures();
+    globalThis.PortfolioNotifications?.resolve("workspace-open-failure");
+    if (shell) { shell.inert = false; shell.removeAttribute("aria-busy"); }
+    if (openingStatus) openingStatus.classList.add("hidden");
+    window.dispatchEvent(new CustomEvent("portfolio:workspace-ready"));
+    return portfolio;
+  } catch (error) {
+    pendingLegacyImageBlobs.splice(pendingStart);
+    workspaceOpening = true;
+    const message = error.message || "The saved workspace could not open. Your saved data has not been replaced. Retry opening it.";
+    if (openingMessage) openingMessage.textContent = message;
+    if (openingRetry) openingRetry.hidden = false;
+    void showWorkspaceNotice(message, { id: "workspace-open-failure", title: "The workspace could not open", dismissible: false, actions: [{ label: "Retry opening", onClick: startWorkspace }] });
+    throw error;
   }
 }
-// Fresh openings start at the first listed category; saved navigation still
-// remains available to imports and category changes within the current session.
-activateCategory(portfolio.categories[0]?.id, { render: false, fitVertical: true });
-syncControls();
-renderInspector();
-setView("products");
-flushPendingLegacyImages();
-function persistPlcDraft(draft) {
-  const serialized = JSON.stringify(draft);
-  if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("PLC evidence is too large to save in this browser.");
+function startWorkspace() {
+  const ready = initializeWorkspace();
+  globalThis.PortfolioWorkspaceReady = ready;
+  void ready.catch(() => {});
+  return ready;
+}
+async function persistPlcDraft(draft) {
   globalThis.PortfolioMasterModel?.snapshot(draft);
-  localStorage.setItem(STORAGE_KEY, serialized);
+  await workspaceStorage.save(JSON.stringify(draft));
 }
 
 async function retryPlcSharing() {
@@ -7649,7 +7723,7 @@ async function retryPlcSharing() {
   }
   if (sharing.status === "saved" && JSON.stringify(portfolio.plcSharePending?.patches || []) === submitted) delete portfolio.plcSharePending;
   portfolio.plcLastSharing = { at: new Date().toISOString(), status: sharing.status, message: sharing.message };
-  try { persistPlcDraft(portfolio); }
+  try { await persistPlcDraft(portfolio); }
   catch (_) { sharing = { ...sharing, message: `${sharing.message} The collection is retained; this device could not save the latest sharing receipt.` }; }
   globalThis.PortfolioMasterUI?.updateStatus?.();
   return sharing;
@@ -7740,8 +7814,8 @@ async function commitPlcPlan(plan, choices) {
   if (pending.size) draft.plcSharePending = { version: 1, queuedAt: before.plcSharePending?.queuedAt || new Date().toISOString(), patches: [...pending.values()] };
   // Persist evidence, field clocks and exceptions together before activating it.
   // Storage failure leaves the current workspace and review untouched.
-  persistPlcDraft(draft);
   clearTimeout(saveTimer);
+  await persistPlcDraft(draft);
   portfolio = draft;
   localDateBaseline = globalThis.PLCImporter.snapshotDateValues(portfolio);
   activateCategory(activeCategoryId || portfolio.activeCategoryId, { fitVertical: false });
@@ -7752,6 +7826,7 @@ async function commitPlcPlan(plan, choices) {
   return result;
 }
 
+function initializeWorkspaceFeatures() {
 globalThis.PortfolioPlcUI?.init({
   adapter: {
     getPortfolio: () => portfolio,
@@ -7782,3 +7857,13 @@ globalThis.PortfolioProductIssues?.mount({
   },
   notifications: globalThis.PortfolioNotifications,
 });
+}
+
+window.addEventListener("beforeunload", event => {
+  if (!workspaceSavePending && !packageOperationInProgress) return;
+  event.preventDefault(); event.returnValue = "";
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && workspaceSavePending) void flushWorkspaceSave();
+});
+startWorkspace();

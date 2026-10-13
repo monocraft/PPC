@@ -1,0 +1,15 @@
+# Local workspace storage
+
+The complete working portfolio is stored in IndexedDB beside the existing binary image library. The workspace record retains the exact serialized data, including specifications, IDs, image references, layouts, PLC evidence, local baselines, merge intents and other operational metadata. Package keys keep their existing endpoint-scoped session storage behavior; GitHub tokens remain in memory. They are not added to workspace records.
+
+Opening waits for the saved database record before displaying products or connecting shared saving. On first migration, a valid older localStorage workspace is normalized using the existing schema rules and committed with any migrated inline images. Older localStorage records are retained, while the new database record takes precedence. A corrupt or inaccessible saved record stops opening and exposes a retry button outside the protected workspace; defaults are created only when every prior workspace record is absent.
+
+Autosave captures a complete JSON snapshot and serializes writes within the tab. A save succeeds only when its transaction completes. Package and data imports commit the manifest and incoming image blobs together before activating the new portfolio. An aborted transaction leaves the previous saved copy intact. If display activation fails, restoration is awaited; if restoration also fails, imported images remain available for the committed record. PLC evidence and its sharing queue are committed before activation or shared requests.
+
+Failed local saves show a persistent warning with retry and data-backup actions. Pending local changes trigger the browser's normal warning when closing the page. Data backups retain the full working metadata and image references; the existing portable project-package export also contains image bytes and follows its existing portable metadata rules.
+
+Restoring a full `.data` backup preserves its supplied comparison baseline and pending metadata, so an unsaved manual edit remains a pending edit. A baseline is constructed only when the input does not provide one. Portable package imports continue to construct a fresh baseline under their existing transfer rules.
+
+The full local workspace and `.data` backups have no application-defined size cap. Actual browser storage capacity and available memory remain finite; quota failures are reported and preserve the previous committed copy. Portable packages retain the codec's separate 64 MiB total, uncompressed and encrypted package limits, so images and the manifest must fit the complete package. Existing encrypted-master manifest and network request limits are unchanged; local storage capacity does not expand shared transport budgets.
+
+The save queue orders snapshots within one tab. Independent tabs still share the origin's saved workspace, and the last committed local snapshot wins, as with the previous localStorage implementation. This change does not introduce a cross-tab merge protocol. Shared master conflict handling continues to operate separately.

@@ -5,7 +5,7 @@ import vm from "node:vm";
 const source = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 // Keep dependencies between application helpers real. UI, persistence, and
 // canvas painting are adapted below; no gesture or motion rule is recreated.
-const functions = [...source.matchAll(/^function \w+\([^]*?^\}/gm)].map((match) => match[0]).join("\n");
+const functions = [...source.matchAll(/^function \w+\([^]*?^\}\r?$/gm)].map((match) => match[0]).join("\n");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 1e-6, `${message}: expected ${expected}, received ${actual}`);
 
