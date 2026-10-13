@@ -85,7 +85,7 @@ for (const [name, expected] of [["Wrist Rest", "wrist"], ["Linear Switch", "swit
 // Use the actual layout and drawing functions, including category selection
 // used by PPTX, while replacing only unrelated canvas/image/price effects.
 const app = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
-const functions = ["cardSpecifications", "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedSpecsHeight", "productCardLayout", "drawDetailedSpecLabel", "drawDetailedSpecs", "drawCard"];
+const functions = ["cardSpecifications", "productCardTitle", "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedSpecsHeight", "productCardLayout", "drawDetailedSpecLabel", "drawDetailedSpecs", "drawCard"];
 const drawText = [], images = [], footers = [];
 const board = { lanes: [{ id: "microphone" }], products: [microphone], settings: { showPrices: true, showSkus: true } };
 const sandbox = {

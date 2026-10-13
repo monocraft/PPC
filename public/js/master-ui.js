@@ -405,5 +405,10 @@
     return active;
   }
   root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
-  if (root.PortfolioMasterAdapter) initialize({ adapter: root.PortfolioMasterAdapter });
+  if (root.PortfolioMasterAdapter) {
+    const openWhenReady = () => initialize({ adapter: root.PortfolioMasterAdapter });
+    root.addEventListener?.("portfolio:workspace-ready", openWhenReady);
+    if (root.PortfolioWorkspaceReady) void root.PortfolioWorkspaceReady.then(openWhenReady).catch(() => {});
+    else openWhenReady();
+  }
 })(globalThis);

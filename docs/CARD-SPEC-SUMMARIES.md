@@ -34,6 +34,8 @@ Priorities are evaluated in the order below; missing values are skipped. Fewer t
 
 Repeated aliases occupy one role. Combined rows retain the IDs of their contributing saved rows. SKU-scoped values become one common value only when every displayed scope belongs to the product's actual bindings and all scoped values agree. Different interfaces, conditions or unknown scopes remain distinct. Polar-pattern ordering alone does not create a difference.
 
+Card titles keep the existing font and two-line frame. The wrapper fills the final permitted line before adding an ellipsis. Exact Cloth Pulsefire Mat titles omit the repeated “Gaming Mouse Pad” phrase on product fronts so the material, M/L/XL/2XL size and WM suffix remain visible. Their complete canonical names stay in saved data, search, Details and editing; editable PowerPoint uses the same front title.
+
 Clean recording-rate and bit-depth lists show their separate explicit maxima using “up to” for lists. This does not assert that two independent maxima form a supported combination. Conditional values are preserved instead of shortened. Capsule diameter is omitted from the front construction summary; the full value remains in Details.
 
 The synthetic checks in `scripts/checks/card-specs.mjs` cover the selector, the actual layout/drawing path, exported-category selection and deployment closure. Existing product-details and editable-PowerPoint checks continue to verify complete Details, images, grouped editable objects and lane pagination.
