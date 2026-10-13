@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import '../public/js/package-codec.js';
@@ -110,6 +111,25 @@ async function unpack(bytes, packageKey) {
 
 /** The bridge credential is only for private export/bootstrap/receipts. It is
  * never a Supabase administrative API key and never leaves the bridge origin. */
+async function readCheckoutPackage(metadata) {
+  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public/data/master_ppc.pkg');
+  let handle;
+  try {
+    handle = await open(file, 'r');
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size !== metadata.size || stat.size > codec.MAX_PACKAGE_BYTES) return null;
+    const bytes = new Uint8Array(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+      if (!bytesRead) { bytes.fill(0); return null; }
+      offset += bytesRead;
+    }
+    return bytes;
+  } catch { return null; }
+  finally { await handle?.close(); }
+}
+
 export function createSupabasePublisher(options = {}) {
   const endpoint = normalizePublisherEndpoint(options.endpoint);
   const { publisherSecret, githubToken } = options;
@@ -169,7 +189,13 @@ export function createSupabasePublisher(options = {}) {
   async function currentPackage() {
     const metadata = await github('read');
     if (metadata.type !== 'file' || !SHA.test(metadata.sha || '') || !Number.isSafeInteger(metadata.size) || metadata.size < 36 || metadata.size > codec.MAX_PACKAGE_BYTES) throw failure('GITHUB_PACKAGE_INVALID');
-    const bytes = await github('blob', metadata.sha);
+    let cached;
+    try { cached = await (options.readCachedPackage || readCheckoutPackage)(metadata); } catch {}
+    let bytes;
+    if (cached instanceof Uint8Array && cached.length === metadata.size && blobSha(cached) === metadata.sha && codec.isEncrypted(cached)) bytes = cached;
+    else { cached?.fill?.(0); bytes = await github('blob', metadata.sha); }
+    // Cache reuse never skips authenticated decryption, revision/manifest checks,
+    // or preservation of every archived asset in the publication flow.
     if (bytes.length !== metadata.size || blobSha(bytes) !== metadata.sha || !codec.isEncrypted(bytes)) throw failure('GITHUB_PACKAGE_INVALID');
     return { sha: metadata.sha, bytes };
   }

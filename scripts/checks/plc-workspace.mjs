@@ -42,11 +42,13 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
   const sandbox = {
     Date: ClockDate, TextEncoder, MAX_PACKAGE_MANIFEST_BYTES: 16 * 1024 * 1024, STORAGE_KEY: 'synthetic-workspace', PREVIOUS_STORAGE_KEY: 'synthetic-previous',
     portfolio: clone(initial), localDateBaseline: importer.snapshotDateValues(initial), packageOperationInProgress: false, saveTimer: 0,
+    persistedWorkspaceStorage: stored, unreadableWorkspaceStorage: null,
+    navigator: { locks: { request: async (_name, callback) => callback() } }, showWorkspaceNotice() {},
     activeCategoryId: 'pc-gaming-audio', PortfolioModel: globalThis.PortfolioModel, PortfolioMasterModel: model,
     PLCImporter: { ...importer, applyPlan(...args) { calls.applies += 1; return importer.applyPlan(...args); }, recordDateChanges(before, portfolio, options = {}) { return importer.recordDateChanges(before, portfolio, { now: clock.value, ...options }); } },
     ensurePortfolioSchema: normalizeDraft, activateCategory() { calls.renders += 1; }, renderInspector() {}, renderActiveView() {},
     setTimeout(callback) { const id = timers.size + 1; timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); },
-    localStorage: { setItem(key, text) { assert.equal(key, 'synthetic-workspace'); if (storageBlocked) throw new Error('Synthetic browser quota exceeded'); stored = text; calls.writes.push(JSON.parse(text)); }, removeItem() {} },
+    localStorage: { getItem: () => stored, setItem(key, text) { assert.equal(key, 'synthetic-workspace'); if (storageBlocked) throw new Error('Synthetic browser quota exceeded'); stored = text; calls.writes.push(JSON.parse(text)); }, removeItem() {} },
     PortfolioMasterUI: {
       getSession: () => session, updateStatus() {},
       async saveScoped(options) { calls.scoped += 1; return session.saveScoped(options); },
@@ -78,7 +80,7 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
     },
   });
   vm.createContext(sandbox);
-  for (const name of ['scheduleSave', 'productDateHistoryOptions', 'persistPlcDraft', 'retryPlcSharing', 'commitPlcPlan']) {
+  for (const name of ['persistPortfolioStorage', 'reportWorkspaceSaveFailure', 'scheduleSave', 'productDateHistoryOptions', 'persistPlcDraft', 'retryPlcSharing', 'commitPlcPlan']) {
     const definition = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, 'm'));
     assert.ok(definition, `Workspace must expose its ${name} integration function.`);
     vm.runInContext(definition[0], sandbox);

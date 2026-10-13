@@ -42,7 +42,7 @@ function targetFor(manifest = original, patch = { ffsDate: '2026-12-10' }) {
     { requestId: 'fixture-request-one', now: '2026-10-08T00:00:00.000Z', actor: 'Optional name' }).manifest;
 }
 
-async function harness({ seeded = true, revision = 1 } = {}) {
+async function harness({ seeded = true, revision = 1, cacheMode = 'match' } = {}) {
   const initial = await packed(original), blobs = new Map([[sha(initial), initial]]);
   let current = sha(initial), manifest = revision ? targetFor() : clone(original), storageRevision = revision;
   let sourceSha = current, seedDigest = null;
@@ -90,7 +90,7 @@ async function harness({ seeded = true, revision = 1 } = {}) {
     assert.equal(options.headers['X-PPC-Publisher-Secret'], undefined);
     assert.ok(!String(options.body || '').includes(packageKey)); assert.ok(!String(options.body || '').includes(publisherSecret));
     if (url.includes('/git/blobs/')) {
-      const bytes = blobs.get(url.split('/').at(-1)); return new Response(bytes?.slice(), { status: bytes ? 200 : 404 });
+      const bytes = blobs.get(url.split('/').at(-1)); calls.push({ operation: 'blob', size: bytes?.length || 0 }); return new Response(bytes?.slice(), { status: bytes ? 200 : 404 });
     }
     if (url.includes('/actions/workflows/deploy.yml/dispatches')) {
       calls.push({ operation: 'deploy' });
@@ -107,7 +107,13 @@ async function harness({ seeded = true, revision = 1 } = {}) {
     if (losePut) { losePut = false; throw new Error(`${githubToken} private network detail`); }
     return json({ content: { sha: current } });
   };
-  const publisher = createSupabasePublisher({ endpoint, packageKey, githubToken, publisherSecret, fetchImpl });
+  const publisher = createSupabasePublisher({ endpoint, packageKey, githubToken, publisherSecret, fetchImpl, readCachedPackage: async () => {
+    if (cacheMode === 'missing') return null;
+    if (cacheMode === 'unavailable') throw new Error('Synthetic unavailable cache');
+    const cached = blobs.get(current).slice();
+    if (cacheMode === 'corrupt') cached[30] ^= 1;
+    return cacheMode === 'short' ? cached.subarray(1) : cached;
+  } });
   return { publisher, calls, acknowledgements, failures, get current() { return current; }, get bytes() { return blobs.get(current).slice(); },
     get publication() { return clone(publication); },
     failAck(count = 1) { ackFails = count; }, failDeploy(count = 1) { deployFails = count; }, loseWriteReply() { losePut = true; },
@@ -223,3 +229,21 @@ assert.match(workflow, /cancel-in-progress: false/); assert.match(workflow, /cro
 assert.match(workflow, /contents: write/); assert.match(workflow, /actions: write/);
 assert.match(workflow, /persist-credentials: false/); assert.ok(!workflow.includes('service_role'));
 console.log('Supabase publisher checks passed: exact archive preservation, safe bootstrap, expected-SHA races, monotonic publication, lost responses, receipt and deployment recovery, and secret-safe errors.');
+
+{
+  const h = await harness(); await h.publisher.publish();
+  const packageBytes = h.bytes.length; h.calls.length = 0;
+  assert.equal((await h.publisher.publish()).status, 'unchanged');
+  const reads = h.calls.filter(call => call.operation === 'blob');
+  console.log(JSON.stringify({ unchangedBlobReads: reads.length, unchangedBlobBytes: reads.reduce((total, call) => total + call.size, 0), packageBytes }));
+  assert.equal(reads.length, 0, 'A matching immutable checkout blob must not be downloaded again.');
+  const changed = clone(original); changed.categories[0].board.products[0].name = 'Changed externally';
+  await h.replace(changed);
+  await assert.rejects(h.publisher.publish(), error => error.code === 'EXTERNAL_PACKAGE_CHANGE');
+  assert.equal(h.calls.filter(call => call.operation === 'blob').length, 0, 'A matching checkout blob still receives full authentication and source checks.');
+}
+for (const cacheMode of ['missing', 'unavailable', 'corrupt', 'short']) {
+  const h = await harness({ cacheMode });
+  assert.equal((await h.publisher.publish()).status, 'published');
+  assert.equal(h.calls.filter(call => call.operation === 'blob').length, 1, 'A missing or mismatched cache must use the authenticated remote blob.');
+}

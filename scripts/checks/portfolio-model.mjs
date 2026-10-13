@@ -165,7 +165,7 @@ const appSource = await readFile(new URL("../../public/js/app.js", import.meta.u
 // the device. Opening the app chooses the first visible category, while normal
 // navigation and imported-workspace restoration retain their own selection.
 const bootStart = appSource.indexOf("\nportfolio = loadPortfolio();") + 1;
-const bootEnd = appSource.indexOf("\nfunction persistPlcDraft(", bootStart);
+const bootEnd = appSource.indexOf("\nasync function persistPlcDraft(", bootStart);
 assert.ok(bootStart > 0 && bootEnd > bootStart);
 const loadDefinition = appSource.match(/^function loadPortfolio\([^]*?^\}/m)?.[0];
 const importDefinition = appSource.match(/^function normalizeImportedPortfolio\([^]*?^\}/m)?.[0];
@@ -187,6 +187,7 @@ for (const [label, saved, prior, expected] of [
   if (prior != null) stored.set("previous", JSON.stringify(prior));
   const boot = {
     portfolio: null, activeCategoryId: null, localDateBaseline: null,
+    persistedWorkspaceStorage: undefined, unreadableWorkspaceStorage: null, queueMicrotask: callback => callback(), showWorkspaceNotice() {},
     STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
     localStorage: { getItem: key => stored.get(key) || null },
     ensurePortfolioSchema: value => ({ ...value, version: 4 }),

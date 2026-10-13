@@ -249,6 +249,41 @@
     if (own(product, "featuredVariantId")) product.featuredVariantId = keeperVariantMap[product.featuredVariantId] || product.featuredVariantId;
     product.partSkus = simpleRows("partSkus", keeperParts, mappedSource.partSkus, (row) => normalizeSku(row.code), "HP SKU");
 
+    // PLC bindings use product-wide variant IDs. Consolidation must move the
+    // bindings together with the color rows, including equal colors and ID collisions.
+    function remapPlc(metadata, variantMap, groupMap = {}) {
+      if (!object(metadata)) return metadata;
+      const output = safeClone(metadata);
+      const actualGroups = new Map(product.variantGroups.flatMap(group => group.items.map(row => [row.id, group.id])));
+      const binding = record => {
+        if (!object(record)) return record;
+        const next = safeClone(record), previous = next.variantId;
+        if (previous && own(variantMap, previous)) next.variantId = variantMap[previous];
+        if (next.groupId) next.groupId = actualGroups.get(next.variantId) || groupMap[next.groupId] || next.groupId;
+        return next;
+      };
+      if (Array.isArray(output.identities)) output.identities = output.identities.map(binding);
+      if (Array.isArray(output.history)) output.history = output.history.map(binding);
+      if (object(output.createdFromSource)) output.createdFromSource = binding(output.createdFromSource);
+      if (object(output.variantProjects)) {
+        const projects = {};
+        for (const [previousId, original] of Object.entries(output.variantProjects)) {
+          const mappedId = variantMap[previousId] || previousId, project = binding(original);
+          if (object(project)) {
+            if (object(project.createdFromSource)) project.createdFromSource = binding(project.createdFromSource);
+            if (Array.isArray(project.history)) project.history = project.history.map(binding);
+            if (Array.isArray(project.identities)) project.identities = project.identities.map(binding);
+          }
+          if (own(projects, mappedId) && !equal(projects[mappedId], project)) throw new RangeError("Multiple PLC projects would bind to one merged colorway. Resolve the duplicate colorway evidence before merging.");
+          projects[mappedId] = project;
+        }
+        output.variantProjects = projects;
+      }
+      return output;
+    }
+    if (object(product.plc)) product.plc = remapPlc(product.plc, keeperVariantMap);
+    if (object(mappedSource.plc)) mappedSource.plc = remapPlc(mappedSource.plc, maps.variants, maps.groups);
+
     function sourceRecords(left, right, target) {
       const output = safeClone(left || []), indexes = new Map();
       if (!Array.isArray(output) || !Array.isArray(right)) throw new TypeError("ASCM source records must be a list.");

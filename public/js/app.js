@@ -244,6 +244,8 @@ let viewerInfoProductId = null;
 let viewerInfoProgress = 0;
 let viewerInfoAnimationFrame = null;
 let saveTimer = null;
+let persistedWorkspaceStorage = undefined;
+let unreadableWorkspaceStorage = null;
 let activeView = "products";
 let roadmapDetailsOpen = true;
 let roadmapSearchQuery = "";
@@ -382,7 +384,7 @@ function referencedImageAssetIds() {
 
 function revokeImageAssetUrl(assetId) {
   const url = imageAssetUrlCache.get(assetId);
-  if (url) URL.revokeObjectURL(url);
+  if (url) { URL.revokeObjectURL(url); imageCache.delete(url); }
   imageAssetUrlCache.delete(assetId);
   imageAssetLoadPromises.delete(assetId);
   missingImageAssetIds.delete(assetId);
@@ -390,8 +392,12 @@ function revokeImageAssetUrl(assetId) {
 
 async function removeImageAssetIfUnused(assetId) {
   if (!assetId || referencedImageAssetIds().has(assetId)) return;
-  const asset = imageAssetById(assetId);
-  portfolio.imageAssets = portfolio.imageAssets.filter((item) => item.id !== assetId);
+  const owner = portfolio, asset = imageAssetById(assetId);
+  const draft = { ...owner, imageAssets: owner.imageAssets.filter(item => item.id !== assetId) };
+  try { await persistPortfolioStorage(JSON.stringify(draft)); }
+  catch (error) { reportWorkspaceSaveFailure(error); return; }
+  if (portfolio !== owner || referencedImageAssetIds().has(assetId)) return;
+  portfolio.imageAssets = portfolio.imageAssets.filter(item => item.id !== assetId);
   revokeImageAssetUrl(assetId);
   if (asset?.sourceType === "local") {
     try { await imageStoreDelete(assetId); } catch (_) {}
@@ -494,7 +500,11 @@ function migrateLegacyProductImages(target) {
           product.imageAssetId = assetId;
         }
       }
-      delete product.imageUrl;
+      if (legacyUrl.startsWith("data:") && product.imageAssetId && !pendingLegacyImageBlobs.some(entry => entry.id === product.imageAssetId)) {
+        const blob = dataUriToBlob(legacyUrl);
+        if (blob) pendingLegacyImageBlobs.push({ id: product.imageAssetId, blob });
+      }
+      if (!legacyUrl.startsWith("data:")) delete product.imageUrl;
     });
   });
 }
@@ -506,7 +516,10 @@ async function flushPendingLegacyImages() {
     try {
       await imageStorePut(entry.id, entry.blob);
       missingImageAssetIds.delete(entry.id);
-    } catch (_) {}
+      for (const category of portfolio.categories) for (const product of category.board.products) {
+        if (product.imageAssetId === entry.id && String(product.imageUrl || "").startsWith("data:")) delete product.imageUrl;
+      }
+    } catch (error) { pendingLegacyImageBlobs.push(entry); reportWorkspaceSaveFailure(error); }
   }
   scheduleSave();
 }
@@ -1365,10 +1378,20 @@ function ensurePortfolioSchema(target) {
 }
 
 function loadPortfolio() {
+  try { persistedWorkspaceStorage = localStorage.getItem(STORAGE_KEY); } catch (_) { persistedWorkspaceStorage = undefined; }
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const parsed = JSON.parse(persistedWorkspaceStorage ?? localStorage.getItem(STORAGE_KEY));
     if (parsed?.version === 4) return ensurePortfolioSchema(parsed);
-  } catch (_) {}
+    if (persistedWorkspaceStorage !== null && persistedWorkspaceStorage !== undefined) throw new Error("The saved workspace uses an unsupported version.");
+  } catch (error) {
+    if (persistedWorkspaceStorage !== null && persistedWorkspaceStorage !== undefined) {
+      unreadableWorkspaceStorage = persistedWorkspaceStorage;
+      queueMicrotask(() => showWorkspaceNotice("The saved workspace could not be opened. Its original data is protected from autosave. Export it for recovery, or import a valid package to replace it.", {
+        id: "workspace-storage-recovery", title: "Saved workspace needs recovery", severity: "error",
+        actions: [{ label: "Export damaged saved data", onClick: () => downloadBlob(new Blob([unreadableWorkspaceStorage], { type: "application/json" }), "product-portfolio-recovery.data") }],
+      }));
+    }
+  }
   try {
     const previous = JSON.parse(localStorage.getItem(PREVIOUS_STORAGE_KEY));
     if (previous?.version === 3 && Array.isArray(previous.categories)) return ensurePortfolioSchema(previous);
@@ -1386,15 +1409,57 @@ function loadPortfolio() {
   return createDefaultPortfolio();
 }
 
+async function persistPortfolioStorage(serialized, { allowRecovery = false } = {}) {
+  if (unreadableWorkspaceStorage !== null && !allowRecovery) throw new Error("The damaged saved workspace is protected. Export it or explicitly import a replacement before saving new changes.");
+  const owner = portfolio;
+  const expectedCurrent = JSON.stringify(owner);
+  const commit = () => {
+    if (portfolio !== owner || JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while this save was waiting. Your latest changes remain in memory. Try saving or exporting again.");
+    const current = localStorage.getItem(STORAGE_KEY);
+    if (persistedWorkspaceStorage !== undefined && current !== persistedWorkspaceStorage) {
+      const error = new Error("Another tab saved this workspace. Your changes remain here in memory. Export a package before reloading to review the other tab's changes.");
+      error.code = "WORKSPACE_STORAGE_CONFLICT";
+      throw error;
+    }
+    if (serialized === null) localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, serialized);
+    persistedWorkspaceStorage = serialized;
+    if (allowRecovery) unreadableWorkspaceStorage = null;
+  };
+  const locks = globalThis.navigator?.locks;
+  if (locks?.request) return locks.request(STORAGE_KEY + "-write", commit);
+  const database = await openImageDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    let failure = null;
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(failure || transaction.error || new Error("Unable to coordinate workspace saves."));
+    transaction.onabort = () => reject(failure || transaction.error || new Error("Workspace save was cancelled."));
+    const request = transaction.objectStore(IMAGE_STORE_NAME).get(STORAGE_KEY + "-write");
+    request.onsuccess = () => {
+      try { commit(); } catch (error) { failure = error; transaction.abort(); }
+    };
+  });
+}
+
+function reportWorkspaceSaveFailure(error) {
+  showWorkspaceNotice(error?.message || "This browser could not save your latest changes. Export a project package to preserve them.", {
+    id: "workspace-autosave-failed", title: "Workspace changes need a backup", severity: "error",
+    actions: [{ label: "Export project package", onClick: () => { void exportProjectPackage().catch(failure => PortfolioDialogs.alert(failure.message || "Could not export package.", { title: "Package export failed" })); } }],
+  });
+}
+
 function scheduleSave() {
   clearTimeout(saveTimer);
   if (packageOperationInProgress) return;
   if (globalThis.PLCImporter && typeof localDateBaseline !== "undefined" && localDateBaseline) localDateBaseline = globalThis.PLCImporter.recordDateChanges(localDateBaseline, portfolio);
-  saveTimer = setTimeout(() => {
+  saveTimer = setTimeout(async () => {
+    saveTimer = null;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(portfolio));
+      await persistPortfolioStorage(JSON.stringify(portfolio));
       localStorage.removeItem(PREVIOUS_STORAGE_KEY);
-    } catch (_) {}
+      globalThis.PortfolioNotifications?.resolve("workspace-autosave-failed");
+    } catch (error) { reportWorkspaceSaveFailure(error); }
   }, 120);
 }
 
@@ -1467,7 +1532,7 @@ function sortedLanes() {
 function visibleProducts() {
   const query = searchQuery.trim();
   if (!query) return board.products;
-  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query)));
+  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
 }
 
 function openPortfolioSearchResult(result) {
@@ -1694,7 +1759,7 @@ function updateProductCardDrag(clientX, clientY) {
 function paintProductCardMotion() {
   if (!productCardMotionValid(productCardMotion)) return;
   const dimensions = productCardMotion.dimensions || getCanvasDimensions();
-  drawBoardTo(canvas.getContext("2d"), dimensions, true);
+  drawBoardTo(viewportCanvasContext(canvas, canvasScroll, dimensions, zoom), dimensions, true);
   syncBoardNavigator();
   syncLaneRail();
 }
@@ -1769,19 +1834,38 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
   };
 }
 
-function setupCanvas(targetCanvas, drawZoom = zoom) {
-  const dimensions = getCanvasDimensions();
+function viewportCanvasContext(targetCanvas, targetScroll, dimensions, drawZoom = 1) {
+  let layer = targetCanvas._ppcViewportLayer;
+  if (!layer) {
+    layer = document.createElement("canvas");
+    layer.setAttribute("aria-hidden", "true");
+    Object.assign(layer.style, { position: "absolute", pointerEvents: "none", left: "0px", top: "0px" });
+    targetCanvas.parentElement.insertBefore(layer, targetCanvas);
+    targetCanvas._ppcViewportLayer = layer;
+    targetCanvas.width = 1;
+    targetCanvas.height = 1;
+  }
   const dpr = window.devicePixelRatio || 1;
-  const pixelWidth = Math.round(dimensions.width * drawZoom * dpr), pixelHeight = Math.round(dimensions.height * drawZoom * dpr);
-  if (targetCanvas.width !== pixelWidth) targetCanvas.width = pixelWidth;
-  if (targetCanvas.height !== pixelHeight) targetCanvas.height = pixelHeight;
-  const cssWidth = `${dimensions.width * drawZoom}px`, cssHeight = `${dimensions.height * drawZoom}px`;
-  if (targetCanvas.style.width !== cssWidth) targetCanvas.style.width = cssWidth;
-  if (targetCanvas.style.height !== cssHeight) targetCanvas.style.height = cssHeight;
-  const context = targetCanvas.getContext("2d");
-  context.setTransform(dpr * drawZoom, 0, 0, dpr * drawZoom, 0, 0);
+  const fullWidth = dimensions.width * drawZoom, fullHeight = dimensions.height * drawZoom;
+  targetCanvas.style.width = fullWidth + "px";
+  targetCanvas.style.height = fullHeight + "px";
+  const width = Math.max(1, Math.min(fullWidth, targetScroll.clientWidth || fullWidth));
+  const height = Math.max(1, Math.min(fullHeight, targetScroll.clientHeight || fullHeight));
+  const left = targetScroll.scrollLeft, top = targetScroll.scrollTop;
+  const pixelWidth = Math.max(1, Math.ceil(width * dpr)), pixelHeight = Math.max(1, Math.ceil(height * dpr));
+  if (layer.width !== pixelWidth) layer.width = pixelWidth;
+  if (layer.height !== pixelHeight) layer.height = pixelHeight;
+  Object.assign(layer.style, { width: width + "px", height: height + "px", left: left + "px", top: top + "px" });
+  const context = layer.getContext("2d");
+  context.setTransform(dpr * drawZoom, 0, 0, dpr * drawZoom, -left * dpr, -top * dpr);
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
+  return context;
+}
+
+function setupCanvas(targetCanvas, drawZoom = zoom) {
+  const dimensions = getCanvasDimensions();
+  const context = viewportCanvasContext(targetCanvas, canvasScroll, dimensions, drawZoom);
   return { context, dimensions };
 }
 
@@ -2532,7 +2616,7 @@ function roadmapRange() {
 function visibleRoadmapProducts() {
   const query = roadmapSearchQuery.trim();
   if (!query) return board.products;
-  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query)));
+  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
 }
 
 function roadmapFamilyOrder(family, targetBoard = board, definition = categoryDefinition()) {
@@ -2672,18 +2756,7 @@ function effectiveRoadmap(product) {
 }
 
 function setupRoadmapCanvas(targetCanvas, dimensions) {
-  const dpr = window.devicePixelRatio || 1;
-  const pixelWidth = Math.round(dimensions.width * dpr);
-  const pixelHeight = Math.round(dimensions.height * dpr);
-  if (targetCanvas.width !== pixelWidth) targetCanvas.width = pixelWidth;
-  if (targetCanvas.height !== pixelHeight) targetCanvas.height = pixelHeight;
-  targetCanvas.style.width = `${dimensions.width}px`;
-  targetCanvas.style.height = `${dimensions.height}px`;
-  const context = targetCanvas.getContext("2d");
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  return context;
+  return viewportCanvasContext(targetCanvas, targetCanvas.parentElement, dimensions);
 }
 
 function roadmapProductBarLabel(product) {
@@ -3606,8 +3679,13 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     renderRoadmaps();
   });
 
+  let scrollRenderFrame = null;
   targetScroll.addEventListener("scroll", () => {
-    requestAnimationFrame(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory()));
+    if (scrollRenderFrame !== null) return;
+    scrollRenderFrame = requestAnimationFrame(() => {
+      scrollRenderFrame = null;
+      renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory());
+    });
   }, { passive: true });
 
   targetScroll.addEventListener("wheel", (event) => {
@@ -5691,7 +5769,7 @@ function localPackageImageIds(target) {
 
 function clearPackageImageCaches() {
   imageAssetGeneration += 1;
-  imageAssetUrlCache.forEach((url) => URL.revokeObjectURL(url));
+  imageAssetUrlCache.forEach((url) => { URL.revokeObjectURL(url); imageCache.delete(url); });
   imageAssetUrlCache.clear();
   imageAssetLoadPromises.clear();
   missingImageAssetIds.clear();
@@ -5702,12 +5780,13 @@ async function commitPackageDraft(draft, expectedCurrent) {
   const previousPortfolio = portfolio;
   const previousStored = localStorage.getItem(STORAGE_KEY);
   const previousRecovery = localStorage.getItem(PACKAGE_RECOVERY_KEY);
+  const previousUnreadableWorkspaceStorage = unreadableWorkspaceStorage;
   const serialized = JSON.stringify(draft);
   if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
   try {
     // Incoming images have new IDs. Preserve the original library until the
     // replacement is saved and activated so a failed commit can roll back.
-    localStorage.setItem(STORAGE_KEY, serialized);
+    await persistPortfolioStorage(serialized, { allowRecovery: true });
     portfolio = draft;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     clearPackageImageCaches();
@@ -5715,7 +5794,8 @@ async function commitPackageDraft(draft, expectedCurrent) {
   } catch (error) {
     portfolio = previousPortfolio;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-    try { if (previousStored === null) localStorage.removeItem(STORAGE_KEY); else localStorage.setItem(STORAGE_KEY, previousStored); } catch (_) {}
+    try { await persistPortfolioStorage(previousStored, { allowRecovery: true }); } catch (_) {}
+    unreadableWorkspaceStorage = previousUnreadableWorkspaceStorage;
     clearPackageImageCaches();
     try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
     throw error;
@@ -5843,7 +5923,9 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     }
     for (const category of draft.categories) {
       for (const product of category.board.products) {
-        product.imageAssetId = replacements.get(product.imageAssetId) || product.imageAssetId;
+        const originalImageId = product.imageAssetId;
+        product.imageAssetId = replacements.get(originalImageId) || originalImageId;
+        if (legacyImages.has(originalImageId)) delete product.imageUrl;
         for (const group of product.variantGroups || []) {
           for (const item of group.items) item.imageAssetId = replacements.get(item.imageAssetId) || item.imageAssetId;
         }
@@ -6495,39 +6577,57 @@ async function exportPptx(scope = "both", selectedCategoryIds = null) {
   renderActiveView();
 }
 
-function exportPng() {
+async function exportPng() {
   stopProductCardDrag();
-  const exportCanvas = document.createElement("canvas");
+  const isProducts = activeView === "products";
+  const dimensions = isProducts ? getCanvasDimensions({ includeViewer: false }) : roadmapDimensions();
   const scale = 2;
-
-  if (activeView === "products") {
-    const dimensions = getCanvasDimensions({ includeViewer: false });
-    exportCanvas.width = dimensions.width * scale;
-    exportCanvas.height = dimensions.height * scale;
-    const exportContext = exportCanvas.getContext("2d");
-    exportContext.setTransform(scale, 0, 0, scale, 0, 0);
-    exportContext.imageSmoothingEnabled = true;
-    exportContext.imageSmoothingQuality = "high";
-    drawBoardTo(exportContext, dimensions, false, true);
-    exportCanvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, safeFilename("png"));
-    }, "image/png");
-    renderBoard();
-    return;
-  }
-
-  const dimensions = roadmapDimensions();
-  exportCanvas.width = dimensions.width * scale;
-  exportCanvas.height = dimensions.height * scale;
-  const exportContext = exportCanvas.getContext("2d");
-  exportContext.setTransform(scale, 0, 0, scale, 0, 0);
-  exportContext.imageSmoothingEnabled = true;
-  exportContext.imageSmoothingQuality = "high";
-  drawRoadmapTo(exportContext, dimensions, exportCanvas, { scrollLeft: 0, scrollTop: 0 }, false, true);
-  exportCanvas.toBlob((blob) => {
-    if (blob) downloadBlob(blob, safeFilename("roadmap.png"));
-  }, "image/png");
-  renderRoadmaps();
+  const expectedCurrent = JSON.stringify(portfolio);
+  const expectedCategory = activeCategoryId;
+  const renderSnapshot = () => JSON.stringify({ activeView, searchQuery, roadmapSearchQuery, roadmapMonthWidth, zoom, inspectorOpen, viewerInfoProgress, viewerInfoProductId, hoveredHeroVariant, pinnedHeroVariantByProduct: [...pinnedHeroVariantByProduct], roadmapDraft });
+  const expectedRender = renderSnapshot();
+  const unchanged = () => activeCategoryId === expectedCategory && JSON.stringify(portfolio) === expectedCurrent && renderSnapshot() === expectedRender;
+  const tiles = dimensions.width * scale > 16384 || dimensions.height * scale > 16384 || dimensions.width * dimensions.height * scale * scale > 32000000;
+  const tileSize = tiles ? 2048 : Math.max(dimensions.width, dimensions.height);
+  const entries = [], placements = [];
+  if (tiles) showWorkspaceNotice("This board exceeds a single PNG's safe size. Export will produce a ZIP of full-resolution PNG tiles with a placement manifest.", { id: "png-export-tiles", title: "Preparing PNG tiles", severity: "info" });
+  try {
+    for (let top = 0; top < dimensions.height; top += tileSize) {
+      for (let left = 0; left < dimensions.width; left += tileSize) {
+        if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+        const width = Math.min(tileSize, dimensions.width - left), height = Math.min(tileSize, dimensions.height - top);
+        const outputCanvas = document.createElement("canvas");
+        outputCanvas.width = Math.ceil(width * scale); outputCanvas.height = Math.ceil(height * scale);
+        const context = outputCanvas.getContext("2d");
+        context.setTransform(scale, 0, 0, scale, -left * scale, -top * scale);
+        context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
+        if (isProducts) drawBoardTo(context, dimensions, false, true);
+        else {
+          drawRoadmapTo(context, dimensions, outputCanvas, { scrollLeft: 0, scrollTop: 0 }, false, true);
+          roadmapHitRegions.delete(outputCanvas);
+        }
+        const blob = await new Promise((resolve, reject) => outputCanvas.toBlob(value => value ? resolve(value) : reject(new Error("This browser could not prepare the PNG export.")), "image/png"));
+        if (!tiles) {
+          if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+          downloadBlob(blob, safeFilename(isProducts ? "png" : "roadmap.png"));
+          return;
+        }
+        const name = "tile-" + String(placements.length + 1).padStart(3, "0") + ".png";
+        entries.push({ name, data: blob });
+        placements.push({ name, x: left * scale, y: top * scale, width: outputCanvas.width, height: outputCanvas.height });
+        outputCanvas.width = 1; outputCanvas.height = 1;
+      }
+    }
+    if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+    if (typeof globalThis.JSZip !== "function") throw new Error("The image archive library did not load. Refresh the page and try exporting again.");
+    const archive = new globalThis.JSZip();
+    archive.file("layout.json", JSON.stringify({ width: dimensions.width * scale, height: dimensions.height * scale, tiles: placements }, null, 2));
+    for (const entry of entries) archive.file(entry.name, entry.data);
+    const output = await archive.generateAsync({ type: "blob", compression: "STORE", streamFiles: true });
+    if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+    downloadBlob(output, safeFilename(isProducts ? "png-tiles.zip" : "roadmap-png-tiles.zip"));
+    showWorkspaceNotice("The large board was exported as full-resolution PNG tiles. The ZIP includes every tile and its position in layout.json.", { id: "png-export-tiles", title: "PNG export complete", severity: "info" });
+  } finally { renderActiveView(); }
 }
 
 function renderLaneSettingsEditor() {
@@ -6699,19 +6799,34 @@ function normalizeImportedPortfolio(parsed) {
 
 function importJson(file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const parsed = parsePortfolioImportText(reader.result);
       if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading new data.");
-      portfolio = normalizeImportedPortfolio(parsed);
-      localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
+      const draft = normalizeImportedPortfolio(parsed);
+      if (globalThis.PortfolioMasterModel) draft.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(draft).products;
+      const previousPortfolio = portfolio;
+      const previousStored = localStorage.getItem(STORAGE_KEY);
+      const previousRecoveryGate = unreadableWorkspaceStorage;
+      await persistPortfolioStorage(JSON.stringify(draft), { allowRecovery: true });
+      try {
+        portfolio = draft;
+        localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
+        selectedId = null;
+        activateCategory(portfolio.activeCategoryId, { fitVertical: true });
+      } catch (error) {
+        portfolio = previousPortfolio;
+        localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
+        try { await persistPortfolioStorage(previousStored, { allowRecovery: true }); } catch (_) {}
+        unreadableWorkspaceStorage = previousRecoveryGate;
+        try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
+        throw error;
+      }
       globalThis.PortfolioProductIssues?.clearAscmIssues();
       globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
-      if (globalThis.PortfolioMasterModel) portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products;
+      globalThis.PortfolioNotifications?.resolve("workspace-storage-recovery");
       globalThis.PortfolioMasterUI?.disconnect();
       globalThis.PortfolioMasterUI?.markImported(portfolio.masterLocalBaseline || []);
-      selectedId = null;
-      activateCategory(portfolio.activeCategoryId, { fitVertical: true });
       flushPendingLegacyImages();
     } catch (error) {
       console.error("Portfolio import failed:", error);
@@ -6774,7 +6889,11 @@ function buildAscmImportPlan(dataset) {
   const items = groups.map((group) => {
     const match = importer.matchProductGroup(group, portfolio);
     let action = "new";
-    if (!group.categoryId) action = "ambiguous";
+    const sourceDates = ascmGroupDates(group);
+    const proposedGa = sourceDates.gaDate || match.product?.generalAvailabilityDate || "";
+    const proposedEm = sourceDates.emDate || match.product?.endManufacturingDate || "";
+    const invalidDateOrder = Boolean(proposedGa && proposedEm && proposedEm < proposedGa);
+    if (!group.categoryId || invalidDateOrder) action = "ambiguous";
     else if (match.status === "ambiguous") action = "ambiguous";
     else if (match.status === "matched") action = ascmProductNeedsUpdate(group, match) ? "update" : "unchanged";
     return {
@@ -6784,6 +6903,7 @@ function buildAscmImportPlan(dataset) {
       matchedProductId: match.product?.id || "",
       matchedCategoryId: match.categoryId || "",
       matchedProductName: match.product?.name || "",
+      ...(invalidDateOrder ? { validationError: "General availability is after end of manufacturing; correct the source dates before applying this product." } : {}),
     };
   });
   const itemsByMatchedProduct = new Map();
@@ -6809,6 +6929,7 @@ function buildAscmImportPlan(dataset) {
 }
 
 function ascmActionLabel(item) {
+  if (item.validationError) return "Review dates";
   if (item.action === "new") return "New product";
   if (item.action === "update") return "Update";
   if (item.action === "unchanged") return "Unchanged";
@@ -6842,7 +6963,7 @@ function renderAscmImportPreview(plan) {
 
   const previewLimit = 250;
   $("#ascmImportPreview").innerHTML = plan.items.slice(0, previewLimit).map((item, index) => {
-    const canReviewMatch = item.action === "ambiguous" && Boolean(item.matchedProductId || item.match?.product?.id || item.match?.candidates?.length);
+    const canReviewMatch = !item.validationError && item.action === "ambiguous" && Boolean(item.matchedProductId || item.match?.product?.id || item.match?.candidates?.length);
     const descriptions = [...new Set((item.group.records || []).map((record) => String(record.description || "").trim()).filter(Boolean))];
     const descriptionSummary = descriptions.length > 1 ? `${descriptions[0]} (+${descriptions.length - 1})` : descriptions[0] || item.group.displayName;
     const productName = item.matchedProductName
@@ -6851,7 +6972,7 @@ function renderAscmImportPreview(plan) {
     const basePns = ascmGroupBasePartNumbers(item.group);
     const basePnSummary = basePns.length > 1 ? `${basePns[0]} +${basePns.length - 1}` : basePns[0] || "—";
     return `<tr>
-      <td><span class="ascm-import-action is-${escapeHtml(item.action)}">${escapeHtml(ascmActionLabel(item))}</span>${canReviewMatch ? `<button type="button" class="small-button" data-review-ascm-match="${index}">Review matches</button>` : ""}</td>
+      <td><span class="ascm-import-action is-${escapeHtml(item.action)}">${escapeHtml(ascmActionLabel(item))}</span>${item.validationError ? `<small class="ascm-import-source-name">${escapeHtml(item.validationError)}</small>` : ""}${canReviewMatch ? `<button type="button" class="small-button" data-review-ascm-match="${index}">Review matches</button>` : ""}</td>
       <td>${escapeHtml(portfolioCategoryName(item.group.categoryId))}</td>
       <td>${productName}</td>
       <td class="ascm-import-pns" title="${escapeHtml(basePns.join(", "))}">${escapeHtml(basePnSummary)}</td>
@@ -7036,7 +7157,15 @@ function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {})
   return { added, updated, unchanged, skipped };
 }
 
-canvasScroll.addEventListener("scroll", () => { syncBoardNavigator(); syncLaneRail(); }, { passive: true });
+let productScrollRenderFrame = null;
+canvasScroll.addEventListener("scroll", () => {
+  syncBoardNavigator(); syncLaneRail();
+  if (productScrollRenderFrame !== null || activeView !== "products") return;
+  productScrollRenderFrame = requestAnimationFrame(() => {
+    productScrollRenderFrame = null;
+    if (activeView === "products") renderBoard();
+  });
+}, { passive: true });
 canvasScroll.addEventListener("wheel", (event) => {
   const max = horizontalScrollMax();
   if (max <= 0) return;
@@ -7143,7 +7272,7 @@ $("#exportPackage").onclick = async () => {
 $("#importJson").onclick = () => { closePopupMenus(); $("#importFile").click(); };
 $("#importFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) importJson(file); event.target.value = ""; };
 $("#exportJson").onclick = () => { closePopupMenus(); downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data"); };
-$("#exportPng").onclick = () => { closePopupMenus(); exportPng(); };
+$("#exportPng").onclick = async () => { closePopupMenus(); try { await exportPng(); } catch (error) { void PortfolioDialogs.alert(error.message || "Could not export PNG.", { title: "PNG export failed" }); } };
 $("#exportPptx").addEventListener("click", openPptxExportDialog);
 $("#pptxSelectAllCategories").onclick = () => {
   const available = PPTXPagination.selectExportCategories(portfolio?.categories);
@@ -7212,12 +7341,18 @@ $("#restoreSample").onclick = async () => {
   const clearingPortfolio = portfolio;
   if (!await PortfolioDialogs.confirm("Clear every product in all categories and remove their saved images? Your categories, lanes, settings, and templates will stay. Export a project package first if you need a backup.", { title: "Clear all products?", confirmLabel: "Clear all products", danger: true })) return;
   if (portfolio !== clearingPortfolio) return;
-  try { await imageStoreClear(); } catch (_) {}
-  localStorage.removeItem(PACKAGE_RECOVERY_KEY);
-  clearPackageImageCaches();
-  PortfolioModel.clearAllProducts(portfolio);
-  activateCategory(activeCategoryId, { fitVertical: true });
-  $("#emptyPullLatestData").focus({ preventScroll: true });
+  const obsoleteIds = localPackageImageIds(portfolio);
+  const draft = clonePortfolioData();
+  PortfolioModel.clearAllProducts(draft);
+  try {
+    await persistPortfolioStorage(JSON.stringify(draft));
+    portfolio = draft;
+    try { localStorage.removeItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
+    clearPackageImageCaches();
+    activateCategory(activeCategoryId, { fitVertical: true });
+    try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {}
+    $("#emptyPullLatestData").focus({ preventScroll: true });
+  } catch (error) { reportWorkspaceSaveFailure(error); }
 };
 
 document.querySelectorAll(".view-tab").forEach((button) => {
@@ -7621,11 +7756,11 @@ syncControls();
 renderInspector();
 setView("products");
 flushPendingLegacyImages();
-function persistPlcDraft(draft) {
+async function persistPlcDraft(draft) {
   const serialized = JSON.stringify(draft);
   if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("PLC evidence is too large to save in this browser.");
   globalThis.PortfolioMasterModel?.snapshot(draft);
-  localStorage.setItem(STORAGE_KEY, serialized);
+  await persistPortfolioStorage(serialized);
 }
 
 async function retryPlcSharing() {
@@ -7641,7 +7776,7 @@ async function retryPlcSharing() {
   }
   if (sharing.status === "saved" && JSON.stringify(portfolio.plcSharePending?.patches || []) === submitted) delete portfolio.plcSharePending;
   portfolio.plcLastSharing = { at: new Date().toISOString(), status: sharing.status, message: sharing.message };
-  try { persistPlcDraft(portfolio); }
+  try { await persistPlcDraft(portfolio); }
   catch (_) { sharing = { ...sharing, message: `${sharing.message} The collection is retained; this device could not save the latest sharing receipt.` }; }
   globalThis.PortfolioMasterUI?.updateStatus?.();
   return sharing;
@@ -7732,7 +7867,7 @@ async function commitPlcPlan(plan, choices) {
   if (pending.size) draft.plcSharePending = { version: 1, queuedAt: before.plcSharePending?.queuedAt || new Date().toISOString(), patches: [...pending.values()] };
   // Persist evidence, field clocks and exceptions together before activating it.
   // Storage failure leaves the current workspace and review untouched.
-  persistPlcDraft(draft);
+  await persistPlcDraft(draft);
   clearTimeout(saveTimer);
   portfolio = draft;
   localDateBaseline = globalThis.PLCImporter.snapshotDateValues(portfolio);

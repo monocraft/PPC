@@ -13,9 +13,10 @@ const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 12 * 1024 * 1024 - 64 * 1024;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const locks = new Map();
-const endpoints = new Set(['/api/master/latest', '/api/master/save', '/api/master/presence', '/api/dates/latest', '/api/dates/save', '/api/package/latest']);
+const endpoints = new Set(['/api/master/latest', '/api/master/save', '/api/master/presence', '/api/master/review', '/api/dates/latest', '/api/dates/save', '/api/package/latest']);
 
 class MasterError extends Error {
   constructor(status, code, message) {
@@ -377,21 +378,32 @@ export function createMasterHandler(options = {}) {
     verifiedPresenceSource = { signature: source.signature, revision: source.revision, verifier: createHash('sha256').update(key).digest() };
   }
 
-  async function presenceAuthorization(key, productId, current) {
+  async function presenceAuthorization(key, productId, categoryId, current) {
     const info = await lstat(filename);
     if (!info.isFile() || info.isSymbolicLink() || info.size < 58 || info.size > maxFileBytes) throw unavailable();
     const currentSignature = signature(info);
     const matches = verifiedPresenceSource?.signature === currentSignature &&
       timingSafeEqual(verifiedPresenceSource.verifier, createHash('sha256').update(key).digest());
-    if (matches && (!productId || (current?.productId === productId && current.sourceSignature === currentSignature))) {
-      return { sourceSignature: currentSignature, productName: productId ? current.productName : '', knownProduct: Boolean(productId && current.productName) };
+    if (matches && current?.sourceSignature === currentSignature && current.requestedCategoryId === categoryId && current.productId === productId) {
+      return { sourceSignature: currentSignature, productName: productId ? current.productName : '',
+        knownProduct: Boolean(productId && current.productName), categoryId: current.categoryId, categoryName: current.categoryName };
     }
-    const source = await unlockPackage(filename, key, maxFileBytes);
-    try {
-      rememberPresenceAuthorization(source, key);
-      const product = productId ? model.snapshot(source.manifest).products.find(item => item.productId === productId) : null;
-      return { sourceSignature: source.signature, productName: product?.productName || '', knownProduct: Boolean(product) };
-    } finally { for (const data of source.entries.values()) data.fill(0); }
+    // Presence is a public authentication boundary. Uncached requests must
+    // share the same bounded filename queue as ordinary reads and saves; a
+    // syntactically valid wrong key must not start an independent full-file
+    // read/decryption for every simultaneous caller.
+    return await serialized(filename, async () => {
+      const source = await unlockPackage(filename, key, maxFileBytes);
+      try {
+        rememberPresenceAuthorization(source, key);
+        const product = productId ? model.entriesFromManifest(source.manifest).find(item => item.productId === productId) : null;
+        const categories = new Map((source.manifest.categories || [{ id: '', name: source.manifest.name || 'Product portfolio' }])
+          .map(item => [item.id, String(item.name || item.id || 'Product portfolio').slice(0, 240)]));
+        const selectedCategoryId = product?.categoryId ?? (categories.has(categoryId) ? categoryId : '');
+        return { sourceSignature: source.signature, productName: product?.productName || '', knownProduct: Boolean(product),
+          categoryId: selectedCategoryId, categoryName: categories.get(selectedCategoryId) || '' };
+      } finally { for (const data of source.entries.values()) data.fill(0); }
+    });
   }
 
   async function presence(body, key) {
@@ -399,7 +411,8 @@ export function createMasterHandler(options = {}) {
       (body.displayName !== undefined && (typeof body.displayName !== 'string' || body.displayName.length > 60)) ||
       (body.editing !== undefined && typeof body.editing !== 'boolean') ||
       (body.leave !== undefined && typeof body.leave !== 'boolean') ||
-      (body.productId !== undefined && (typeof body.productId !== 'string' || body.productId.length > 180))) {
+      (body.productId !== undefined && (typeof body.productId !== 'string' || body.productId.length > 180)) ||
+      (body.categoryId !== undefined && (typeof body.categoryId !== 'string' || body.categoryId.length > 180))) {
       throw problem(400, 'INVALID_PRESENCE', 'The active viewer details are invalid.');
     }
     const now = presenceClock();
@@ -407,7 +420,8 @@ export function createMasterHandler(options = {}) {
     for (const [sessionId, entry] of presenceSessions) if (now - entry.touchedAt >= presenceTtlMs) presenceSessions.delete(sessionId);
     const current = presenceSessions.get(body.sessionId);
     const productId = body.editing === true ? body.productId || '' : '';
-    const authorized = await presenceAuthorization(key, productId, current);
+    const requestedCategoryId = body.categoryId || '';
+    const authorized = await presenceAuthorization(key, productId, requestedCategoryId, current);
     if (body.leave) presenceSessions.delete(body.sessionId);
     else {
       if (!current && presenceSessions.size >= presenceMaxUsers) throw problem(429, 'PRESENCE_FULL', 'The active viewer list is full. Try again shortly.');
@@ -417,20 +431,24 @@ export function createMasterHandler(options = {}) {
         editing: body.editing === true && authorized.knownProduct,
         productId: authorized.knownProduct ? productId : '',
         productName: authorized.productName,
+        categoryId: authorized.categoryId,
+        categoryName: authorized.categoryName,
+        requestedCategoryId,
         sourceSignature: authorized.sourceSignature,
         touchedAt: now,
       });
     }
     const users = [...presenceSessions.values()].map(entry => ({
       sessionId: entry.sessionId, displayName: entry.displayName, editing: entry.editing,
+      categoryId: entry.categoryId, categoryName: entry.categoryName,
       ...(entry.productId ? { productId: entry.productId, productName: entry.productName } : {}),
       lastSeen: new Date(entry.touchedAt).toISOString(), lastSeenAt: new Date(entry.touchedAt).toISOString(),
     }));
     return { users, sessions: users, onlineCount: users.length, ttlSeconds: presenceTtlMs / 1000 };
   }
 
-  function snapshot(source, writable, requiresEditorToken) {
-    return {
+  function snapshot(source, writable, requiresEditorToken, snapshotFormat) {
+    const value = {
       ...model.snapshot(source.manifest),
       revision: source.revision,
       packageInfo: model.latestPackageInfo(source.manifest),
@@ -438,6 +456,7 @@ export function createMasterHandler(options = {}) {
       canWrite: writable,
       requiresEditorToken,
     };
+    return ['compact-v1', 'compact-conflict-v1'].includes(snapshotFormat) ? model.compactSnapshot(value) : value;
   }
 
   return async function handleMaster(request, response) {
@@ -462,6 +481,7 @@ export function createMasterHandler(options = {}) {
       }
       if (request.method !== 'POST') throw problem(405, 'METHOD_NOT_ALLOWED', 'Use a POST request for the shared master.');
       const isPresence = request.url === '/api/master/presence';
+      const isReview = request.url === '/api/master/review';
       if (!acceptRate(request, isPresence)) {
         response.setHeader('Retry-After', String(Math.ceil(rateWindowMs / 1000)));
         throw problem(429, 'RATE_LIMITED', 'Too many master requests. Try again shortly.');
@@ -469,10 +489,12 @@ export function createMasterHandler(options = {}) {
       if (!/^application\/json(?:\s*;|$)/i.test(String(request.headers['content-type'] || ''))) throw problem(415, 'INVALID_REQUEST', 'Use a JSON request for the shared master.');
       body = await readBody(request, isPresence ? Math.min(maxBodyBytes, 4096) : maxBodyBytes);
       const save = request.url.endsWith('/save');
-      const allowed = isPresence ? ['key', 'editorToken', 'sessionId', 'displayName', 'editing', 'productId', 'leave']
-        : save ? ['key', 'editorToken', 'requestId', 'changes', 'actor', 'team', 'reason'] : ['key', 'editorToken'];
+      const allowed = isPresence ? ['key', 'editorToken', 'sessionId', 'displayName', 'editing', 'productId', 'categoryId', 'leave']
+        : isReview ? ['key', 'editorToken', 'sessionId', 'productId', 'sourceProductId', 'snapshotFormat']
+        : save ? ['key', 'editorToken', 'requestId', 'changes', 'actor', 'team', 'reason', 'snapshotFormat'] : ['key', 'editorToken', 'snapshotFormat'];
       if (!isRecord(body) || Object.keys(body).some(name => !allowed.includes(name)) || typeof body.key !== 'string' ||
         (body.editorToken !== undefined && typeof body.editorToken !== 'string')) throw problem(400, 'INVALID_REQUEST', 'The master request is invalid.');
+      if (body.snapshotFormat !== undefined && !['compact-v1', 'compact-conflict-v1'].includes(body.snapshotFormat)) throw problem(400, 'INVALID_REQUEST', 'The snapshot format is unsupported.');
       try { key = codec.normalizeKey(body.key); }
       catch { throw problem(401, 'INVALID_KEY', 'The package key was not accepted.'); }
       body.key = '';
@@ -508,7 +530,23 @@ export function createMasterHandler(options = {}) {
                 response.end(source.bytes);
                 return;
               }
-              if (!save) { respond(response, 200, { snapshot: snapshot(source, writable, requiresEditorToken) }); return; }
+              if (isReview) {
+                if (![body.productId, body.sourceProductId].every(value => typeof value === 'string' && value.length > 0 && value.length <= 180 &&
+                    !/[\u0000-\u001f]/.test(value) && !['__proto__', 'constructor', 'prototype'].includes(value)) || body.productId === body.sourceProductId) {
+                  throw problem(400, 'INVALID_REQUEST', 'Choose two different products to review.');
+                }
+                const entries = model.entriesFromManifest(source.manifest);
+                const products = [body.productId, body.sourceProductId].map(id => entries.find(entry => entry.productId === id)).filter(Boolean);
+                if (!products.length || (products.length === 2 && products[0].categoryId !== products[1].categoryId)) {
+                  throw problem(409, 'MERGE_REVIEW_REQUIRED', 'These products changed. Review the current products before combining them.');
+                }
+                const review = { snapshot: snapshot(source, writable, requiresEditorToken, body.snapshotFormat),
+                  products: products.map(entry => ({ product: entry.product, categoryId: entry.categoryId })) };
+                if (Buffer.byteLength(JSON.stringify(review)) > 20 * 1024 * 1024) throw problem(413, 'REVIEW_TOO_LARGE', 'These complete product details exceed the review response limit. Your local draft is safe. Export a backup and reduce retained data.');
+                respond(response, 200, review);
+                return;
+              }
+              if (!save) { respond(response, 200, { snapshot: snapshot(source, writable, requiresEditorToken, body.snapshotFormat) }); return; }
               let result;
               try {
                 result = model.mergeChanges(source.manifest, body.changes, {
@@ -521,20 +559,27 @@ export function createMasterHandler(options = {}) {
                 throw error;
               }
               if (result.conflicts.length) {
-                respond(response, 409, {
+                const conflictResponse = {
                   error: 'The master changed while you were editing. Choose which values to keep.', code: 'MASTER_CONFLICT',
-                  snapshot: snapshot(source, writable, requiresEditorToken), conflicts: result.conflicts, requestId: body.requestId,
-                });
+                  snapshot: snapshot(source, writable, requiresEditorToken, body.snapshotFormat),
+                  ...(body.snapshotFormat === 'compact-conflict-v1' ? { conflictPlan: model.conflictPlan(result.conflicts) } : { conflicts: result.conflicts }), requestId: body.requestId,
+                };
+                if (body.snapshotFormat === 'compact-conflict-v1' && Buffer.byteLength(JSON.stringify(conflictResponse)) > 16 * 1024 * 1024) throw problem(413, 'CONFLICT_TOO_LARGE', 'The complete conflict review exceeds its response limit. Your local draft is safe. Export a backup and reduce retained data.');
+                respond(response, 409, conflictResponse);
                 return;
               }
               if (result.savedFields) {
+                const preview = snapshot({ manifest: result.manifest, revision: 'f'.repeat(64) }, writable, requiresEditorToken, 'compact-v1');
+                if (preview.products.length > 30000 || Buffer.byteLength(JSON.stringify({ snapshot: preview })) > MAX_SNAPSHOT_BYTES) {
+                  throw problem(413, 'MASTER_TOO_LARGE', 'The master exceeds its readable response limit. Export a backup and reduce retained data.');
+                }
                 const revision = await persistPackage(filename, source, result.manifest, key, maxFileBytes);
                 if (revision === null) continue;
                 source.manifest = result.manifest;
                 source.revision = revision;
               }
               respond(response, 200, {
-                snapshot: snapshot(source, writable, requiresEditorToken), savedFields: result.savedFields,
+                snapshot: snapshot(source, writable, requiresEditorToken, body.snapshotFormat), savedFields: result.savedFields,
                 savedProducts: result.savedProducts, requestId: body.requestId,
               });
               return;
