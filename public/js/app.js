@@ -1007,11 +1007,22 @@ function formatProductInfoDate(value) {
   }).format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-async function copyTextToClipboard(value) {
+async function copyTextToClipboard(value, { timeoutMs = 0, onLateNative } = {}) {
   const text = String(value || "").trim();
   if (!text) return false;
   try {
-    await navigator.clipboard.writeText(text);
+    const nativeWrite = navigator.clipboard.writeText(text);
+    if (timeoutMs > 0) {
+      let timer, timedOut = false;
+      try {
+        await Promise.race([nativeWrite, new Promise((_, reject) => {
+          timer = setTimeout(() => { timedOut = true; reject(new Error("Clipboard request timed out.")); }, timeoutMs);
+        })]);
+      } finally {
+        clearTimeout(timer);
+        if (timedOut) void Promise.resolve(nativeWrite).then(() => { try { onLateNative?.(); } catch (_) {} }, () => {});
+      }
+    } else await nativeWrite;
     return true;
   } catch {
     const textarea = document.createElement("textarea");
@@ -5609,6 +5620,51 @@ function clonePortfolioData() {
   return JSON.parse(JSON.stringify(portfolio));
 }
 
+function portfolioDataBackupText() {
+  return JSON.stringify(portfolio, null, 2);
+}
+
+async function copyPortfolioDataBackup() {
+  const button = $("#copyJson"), status = $("#dataCopyStatus"), fallback = $("#dataCopyFallback"), textField = $("#dataBackupText");
+  if (button.disabled) return false;
+  status.classList.remove("hidden");
+  if (workspaceOpening || packageOperationInProgress) {
+    status.textContent = "Finish loading the portfolio before copying its data backup.";
+    return false;
+  }
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  status.textContent = "Copying data backup…";
+  try {
+    const snapshot = portfolioDataBackupText();
+    textField.value = snapshot; fallback.classList.remove("hidden");
+    const copied = await copyTextToClipboard(snapshot, { timeoutMs: 2000, onLateNative: () => {
+      if (portfolioDataBackupText() !== snapshot) {
+        textField.value = portfolioDataBackupText();
+        status.textContent = "An earlier copy completed late. Use the latest backup text below, or copy it again before using it.";
+      }
+    } });
+    if (!copied) {
+      textField.value = portfolioDataBackupText();
+      status.textContent = "The browser could not copy the backup automatically. The latest backup text is shown below for manual copying, or make this browser window active and try again.";
+      return false;
+    }
+    if (portfolioDataBackupText() !== snapshot) {
+      textField.value = portfolioDataBackupText();
+      status.textContent = "The portfolio changed while copying. Use the latest backup text below, or click Copy data backup again.";
+      return false;
+    }
+    status.textContent = "Data backup copied. Paste it into a text file and save it as .data. Image files are not included.";
+    return true;
+  } catch (_) {
+    status.textContent = "The data backup could not be copied. Try again, or use Export data file.";
+    return false;
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
+}
+
 
 function packageCodec() {
   if (!globalThis.PortfolioPackage) throw new Error("The package tools did not load. Refresh the page and try again.");
@@ -6743,6 +6799,131 @@ function importJson(file) {
   reader.readAsText(file);
 }
 
+function planPortfolioNameUpdates(input, current) {
+  const fail = (message) => { throw new Error(message); };
+  const record = (value) => value && typeof value === "object" && !Array.isArray(value);
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const canonical = (value) => JSON.stringify(value, (_, entry) => record(entry)
+    ? Object.fromEntries(Object.keys(entry).sort().map((key) => [key, entry[key]])) : entry);
+  function validateIdentity(data) {
+    if (!record(data) || ![2, 3, 4].includes(data.version) || !Array.isArray(data.categories)) fail("Use a current complete data backup for name updates.");
+    const categoryIds = new Set(), productIds = new Set();
+    const add = (ids, value) => { if (typeof value !== "string" || !value.trim() || ids.has(value)) fail("The name update file contains missing or repeated identities."); ids.add(value); };
+    for (const category of data.categories) {
+      if (!record(category) || !record(category.board) || !Array.isArray(category.board.lanes) || !Array.isArray(category.board.products)) fail("Use a current complete data backup for name updates.");
+      add(categoryIds, category.id);
+      const laneIds = new Set();
+      for (const lane of category.board.lanes) add(laneIds, lane?.id);
+      for (const product of category.board.products) {
+        if (!record(product) || !laneIds.has(product.laneId)) fail("The name update file contains an invalid product identity.");
+        add(productIds, product.id);
+      }
+    }
+  }
+  validateIdentity(current); validateIdentity(input);
+  const before = clone(current), incoming = clone(input), changes = [];
+  if (before.categories.length !== incoming.categories.length) fail("Name updates cannot change categories or products.");
+  for (const [categoryIndex, category] of before.categories.entries()) {
+    const other = incoming.categories[categoryIndex];
+    if (category.id !== other.id || category.board.products.length !== other.board.products.length) fail("Name updates must keep category and product identities and order.");
+    for (const [productIndex, product] of category.board.products.entries()) {
+      const updated = other.board.products[productIndex];
+      if (product.id !== updated.id) fail("Name updates must keep product identities and order.");
+      if (product.name !== updated.name) {
+        if (typeof updated.name !== "string" || !updated.name.trim() || updated.name.length > 2048) fail("Each updated product name must be nonempty text of at most 2048 characters.");
+        changes.push({ categoryIndex, productIndex, productId: product.id, before: product.name, after: updated.name });
+      }
+      delete product.name; delete updated.name;
+    }
+  }
+  if (canonical(before) !== canonical(incoming)) fail("This file changes more than product names. Copy a fresh data backup and edit only the product names.");
+  if (!changes.length) fail("The file contains no product name changes.");
+  const model = globalThis.PortfolioMasterModel;
+  if (!model || !Array.isArray(current.masterLocalBaseline)) fail("A saved comparison baseline is required for name updates. Open the portfolio and copy a fresh backup.");
+  if (current.masterLocalMerges && (!Array.isArray(current.masterLocalMerges) || current.masterLocalMerges.length)) fail("Finish the pending merge before importing name updates.");
+  const baseline = new Map();
+  for (const entry of current.masterLocalBaseline) {
+    if (!record(entry) || typeof entry.productId !== "string" || !entry.productId || baseline.has(entry.productId)) fail("The comparison baseline contains invalid product identities.");
+    baseline.set(entry.productId, entry);
+  }
+  const products = model.snapshot(current).products;
+  if (products.length !== baseline.size) fail("Finish pending product additions or removals before importing name updates.");
+  for (const product of products) {
+    const previous = baseline.get(product.productId);
+    if (!previous || previous.categoryId !== product.categoryId || previous.laneId !== product.laneId
+      || model.diffOperations(previous.values, product.values).some((operation) => operation.path !== "name")) fail("Finish other pending product changes before importing name updates. Only name changes may be pending.");
+  }
+  const draft = clone(current);
+  for (const change of changes) draft.categories[change.categoryIndex].board.products[change.productIndex].name = change.after;
+  return { expectedCurrent: JSON.stringify(current), draft, changes };
+}
+
+async function applyPortfolioNameUpdates(readInput) {
+  if (workspaceOpening || packageOperationInProgress) throw new Error("Wait for the current portfolio operation to finish before importing name updates.");
+  const expectedCurrent = JSON.stringify(portfolio);
+  let plan, saved = false, applied = false, completed = false;
+  packageOperationInProgress = true;
+  clearTimeout(saveTimer); saveTimer = null;
+  workspaceSaveRevision += 1;
+  try {
+    const input = typeof readInput === "function" ? await readInput() : readInput;
+    if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The portfolio changed while reading the file. Copy a fresh backup and try again.");
+    plan = planPortfolioNameUpdates(input, JSON.parse(expectedCurrent));
+    const serialized = JSON.stringify(plan.draft);
+    await workspaceStorage.save(serialized, { isCurrent: () => JSON.stringify(portfolio) === expectedCurrent });
+    saved = true;
+    if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The portfolio changed while saving the names. Your newer changes have been kept; copy a fresh backup and try again.");
+    for (const change of plan.changes) portfolio.categories[change.categoryIndex].board.products[change.productIndex].name = change.after;
+    applied = true;
+    syncControls(); renderInspector(); renderActiveView();
+    if (JSON.stringify(portfolio) !== serialized) throw new Error("The portfolio changed while applying the names. Copy a fresh backup and try again.");
+    workspaceSavePending = false;
+    globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+    completed = true;
+    return plan.changes.length;
+  } catch (error) {
+    if (applied) for (const change of plan.changes) {
+      const product = portfolio.categories[change.categoryIndex]?.board.products[change.productIndex];
+      if (product?.id === change.productId && product.name === change.after) product.name = change.before;
+    }
+    if (saved) {
+      const restored = JSON.stringify(portfolio);
+      try { await workspaceStorage.save(restored, { isCurrent: () => JSON.stringify(portfolio) === restored }); }
+      catch (restoreError) {
+        workspaceSavePending = true;
+        showLocalSaveFailure(restoreError);
+        error.message += " The saved copy could not be restored. Retry local saving before closing this page.";
+      }
+    }
+    if (applied) { try { syncControls(); renderInspector(); renderActiveView(); } catch (_) {} }
+    throw error;
+  } finally {
+    packageOperationInProgress = false;
+    if (!completed && workspaceSavePending) scheduleSave();
+    globalThis.PortfolioMasterUI?.updateStatus?.();
+  }
+}
+
+async function importPortfolioNameUpdates(file) {
+  const button = $("#importNameUpdates"), status = $("#nameUpdateStatus");
+  if (button.disabled) return;
+  button.disabled = true; button.setAttribute("aria-busy", "true");
+  status.classList.remove("hidden"); status.textContent = "Checking product name updates…";
+  try {
+    const count = await applyPortfolioNameUpdates(() => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => { try { resolve(parsePortfolioImportText(reader.result)); } catch (error) { reject(error); } };
+      reader.onerror = () => reject(new Error("The name update file could not be read. Try again."));
+      reader.readAsText(file);
+    }));
+    status.textContent = `${count} ${count === 1 ? "product name" : "product names"} updated on this device. Review and save changes to share them.`;
+  } catch (error) {
+    status.textContent = error.message || "The name updates could not be applied. Copy a fresh backup and try again.";
+  } finally {
+    button.disabled = false; button.removeAttribute("aria-busy");
+  }
+}
+
 function ascmGroupBasePartNumbers(group) {
   return [...new Set((Array.isArray(group?.basePns) ? group.basePns : (group?.records || []).map((record) => record.basePn))
     .map((value) => String(value || "").trim().toUpperCase()).filter(Boolean))].sort();
@@ -7163,7 +7344,10 @@ $("#exportPackage").onclick = async () => {
 };
 $("#importJson").onclick = () => { closePopupMenus(); $("#importFile").click(); };
 $("#importFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) importJson(file); event.target.value = ""; };
-$("#exportJson").onclick = () => { closePopupMenus(); downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data"); };
+$("#importNameUpdates").onclick = () => $("#importNameUpdatesFile").click();
+$("#importNameUpdatesFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) void importPortfolioNameUpdates(file); event.target.value = ""; };
+$("#exportJson").onclick = () => { closePopupMenus(); downloadBlob(new Blob([portfolioDataBackupText()], { type: "application/json" }), "product-portfolio-data.data"); };
+$("#copyJson").onclick = copyPortfolioDataBackup;
 $("#exportPng").onclick = () => { closePopupMenus(); exportPng(); };
 $("#exportPptx").addEventListener("click", openPptxExportDialog);
 $("#pptxSelectAllCategories").onclick = () => {
