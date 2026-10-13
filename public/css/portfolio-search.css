@@ -1,7 +1,7 @@
 /* Search suggestions sit above the board without taking up toolbar space. */
 .portfolio-search-shell { position: relative; flex: 0 1 auto; width: min(310px, 32vw); min-width: 160px; max-width: 100%; }
 .portfolio-search-shell > .search-shell { width: 100%; min-width: 0; }
-.portfolio-search-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 55; width: max(100%, 380px); max-width: calc(100vw - 40px); max-height: min(320px, var(--portfolio-search-height, 320px)); padding: 0 0 5px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); box-shadow: var(--shadow-overlay); color: var(--color-text, #F2F4F8); }
+.portfolio-search-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 55; width: max(100%, 380px); max-width: calc(100vw - 40px); max-height: min(320px, var(--portfolio-search-height, 320px)); padding: 0 0 5px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); box-shadow: var(--shadow-overlay); color: var(--color-text, #D5D7DC); }
 .portfolio-search-panel[hidden], .portfolio-search-panel [hidden] { display: none; }
 .portfolio-search-header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 9px 11px; border-bottom: 1px solid transparent; background: var(--color-header); font-size: 10px; line-height: 1.4; }
 .portfolio-search-heading { color: var(--color-text); font-weight: 600; }

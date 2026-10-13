@@ -6,12 +6,12 @@
 .workspace-messages-trigger.has-attention { border-color: transparent; color: var(--color-text); }
 .workspace-messages-trigger.has-attention .workspace-messages-symbol { color: var(--color-text-secondary); }
 .workspace-messages-trigger.has-attention .workspace-messages-count { background: var(--color-header); color: var(--color-text); }
-.workspace-messages-panel { position: fixed; inset: 68px 14px auto auto; width: min(460px, calc(100vw - 28px)); max-height: calc(100dvh - 88px); margin: 0; padding: 0; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface, #242527); color: var(--color-text, #F2F4F8); box-shadow: var(--shadow-overlay); overflow: hidden; }
+.workspace-messages-panel { position: fixed; inset: 68px 14px auto auto; width: min(460px, calc(100vw - 28px)); max-height: calc(100dvh - 88px); margin: 0; padding: 0; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface, #242527); color: var(--color-text, #D5D7DC); box-shadow: var(--shadow-overlay); overflow: hidden; }
 .workspace-messages-panel[open] { display: flex; flex-direction: column; }
 .workspace-messages-panel::backdrop { background: #080b0a75; }
 .workspace-messages-heading { display: flex; justify-content: space-between; align-items: flex-start; flex: 0 0 auto; gap: 16px; padding: 20px 20px 17px; border-bottom: 1px solid transparent;  background: var(--color-header); }
 .workspace-messages-heading h2 { margin: 0 0 6px; font-size: 18px; letter-spacing: -.02em; }
-.workspace-messages-heading p, .workspace-messages-footer p { margin: 0; color: var(--color-text-muted, #F2F4F8); font-size: 11px; line-height: 1.5; }
+.workspace-messages-heading p, .workspace-messages-footer p { margin: 0; color: var(--color-text-muted, #D5D7DC); font-size: 11px; line-height: 1.5; }
 .workspace-messages-close { flex: 0 0 auto; min-width: 28px; min-height: 28px; margin: -4px -4px 0 0; padding: 0; border: 0; background: transparent; font-size: 23px; }
 .workspace-messages-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px; display: grid; gap: 12px; }
 .workspace-message { min-width: 0; padding: 14px 15px 15px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); }
@@ -24,14 +24,14 @@
 .workspace-message-error .workspace-message-kind { color: var(--color-danger-text); }
 .workspace-message-success .workspace-message-kind { color: var(--color-text-secondary); }
 .workspace-message h3 { margin: 0 0 7px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-.workspace-message-copy { margin: 0; color: var(--color-text-secondary, #F2F4F8); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-.workspace-message-dismiss { min-width: 23px; min-height: 23px; margin: -4px -4px -4px 0; padding: 0; border: 0; background: transparent; color: var(--color-text-muted, #F2F4F8); font-size: 19px; }
+.workspace-message-copy { margin: 0; color: var(--color-text-secondary, #D5D7DC); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-message-dismiss { min-width: 23px; min-height: 23px; margin: -4px -4px -4px 0; padding: 0; border: 0; background: transparent; color: var(--color-text-muted, #D5D7DC); font-size: 19px; }
 .workspace-message-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
 .workspace-message-actions button { min-height: 32px; padding: 6px 11px; border-color: transparent; background: var(--color-surface); color: var(--color-text); font-size: 11px; }
 .workspace-messages-empty { padding: 40px 14px; text-align: center; }
 .workspace-messages-empty > span { display: grid; place-items: center; width: 35px; height: 35px; margin: 0 auto 15px; border: 1px solid transparent; border-radius: 50%; color: var(--color-text-secondary); font-size: 18px; }
 .workspace-messages-empty h3 { margin-bottom: 7px; font-size: 14px; }
-.workspace-messages-empty p { margin: 0; color: var(--color-text-muted, #F2F4F8); font-size: 12px; line-height: 1.6; }
+.workspace-messages-empty p { margin: 0; color: var(--color-text-muted, #D5D7DC); font-size: 12px; line-height: 1.6; }
 .workspace-messages-footer { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 12px; padding: 14px 20px; border-top: 1px solid transparent; background: var(--color-surface); }
 .workspace-messages-footer button { flex: 0 0 auto; font-size: 11px; }
 .workspace-toast-region { position: fixed; left: 50%; bottom: 46px; z-index: 120; width: max-content; max-width: calc(100vw - 28px); transform: translateX(-50%); pointer-events: none; }

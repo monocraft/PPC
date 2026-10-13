@@ -1503,7 +1503,7 @@ function openPortfolioSearchResult(result) {
     const matchingCopy = result.matchedSku && [...target.querySelectorAll("[data-detail-copy]")].find((element) => element.dataset.detailCopy === result.matchedSku);
     (matchingCopy || target.querySelector('[role="tab"][aria-selected="true"]'))?.focus({ preventScroll: true });
   };
-  if (nextView === "products") openViewerInfo(product.id, { onReady: focusResult });
+  if (nextView === "products") openViewerInfo(product.id, { onReady: focusResult, preserveDetailTab: true });
   else requestAnimationFrame(focusResult);
   return true;
 }
@@ -1631,23 +1631,30 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
 }
 
 function viewerInfoVisualWidth() {
-  return 720;
+  const available = (canvasScroll?.clientWidth || 896) - 16;
+  return Math.max(1, Math.min(500, viewerInfoStacked() ? available : Math.max(280, available - CARD_WIDTH * zoom)));
 }
 
 function viewerInfoVisualHeight() {
-  return productCardLayout().cardHeight * zoom;
+  const readingHeight = Math.max(1, Math.min(600, (canvasScroll?.clientHeight || 616) - 16));
+  return viewerInfoStacked() ? readingHeight : Math.max(productCardLayout().cardHeight * zoom, readingHeight);
+}
+
+function viewerInfoStacked() {
+  return (canvasScroll?.clientWidth || 896) < 600;
 }
 
 function setViewerInfoSize(width, height) {
   viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
   viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
-  viewerInfo.dataset.compactHeight = String(height <= 180);
+  viewerInfo.dataset.compactHeight = "false";
   viewerInfo.dataset.detailColumns = "1";
 }
 
 function viewerInfoReserveLogical() {
   if (activeView !== "products" || !viewerInfoProductId || viewerInfoProgress <= 0 || !visibleProducts().some((product) => product.id === viewerInfoProductId)) return 0;
-  return (viewerInfoVisualWidth() + 10) / Math.max(PRODUCT_MIN_ZOOM, zoom || 1) * viewerInfoProgress;
+  const width = viewerInfoStacked() ? Math.max(0, viewerInfoVisualWidth() - CARD_WIDTH * zoom) : viewerInfoVisualWidth();
+  return width / Math.max(PRODUCT_MIN_ZOOM, zoom || 1) * viewerInfoProgress;
 }
 
 function viewerInfoGapIndex(laneProducts) {
@@ -1661,8 +1668,16 @@ function cardXForDisplayIndex(laneProducts, displayIndex, includeViewer = true) 
   return GUTTER + displayIndex * (CARD_WIDTH + CARD_GAP) + shift;
 }
 
-function productLaneGeometry(layout = productCardLayout()) {
-  return PortfolioModel.layoutProductLanes(sortedLanes(), layout, { top: LANE_TOP });
+function productLaneGeometry(layout = productCardLayout(), { includeViewer = true } = {}) {
+  const product = includeViewer && activeView === "products" && viewerInfoProgress > 0
+    ? visibleProducts().find((item) => item.id === viewerInfoProductId) : null;
+  let detailHeight = 0;
+  if (product) {
+    const readingHeight = viewerInfoVisualHeight() / Math.max(PRODUCT_MIN_ZOOM, zoom || 1);
+    const targetHeight = viewerInfoStacked() ? layout.cardHeight + readingHeight : Math.max(layout.cardHeight, readingHeight);
+    detailHeight = layout.cardHeight + (targetHeight - layout.cardHeight) * viewerInfoProgress;
+  }
+  return PortfolioModel.layoutProductLanes(sortedLanes(), layout, { top: LANE_TOP, expandedLaneId: product?.laneId || "", detailHeight });
 }
 
 function productCardDropTarget(allProducts, visible, laneRows, draggedId, position) {
@@ -1788,7 +1803,7 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
   const editorRevealReserve = inspectorOpen && activeView === "products" && inspector?.offsetWidth
     ? Math.ceil((inspector.offsetWidth + 28) / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
     : 0;
-  const laneGeometry = productLaneGeometry(layout);
+  const laneGeometry = productLaneGeometry(layout, { includeViewer });
   const contentWidth = GUTTER + maxCount * (CARD_WIDTH + CARD_GAP) + SIDE_PADDING + editorRevealReserve + (includeViewer ? viewerInfoReserveLogical() : 0);
   const viewportLogicalWidth = canvasScroll?.clientWidth
     ? Math.ceil(canvasScroll.clientWidth / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
@@ -2149,8 +2164,19 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
         if (includeProducts && product.id === liftedId) return;
         const automatic = { x: cardXForDisplayIndex(laneProducts, displayIndex, dimensions.includeViewer !== false), y: laneY };
         const position = motion?.positions.get(product.id) || automatic;
-        renderedCards.push({ productId: product.id, laneId: lane.id, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
-        drawCard(context, product, position.x, position.y, includeSelection && product.id === selectedId, layout, includeSelection && !productLayoutEditing);
+        const integrated = includeSelection && dimensions.includeViewer !== false && !dimensions.pptxPage && activeView === "products" && viewerInfoProgress > 0 && product.id === viewerInfoProductId;
+        const stacked = integrated && viewerInfoStacked();
+        const sourceOffset = stacked ? viewerInfoReserveLogical() / 2 : 0;
+        const sourceX = position.x + sourceOffset;
+        const cardLayout = integrated ? { ...layout, cardHeight: stacked ? layout.cardHeight : contentHeight, viewerExtended: true } : layout;
+        if (stacked) {
+          roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, layout.cardHeight, [4, 4, 0, 0], UI_PALETTE.carbon);
+          const presentation = productPresentation(product);
+          if (presentation.primaryLabel) roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
+        }
+        renderedCards.push({ productId: product.id, laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
+          ...(integrated ? { viewerIntegrated: true, viewerStacked: stacked, integrationX: position.x, integrationWidth: CARD_WIDTH + viewerInfoReserveLogical(), integrationHeight: contentHeight } : {}) });
+        drawCard(context, product, sourceX, position.y, includeSelection && product.id === selectedId, cardLayout, includeSelection && !productLayoutEditing);
       });
   });
   if (includeProducts && drag) {
@@ -2424,11 +2450,11 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   context.shadowColor = "transparent";
   context.shadowBlur = 0;
   context.shadowOffsetY = 0;
-  roundRect(context, x, y, CARD_WIDTH, cardHeight, 4, UI_PALETTE.carbon);
+  roundRect(context, x, y, CARD_WIDTH, cardHeight, layout.viewerExtended ? 0 : 4, UI_PALETTE.carbon);
   context.restore();
 
   if (presentation.primaryLabel) {
-    roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
+    roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, layout.viewerExtended ? 0 : [4, 4, 0, 0], presentation.primaryColor);
     context.fillStyle = labelColor;
     context.font = `700 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
@@ -2492,7 +2518,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   // Filled surfaces and gutters separate cards; outlines identify selection.
   if (selected) {
     context.save();
-    roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, UI_PALETTE.selection, 1.25);
+    if (!layout.viewerExtended) roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, UI_PALETTE.selection, 1.25);
     const markerY = y + STATUS_BANNER_HEIGHT + (presentation.secondaryLabel ? 28 : 9);
     roundRect(context, x + 8, markerY, 64, 18, 4, UI_PALETTE.charcoal700);
     context.fillStyle = UI_PALETTE.steelTealLight;
@@ -4123,7 +4149,7 @@ function renderViewerInfo() {
     if (viewerInfoOutline) { viewerInfoOutline.classList.remove('is-open'); viewerInfoOutline.style.width = '0px'; }
     return;
   }
-  viewerInfo.innerHTML = `<div class="viewer-info-body"><div class="viewer-detail-heading"><div class="viewer-detail-title"><span class="viewer-detail-eyebrow">Product details</span><h2>${escapeHtml(product.name)}</h2></div><button type="button" class="icon-button viewer-detail-close" data-detail-close aria-label="Close product information">×</button></div>${PortfolioDetails.render(productDetailsModel(product), { surface: 'viewer' })}</div>`;
+  viewerInfo.innerHTML = `<div class="viewer-info-body"><h2 class="visually-hidden">Details for ${escapeHtml(product.name)}</h2><button type="button" class="icon-button viewer-detail-close" data-detail-close aria-label="Close product information">×</button>${PortfolioDetails.render(productDetailsModel(product), { surface: 'viewer' })}</div>`;
   setViewerInfoSize(viewerInfoVisualWidth(), viewerInfoVisualHeight());
   PortfolioDetails.bind(viewerInfo, { onCopy: copyTextToClipboard, onClose: closeViewerInfo, dateHistory: productDateHistoryOptions(product.id) });
 }
@@ -4133,45 +4159,51 @@ function positionViewerInfo() {
   viewerInfo.classList.toggle("is-open", Boolean(card));
   viewerInfo.setAttribute("aria-hidden", String(!card));
   if (!card) return null;
-  const height = card.height * zoom;
-  const width = viewerInfoVisualWidth(height);
-  const left = (card.x + card.width) * zoom + 10;
-  const top = card.y * zoom;
+  const stacked = card.viewerStacked ?? viewerInfoStacked();
+  const height = stacked ? viewerInfoVisualHeight() : card.height * zoom;
+  const width = viewerInfoVisualWidth();
+  const left = stacked ? (card.integrationX ?? card.x) * zoom : (card.x + card.width) * zoom;
+  const top = (card.y + (stacked ? card.height : 0)) * zoom;
   const hiddenPercent = Math.max(0, Math.min(100, (1 - viewerInfoProgress) * 100));
-  const visibleWidth = width * viewerInfoProgress;
+  const visibleWidth = stacked ? Math.max(card.width * zoom, (card.integrationWidth || card.width) * zoom) : width * viewerInfoProgress;
 
-  setViewerInfoSize(width, height);
+  setViewerInfoSize(stacked ? visibleWidth : width, height);
+  const presentation = productPresentation(infoProduct());
+  viewerInfo.dataset.stacked = String(stacked);
+  viewerInfo.style.setProperty("--viewer-info-band-height", `${stacked ? 0 : STATUS_BANNER_HEIGHT * zoom}px`);
+  viewerInfo.style.setProperty("--viewer-info-band-color", presentation.primaryLabel ? presentation.primaryColor : UI_PALETTE.carbon);
   viewerInfo.style.left = `${left}px`;
   viewerInfo.style.top = `${top}px`;
   viewerInfo.style.transform = "none";
   viewerInfo.style.opacity = "1";
-  viewerInfo.style.clipPath = `inset(0 ${hiddenPercent}% 0 0)`;
+  viewerInfo.style.clipPath = stacked ? `inset(0 0 ${hiddenPercent}% 0)` : `inset(0 ${hiddenPercent}% 0 0)`;
   viewerInfo.style.pointerEvents = viewerInfoProgress > .96 ? "auto" : "none";
 
   if (viewerInfoOutline) {
-    const outlineWidth = (CARD_WIDTH * zoom) + visibleWidth;
+    const outlineWidth = stacked ? visibleWidth : (CARD_WIDTH * zoom) + visibleWidth;
     viewerInfoOutline.classList.toggle("is-open", viewerInfoProgress > .001);
-    viewerInfoOutline.style.left = `${card.x * zoom}px`;
-    viewerInfoOutline.style.top = `${top}px`;
+    viewerInfoOutline.style.left = `${(card.integrationX ?? card.x) * zoom}px`;
+    viewerInfoOutline.style.top = `${card.y * zoom}px`;
     viewerInfoOutline.style.width = `${outlineWidth}px`;
-    viewerInfoOutline.style.height = `${height}px`;
+    viewerInfoOutline.style.height = `${(card.integrationHeight ?? card.height) * zoom}px`;
   }
 
   return {
-    cardLeft: card.x * zoom,
+    cardLeft: (card.integrationX ?? card.x) * zoom,
     cardTop: card.y * zoom,
+    cardBottom: (card.y + card.height) * zoom,
     paneLeft: left,
     paneRight: left + visibleWidth,
-    paneBottom: top + height,
+    paneBottom: top + height * (stacked ? viewerInfoProgress : 1),
   };
 }
 
 function revealViewerInfoBesideProduct() {
   const placement = positionViewerInfo();
   if (!placement) return;
-  const padding = 18;
   const viewportWidth = canvasScroll.clientWidth;
   const viewportHeight = canvasScroll.clientHeight;
+  const padding = Math.min(18, Math.max(0, (viewportWidth - (placement.paneRight - placement.paneLeft)) / 2));
   const combinedWidth = placement.paneRight - placement.cardLeft;
   let targetLeft = canvasScroll.scrollLeft;
   if (combinedWidth <= viewportWidth - padding * 2) {
@@ -4184,7 +4216,7 @@ function revealViewerInfoBesideProduct() {
 
   let targetTop = canvasScroll.scrollTop;
   if (placement.cardTop < targetTop + padding || placement.paneBottom > targetTop + viewportHeight - padding) {
-    targetTop = Math.max(0, placement.cardTop - padding);
+    targetTop = Math.max(0, viewerInfoStacked() ? placement.cardTop - padding : placement.cardTop - 8);
   }
   canvasScroll.scrollTo({ left: targetLeft, top: targetTop, behavior: "smooth" });
 }
@@ -4227,7 +4259,7 @@ function animateViewerInfo(targetProgress, onComplete) {
   viewerInfoAnimationFrame = requestAnimationFrame(step);
 }
 
-function openViewerInfo(productId = selectedId, { onReady } = {}) {
+function openViewerInfo(productId = selectedId, { onReady, preserveDetailTab = false } = {}) {
   if (!productId) return;
 
   if (viewerInfoOpen && viewerInfoProductId === productId) {
@@ -4238,6 +4270,10 @@ function openViewerInfo(productId = selectedId, { onReady } = {}) {
   viewerInfoProductId = productId;
   viewerInfoOpen = true;
   selectedId = productId;
+  if (!preserveDetailTab) {
+    const product = infoProduct();
+    if (product) PortfolioDetails.focusMatch(productDetailsModel(product), { surface: "viewer" });
+  }
   renderInspector();
   renderViewerInfo();
   renderBoard();
@@ -7021,7 +7057,7 @@ function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {})
   return { added, updated, unchanged, skipped };
 }
 
-canvasScroll.addEventListener("scroll", () => { syncBoardNavigator(); syncLaneRail(); }, { passive: true });
+canvasScroll.addEventListener("scroll", () => { syncBoardNavigator(); syncLaneRail(); positionViewerInfo(); }, { passive: true });
 canvasScroll.addEventListener("wheel", (event) => {
   const max = horizontalScrollMax();
   if (max <= 0) return;
