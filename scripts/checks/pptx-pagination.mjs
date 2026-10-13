@@ -237,6 +237,7 @@ class RecordingPptx {
     return slide;
   }
   async writeFile({ fileName }) { this.fileName = fileName; }
+  defineLayout(layout) { this.customLayout = layout; }
 }
 function recordImage(kind, category, page = null) {
   const pageProducts = kind === "products" ? page.rows.flatMap((row) => row.products) : page.flatMap((group) => group.products);
@@ -261,6 +262,7 @@ function recordImage(kind, category, page = null) {
   renderCalls.push({ kind, categoryId: category.id, productIds, image, page });
   return image;
 }
+const limitControl = { id: "pptxRoadmapLimit", checked: false };
 const sandbox = {
   UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
   PPTXPagination: globalThis.PPTXPagination, paginateRoadmapGroupsForPptx: paginateRoadmapGroups,
@@ -268,7 +270,7 @@ const sandbox = {
   portfolio: { categories: exportCategories }, pptxSelectedCategoryIds: null, pptxExportInProgress: false,
   pptxExportDialog: { classList: { add() {}, remove() {} } }, confirmPptxExportButton: { disabled: false },
   pptxExportForm: {
-    querySelector: () => ({ value: selectedScope }),
+    querySelector: selector => selector === "#pptxRoadmapLimit" ? limitControl : { value: selectedScope },
     querySelectorAll: (selector) => selector.includes(":checked") ? categoryInputs.filter((input) => input.checked) : categoryInputs,
   },
   $: (selector) => exportControls.get(selector),
@@ -379,8 +381,10 @@ sandbox.pptxExportDialog.classList = { add: (name) => modalClasses.add(name), re
 sandbox.document = { activeElement: originalControl, querySelector: (selector) => selector === ".app-shell" ? appShell : null };
 sandbox.requestAnimationFrame = (callback) => callback();
 sandbox.pptxReturnFocus = null;
-sandbox.pptxExportForm.querySelector = () => ({ value: selectedScope, focus: () => { scopeFocus += 1; } });
+sandbox.pptxExportForm.querySelector = selector => selector === "#pptxRoadmapLimit" ? limitControl : { value: selectedScope, focus: () => { scopeFocus += 1; } };
+limitControl.checked = true;
 sandbox.openPptxExportDialog();
+assert.equal(limitControl.checked, false, "reopening the chooser requires a fresh explicit cutoff choice");
 assert.equal(sandbox.confirmPptxExportButton.disabled, true);
 assert.equal(modalClasses.has("hidden"), false);
 assert.equal(appShell.inert, true);
@@ -399,6 +403,16 @@ sandbox.closePptxExportDialog();
 assert.equal(modalClasses.has("hidden"), false, "an active file export keeps its chooser open");
 assert.equal(appShell.inert, true);
 sandbox.pptxExportInProgress = false;
+for (const id of ["pptxRoadmapStart", "pptxRoadmapEnd", "pptxRoadmapMode", "pptxExportScope", "pptxExportCategory"]) {
+  limitControl.checked = true;
+  sandbox.handlePptxSelectionChange({ target: { id } });
+  assert.equal(limitControl.checked, false, "changing the selection or calendar clears consent to a previous fitting range");
+}
+limitControl.checked = true;
+sandbox.handlePptxSelectionChange({ target: limitControl });
+assert.equal(limitControl.checked, true, "checking the cutoff choice preserves the user's explicit choice");
+sandbox.setPptxCategorySelection(["beta"]);
+assert.equal(limitControl.checked, false, "category shortcut controls clear prior cutoff consent too");
 sandbox.closePptxExportDialog();
 assert.equal(returnedFocus, 2);
 assert.equal(appShell.inert, false);
@@ -427,7 +441,7 @@ for (const [scope, expectedKinds, expectedFilename] of [
     }
   }
   deck.slides.forEach((slide, index) => {
-    assert.deepEqual(structuredClone(deck.theme), { headFontFace: "Jost", bodyFontFace: "Jost", lang: "en-US" }, "PowerPoint theme fonts match its native text objects.");
+    assert.deepEqual(structuredClone(deck.theme), { headFontFace: "HP Forma DJR Office", bodyFontFace: "HP Forma DJR Office", lang: "en-US" }, "all PowerPoint themes use the required HP Office font.");
     const call = renderCalls[index];
     const category = exportCategories.find((item) => item.id === call.categoryId);
     const previousSameView = renderCalls.slice(0, index).some((earlier) => earlier.kind === call.kind && earlier.categoryId === call.categoryId);
@@ -674,7 +688,7 @@ const declaredParts = async (archive) => [...(await archive.file("[Content_Types
 const missingDeclaredParts = async (archive) => (await declaredParts(archive)).filter((part) => !archive.file(part));
 assert.deepEqual(await missingDeclaredParts(beforeGroupingArchive), ["ppt/slideMasters/slideMaster2.xml"], "the browser bundle itself reproduces the extra-master defect");
 assert.deepEqual(await missingDeclaredParts(deliveredArchive), [], "the actual download must not declare missing parts");
-assert.equal(await deliveredArchive.file("ppt/slideMasters/slideMaster1.xml").async("string"), await beforeGroupingArchive.file("ppt/slideMasters/slideMaster1.xml").async("string"), "compatibility keeps the real shared master unchanged");
+assert.equal((await deliveredArchive.file("ppt/slideMasters/slideMaster1.xml").async("string")).replace(/typeface="[^"]*"/g, 'typeface="FONT"'), (await beforeGroupingArchive.file("ppt/slideMasters/slideMaster1.xml").async("string")).replace(/typeface="[^"]*"/g, 'typeface="FONT"'), "compatibility preserves the shared master except the required HP font policy");
 const threeSlideDeck = new librarySandbox.PptxGenJS();
 for (let index = 0; index < 3; index++) threeSlideDeck.addSlide().addText(`Slide ${index + 1}`, { x: 1, y: 1, w: 3, h: 1 });
 const threeSlideRaw = await threeSlideDeck.write({ outputType: "arraybuffer" });
@@ -770,13 +784,12 @@ nativeCategories[0].board.products.forEach((product, index) => {
   Object.assign(product, { family: "Headsets", price: "$99", roadmap: { startMonth: index === 25 ? "2030-01" : "2026-01", endMonth: index === 25 ? "2030-12" : "2028-12", status: "launched" } });
 });
 const nativeBefore = JSON.stringify(nativeCategories);
-const blockedPlan = sandbox.buildPptxExportPlan("roadmap", nativeCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12", overflow: "ask" });
-assert.equal(blockedPlan.roadmapPlan.requiresDecision, true, "the actual adapter blocks an unreadably dense merged slide");
-const fallbackPlan = sandbox.buildPptxExportPlan("roadmap", nativeCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12", overflow: "overview-details" });
-assert.equal(fallbackPlan.roadmapPlan.requiresDecision, false);
-assert.equal(fallbackPlan[0].kind, "roadmap-overview");
-assert.equal(fallbackPlan.roadmapPlan.outsideRangeCount, 1, "the selected period explicitly excludes dated products outside it");
-const rows = Array.from(fallbackPlan).flatMap(item => Array.from(item.roadmapSlide.rows));
+const compactPlan = sandbox.buildPptxExportPlan("roadmap", nativeCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
+assert.equal(compactPlan.roadmapPlan.requiresDecision, false, "the compact actual-product layout fits a selection rejected by the old12pt layout");
+assert.equal(compactPlan.length, 1);
+assert.equal(compactPlan[0].kind, "roadmap-merged");
+assert.equal(compactPlan.roadmapPlan.outsideRangeCount, 1, "the selected period explicitly excludes dated products outside it");
+const rows = Array.from(compactPlan).flatMap(item => Array.from(item.roadmapSlide.rows));
 const productRows = rows.filter(row => row.kind === "product");
 assert.equal(productRows.length, 25); assert.equal(new Set(productRows.map(row => row.product.id)).size, 25);
 assert.ok(productRows.every(row => row.product.family === "Headsets" && row.product.priceLabel === "$99"));
@@ -787,10 +800,79 @@ const originalSerializer = sandbox.PPTXEditable;
 try {
   sandbox.portfolio.categories = nativeCategories;
   sandbox.PPTXEditable = { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) };
-  await sandbox.exportPptx("roadmap", nativeCategories.map(category => category.id), { mode: "merged", startMonth: "2026-01", endMonth: "2028-12", overflow: "overview-details" });
+  await sandbox.exportPptx("roadmap", nativeCategories.map(category => category.id), { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
 } finally { sandbox.portfolio.categories = originalFixtureCategories; sandbox.PPTXEditable = originalSerializer; }
 const nativeDeck = decks.at(-1);
 assert.equal(renderCalls.length, oldRenderCount, "native roadmap plans bypass the canvas image renderer");
-assert.equal(nativeDeck.slides.length, fallbackPlan.length);
-assert.ok(nativeDeck.slides.every(slide => slide.images.length === 0 && slide.texts.some(text => text.options.fontSize === 12)));
-console.log(`PPTX checks passed: pagination, category selection, grouped native portfolio cards, top-filled sparse pages, native roadmap planner/range/fallback adapter with retained prices/families and unchanged data, and real delivered-file OOXML (${groupedBytes.byteLength} bytes).`);
+assert.equal(nativeDeck.slides.length, compactPlan.length);
+assert.ok(nativeDeck.slides.every(slide => slide.images.length === 0 && slide.texts.some(text => text.options.fontSize === 7)));
+const denseCategories = [productBoundaryCategory(140)];
+denseCategories[0].board.products.forEach(product => Object.assign(product, { family: "Headsets", price: "$99", roadmap: { startMonth: "2026-01", endMonth: "2028-12", status: "launched" } }));
+const denseBefore = JSON.stringify(denseCategories);
+const densePlan = sandbox.buildPptxExportPlan("both", denseCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
+assert.equal(densePlan.roadmapPlan.requiresDecision, false);
+assert.equal(densePlan.roadmapPlan.slides.length, 1);
+assert.ok(densePlan.roadmapPlan.canvas.width > 40 / 3, "a dense single slide gets a larger native canvas");
+assert.ok(Math.abs(densePlan.roadmapPlan.canvas.width / densePlan.roadmapPlan.canvas.height - 16 / 9) < 1e-9);
+assert.equal(densePlan.roadmapPlan.slides[0].columns.length, 1, "the merged slide has exactly one shared timeline");
+assert.equal(densePlan.roadmapPlan.slides[0].rows.filter(row => row.kind === "product").length, 140);
+try {
+  sandbox.portfolio.categories = denseCategories;
+  sandbox.PPTXEditable = { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) };
+  await sandbox.exportPptx("both", denseCategories.map(category => category.id), { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
+} finally { sandbox.portfolio.categories = originalFixtureCategories; sandbox.PPTXEditable = originalSerializer; }
+const singleTimelineDeck = decks.at(-1), factor = densePlan.roadmapPlan.canvas.width / (40 / 3);
+assert.equal(singleTimelineDeck.customLayout.width, densePlan.roadmapPlan.canvas.width);
+assert.equal(singleTimelineDeck.customLayout.height, densePlan.roadmapPlan.canvas.height);
+assert.equal(singleTimelineDeck.slides.length, densePlan.length, "Both keeps all product pages and exactly one merged roadmap");
+assert.equal(singleTimelineDeck.slides[0].images[0].y, .74 * factor, "product pages stay top aligned on the shared enlarged canvas");
+assert.equal(singleTimelineDeck.slides[0].texts[0].options.fontSize, 20 * factor, "the product presentation scales proportionally as a whole");
+assert.equal(JSON.stringify(denseCategories), denseBefore);
+const overflowCategories = [productBoundaryCategory(220)];
+overflowCategories[0].board.products.forEach((product, index) => Object.assign(product, { name: `Ordered headset ${index + 1}`, family: "Headsets", roadmap: { startMonth: "2026-01", endMonth: "2028-12", status: "launched" } }));
+const overflowOptions = { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" };
+const blockedPlan = sandbox.buildPptxExportPlan("roadmap", overflowCategories, overflowOptions);
+assert.equal(blockedPlan.roadmapPlan.requiresDecision, true, "overflow cannot create a file before the cutoff is accepted");
+assert.equal(blockedPlan.length, 0);
+const cutoff = blockedPlan.roadmapPlan.cutoff;
+assert.ok(cutoff.includedCount > 0 && cutoff.excludedCount > 0);
+assert.equal(cutoff.includedCount + cutoff.excludedCount, 220);
+assert.equal(cutoff.lastIncluded.name, overflowCategories[0].board.products[cutoff.includedCount - 1].name);
+assert.equal(cutoff.firstExcluded.name, overflowCategories[0].board.products[cutoff.includedCount].name);
+const acceptedPlan = sandbox.buildPptxExportPlan("roadmap", overflowCategories, { ...overflowOptions, limitToFit: true });
+assert.equal(acceptedPlan.roadmapPlan.requiresDecision, false);
+assert.equal(acceptedPlan.length, 1);
+assert.equal(acceptedPlan.roadmapPlan.selectedProductCount, 220);
+assert.equal(acceptedPlan.roadmapPlan.includedProductCount, cutoff.includedCount);
+assert.equal(acceptedPlan.roadmapPlan.excludedProductCount, cutoff.excludedCount);
+assert.deepEqual(acceptedPlan[0].roadmapSlide.rows.filter(row => row.kind === "product").map(row => row.product.id), overflowCategories[0].board.products.slice(0, cutoff.includedCount).map(product => product.id), "the explicit fitting range is exactly the ordered prefix shown before export");
+const deckCountBeforeBlockedExport = decks.length;
+try {
+  sandbox.portfolio.categories = overflowCategories;
+  sandbox.PPTXEditable = { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) };
+  await assert.rejects(sandbox.exportPptx("roadmap", overflowCategories.map(category => category.id), overflowOptions), /fit|selection|products|slide/i);
+  assert.equal(decks.length, deckCountBeforeBlockedExport, "no deck is created by a blocked export");
+  await sandbox.exportPptx("roadmap", overflowCategories.map(category => category.id), { ...overflowOptions, limitToFit: true });
+  assert.equal(decks.at(-1).slides.length, 1);
+  const names = decks.at(-1).slides[0].texts.map(text => text.text);
+  assert.ok(names.includes(cutoff.lastIncluded.name));
+  assert.ok(!names.includes(cutoff.firstExcluded.name), "the native export observes the announced boundary");
+} finally { sandbox.portfolio.categories = originalFixtureCategories; sandbox.PPTXEditable = originalSerializer; }
+assert.equal(sandbox.UI_FONT_FACE, "Jost", "PowerPoint rendering restores the website font after completion");
+await assert.rejects(sandbox.exportPptx("roadmap", originalFixtureCategories.map(category => category.id), { mode: "merged", startMonth: "2028-12", endMonth: "2026-01" }), /valid start and end month/);
+assert.equal(sandbox.UI_FONT_FACE, "Jost", "an invalid export also restores the website font");
+const priorFontsApi = sandbox.document.fonts;
+const priorFontLoader = sandbox.PPTXEditable.fontsReady;
+const decksBeforeMissingFont = decks.length;
+try {
+  sandbox.document.fonts = {};
+  sandbox.PPTXEditable = { ...sandbox.PPTXEditable, fontsReady: async () => false };
+  await assert.rejects(sandbox.exportPptx("products", originalFixtureCategories.map(category => category.id)), /Install the supplied HP Forma DJR Office fonts/);
+  assert.equal(decks.length, decksBeforeMissingFont, "a browser missing the required HP font cannot deliver a file measured with fallback glyphs");
+  assert.equal(sandbox.UI_FONT_FACE, "Jost");
+} finally {
+  if (priorFontsApi === undefined) delete sandbox.document.fonts;
+  else sandbox.document.fonts = priorFontsApi;
+  sandbox.PPTXEditable = { ...sandbox.PPTXEditable, fontsReady: priorFontLoader };
+}
+console.log(`PPTX checks passed: pagination, category selection and cutoff consent reset, grouped native portfolio cards, top-filled sparse pages, compact7pt roadmap/range adapter, one shared16:9 timeline with retained prices/families, proportionally scaled Both pages and unchanged data, and real delivered-file OOXML (${groupedBytes.byteLength} bytes).`);

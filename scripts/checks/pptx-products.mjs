@@ -276,4 +276,13 @@ const legacyPage = { ...exportPage, rows: exportPage.rows.map(({ slot, ...row })
 const legacyResult = await sandbox.renderCategoryImageForPptx(category, legacyPage);
 assertRestored();
 assert.deepEqual(Array.from(legacyResult.products, (product) => [product.id, product.x, product.y, product.width]), Array.from(result.products, (product) => [product.id, product.x, product.y, product.width]), "rendering still supports explicitly supplied older pages whose row positions come from their array order");
+vm.runInContext(await readFile(new URL("../../public/js/pptx-editable.js", import.meta.url), "utf8"), sandbox);
+const nativeTextCalls = [];
+const slide = { addText(text, options) { nativeTextCalls.push({ text, ...options }); }, addImage() {}, addShape() {} };
+const uiFontBeforeNativeCard = sandbox.UI_FONT_FACE;
+sandbox.PPTXEditable.addCard({ ShapeType: {} }, slide, result.products[0], { x: 0, y: 0, scale: 1 }, 0);
+assert.ok(nativeTextCalls.length > 0);
+assert.ok(nativeTextCalls.every(text => text.fontFace === "HP Forma DJR Office"), "legacy recorded Arial values cannot leak into a native PowerPoint card");
+assert.equal(sandbox.UI_FONT_FACE, uiFontBeforeNativeCard, "native HP card creation leaves the website Jost font unchanged");
+assertRestored();
 console.log("PowerPoint cards preserve constant size and stable lane slots, record editable name/price/spec/SKU and native shapes, isolate artwork, omit product content from the background, and restore workspace state.");
