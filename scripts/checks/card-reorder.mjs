@@ -13,6 +13,7 @@ const functions = names.map((name) => {
 }).join("\n");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 function harness() {
+  const roadmapDefaultMonthWidth = Number(source.match(/^const ROADMAP_DEFAULT_MONTH_WIDTH = (\d+);/m)[1]);
   const focus = [], counts = { saves: 0, writes: 0, paints: 0 }, notices = [];
   const nodes = new Map();
   function node(id = "") {
@@ -36,7 +37,7 @@ function harness() {
     closePopupMenus() {}, showWorkspaceNotice: (message, options) => notices.push({ message, options }), selectedProduct: () => context.board.products.find((product) => product.id === context.selectedId), sortedLanes: () => context.board.lanes,
     updateBoard(mutator) { counts.writes++; mutator(context.board); context.scheduleSave(); context.updateProductLayoutEditControls(); },
     closeViewerInfo() {}, viewerInfoOutline: get("outline"), viewerInfoProgress: 0, viewerInfoProductId: null, viewerInfoOpen: false,
-    ensureBoardSchema: (value) => value, categoryDefinition: () => ({}), PortfolioModel: { syncTimelineSettings() {} }, closeInspector() {}, closeVariantPopover() {}, hoveredHeroVariant: null, stopRoadmapSlotEditing() {}, initialVerticalFitPending: false, fitProductLanesVertically() {},
+    ensureBoardSchema: (value) => value, categoryDefinition: () => ({}), PortfolioModel: { syncTimelineSettings() {} }, closeInspector() {}, closeVariantPopover() {}, hoveredHeroVariant: null, stopRoadmapSlotEditing() {}, initialVerticalFitPending: false, fitProductLanesVertically() {}, ROADMAP_DEFAULT_MONTH_WIDTH: roadmapDefaultMonthWidth,
     roadmapPanState: null, roadmapLaneHovers: new Map(), roadmapInteractionMode: "pan", roadmapDetailsOpen: false, productView: get("productView"), roadmapView: get("roadmapView"), splitView: get("splitView"), syncRoadmapDetailsVisibility() {}, updateLinkedViewButton() {}, updateRoadmapEditControls() {},
     document: { querySelectorAll: () => [] }, requestAnimationFrame: (callback) => callback(), cancelAnimationFrame() {}, scrollSelectedIntoView() {}, scrollRoadmapSelected() {}, roadmapScroll: {}, splitRoadmapScroll: {}, startProductCardSettling() {}, updateProductCardDrag() {},
     productLaneGeometry: () => ({ rows: [{ lane: { id: "first" }, top: 34 }, { lane: { id: "second" }, top: 650 }] }), GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, syncBoardNavigator() {}, canvasScroll: { classList: get("scroll").classList },
