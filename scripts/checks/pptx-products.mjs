@@ -83,7 +83,7 @@ const sandbox = {
     context.fillStyle = "#F0F2F0";
     context.font = "700 16px Arial";
     context.textAlign = "center";
-    context.fillText(product.name, 120, 185);
+    sandbox.wrapText(context, sandbox.productCardTitle(product, layout.categoryId), 120, 185, 216, 18, 2, "center");
     context.font = "16px Arial";
     context.fillText("$149.99", 120, 215);
     context.font = "11.5px Arial";
@@ -129,6 +129,8 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 vm.runInContext(
+  appSection("function productCardTitle(", "function normalizedSpecLabel(") +
+  appSection("function wrapText(", "function loadImage(") +
   appSection("function drawProductBoardExportBackground(", "function specIconKind(") +
   appSection("function recordCardElementsForPptx(", "async function renderCategoryRoadmapImageForPptx("),
   sandbox,
@@ -218,6 +220,55 @@ assert.equal(secondLaneContinuation.products[0].x, result.products[2].x);
 assert.equal(secondLaneContinuation.products[0].width, result.products[2].width);
 assert.equal(secondLaneContinuation.height, result.height);
 assert.equal(headers.at(-1).y, headers[1].y, "background family labels stay aligned with the lane's fixed row slot");
+
+// The shared wrapper must use the entire last allowed line. Previously it
+// stopped at that line's first word, hiding product design/size suffixes.
+const wrapping = (value, width, limit) => {
+  const calls = [], context = { font: "700 16px Arial", measureText: text => ({ width: String(text).length }), fillText: (text, x, y) => calls.push({ text, x, y }) };
+  const lines = sandbox.wrapText(context, value, 42, 7, width, 18, limit, "center");
+  assert.equal(context.font, "700 16px Arial"); assert.equal(context.textAlign, "center");
+  assert.equal(lines, calls.length); assert.ok(lines <= limit);
+  calls.forEach((call, index) => { assert.equal(call.x, 42); assert.equal(call.y, 7 + index * 18); assert.ok(call.text.length <= width); });
+  return calls.map(call => call.text);
+};
+assert.deepEqual(wrapping("Alpha beta gamma delta", 11, 2), ["Alpha beta", "gamma delta"], "all words that fit on line two remain visible without a false ellipsis");
+assert.deepEqual(wrapping("Alpha beta gamma delta epsilon", 11, 2), ["Alpha beta", "gamma delt…"], "a real overflow is elided only after the final line fills");
+assert.deepEqual(wrapping("alpha beta gamma delta epsilon zeta", 12, 3), ["alpha beta", "gamma delta", "epsilon zeta"], "technical values also retain the full third line");
+assert.deepEqual(wrapping("Alpha beta gamma", 11, 1), ["Alpha beta…"], "one-line limits cannot accidentally create extra lines");
+const titleGroups = [
+  ["HyperX 3D Print - Headset Plates - Nature Earcup", "HyperX 3D Print - Headset Plates - Valkyrie Earcup", "HyperX 3D Print - Headset Plates - Werewolf Earcup"],
+  ["HyperX 3D Print - Headband Decoration - Antlers", "HyperX 3D Print - Headband Decoration - Valkyrie Wings", "HyperX 3D Print - Headband Decoration - Werewolf Ears"],
+  ["HyperX 3D Print - Keycap CIV7 MVMNT Set", "HyperX 3D Print - Keycap CIV7 Enter", "HyperX 3D Print - Keycap CIV7 WNDR Set"],
+  ["HyperX 3D Print - Keycap - COTL Set", "HyperX 3D Print - Keycap - COTL Goat", "HyperX 3D Print - Keycap - COTL Lamb"],
+  ["HyperX Wrist Rest - Keyboard - Compact 60% 65%", "HyperX Wrist Rest - Keyboard - Full Size", "HyperX Wrist Rest - Keyboard - Tenkeyless"],
+  ["HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth (M)", "HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth (L)", "HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth (XL)", "HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth (2XL)", "HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth (XL) WM"],
+];
+const titleRegions = { renderedVariantOverflow: sandbox.renderedVariantOverflow, renderedHeroVariantRegions: sandbox.renderedHeroVariantRegions };
+sandbox.renderedVariantOverflow = []; sandbox.renderedHeroVariantRegions = [];
+for (const group of titleGroups) {
+  const titles = group.map((name, index) => {
+    const canvas = sandbox.document.createElement("canvas");
+    canvas.context.measureText = text => ({ width: String(text).length * 7.5 });
+    const product = { id: `wrapped-${index}`, name }, unchanged = JSON.stringify(product);
+    const elements = sandbox.recordCardElementsForPptx(canvas, product, { detailed: true, cardHeight: 450, categoryId: "accessories" });
+    const title = Array.from(elements.filter(element => element.kind === "text" && element.fontSize === 16 && element.bold && element.align === "center"), element => element.text);
+    assert.equal(JSON.stringify(product), unchanged, "native recording preserves the full canonical name");
+    assert.ok(title.length <= 2); assert.ok(title.every(line => canvas.context.measureText(line).width <= 216));
+    assert.ok(elements.some(element => element.kind === "image"), "product artwork remains independently recorded");
+    return title.join("\n");
+  });
+  assert.equal(new Set(titles).size, group.length, "the actual PowerPoint recorder retains distinguishing design/model/size text on line two");
+}
+Object.assign(sandbox, titleRegions);
+for (const name of titleGroups.at(-1)) {
+  const original = { name }, before = JSON.stringify(original);
+  assert.equal(sandbox.productCardTitle(original, "accessories"), name.replace(" - Gaming Mouse Pad", ""));
+  assert.equal(sandbox.productCardTitle(original, "audio-accessories"), name, "the narrow Mat projection applies only in Gaming Accessories");
+  assert.equal(JSON.stringify(original), before, "the canonical PCB name remains complete and unmodified");
+}
+for (const name of ["HyperX Pulsefire Mat - Gaming Mouse Pad - RGB (2XL)", "HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth (XL) Limited Edition", "Other Gaming Mouse Pad - Cloth (M)", "HyperX Pulsefire Mat"]) {
+  assert.equal(sandbox.productCardTitle({ name }, "accessories"), name, "unmatched titles retain their full normal two-line text");
+}
 
 const legacyPage = { ...exportPage, rows: exportPage.rows.map(({ slot, ...row }) => row) };
 const legacyResult = await sandbox.renderCategoryImageForPptx(category, legacyPage);
