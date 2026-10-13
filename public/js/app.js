@@ -1491,6 +1491,13 @@ function openPortfolioSearchResult(result) {
   return true;
 }
 
+function cardSpecifications(product, categoryId = activeCategoryId) {
+  return PortfolioCardSpecs.select(product, {
+    categoryId,
+    specs: globalThis.PortfolioLaunchRecords?.specifications(product) || product?.specs,
+  });
+}
+
 function normalizedSpecLabel(label) {
   return String(label || "").trim().toLowerCase();
 }
@@ -1549,24 +1556,26 @@ function detailedSpecRowHeight(row) {
   return 34 + Math.max(0, lines - 1) * 13;
 }
 
-function detailedSpecsHeight(product) {
-  return detailedSpecRows(globalThis.PortfolioLaunchRecords?.specifications(product) || product?.specs).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
+function detailedSpecsHeight(product, categoryId = activeCategoryId) {
+  return detailedSpecRows(cardSpecifications(product, categoryId)).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
 }
 
 function productCardLayout(targetBoard = board, definition = categoryDefinition()) {
   const lanes = targetBoard === board ? sortedLanes() : [...targetBoard.lanes].sort((a, b) => a.order - b.order);
   const supportsDetailedCards = lanes.length === 1 || definition.fullSpecCards === true;
   const products = targetBoard.products;
+  const categoryId = definition.id || activeCategoryId;
   const detailed = supportsDetailedCards && products.some((product) => (globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs).length);
   if (!detailed) {
     // Size the category together so filtering never moves cards or their hit regions.
     const rowsTop = TITLE_BLOCK_TOP + DETAILS_TOP_OFFSET + 9;
     const maxContentHeight = Math.max(0, ...products.map((product) => (
-      rowsTop + (globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs).length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
+      rowsTop + cardSpecifications(product, categoryId).length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
     )));
-    const cardHeight = Math.max(300, Math.min(CARD_HEIGHT, maxContentHeight));
+    const cardHeight = Math.max(300, maxContentHeight);
     return {
       detailed: false,
+      categoryId,
       cardHeight,
       laneHeight: cardHeight + 70,
       imageSlotTop: IMAGE_SLOT_TOP,
@@ -1577,7 +1586,7 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
     };
   }
 
-  const maxDetailsHeight = Math.max(0, ...products.map((product) => detailedSpecsHeight(product)));
+  const maxDetailsHeight = Math.max(0, ...products.map((product) => detailedSpecsHeight(product, categoryId)));
   const maxFooterHeight = targetBoard.settings.showSkus
     ? Math.max(0, ...products.map((product) => variantFooterLayout(product).height))
     : 0;
@@ -1585,6 +1594,7 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
   const cardHeight = Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + maxFooterHeight + 10);
   return {
     detailed: true,
+    categoryId,
     cardHeight,
     laneHeight: cardHeight + 70,
     imageSlotTop: STATUS_BANNER_HEIGHT + 10,
@@ -2309,8 +2319,8 @@ function drawDetailedSpecLabel(context, label, x, y, maxWidth) {
   context.fillText(String(label || "Specification").toUpperCase(), x, y, maxWidth);
 }
 
-function drawDetailedSpecs(context, product, x, startY) {
-  const rows = detailedSpecRows(globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs);
+function drawDetailedSpecs(context, product, x, startY, categoryId = activeCategoryId) {
+  const rows = detailedSpecRows(cardSpecifications(product, categoryId));
   let cursorY = startY;
 
   rows.forEach((row) => {
@@ -2450,18 +2460,11 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   const detailsBottom = y + cardHeight - footerHeight;
 
   if (layout.detailed) {
-    drawDetailedSpecs(context, product, x, detailsTop + 5);
+    drawDetailedSpecs(context, product, x, detailsTop + 5, layout.categoryId);
   } else {
     const rowHeight = 32;
     const rowsTop = detailsTop + 9;
-    const overflowNoteHeight = 24;
-    const availableHeight = Math.max(0, detailsBottom - rowsTop);
-    const featureSpecs = globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs;
-    let visibleSpecCount = Math.max(0, Math.floor(availableHeight / rowHeight));
-    if (featureSpecs.length > visibleSpecCount) {
-      visibleSpecCount = Math.max(0, Math.floor((availableHeight - overflowNoteHeight - 8) / rowHeight));
-    }
-    const visibleSpecs = featureSpecs.slice(0, visibleSpecCount);
+    const visibleSpecs = cardSpecifications(product, layout.categoryId);
     visibleSpecs.forEach((item, index) => {
       const rowY = rowsTop + index * rowHeight;
       // Align with the first line's visual center, retaining room for a second line.
@@ -2474,14 +2477,6 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
       context.beginPath(); context.moveTo(x + 10, rowY + 26); context.lineTo(x + CARD_WIDTH - 10, rowY + 26); context.stroke();
     });
 
-    const hiddenSpecCount = featureSpecs.length - visibleSpecs.length;
-    if (hiddenSpecCount > 0) {
-      const noteY = detailsBottom - overflowNoteHeight - 7;
-      context.fillStyle = UI_PALETTE.greyOlive;
-      context.font = "10px Arial";
-      context.textAlign = "center";
-      context.fillText(`+${hiddenSpecCount} specification${hiddenSpecCount === 1 ? "" : "s"}`, x + CARD_WIDTH / 2, noteY + 16);
-    }
   }
 
   if (footerHeight) {
