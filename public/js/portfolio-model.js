@@ -5,9 +5,9 @@
   // The site loads its shared presentation theme before this pure model.
   // Standalone consumers retain the same neutral defaults without DOM access.
   const DEFAULT_STAGE_COLORS = root.PortfolioTheme?.stageColors || Object.freeze({
-    launched: "#4D5054", "in-development": "#676A70", "in-planning": "#333538",
+    launched: "#4D5054", "in-development": "#56595E", "in-planning": "#333538",
   });
-  const THEME_ACCENTS = root.PortfolioTheme?.accents || Object.freeze({ newProduct: "#BBBCC0", embargo: "#FF2525", inDevelopment: "#676A70", sunsetting: "#4D5054" });
+  const THEME_ACCENTS = root.PortfolioTheme?.accents || Object.freeze({ newProduct: "#BBBCC0", embargo: "#FF2525", inDevelopment: "#56595E", sunsetting: "#4D5054" });
   const LIFECYCLE_TONES = root.PortfolioTheme?.lifecycleTones || Object.freeze({ ...DEFAULT_STAGE_COLORS, embargo: THEME_ACCENTS.embargo, "end-of-life": "#242527" });
 
   function lifecycleTone(stage) {

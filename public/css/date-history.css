@@ -2,15 +2,15 @@
 .date-history-label { cursor: help; border-radius: var(--corner-control); }
 .date-history-label:hover { text-decoration: underline dashed; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
 .date-history-label:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 3px; }
-.date-history-popup { position: fixed; inset: auto; z-index: 1600; pointer-events: none; width: max-content; max-width: min(320px, calc(100vw - 20px)); margin: 0; padding: 12px 14px; overflow: visible; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-overlay); font-family: inherit; font-size: 11px; line-height: 1.5; letter-spacing: normal; text-align: left; text-transform: none; overflow-wrap: anywhere; }
+.date-history-popup { position: fixed; inset: auto; z-index: 1600; pointer-events: none; width: max-content; max-width: min(320px, calc(100vw - 20px)); margin: 0; padding: 12px 14px; overflow: visible; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-overlay); font-family: inherit; font-size: 12px; line-height: 1.5; letter-spacing: normal; text-align: left; text-transform: none; overflow-wrap: anywhere; }
 .date-history-popup::backdrop { background: transparent; pointer-events: none; }
-.date-history-heading { color: var(--color-text); font-size: 12px; font-weight: 650; }
+.date-history-heading { color: var(--color-text); font-size: 13px; font-weight: 600; }
 .date-history-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; margin: 9px 0 0; }
-.date-history-facts dt { margin: 0; color: var(--color-text-secondary); font-size: 10px; }
-.date-history-facts dd { margin: 0; color: var(--color-text); }
+.date-history-facts dt { margin: 0; color: var(--color-text-secondary); font-size: 12px; }
+.date-history-facts dd { margin: 0; color: var(--color-text); font-size: 13px; }
 .date-history-facts .date-history-age { color: var(--color-text-secondary); }
 .date-history-shared, .date-history-source { padding-top: 8px; border-top: 1px solid transparent; }
 .date-history-empty { margin-top: 8px; color: var(--color-text); }
-.date-history-note { max-width: 255px; margin: 3px 0 0; color: var(--color-text-secondary); font-size: 10px; }
-.date-history-pending { display: inline-block; margin-top: 8px; padding: 2px 6px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); color: var(--color-text-secondary); font-size: 10px; }
-@media (max-width: 420px) { .date-history-popup { padding: 10px 12px; font-size: 10px; } .date-history-facts { gap: 5px 10px; } }
+.date-history-note { max-width: 255px; margin: 3px 0 0; color: var(--color-text-secondary); font-size: 12px; }
+.date-history-pending { display: inline-block; margin-top: 8px; padding: 2px 6px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); color: var(--color-text-secondary); font-size: 12px; }
+@media (max-width: 420px) { .date-history-popup { padding: 10px 12px; } .date-history-facts { gap: 5px 10px; } }
