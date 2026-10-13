@@ -184,7 +184,7 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
   const shell = { inert: false, setAttribute() {}, removeAttribute() {} }, status = { classList: { add() {}, remove() {} } }, message = { textContent: "" }, retry = { hidden: true };
   let durable = typeof database === "string" || database === null ? database : JSON.stringify(database), release;
   const boot = {
-    portfolio: null, activeCategoryId: null, localDateBaseline: null, workspaceOpening: true,
+    portfolio: null, activeCategoryId: null, localDateBaseline: null, workspaceOpening: true, workspaceRecovery: null, workspaceRecoveryPlan: null,
     pendingLegacyImageBlobs: [], workspaceValidationPending: false,
     STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
     localStorage: { getItem(key) { if (denyLegacy) throw new Error("Synthetic denied legacy storage"); return stored.get(key) ?? null; } },
@@ -194,7 +194,7 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
     },
     document: { querySelector: () => shell, getElementById: id => ({ workspaceOpeningStatus: status, workspaceOpeningMessage: message, workspaceOpeningRetry: retry })[id] },
     window: { dispatchEvent: event => events.push(event.type) }, CustomEvent: class { constructor(type) { this.type = type; } },
-    showWorkspaceNotice: (...args) => notices.push(args), PortfolioNotifications: { resolve() {} },
+    showWorkspaceNotice: (...args) => notices.push(args), showWorkspaceRecovery() {}, PortfolioNotifications: { resolve() {} },
     ensurePortfolioSchema: value => ({ ...value, version: 4 }),
     createDefaultPortfolio: () => startupPortfolio(defaultFirst, defaultFirst),
     categoryDefinition: id => ({ id }), ensureBoardSchema: value => structuredClone(value), migrateLegacyProductImages() {},

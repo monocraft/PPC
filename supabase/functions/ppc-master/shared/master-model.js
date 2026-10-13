@@ -212,13 +212,27 @@
     return tree;
   }
 
-  function fromTree(tree) {
+  function collectionOrder(...values) {
+    const order = { specs: [], partSkus: [], variantGroups: [], items: dictionary() };
+    const append = (target, ids) => { const seen = new Set(target); for (const id of ids) if (!seen.has(id)) { seen.add(id); target.push(id); } };
+    for (const value of values) {
+      for (const field of COLLECTIONS) append(order[field], (Array.isArray(value?.[field]) ? value[field] : []).map(row => row.id));
+      for (const group of Array.isArray(value?.variantGroups) ? value.variantGroups : []) {
+        order.items[group.id] ||= [];
+        append(order.items[group.id], (Array.isArray(group.items) ? group.items : []).map(row => row.id));
+      }
+    }
+    return order;
+  }
+
+  function fromTree(tree, order = {}) {
+    const ordered = (rows, ids = []) => [...new Set([...ids, ...Object.keys(rows || {})])].filter(id => own(rows, id)).map(id => rows[id]);
     const result = {};
     for (const field of SHARED_FIELDS) if (!["generalAvailabilityDate", "startMonth", "endManufacturingDate", "endMonth", ...COLLECTIONS].includes(field)) result[field] = clone(tree[field]);
     Object.assign(result, tree["@launch"], tree["@end"]);
-    result.specs = Object.values(tree.specs || {}).map(clone);
-    result.partSkus = Object.values(tree.partSkus || {}).map(clone);
-    result.variantGroups = Object.values(tree.variantGroups || {}).map((row) => ({ ...clone(row), items: Object.values(row.items || {}).map(clone) }));
+    result.specs = ordered(tree.specs, order.specs).map(clone);
+    result.partSkus = ordered(tree.partSkus, order.partSkus).map(clone);
+    result.variantGroups = ordered(tree.variantGroups, order.variantGroups).map((row) => ({ ...clone(row), items: ordered(row.items, order.items?.[row.id]).map(clone) }));
     return result;
   }
 
@@ -456,7 +470,8 @@
         setNode(mergedTree, "plc", getNode(masterTree, "plc"), masterTree);
       }
     }
-    const mergedValues = fromTree(mergedTree);
+    const order = collectionOrder(master, mine);
+    const mergedValues = fromTree(mergedTree, order);
     const dateConflicts = conflicts.filter((item) => ["@launch", "@end"].includes(item.path));
     let unsafeDateChoice = !validDateOrder(mergedValues);
     for (let mask = 0; mask < 2 ** dateConflicts.length && !unsafeDateChoice; mask += 1) {
@@ -470,7 +485,7 @@
       const basePair = pair(baseTree), minePair = pair(mineTree), masterPair = pair(masterTree);
       conflicts.push({ path: "@lifecycle", field: "@lifecycle", label: LABELS["@lifecycle"], reason: "date-order", base: basePair, mine: minePair, master: masterPair, baseExists: true, mineExists: true, masterExists: true, baseText: describeNode(basePair, "@lifecycle"), mineText: describeNode(minePair, "@lifecycle"), masterText: describeNode(masterPair, "@lifecycle") });
     }
-    return { values: mergedValues, conflicts, operations, _tree: mergedTree, _mineTree: mineTree, _masterTree: masterTree };
+    return { values: mergedValues, conflicts, operations, _tree: mergedTree, _mineTree: mineTree, _masterTree: masterTree, _order: order };
   }
 
   function resolveConflicts(plan, choices = {}, { preserveDrafts = false } = {}) {
@@ -503,7 +518,7 @@
         }
       }
     }
-    return validateValues(fromTree(tree));
+    return validateValues(fromTree(tree, plan._order));
   }
 
   function draftBaseline(base, mine, remote) {
@@ -524,7 +539,7 @@
         tree["@end"] = clone(baseTree["@end"]);
       }
     }
-    return fromTree(tree);
+    return fromTree(tree, collectionOrder(remote, base));
   }
 
   function draftRevisions(base, mine, baseRevisions = {}, remoteRevisions = {}) {
@@ -596,6 +611,23 @@
       .map(entry => ({ id: entry.productId || entry.id, order: entry.values?.cardPlacement?.order ?? null }))
       .sort((left, right) => (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
     return productVersion(members);
+  }
+
+  // Lane races can require a choice even when this product's own placement
+  // stayed unchanged. Use the identical whole-lane fence on the server and
+  // when restoring its compact conflict descriptors in the browser.
+  function appendPlacementConflicts(plan, change, base, mine, remote, products) {
+    if (!own(change.patch, "cardPlacement")) return plan;
+    if (!mine.cardPlacement) throw new TypeError("A product placement cannot be cleared.");
+    if (change.categoryId !== undefined && change.categoryId !== remote.categoryId) throw new TypeError("Product placement stays within its existing category.");
+    const lanes = [...new Set([base.cardPlacement?.laneId || remote.laneId, mine.cardPlacement.laneId])];
+    const supplied = change.placementLaneVersions;
+    if (!Array.isArray(supplied) || supplied.length !== lanes.length || supplied.some(item => !object(item) || !lanes.includes(item.laneId) || !/^[a-f0-9]{64}$/.test(item.version)) || new Set(supplied.map(item => item.laneId)).size !== lanes.length) throw new TypeError("Moving or reordering a product needs the current source and destination lane versions.");
+    if (supplied.some(item => laneVersion(products, remote.categoryId, item.laneId) !== item.version) && !plan.conflicts.some(item => item.path === "cardPlacement")) {
+      plan.conflicts.push({ path: "cardPlacement", field: "cardPlacement", label: LABELS.cardPlacement, reason: "lane-order-changed", base: clone(base.cardPlacement), mine: clone(mine.cardPlacement), master: clone(remote.values.cardPlacement), baseExists: true, mineExists: true, masterExists: true,
+        baseText: describeNode(base.cardPlacement, "cardPlacement"), mineText: describeNode(mine.cardPlacement, "cardPlacement"), masterText: `${describeNode(remote.values.cardPlacement, "cardPlacement")} (lane order changed)` });
+    }
+    return plan;
   }
 
   function updateTimestamp(value) {
@@ -757,6 +789,63 @@
       tombstones.push({ productId, categoryId: String(metadata.categoryId || ""), laneId: String(metadata.laneId || ""), productName: String(metadata.productName || "Removed product"), revisions: safeRevisions(metadata.revisions), ...(metadata.mergedIntoProductId ? { mergedIntoProductId: identity(metadata.mergedIntoProductId, "Kept product"), mergeChoices: clone(metadata.mergeChoices || {}) } : {}) });
     }
     return { version: 1, cardPlacementVersion: 1, products, tombstones, packageInfo: latestPackageInfo(manifest) };
+  }
+
+  // Optional wire representation. Missing blank values are restored by the
+  // same canonical validator used for every incoming browser snapshot. Keep
+  // evidence intact: empty values can be meaningful inside a PLC record.
+  function compactSnapshot(value) {
+    const compactRow = (row) => Object.fromEntries(Object.entries(row).filter(([, item]) => item !== "").map(([key, item]) =>
+      [key, key === "items" && Array.isArray(item) ? item.map(compactRow) : item]));
+    const compactValues = (values) => Object.fromEntries(Object.entries(values).filter(([, item]) =>
+      item !== "" && item !== null && !(Array.isArray(item) && !item.length)).map(([key, item]) =>
+      [key, COLLECTIONS.includes(key) ? item.map(compactRow) : item]));
+    return { ...value, products: value.products.map(product => ({ ...product, values: compactValues(product.values) })) };
+  }
+
+  // Conflicts repeat facts already present in the submitted request and the
+  // returned immutable snapshot. Send one bounded reconstruction descriptor per
+  // product, and bind it to the complete server result before displaying choices.
+  function conflictPlan(conflicts) {
+    const groups = [], seen = new Set();
+    for (const conflict of conflicts) {
+      if (seen.has(conflict.productId)) continue;
+      seen.add(conflict.productId);
+      groups.push({ productId: conflict.productId, kind: conflict.path === "@product" ? "lifecycle" : conflict.path === "@merge" ? "merge" : "update",
+        ...(["@product", "@merge"].includes(conflict.path) ? { reason: conflict.reason } : {}) });
+    }
+    if (groups.length > 500 || new TextEncoder().encode(JSON.stringify(groups)).length > 1024 * 1024) throw new RangeError("The conflict plan exceeds the changed-product limit.");
+    return { version: 1, groups, digest: productVersion(conflicts) };
+  }
+
+  function restoreConflictPlan(plan, latest, changes) {
+    if (!object(plan) || plan.version !== 1 || !Array.isArray(plan.groups) || !plan.groups.length || plan.groups.length > 500 || !/^[a-f0-9]{64}$/.test(plan.digest || "") ||
+        !Array.isArray(latest?.products) || !Array.isArray(changes) || changes.length > 500) throw new TypeError("The conflict plan is invalid.");
+    const products = new Map(latest.products.map(product => [product.productId, product]));
+    const tombstones = new Map((latest.tombstones || []).map(product => [product.productId, product]));
+    const requests = new Map(changes.map(change => [change.productId, change])), seen = new Set(), conflicts = [];
+    for (const group of plan.groups) {
+      identity(group?.productId, "Conflict product");
+      if (seen.has(group.productId)) throw new TypeError("The conflict plan repeats a product.");
+      seen.add(group.productId);
+      const change = requests.get(group.productId), remote = products.get(group.productId), kind = change?.kind || "update";
+      if (!change) throw new TypeError("The conflict plan refers to an unsubmitted product.");
+      if (group.kind === "update" && kind === "update" && remote) {
+        const base = canonicalValues({ ...remote.values, ...change.base }), mine = patchValues(base, change.patch || {});
+        const updatePlan = appendPlacementConflicts(planMerge(base, mine, remote.values, safeRevisions(change.baseRevisions), remote.revisions), change, base, mine, remote, latest.products);
+        conflicts.push(...updatePlan.conflicts
+          .map(conflict => ({ productId: group.productId, productName: remote.productName, ...conflict })));
+      } else if (group.kind === "lifecycle" && ["update", "create", "delete"].includes(kind) &&
+          ["product-id-exists", "product-removed", "product-changed-before-delete"].includes(group.reason)) {
+        const base = kind === "create" ? null : canonicalValues({ ...(remote?.values || {}), ...change.base });
+        const mine = kind === "delete" ? null : kind === "create" ? validateValues(change.mine) : patchValues(base, change.patch || {});
+        conflicts.push(lifecycleConflict(change, remote, base, mine, group.reason, tombstones.get(group.productId)));
+      } else if (group.kind === "merge" && kind === "merge" && ["products-changed-before-merge", "additional-details-need-review"].includes(group.reason)) {
+        conflicts.push(mergeProductConflict(change, remote, products.get(change.sourceProductId), group.reason));
+      } else throw new TypeError("The conflict plan contains an unexpected product operation.");
+    }
+    if (productVersion(conflicts) !== plan.digest) throw new TypeError("The complete conflict choices could not be verified. Pull the latest master and try again.");
+    return conflicts;
   }
 
   function publicMetadata(manifest) {
@@ -1031,13 +1120,7 @@
         if (!mine.cardPlacement) throw new TypeError("A product placement cannot be cleared.");
         if (change.categoryId !== undefined && change.categoryId !== remote.categoryId) throw new TypeError("Product placement stays within its existing category.");
         boardForPlacement(manifest, remote.categoryId, mine.cardPlacement.laneId);
-        const lanes = [...new Set([base.cardPlacement?.laneId || remote.laneId, mine.cardPlacement.laneId])];
-        const supplied = change.placementLaneVersions;
-        if (!Array.isArray(supplied) || supplied.length !== lanes.length || supplied.some(item => !object(item) || !lanes.includes(item.laneId) || !/^[a-f0-9]{64}$/.test(item.version)) || new Set(supplied.map(item => item.laneId)).size !== lanes.length) throw new TypeError("Moving or reordering a product needs the current source and destination lane versions.");
-        if (supplied.some(item => laneVersion(currentSnapshot.products, remote.categoryId, item.laneId) !== item.version) && !plan.conflicts.some(item => item.path === "cardPlacement")) {
-          plan.conflicts.push({ path: "cardPlacement", field: "cardPlacement", label: LABELS.cardPlacement, reason: "lane-order-changed", base: clone(base.cardPlacement), mine: clone(mine.cardPlacement), master: clone(remote.values.cardPlacement), baseExists: true, mineExists: true, masterExists: true,
-            baseText: describeNode(base.cardPlacement, "cardPlacement"), mineText: describeNode(mine.cardPlacement, "cardPlacement"), masterText: `${describeNode(remote.values.cardPlacement, "cardPlacement")} (lane order changed)` });
-        }
+        appendPlacementConflicts(plan, change, base, mine, remote, currentSnapshot.products);
       }
       conflicts.push(...plan.conflicts.map((item) => ({ productId, productName: remote.productName, ...item })));
       plans.push({ productId, remote, plan });
@@ -1201,5 +1284,5 @@
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: affectedLanes.size ? new Set(history.map(item => item.productId)).size : updates.length, history };
   }
 
-  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, cardPlacement, laneVersion, productValues, values: productValues, productVersion, variantSkuIdentity, variantMatchIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, latestPackageInfo, dateEditsForProduct, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
+  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, cardPlacement, laneVersion, productValues, values: productValues, productVersion, variantSkuIdentity, variantMatchIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, compactSnapshot, conflictPlan, restoreConflictPlan, latestPackageInfo, dateEditsForProduct, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
 })(globalThis);

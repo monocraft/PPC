@@ -73,7 +73,10 @@
       overlay.style.width = `${width}px`; overlay.style.height = `${height}px`;
       const context = overlay.getContext("2d");
       context.clearRect(0, 0, pixelWidth, pixelHeight);
-      context.drawImage(canvas, Math.round(scroll.scrollLeft * dpr), Math.round(scroll.scrollTop * dpr), pixelWidth, pixelHeight, 0, 0, pixelWidth, pixelHeight);
+      const source = canvas._ppcViewportLayer || canvas;
+      const sourceLeft = canvas._ppcViewportLayer ? 0 : Math.round(scroll.scrollLeft * dpr);
+      const sourceTop = canvas._ppcViewportLayer ? 0 : Math.round(scroll.scrollTop * dpr);
+      context.drawImage(source, sourceLeft, sourceTop, pixelWidth, pixelHeight, 0, 0, pixelWidth, pixelHeight);
     } });
   }
 

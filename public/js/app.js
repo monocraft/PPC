@@ -174,6 +174,10 @@ let imageAssetGeneration = 0;
 let packageOperationInProgress = false;
 const workspaceStorage = globalThis.PortfolioWorkspaceStore.create({ databaseName: IMAGE_DB_NAME, databaseVersion: IMAGE_DB_VERSION, imageStoreName: IMAGE_STORE_NAME, workspaceKey: STORAGE_KEY });
 let workspaceOpening = true;
+let workspaceRecovery = null;
+let workspaceRecoveryPlan = null;
+let workspaceRecoveryBusy = false;
+let workspaceRecoveryExportText = null;
 let workspaceSavePending = false;
 let workspaceSaveRevision = 0;
 let workspaceSaveAttempt = 0;
@@ -385,7 +389,7 @@ function referencedImageAssetIds() {
 
 function revokeImageAssetUrl(assetId) {
   const url = imageAssetUrlCache.get(assetId);
-  if (url) URL.revokeObjectURL(url);
+  if (url) { URL.revokeObjectURL(url); imageCache.delete(url); }
   imageAssetUrlCache.delete(assetId);
   imageAssetLoadPromises.delete(assetId);
   missingImageAssetIds.delete(assetId);
@@ -393,8 +397,12 @@ function revokeImageAssetUrl(assetId) {
 
 async function removeImageAssetIfUnused(assetId) {
   if (!assetId || referencedImageAssetIds().has(assetId)) return;
-  const asset = imageAssetById(assetId);
-  portfolio.imageAssets = portfolio.imageAssets.filter((item) => item.id !== assetId);
+  const owner = portfolio, asset = imageAssetById(assetId);
+  const draft = { ...owner, imageAssets: owner.imageAssets.filter(item => item.id !== assetId) };
+  try { await persistPortfolioStorage(JSON.stringify(draft)); }
+  catch (error) { reportWorkspaceSaveFailure(error); return; }
+  if (portfolio !== owner || referencedImageAssetIds().has(assetId)) return;
+  portfolio.imageAssets = portfolio.imageAssets.filter(item => item.id !== assetId);
   revokeImageAssetUrl(assetId);
   if (asset?.sourceType === "local") {
     try { await imageStoreDelete(assetId); } catch (_) {}
@@ -497,7 +505,11 @@ function migrateLegacyProductImages(target) {
           product.imageAssetId = assetId;
         }
       }
-      delete product.imageUrl;
+      if (legacyUrl.startsWith("data:") && product.imageAssetId && !pendingLegacyImageBlobs.some(entry => entry.id === product.imageAssetId)) {
+        const blob = dataUriToBlob(legacyUrl);
+        if (blob) pendingLegacyImageBlobs.push({ id: product.imageAssetId, blob });
+      }
+      if (!legacyUrl.startsWith("data:")) delete product.imageUrl;
     });
   });
 }
@@ -509,7 +521,10 @@ async function flushPendingLegacyImages() {
     try {
       await imageStorePut(entry.id, entry.blob);
       missingImageAssetIds.delete(entry.id);
-    } catch (_) {}
+      for (const category of portfolio.categories) for (const product of category.board.products) {
+        if (product.imageAssetId === entry.id && String(product.imageUrl || "").startsWith("data:")) delete product.imageUrl;
+      }
+    } catch (error) { pendingLegacyImageBlobs.push(entry); reportWorkspaceSaveFailure(error); }
   }
   scheduleSave();
 }
@@ -1400,6 +1415,15 @@ function loadPortfolio() {
   return createDefaultPortfolio();
 }
 
+async function persistPortfolioStorage(serialized, { images = [], isCurrent } = {}) {
+  const owner = portfolio, expectedCurrent = JSON.stringify(owner);
+  return workspaceStorage.save(serialized, { images,
+    isCurrent: () => portfolio === owner && JSON.stringify(portfolio) === expectedCurrent && (!isCurrent || isCurrent()),
+  });
+}
+
+function reportWorkspaceSaveFailure(error) { showLocalSaveFailure(error); }
+
 function scheduleSave() {
   clearTimeout(saveTimer);
   if (packageOperationInProgress || workspaceOpening || !portfolio) return;
@@ -1425,8 +1449,8 @@ async function flushWorkspaceSave() {
   const revision = workspaceSaveRevision;
   const attempt = ++workspaceSaveAttempt;
   try {
-    const serialized = JSON.stringify(portfolio);
-    await workspaceStorage.save(serialized);
+    const owner = portfolio, serialized = JSON.stringify(owner);
+    await workspaceStorage.save(serialized, { isCurrent: () => portfolio === owner && JSON.stringify(portfolio) === serialized });
     if (revision === workspaceSaveRevision && attempt === workspaceSaveAttempt) {
       workspaceSavePending = false;
       globalThis.PortfolioNotifications?.resolve("workspace-local-save");
@@ -1516,7 +1540,7 @@ function sortedLanes() {
 function visibleProducts() {
   const query = searchQuery.trim();
   if (!query) return board.products;
-  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query)));
+  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
 }
 
 function openPortfolioSearchResult(result) {
@@ -1791,7 +1815,7 @@ function updateProductCardDrag(clientX, clientY) {
 function paintProductCardMotion() {
   if (!productCardMotionValid(productCardMotion)) return;
   const dimensions = productCardMotion.dimensions || getCanvasDimensions();
-  drawBoardTo(canvas.getContext("2d"), dimensions, true);
+  drawBoardTo(viewportCanvasContext(canvas, canvasScroll, dimensions, zoom), dimensions, true);
   syncBoardNavigator();
   syncLaneRail();
 }
@@ -1882,20 +1906,38 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
   };
 }
 
-function setupCanvas(targetCanvas, drawZoom = zoom) {
-  const dimensions = getCanvasDimensions();
+function viewportCanvasContext(targetCanvas, targetScroll, dimensions, drawZoom = 1) {
+  let layer = targetCanvas._ppcViewportLayer;
+  if (!layer) {
+    layer = document.createElement("canvas");
+    layer.setAttribute("aria-hidden", "true");
+    Object.assign(layer.style, { position: "absolute", pointerEvents: "none", left: "0px", top: "0px" });
+    targetCanvas.parentElement.insertBefore(layer, targetCanvas);
+    targetCanvas._ppcViewportLayer = layer;
+    targetCanvas.width = 1;
+    targetCanvas.height = 1;
+  }
   const dpr = window.devicePixelRatio || 1;
-  const allocationWidth = dimensions.allocationWidth || dimensions.width, allocationHeight = dimensions.allocationHeight || dimensions.height;
-  const pixelWidth = Math.round(allocationWidth * drawZoom * dpr), pixelHeight = Math.round(allocationHeight * drawZoom * dpr);
-  if (targetCanvas.width !== pixelWidth) targetCanvas.width = pixelWidth;
-  if (targetCanvas.height !== pixelHeight) targetCanvas.height = pixelHeight;
-  const cssWidth = `${allocationWidth * drawZoom}px`, cssHeight = `${allocationHeight * drawZoom}px`;
-  if (targetCanvas.style.width !== cssWidth) targetCanvas.style.width = cssWidth;
-  if (targetCanvas.style.height !== cssHeight) targetCanvas.style.height = cssHeight;
-  const context = targetCanvas.getContext("2d");
-  context.setTransform(dpr * drawZoom, 0, 0, dpr * drawZoom, 0, 0);
+  const fullWidth = (dimensions.allocationWidth || dimensions.width) * drawZoom, fullHeight = (dimensions.allocationHeight || dimensions.height) * drawZoom;
+  targetCanvas.style.width = fullWidth + "px";
+  targetCanvas.style.height = fullHeight + "px";
+  const width = Math.max(1, Math.min(fullWidth, targetScroll.clientWidth || fullWidth));
+  const height = Math.max(1, Math.min(fullHeight, targetScroll.clientHeight || fullHeight));
+  const left = targetScroll.scrollLeft, top = targetScroll.scrollTop;
+  const pixelWidth = Math.max(1, Math.ceil(width * dpr)), pixelHeight = Math.max(1, Math.ceil(height * dpr));
+  if (layer.width !== pixelWidth) layer.width = pixelWidth;
+  if (layer.height !== pixelHeight) layer.height = pixelHeight;
+  Object.assign(layer.style, { width: width + "px", height: height + "px", left: left + "px", top: top + "px" });
+  const context = layer.getContext("2d");
+  context.setTransform(dpr * drawZoom, 0, 0, dpr * drawZoom, -left * dpr, -top * dpr);
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
+  return context;
+}
+
+function setupCanvas(targetCanvas, drawZoom = zoom) {
+  const dimensions = getCanvasDimensions();
+  const context = viewportCanvasContext(targetCanvas, canvasScroll, dimensions, drawZoom);
   return { context, dimensions };
 }
 
@@ -2587,7 +2629,7 @@ function roadmapRange() {
 function visibleRoadmapProducts() {
   const query = roadmapSearchQuery.trim();
   if (!query) return board.products;
-  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query)));
+  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
 }
 
 function roadmapFamilyOrder(family, targetBoard = board, definition = categoryDefinition()) {
@@ -2727,18 +2769,7 @@ function effectiveRoadmap(product) {
 }
 
 function setupRoadmapCanvas(targetCanvas, dimensions) {
-  const dpr = window.devicePixelRatio || 1;
-  const pixelWidth = Math.round(dimensions.width * dpr);
-  const pixelHeight = Math.round(dimensions.height * dpr);
-  if (targetCanvas.width !== pixelWidth) targetCanvas.width = pixelWidth;
-  if (targetCanvas.height !== pixelHeight) targetCanvas.height = pixelHeight;
-  targetCanvas.style.width = `${dimensions.width}px`;
-  targetCanvas.style.height = `${dimensions.height}px`;
-  const context = targetCanvas.getContext("2d");
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  return context;
+  return viewportCanvasContext(targetCanvas, targetCanvas.parentElement, dimensions);
 }
 
 function roadmapProductBarLabel(product) {
@@ -3425,7 +3456,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
 
   function paintInteraction() {
     const dimensions = roadmapDimensions();
-    const context = targetCanvas.getContext("2d");
+    const context = viewportCanvasContext(targetCanvas, targetScroll, dimensions);
     drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
     headerOverlay?.sync();
     syncRoadmapNavigator(targetScroll, navigatorRefsFactory());
@@ -5955,7 +5986,7 @@ function localPackageImageIds(target) {
 
 function clearPackageImageCaches() {
   imageAssetGeneration += 1;
-  imageAssetUrlCache.forEach((url) => URL.revokeObjectURL(url));
+  imageAssetUrlCache.forEach((url) => { URL.revokeObjectURL(url); imageCache.delete(url); });
   imageAssetUrlCache.clear();
   imageAssetLoadPromises.clear();
   missingImageAssetIds.clear();
@@ -6113,7 +6144,9 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     }
     for (const category of draft.categories) {
       for (const product of category.board.products) {
-        product.imageAssetId = replacements.get(product.imageAssetId) || product.imageAssetId;
+        const originalImageId = product.imageAssetId;
+        product.imageAssetId = replacements.get(originalImageId) || originalImageId;
+        if (legacyImages.has(originalImageId)) delete product.imageUrl;
         for (const group of product.variantGroups || []) {
           for (const item of group.items) item.imageAssetId = replacements.get(item.imageAssetId) || item.imageAssetId;
         }
@@ -6821,39 +6854,57 @@ async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOpt
   }
 }
 
-function exportPng() {
+async function exportPng() {
   stopProductCardDrag();
-  const exportCanvas = document.createElement("canvas");
+  const isProducts = activeView === "products";
+  const dimensions = isProducts ? getCanvasDimensions({ includeViewer: false }) : roadmapDimensions();
   const scale = 2;
-
-  if (activeView === "products") {
-    const dimensions = getCanvasDimensions({ includeViewer: false });
-    exportCanvas.width = dimensions.width * scale;
-    exportCanvas.height = dimensions.height * scale;
-    const exportContext = exportCanvas.getContext("2d");
-    exportContext.setTransform(scale, 0, 0, scale, 0, 0);
-    exportContext.imageSmoothingEnabled = true;
-    exportContext.imageSmoothingQuality = "high";
-    drawBoardTo(exportContext, dimensions, false, true);
-    exportCanvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, safeFilename("png"));
-    }, "image/png");
-    renderBoard();
-    return;
-  }
-
-  const dimensions = roadmapDimensions();
-  exportCanvas.width = dimensions.width * scale;
-  exportCanvas.height = dimensions.height * scale;
-  const exportContext = exportCanvas.getContext("2d");
-  exportContext.setTransform(scale, 0, 0, scale, 0, 0);
-  exportContext.imageSmoothingEnabled = true;
-  exportContext.imageSmoothingQuality = "high";
-  drawRoadmapTo(exportContext, dimensions, exportCanvas, { scrollLeft: 0, scrollTop: 0 }, false, true);
-  exportCanvas.toBlob((blob) => {
-    if (blob) downloadBlob(blob, safeFilename("roadmap.png"));
-  }, "image/png");
-  renderRoadmaps();
+  const expectedCurrent = JSON.stringify(portfolio);
+  const expectedCategory = activeCategoryId;
+  const renderSnapshot = () => JSON.stringify({ activeView, searchQuery, roadmapSearchQuery, roadmapMonthWidth, zoom, inspectorOpen, viewerInfoProgress, viewerInfoProductId, hoveredHeroVariant, pinnedHeroVariantByProduct: [...pinnedHeroVariantByProduct], roadmapDraft });
+  const expectedRender = renderSnapshot();
+  const unchanged = () => activeCategoryId === expectedCategory && JSON.stringify(portfolio) === expectedCurrent && renderSnapshot() === expectedRender;
+  const tiles = dimensions.width * scale > 16384 || dimensions.height * scale > 16384 || dimensions.width * dimensions.height * scale * scale > 32000000;
+  const tileSize = tiles ? 2048 : Math.max(dimensions.width, dimensions.height);
+  const entries = [], placements = [];
+  if (tiles) showWorkspaceNotice("This board exceeds a single PNG's safe size. Export will produce a ZIP of full-resolution PNG tiles with a placement manifest.", { id: "png-export-tiles", title: "Preparing PNG tiles", severity: "info" });
+  try {
+    for (let top = 0; top < dimensions.height; top += tileSize) {
+      for (let left = 0; left < dimensions.width; left += tileSize) {
+        if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+        const width = Math.min(tileSize, dimensions.width - left), height = Math.min(tileSize, dimensions.height - top);
+        const outputCanvas = document.createElement("canvas");
+        outputCanvas.width = Math.ceil(width * scale); outputCanvas.height = Math.ceil(height * scale);
+        const context = outputCanvas.getContext("2d");
+        context.setTransform(scale, 0, 0, scale, -left * scale, -top * scale);
+        context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
+        if (isProducts) drawBoardTo(context, dimensions, false, true);
+        else {
+          drawRoadmapTo(context, dimensions, outputCanvas, { scrollLeft: 0, scrollTop: 0 }, false, true);
+          roadmapHitRegions.delete(outputCanvas);
+        }
+        const blob = await new Promise((resolve, reject) => outputCanvas.toBlob(value => value ? resolve(value) : reject(new Error("This browser could not prepare the PNG export.")), "image/png"));
+        if (!tiles) {
+          if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+          downloadBlob(blob, safeFilename(isProducts ? "png" : "roadmap.png"));
+          return;
+        }
+        const name = "tile-" + String(placements.length + 1).padStart(3, "0") + ".png";
+        entries.push({ name, data: blob });
+        placements.push({ name, x: left * scale, y: top * scale, width: outputCanvas.width, height: outputCanvas.height });
+        outputCanvas.width = 1; outputCanvas.height = 1;
+      }
+    }
+    if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+    if (typeof globalThis.JSZip !== "function") throw new Error("The image archive library did not load. Refresh the page and try exporting again.");
+    const archive = new globalThis.JSZip();
+    archive.file("layout.json", JSON.stringify({ width: dimensions.width * scale, height: dimensions.height * scale, tiles: placements }, null, 2));
+    for (const entry of entries) archive.file(entry.name, entry.data);
+    const output = await archive.generateAsync({ type: "blob", compression: "STORE", streamFiles: true });
+    if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
+    downloadBlob(output, safeFilename(isProducts ? "png-tiles.zip" : "roadmap-png-tiles.zip"));
+    showWorkspaceNotice("The large board was exported as full-resolution PNG tiles. The ZIP includes every tile and its position in layout.json.", { id: "png-export-tiles", title: "PNG export complete", severity: "info" });
+  } finally { renderActiveView(); }
 }
 
 function renderLaneSettingsEditor() {
@@ -7235,7 +7286,11 @@ function buildAscmImportPlan(dataset) {
   const items = groups.map((group) => {
     const match = importer.matchProductGroup(group, portfolio);
     let action = "new";
-    if (!group.categoryId) action = "ambiguous";
+    const sourceDates = ascmGroupDates(group);
+    const proposedGa = sourceDates.gaDate || match.product?.generalAvailabilityDate || "";
+    const proposedEm = sourceDates.emDate || match.product?.endManufacturingDate || "";
+    const invalidDateOrder = Boolean(proposedGa && proposedEm && proposedEm < proposedGa);
+    if (!group.categoryId || invalidDateOrder) action = "ambiguous";
     else if (match.status === "ambiguous") action = "ambiguous";
     else if (match.status === "matched") action = ascmProductNeedsUpdate(group, match) ? "update" : "unchanged";
     return {
@@ -7245,6 +7300,7 @@ function buildAscmImportPlan(dataset) {
       matchedProductId: match.product?.id || "",
       matchedCategoryId: match.categoryId || "",
       matchedProductName: match.product?.name || "",
+      ...(invalidDateOrder ? { validationError: "General availability is after end of manufacturing; correct the source dates before applying this product." } : {}),
     };
   });
   const itemsByMatchedProduct = new Map();
@@ -7270,6 +7326,7 @@ function buildAscmImportPlan(dataset) {
 }
 
 function ascmActionLabel(item) {
+  if (item.validationError) return "Review dates";
   if (item.action === "new") return "New product";
   if (item.action === "update") return "Update";
   if (item.action === "unchanged") return "Unchanged";
@@ -7303,7 +7360,7 @@ function renderAscmImportPreview(plan) {
 
   const previewLimit = 250;
   $("#ascmImportPreview").innerHTML = plan.items.slice(0, previewLimit).map((item, index) => {
-    const canReviewMatch = item.action === "ambiguous" && Boolean(item.matchedProductId || item.match?.product?.id || item.match?.candidates?.length);
+    const canReviewMatch = !item.validationError && item.action === "ambiguous" && Boolean(item.matchedProductId || item.match?.product?.id || item.match?.candidates?.length);
     const descriptions = [...new Set((item.group.records || []).map((record) => String(record.description || "").trim()).filter(Boolean))];
     const descriptionSummary = descriptions.length > 1 ? `${descriptions[0]} (+${descriptions.length - 1})` : descriptions[0] || item.group.displayName;
     const productName = item.matchedProductName
@@ -7312,7 +7369,7 @@ function renderAscmImportPreview(plan) {
     const basePns = ascmGroupBasePartNumbers(item.group);
     const basePnSummary = basePns.length > 1 ? `${basePns[0]} +${basePns.length - 1}` : basePns[0] || "—";
     return `<tr>
-      <td><span class="ascm-import-action is-${escapeHtml(item.action)}">${escapeHtml(ascmActionLabel(item))}</span>${canReviewMatch ? `<button type="button" class="small-button" data-review-ascm-match="${index}">Review matches</button>` : ""}</td>
+      <td><span class="ascm-import-action is-${escapeHtml(item.action)}">${escapeHtml(ascmActionLabel(item))}</span>${item.validationError ? `<small class="ascm-import-source-name">${escapeHtml(item.validationError)}</small>` : ""}${canReviewMatch ? `<button type="button" class="small-button" data-review-ascm-match="${index}">Review matches</button>` : ""}</td>
       <td>${escapeHtml(portfolioCategoryName(item.group.categoryId))}</td>
       <td>${productName}</td>
       <td class="ascm-import-pns" title="${escapeHtml(basePns.join(", "))}">${escapeHtml(basePnSummary)}</td>
@@ -7610,7 +7667,7 @@ $("#importNameUpdates").onclick = () => $("#importNameUpdatesFile").click();
 $("#importNameUpdatesFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) void importPortfolioNameUpdates(file); event.target.value = ""; };
 $("#exportJson").onclick = () => { closePopupMenus(); downloadBlob(new Blob([portfolioDataBackupText()], { type: "application/json" }), "product-portfolio-data.data"); };
 $("#copyJson").onclick = copyPortfolioDataBackup;
-$("#exportPng").onclick = () => { closePopupMenus(); exportPng(); };
+$("#exportPng").onclick = async () => { closePopupMenus(); try { await exportPng(); } catch (error) { void PortfolioDialogs.alert(error.message || "Could not export PNG.", { title: "PNG export failed" }); } };
 $("#exportPptx").addEventListener("click", openPptxExportDialog);
 $("#pptxSelectAllCategories").onclick = () => {
   const available = PPTXPagination.selectExportCategories(portfolio?.categories);
@@ -7679,12 +7736,18 @@ $("#restoreSample").onclick = async () => {
   const clearingPortfolio = portfolio;
   if (!await PortfolioDialogs.confirm("Clear every product in all categories and remove their saved images? Your categories, lanes, settings, and templates will stay. Export a project package first if you need a backup.", { title: "Clear all products?", confirmLabel: "Clear all products", danger: true })) return;
   if (portfolio !== clearingPortfolio) return;
-  try { await imageStoreClear(); } catch (_) {}
-  localStorage.removeItem(PACKAGE_RECOVERY_KEY);
-  clearPackageImageCaches();
-  PortfolioModel.clearAllProducts(portfolio);
-  activateCategory(activeCategoryId, { fitVertical: true });
-  $("#emptyPullLatestData").focus({ preventScroll: true });
+  const obsoleteIds = localPackageImageIds(portfolio);
+  const draft = clonePortfolioData();
+  PortfolioModel.clearAllProducts(draft);
+  try {
+    await persistPortfolioStorage(JSON.stringify(draft));
+    portfolio = draft;
+    try { localStorage.removeItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
+    clearPackageImageCaches();
+    activateCategory(activeCategoryId, { fitVertical: true });
+    try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {}
+    $("#emptyPullLatestData").focus({ preventScroll: true });
+  } catch (error) { reportWorkspaceSaveFailure(error); }
 };
 
 document.querySelectorAll(".view-tab").forEach((button) => {
@@ -8079,8 +8142,137 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   },
 });
 
+function workspaceRecoveryCurrent(recovery) {
+  if (!workspaceOpening || workspaceRecovery !== recovery) return false;
+  if (!recovery.legacyKey) return true;
+  try { return localStorage.getItem(recovery.legacyKey) === recovery.rawText; }
+  catch (_) { return false; }
+}
+
+async function showWorkspaceRecovery() {
+  const controls = document.getElementById("workspaceRecoveryControls");
+  if (!controls) return;
+  workspaceRecoveryPlan = null;
+  document.getElementById("workspaceRecoveryPreview").hidden = true;
+  try {
+    const token = await workspaceStorage.readRecovery();
+    let legacyKey = null, rawText = token.rawText;
+    if (!token.record) {
+      for (const key of [STORAGE_KEY, PREVIOUS_STORAGE_KEY, LEGACY_STORAGE_KEY]) {
+        const value = localStorage.getItem(key);
+        if (value !== null) { legacyKey = key; rawText = value; break; }
+      }
+    }
+    workspaceRecovery = { token, legacyKey, rawText };
+    workspaceRecoveryExportText = rawText;
+    controls.hidden = false;
+    document.getElementById("workspaceRecoveryExport").disabled = rawText === null;
+    document.getElementById("workspaceRecoveryStatus").textContent = rawText === null
+      ? "No readable saved data is available to export. You can review a complete backup before restoring it."
+      : "The saved data is available to export exactly as read. Reviewing a backup does not replace it.";
+  } catch (error) {
+    workspaceRecovery = null;
+    controls.hidden = true;
+    document.getElementById("workspaceOpeningMessage").textContent += " Saved storage is unavailable; retry opening before restoring a backup.";
+  }
+}
+
+function setWorkspaceRecoveryBusy(busy) {
+  workspaceRecoveryBusy = busy;
+  for (const id of ["workspaceOpeningRetry", "workspaceRecoveryFile", "workspaceRecoveryKey", "workspaceRecoveryReview", "workspaceRecoveryRestore"]) {
+    const control = document.getElementById(id);
+    if (control) control.disabled = busy;
+  }
+  document.getElementById("workspaceRecoveryControls")?.setAttribute("aria-busy", String(busy));
+}
+
+async function prepareWorkspaceRecovery(file, key = "") {
+  const recovery = workspaceRecovery;
+  if (!file || !recovery || !workspaceRecoveryCurrent(recovery)) throw new Error("Retry opening before reviewing this backup. The saved workspace has changed.");
+  const codec = packageCodec(), pendingStart = pendingLegacyImageBlobs.length;
+  let parsed, entries = null;
+  try {
+    if (/\.pkg$/i.test(file.name)) {
+      if (file.size > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
+      const input = new Uint8Array(await file.arrayBuffer());
+      const bytes = codec.isEncrypted(input) ? await codec.decrypt(input, codec.normalizeKey(key)) : input;
+      entries = codec.readZip(bytes);
+      const manifest = entries.get("portfolio.json");
+      if (!manifest) throw new Error("The project package is missing portfolio.json.");
+      parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifest));
+    } else parsed = parsePortfolioImportText(await file.text());
+    if (![2, 3, 4].includes(parsed?.version) || !Array.isArray(parsed.categories) || !parsed.categories.length
+      || !parsed.categories.every(category => category?.board && Array.isArray(category.board.lanes) && Array.isArray(category.board.products))) {
+      throw new Error("Choose a complete portfolio data backup or project package. A categories-only file cannot recover your saved work.");
+    }
+    validatePackageManifest(parsed);
+    const draft = normalizeImportedPortfolio(JSON.parse(JSON.stringify(parsed)));
+    const model = globalThis.PortfolioMasterModel, comparison = model?.snapshot(draft).products;
+    if (comparison && (entries || !Object.hasOwn(draft, "masterLocalBaseline"))) draft.masterLocalBaseline = comparison;
+    validatePackageImageReferences(draft);
+    const legacyImages = new Map(pendingLegacyImageBlobs.splice(pendingStart).map(entry => [entry.id, entry.blob]));
+    const images = [], replacements = new Map();
+    for (const asset of draft.imageAssets) {
+      if (asset.sourceType !== "local") continue;
+      if (entries || legacyImages.has(asset.id)) {
+        const packagePath = asset.packagePath || `images/${asset.id}.${extensionForImageAsset(asset)}`;
+        const data = entries?.get(packagePath);
+        if (!legacyImages.has(asset.id) && (!packagePath.startsWith("images/") || !data?.length)) throw new Error("The backup is missing a saved product image. Choose a complete project package.");
+        const blob = legacyImages.get(asset.id) || new Blob([data], { type: asset.mimeType || "application/octet-stream" });
+        const previousId = asset.id, nextId = `recovery-${id()}`;
+        replacements.set(previousId, nextId); asset.id = nextId; asset.size = blob.size; delete asset.packagePath;
+        images.push({ id: nextId, blob });
+      } else if (!(await imageStoreGet(asset.id))?.size) throw new Error("This data backup refers to image files that are unavailable on this device. Choose a complete project package with its images.");
+    }
+    for (const category of draft.categories) for (const product of category.board.products) {
+      if (replacements.has(product.imageAssetId)) { product.imageAssetId = replacements.get(product.imageAssetId); delete product.imageUrl; }
+      for (const group of product.variantGroups || []) for (const variant of group.items) if (replacements.has(variant.imageAssetId)) variant.imageAssetId = replacements.get(variant.imageAssetId);
+    }
+    if (entries) draft.masterLocalAssetIds = Object.fromEntries(replacements);
+    else if (replacements.size) draft.masterLocalAssetIds = Object.fromEntries(Object.entries(draft.masterLocalAssetIds || {}).map(([original, local]) => [original, replacements.get(local) || local]));
+    if (!workspaceRecoveryCurrent(recovery)) throw new Error("The saved workspace changed while reviewing the backup. Retry opening before restoring it.");
+    return { recovery, draft, images, serialized: JSON.stringify(draft), fileName: file.name,
+      productCount: draft.categories.reduce((count, category) => count + category.board.products.length, 0) };
+  } finally { pendingLegacyImageBlobs.splice(pendingStart); }
+}
+
+async function restoreWorkspaceRecovery(plan) {
+  if (!plan || plan !== workspaceRecoveryPlan || !workspaceRecoveryCurrent(plan.recovery)) throw new Error("Review the backup again before restoring it. The workspace has changed.");
+  const previousPortfolio = portfolio, previousBoard = board, previousCategory = activeCategoryId;
+  const previousBaseline = localDateBaseline;
+  let receipt, rollbackFailed = false;
+  packageOperationInProgress = true; clearTimeout(saveTimer);
+  try {
+    receipt = await workspaceStorage.recover(plan.serialized, { recovery: plan.recovery.token, images: plan.images, isCurrent: () => workspaceRecoveryCurrent(plan.recovery) });
+    await startWorkspace();
+    workspaceRecovery = null; workspaceRecoveryPlan = null;
+    globalThis.PortfolioNotifications?.resolve("workspace-open-failure");
+    return true;
+  } catch (error) {
+    portfolio = previousPortfolio; board = previousBoard; activeCategoryId = previousCategory; localDateBaseline = previousBaseline;
+    workspaceOpening = true;
+    if (receipt) {
+      try { await workspaceStorage.rollbackRecovery(receipt); }
+      catch (_) { rollbackFailed = true; error.message += " The backup remains saved because the previous record could not be restored. Retry opening to inspect the saved backup; export the original recovery data before closing. The original record also remains in this device's recovery archive."; }
+    }
+    const shell = document.querySelector(".app-shell");
+    if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); }
+    document.getElementById("workspaceOpeningStatus")?.classList.remove("hidden");
+    document.getElementById("workspaceOpeningRetry").hidden = false;
+    await showWorkspaceRecovery();
+    if (rollbackFailed) {
+      workspaceRecoveryExportText = plan.recovery.rawText;
+      document.getElementById("workspaceRecoveryExport").disabled = workspaceRecoveryExportText === null;
+    }
+    throw error;
+  } finally { packageOperationInProgress = false; }
+}
+
 async function initializeWorkspace() {
   workspaceOpening = true;
+  workspaceRecovery = null; workspaceRecoveryPlan = null;
+  const recoveryControls = document.getElementById("workspaceRecoveryControls");
+  if (recoveryControls) recoveryControls.hidden = true;
   const shell = document.querySelector(".app-shell");
   if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); }
   const openingStatus = document.getElementById("workspaceOpeningStatus");
@@ -8131,10 +8323,13 @@ async function initializeWorkspace() {
   } catch (error) {
     pendingLegacyImageBlobs.splice(pendingStart);
     workspaceOpening = true;
-    const message = error.message || "The saved workspace could not open. Your saved data has not been replaced. Retry opening it.";
+    const message = error.name === "SyntaxError"
+      ? "The saved portfolio data is damaged. Your saved copy and images have not been replaced. Export the saved data, then review a complete backup to restore it."
+      : error.message || "The saved workspace could not open. Your saved data has not been replaced. Retry opening it.";
     if (openingMessage) openingMessage.textContent = message;
     if (openingRetry) openingRetry.hidden = false;
-    void showWorkspaceNotice(message, { id: "workspace-open-failure", title: "The workspace could not open", dismissible: false, actions: [{ label: "Retry opening", onClick: startWorkspace }] });
+    globalThis.PortfolioNotifications?.publish?.({ id: "workspace-open-failure", severity: "error", title: "The workspace could not open", message, dismissible: false, actions: [{ label: "Retry opening", onClick: startWorkspace }] });
+    await showWorkspaceRecovery();
     throw error;
   }
 }
@@ -8144,9 +8339,9 @@ function startWorkspace() {
   void ready.catch(() => {});
   return ready;
 }
-async function persistPlcDraft(draft) {
+async function persistPlcDraft(draft, { isCurrent } = {}) {
   globalThis.PortfolioMasterModel?.snapshot(draft);
-  await workspaceStorage.save(JSON.stringify(draft));
+  await persistPortfolioStorage(JSON.stringify(draft), { isCurrent });
 }
 
 async function retryPlcSharing() {
@@ -8171,6 +8366,7 @@ async function retryPlcSharing() {
 async function commitPlcPlan(plan, choices) {
   if (packageOperationInProgress) throw new Error("Finish loading the package before applying PLC updates.");
   const before = portfolio;
+  const expectedCurrent = JSON.stringify(before);
   const result = globalThis.PLCImporter.applyPlan(before, plan, choices);
   const draft = ensurePortfolioSchema(result.portfolio);
   for (const change of result.variantChanges || []) {
@@ -8254,7 +8450,8 @@ async function commitPlcPlan(plan, choices) {
   // Persist evidence, field clocks and exceptions together before activating it.
   // Storage failure leaves the current workspace and review untouched.
   clearTimeout(saveTimer);
-  await persistPlcDraft(draft);
+  await persistPlcDraft(draft, { isCurrent: () => portfolio === before && JSON.stringify(portfolio) === expectedCurrent });
+  if (portfolio !== before || JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the PLC review was being saved. Your newer changes have been kept. Review the workbook again before applying it.");
   portfolio = draft;
   localDateBaseline = globalThis.PLCImporter.snapshotDateValues(portfolio);
   activateCategory(activeCategoryId || portfolio.activeCategoryId, { fitVertical: false });
@@ -8305,4 +8502,30 @@ window.addEventListener("beforeunload", event => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && workspaceSavePending) void flushWorkspaceSave();
 });
+document.getElementById("workspaceRecoveryExport").onclick = () => {
+  if (workspaceRecoveryExportText !== null) downloadBlob(new Blob([workspaceRecoveryExportText], { type: "application/octet-stream" }), "product-portfolio-saved-recovery.data");
+};
+document.getElementById("workspaceRecoveryForm").onsubmit = async event => {
+  event.preventDefault(); if (workspaceRecoveryBusy) return;
+  const status = document.getElementById("workspaceRecoveryStatus");
+  workspaceRecoveryPlan = null; document.getElementById("workspaceRecoveryPreview").hidden = true;
+  setWorkspaceRecoveryBusy(true);
+  try {
+    status.textContent = "Checking the backup and its saved images…";
+    const file = document.getElementById("workspaceRecoveryFile").files?.[0];
+    workspaceRecoveryPlan = await prepareWorkspaceRecovery(file, document.getElementById("workspaceRecoveryKey").value);
+    document.getElementById("workspaceRecoverySummary").textContent = `${workspaceRecoveryPlan.fileName}: ${workspaceRecoveryPlan.draft.categories.length} categories, ${workspaceRecoveryPlan.productCount} product${workspaceRecoveryPlan.productCount === 1 ? "" : "s"}. Restoring replaces the unreadable saved workspace; existing images are retained.`;
+    document.getElementById("workspaceRecoveryPreview").hidden = false;
+    status.textContent = "Backup checked. Select Restore this backup to replace the saved workspace.";
+  } catch (error) { status.textContent = error.message || "The backup could not be checked. Your saved data has not been replaced."; }
+  finally { document.getElementById("workspaceRecoveryKey").value = ""; setWorkspaceRecoveryBusy(false); }
+};
+document.getElementById("workspaceRecoveryFile").onchange = () => { workspaceRecoveryPlan = null; document.getElementById("workspaceRecoveryPreview").hidden = true; };
+document.getElementById("workspaceRecoveryRestore").onclick = async () => {
+  if (workspaceRecoveryBusy) return;
+  setWorkspaceRecoveryBusy(true);
+  try { await restoreWorkspaceRecovery(workspaceRecoveryPlan); }
+  catch (error) { document.getElementById("workspaceRecoveryStatus").textContent = error.message || "The backup was not restored. Your previous saved data has been kept."; }
+  finally { setWorkspaceRecoveryBusy(false); }
+};
 startWorkspace();

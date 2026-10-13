@@ -30,13 +30,15 @@
     return "";
   }
 
-  function normalize(value) {
-    return safeString(value).normalize("NFKD").toLowerCase()
+  function normalizeField(value, limit = MAX_FIELD_LENGTH) {
+    return safeString(value, limit).normalize("NFKD").toLowerCase()
       .replace(/\p{M}/gu, "")
       .replace(/đ/g, "d")
       .replace(/[^\p{L}\p{N}]+/gu, " ")
       .trim();
   }
+
+  function normalize(value) { return normalizeField(value); }
 
   function compact(value) {
     return normalize(value).replace(/ /g, "");
@@ -64,22 +66,27 @@
     for (let index = 0; index < Math.min(value.length, limit); index++) visit(read(value, String(index)));
   }
 
-  function productIndex(product) {
+  function productIndex(product, completeIndex = false) {
+    // Complete indexing is used only for the application's accepted JSON data.
+    // Keep bounded normalization for public/untrusted callers and all queries.
+    const fieldLimit = completeIndex ? Number.MAX_SAFE_INTEGER : MAX_FIELD_LENGTH;
+    const normalized = value => normalizeField(value, fieldLimit);
+    const indexedItems = (value, visit) => eachItem(value, visit, completeIndex ? Number.MAX_SAFE_INTEGER : MAX_ITEMS);
     const fields = [];
     const skus = [];
     const variants = [];
-    const name = normalize(read(product, "name"));
+    const name = normalized(read(product, "name"));
     const seenSkus = new Set();
     const seenVariants = new Set();
     const addText = (value) => {
-      if (fields.length >= MAX_FIELDS) return;
-      const text = normalize(value);
+      if (!completeIndex && fields.length >= MAX_FIELDS) return;
+      const text = normalized(value);
       if (text) fields.push(text);
     };
     const addCode = (target, seen, value) => {
-      if (target.length >= MAX_ITEMS) return;
-      const code = safeString(value).trim();
-      const key = compact(code);
+      if (!completeIndex && target.length >= MAX_ITEMS) return;
+      const code = safeString(value, fieldLimit).trim();
+      const key = normalized(code).replace(/ /g, "");
       if (!key || seen.has(key)) return;
       seen.add(key);
       target.push({ code, compact: key });
@@ -94,25 +101,25 @@
     const roadmap = read(product, "roadmap");
     for (const field of ["family", "status", "confidence", "notes", "startMonth", "launchMonth", "endMonth"]) addText(read(roadmap, field));
 
-    eachItem(read(product, "partSkus"), (item) => {
+    indexedItems(read(product, "partSkus"), (item) => {
       addCode(skus, seenSkus, typeof item === "string" ? item : read(item, "code") || read(item, "sku") || read(item, "value"));
     });
     const ascm = read(product, "ascm");
-    eachItem(read(ascm, "basePartNumbers"), (code) => addCode(skus, seenSkus, code));
-    eachItem(read(ascm, "records"), (record) => {
+    indexedItems(read(ascm, "basePartNumbers"), (code) => addCode(skus, seenSkus, code));
+    indexedItems(read(ascm, "records"), (record) => {
       for (const field of ["basePartNumber", "basePN", "basePn"]) addCode(skus, seenSkus, read(record, field));
     });
 
-    eachItem(read(product, "variantGroups"), (group) => {
+    indexedItems(read(product, "variantGroups"), (group) => {
       addText(read(group, "label"));
-      eachItem(read(group, "items"), (item) => {
+      indexedItems(read(group, "items"), (item) => {
         addCode(variants, seenVariants, read(item, "code"));
         for (const field of ["label", "name", "colorName", "colorName2"]) addText(read(item, field));
       });
     });
     const specs = read(product, "specs");
     if (typeof specs === "string") addText(specs);
-    eachItem(specs, (item) => {
+    indexedItems(specs, (item) => {
       if (Array.isArray(item)) {
         addText(read(item, "0"));
         addText(read(item, "1"));
@@ -195,12 +202,12 @@
 
   // Returns a small match descriptor or null so existing category filters can
   // use the same matching rules as cross-category results.
-  function matchProduct(product, query) {
+  function matchProduct(product, query, options = {}) {
     if (!isRecord(product)) return null;
     const parsed = queryInfo(query);
     if (!parsed) return null;
     if (!parsed.text) return { matchedSku: "", matchedVariant: "", matchType: "all", score: 0 };
-    return matchIndexed(productIndex(product), parsed);
+    return matchIndexed(productIndex(product, read(options, "completeIndex") === true), parsed);
   }
 
   function boundedInteger(value, fallback, maximum) {
@@ -229,7 +236,7 @@
       eachItem(read(board, "products"), (product) => {
         const productId = safeString(read(product, "id"));
         if (!productId || !isRecord(product)) return;
-        const match = matchIndexed(productIndex(product), parsed);
+        const match = matchIndexed(productIndex(product, read(options, "completeIndex") === true), parsed);
         if (!match) return;
         const laneId = safeString(read(product, "laneId"));
         matches.push({

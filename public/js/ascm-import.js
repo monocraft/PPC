@@ -1514,6 +1514,9 @@
 
     const gaDate = parseExcelDate(group.gaDate) || incomingRecords.map((record) => record.generalAvailabilityDate).filter(Boolean).sort()[0] || "";
     const emDate = parseExcelDate(group.emDate) || incomingRecords.map((record) => record.endManufacturingDate).filter(Boolean).sort().at(-1) || "";
+    const resultingGa = gaDate || product.generalAvailabilityDate || "";
+    const resultingEm = emDate || product.endManufacturingDate || "";
+    if (resultingGa && resultingEm && resultingEm < resultingGa) fail("INVALID_DATE_ORDER", "ASCM general availability would fall after end of manufacturing. Review these source dates before applying this product.", { productId: product.id, generalAvailabilityDate: resultingGa, endManufacturingDate: resultingEm });
     const ascm = {
       ...previousSource,
       key: cleanText(group.ascmKey || group.key) || previousSource.key || "",

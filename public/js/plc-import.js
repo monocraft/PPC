@@ -144,8 +144,14 @@
     const detected = Boolean(color || /\bcolorway\b/i.test(`${row.section || ""} ${row.name || ""}`));
     return { detected, color, baseName: remove(name, nameColor), baseCodename: remove(code, codeColor), reason: detected ? "Colorway milestones belong to a color option, not the product-wide dates" : "" };
   }
-  function hardwareConflict(source, target) {
-    const signature = (value) => normalizeName(value).replace(/\b(quadcast|solocast|flipcast|cloud|alpha)\s*(\d+)/g, "$1 $2").replace(/\b(\d+)(s|pro|mini)\b/g, "$1 $2").replace(/\bsmini\b/g, "s mini");
+  function hardwareConflict(source, target, signatures = null) {
+    const signature = value => {
+      const key = clean(value);
+      if (signatures?.has(key)) return signatures.get(key);
+      const result = normalizeName(value).replace(/\b(quadcast|solocast|flipcast|cloud|alpha)\s*(\d+)/g, "$1 $2").replace(/\b(\d+)(s|pro|mini)\b/g, "$1 $2").replace(/\bsmini\b/g, "s mini");
+      signatures?.set(key, result);
+      return result;
+    };
     const first = signature(source), second = signature(target);
     const family = (value) => value.match(/\b(?:quadcast|solocast|flipcast|cloud|alpha|pulsefire haste|clutch|alloy origins)\b/)?.[0] || "";
     const a = family(first), b = family(second);
@@ -188,8 +194,19 @@
   function identities(portfolio) {
     return (portfolio.categories || []).flatMap((category) => (category.board?.products || []).map((product) => ({ product, productId: product.id, name: product.name, categoryId: category.id })));
   }
-  function matchProduct(row, portfolio, options = {}) {
-    const all = identities(portfolio), key = sourceKey(row);
+  function productMatchFacts(product, cache) {
+    if (cache?.products.has(product)) return cache.products.get(product);
+    const ownIdentity = extractIdentity(product.name);
+    const name = normalizeName(ownIdentity.marketingName);
+    const code = normalizeCode(product.codename || product.codeName || ownIdentity.codename);
+    const ownColorway = colorwayIdentity({ name: product.name, codename: product.codename || product.codeName });
+    const codes = [...(product.partSkus || []).map(sku => sku.code), ...(product.ascm?.basePartNumbers || []), ...colorVariants(product).map(variant => variant.code).filter(value => !root.ASCMImporter?.helpers?.canonicalColorCode?.(value) && /^[A-Z0-9]{4,}(?:#[A-Z0-9]+)?$/i.test(clean(value)))].map(sku => clean(sku).toUpperCase());
+    const facts = { ownIdentity, name, code, ownColorway, codes, tokens: new Set(name.split(" ").filter(Boolean)), siblingName: normalizeName(product.name).replace(/\bwireless\b/g, "").replace(/\s+/g, " ").trim() };
+    cache?.products.set(product, facts);
+    return facts;
+  }
+  function matchProduct(row, portfolio, options = {}, cache = null) {
+    const all = cache?.entries || identities(portfolio), key = sourceKey(row);
     const explicit = options.variantAssignments?.[key]?.productId || options.selections?.[key] || options.aliases?.[key];
     const compatible = (entry) => !row.categoryId || row.categoryId === entry.categoryId;
     const candidates = [];
@@ -198,31 +215,29 @@
     const incomingCode = normalizeCode(row.codename || incomingIdentity.codename);
     const colorway = colorwayIdentity(row), baseName = normalizeName(colorway.baseName), baseCode = normalizeCode(colorway.baseCodename);
     const skuList = (row.skus || row.partNumbers || []).map((sku) => clean(sku).toUpperCase());
+    const incomingTokens = new Set(incomingName.split(" ").filter(Boolean));
     for (const entry of all) {
       const product = entry.product;
+      let facts = null;
       let score = 0, reason = "";
       if (explicit === entry.productId) { score = 100; reason = "Selected product"; }
       else if (product.plc?.createdFromSource?.key === key && product.plc?.identities?.some((identity) => identity.key === key)) { score = 99; reason = "Confirmed PLC source identity"; }
       else if (!compatible(entry)) continue;
-      else if (hardwareConflict(colorway.baseName || incomingIdentity.marketingName, extractIdentity(product.name).marketingName)) continue;
+      else if (hardwareConflict(colorway.baseName || incomingIdentity.marketingName, (facts ||= productMatchFacts(product, cache)).ownIdentity.marketingName, cache?.signatures)) continue;
       else if (/\b(?:xbox|ps5|ps4|playstation)\b/i.test(row.name) && /\b(?:xbox|ps5|ps4|playstation)\b/i.test(product.name)
         && /xbox/i.test(row.name) !== /xbox/i.test(product.name)) continue;
       else if (/\b(?:wireless|wl)\b/i.test(row.name) && /\b(?:wired|wd)\b/i.test(product.name) || /\b(?:wired|wd)\b/i.test(row.name) && /\b(?:wireless|wl)\b/i.test(product.name)) continue;
       else if (row.productId === entry.productId || row.projectId && !/^\d+$/.test(String(row.projectId)) && row.projectId === entry.productId) { score = 100; reason = "Exact PPC product ID"; }
       else if (product.plc?.identities?.some((identity) => identity.key === key)) { score = 99; reason = "Remembered source identity"; }
       else {
-        const codes = [...(product.partSkus || []).map((sku) => sku.code), ...(product.ascm?.basePartNumbers || []), ...colorVariants(product).map((variant) => variant.code).filter((value) => !root.ASCMImporter?.helpers?.canonicalColorCode?.(value) && /^[A-Z0-9]{4,}(?:#[A-Z0-9]+)?$/i.test(clean(value)))].map((sku) => clean(sku).toUpperCase());
-        const ownIdentity = extractIdentity(product.name);
-        const name = normalizeName(ownIdentity.marketingName);
-        const code = normalizeCode(product.codename || product.codeName || ownIdentity.codename);
-        const ownColorway = colorwayIdentity({ name: product.name, codename: product.codename || product.codeName });
+        const { codes, name, code, ownColorway } = facts;
         if (skuList.some((sku) => codes.includes(sku))) { score = 98; reason = "Exact HP SKU"; }
         else if (incomingCode && code === incomingCode) { score = 96; reason = "Exact codename"; }
         else if (incomingName && incomingName === name) { score = 94; reason = "Exact normalized product name"; }
         else if (colorway.detected && baseCode && normalizeCode(ownColorway.baseCodename) === baseCode) { score = 95; reason = "Same hardware codename; select its color option"; }
         else if (colorway.detected && baseName && baseName === normalizeName(ownColorway.baseName)) { score = 94; reason = "Same hardware name; select its color option"; }
         else {
-          const a = new Set(incomingName.split(" ").filter(Boolean)), b = new Set(name.split(" ").filter(Boolean));
+          const a = incomingTokens, b = facts.tokens;
           const overlap = [...a].filter((token) => b.has(token)).length;
           score = Math.round(70 * overlap / Math.max(a.size, b.size, 1));
           if (score >= 25) reason = "Similar name; confirmation required";
@@ -232,7 +247,7 @@
     }
     candidates.sort((a, b) => b.score - a.score || a.productId.localeCompare(b.productId));
     if (!/\b(?:wired|wireless|wl|wd)\b/i.test(row.marketingName || incomingIdentity.marketingName)) {
-      const wirelessSibling = all.some((entry) => compatible(entry) && /\bwireless\b/i.test(entry.name) && normalizeName(entry.name).replace(/\bwireless\b/g, "").replace(/\s+/g, " ").trim() === incomingName);
+      const wirelessSibling = all.some((entry) => compatible(entry) && /\bwireless\b/i.test(entry.name) && productMatchFacts(entry.product, cache).siblingName === incomingName);
       if (wirelessSibling) for (const candidate of candidates) if (candidate.reason === "Exact normalized product name") { candidate.score = 70; candidate.reason = "Connection type missing; wired and wireless siblings require review"; }
       candidates.sort((a, b) => b.score - a.score || a.productId.localeCompare(b.productId));
     }
@@ -313,7 +328,11 @@
   }
   async function parseWorkbook(input, options = {}) {
     if (!root.ASCMImporter?.helpers?.openZip) throw new Error("The Excel reader did not load. Reload PPC.");
+    const maximumFileBytes = 40 * 1024 * 1024;
+    const declaredSize = Number(input?.size);
+    if (Number.isFinite(declaredSize) && declaredSize > maximumFileBytes) throw new Error("The selected PLC file exceeds the 40 MiB size limit.");
     const bytes = input?.arrayBuffer ? new Uint8Array(await input.arrayBuffer()) : input instanceof ArrayBuffer ? new Uint8Array(input) : input;
+    if (!ArrayBuffer.isView(bytes) || bytes.byteLength > maximumFileBytes) throw new Error("Choose a PLC workbook of at most 40 MiB.");
     if (!root.crypto?.subtle) throw new Error("PLC imports require a secure browser context for file identification.");
     const fingerprint = [...new Uint8Array(await root.crypto.subtle.digest("SHA-256", bytes))].map((value) => value.toString(16).padStart(2, "0")).join("");
     const zip = await root.ASCMImporter.helpers.openZip(bytes, { maxFileBytes: 40 * 1024 * 1024, maxTotalUncompressedBytes: 128 * 1024 * 1024 });
@@ -631,8 +650,9 @@
     if (reportParsed.kind !== "exact") throw new Error("The report date must be an exact calendar date.");
     const reportDate = reportParsed.value;
     const products = new Map(identities(matchingPortfolio).map((entry) => [entry.productId, entry.product]));
+    const matchingCache = { entries: identities(matchingPortfolio), products: new Map(), signatures: new Map() };
     const items = dataset.rows.map((row) => {
-      const key = sourceKey(row), match = matchProduct(row, matchingPortfolio, matchingOptions), parent = products.get(match.productId);
+      const key = sourceKey(row), match = matchProduct(row, matchingPortfolio, matchingOptions, matchingCache), parent = products.get(match.productId);
       const sourceColorway = colorwayIdentity(row), separate = parent?.plc?.createdFromSource?.key === key && parent.plc.createdFromSource.separateProduct;
       const colorway = separate ? { ...sourceColorway, detected: false, reason: "Reviewed separate hardware product" } : sourceColorway;
       const assignment = variants.assignments[key], remembered = parent && rememberedVariant(parent, key);

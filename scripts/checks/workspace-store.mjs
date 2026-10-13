@@ -12,7 +12,7 @@ assert.equal(api.MAX_WORKSPACE_BYTES, undefined, 'local storage uses actual brow
 const tick = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 const failure = (name, message = name) => Object.assign(new Error(message), { name });
 function driver() {
-  const state = { version: 1, stores: new Map([['images', new Map()]]), keys: new Map([['images', 'id']]), connections: [], transactions: [], openCalls: 0, strictAttempts: 0, clears: 0, holdRead: false, holdWrite: false, nextOpenFailure: '', nextWriteFailure: '', nextPutFailure: false, strictUnsupported: false, blockedRequest: null };
+  const state = { version: 1, stores: new Map([['images', new Map()]]), keys: new Map([['images', 'id']]), connections: [], transactions: [], openCalls: 0, strictAttempts: 0, clears: 0, holdRead: false, holdWrite: false, holdRequests: false, requestJobs: [], nextOpenFailure: '', nextWriteFailure: '', nextPutFailure: false, strictUnsupported: false, blockedRequest: null };
   function connection() {
     const db = { closed: false, objectStoreNames: { contains: name => state.stores.has(name) },
       createObjectStore(name, options) { assert(!state.stores.has(name)); state.stores.set(name, new Map()); state.keys.set(name, options.keyPath); },
@@ -25,6 +25,7 @@ function driver() {
           objectStore(name) { assert(names.includes(name)); return {
             get(key) { const request = {}; tx.requests.push({ request, name, key }); return request; },
             put(record) { if (state.nextPutFailure) { state.nextPutFailure = false; throw failure('DataError', 'Synthetic synchronous put failure'); } tx.operations.push({ name, record: { ...record } }); return {}; },
+            delete(key) { tx.operations.push({ name, deletedKey: key }); return {}; },
             clear() { state.clears++; throw new Error('Store clearing is forbidden in these durability cases'); },
           }; },
           abort() { if (tx.finished) return; tx.aborted = true; queueMicrotask(() => tx.complete()); },
@@ -33,15 +34,18 @@ function driver() {
             tx.finished = true;
             if (tx.mode === 'readwrite' && state.nextWriteFailure) { tx.error = failure(state.nextWriteFailure); state.nextWriteFailure = ''; tx.aborted = true; }
             if (tx.aborted) { tx.onabort?.(); return; }
-            for (const { name, record } of tx.operations) state.stores.get(name).set(record[state.keys.get(name)], record);
+            for (const { name, record, deletedKey } of tx.operations) { if (deletedKey !== undefined) state.stores.get(name).delete(deletedKey); else state.stores.get(name).set(record[state.keys.get(name)], record); }
             tx.oncomplete?.();
           },
         };
         state.transactions.push(tx);
         queueMicrotask(() => {
-          for (const { request, name, key } of tx.requests) { request.result = state.stores.get(name).get(key); request.onsuccess?.(); }
-          tx.requestEventsDone = true;
-          if (!(mode === 'readonly' ? state.holdRead : state.holdWrite)) queueMicrotask(() => tx.complete());
+          const completeRequests = () => {
+            for (const { request, name, key } of tx.requests) { request.result = state.stores.get(name).get(key); request.onsuccess?.(); }
+            tx.requestEventsDone = true;
+            if (!(mode === 'readonly' ? state.holdRead : state.holdWrite)) queueMicrotask(() => tx.complete());
+          };
+          if (state.holdRequests) state.requestJobs.push(completeRequests); else completeRequests();
         });
         return tx;
       },
@@ -119,4 +123,117 @@ for (const kind of ['blocked', 'error', 'throw']) {
   const beyondFormerCap = JSON.stringify({ version: 4, categories: [{ id: 'synthetic', board: { lanes: [], products: [] } }], completeEvidence: 'x'.repeat(65 * 1024 * 1024) });
   await store.save(beyondFormerCap); assert.equal(await store.read(), beyondFormerCap); mark('full local record above former64MiB application cap remains exact');
 }
-console.log('Workspace store checks passed: ' + cases.length + ' bounded durability, quota, migration, atomic image, ordering and retry cases.');
+{
+  const d = driver(), first = create(d), second = create(d);
+  await first.save('original'); assert.equal(await second.read(), 'original');
+  await first.save('accepted first-tab change');
+  await assert.rejects(second.save('stale second-tab draft', { images: [{ id: 'unaccepted-image', blob: new Blob(['keep out']) }] }), { code: 'WORKSPACE_CONFLICT' });
+  assert.equal(d.state.stores.get('workspaces').get('production').serialized, 'accepted first-tab change');
+  assert(!d.state.stores.get('images').has('unaccepted-image'), 'a conflict cannot stage pixels without its metadata');
+  assert.equal(await second.read(), 'accepted first-tab change');
+  await second.save('explicitly rebased second-tab update');
+  assert.equal(await second.read(), 'explicitly rebased second-tab update');
+  mark('two observed clients reject stale metadata and images atomically and permit explicit rebase');
+}
+{
+  const d = driver(), store = create(d); await store.save('original');
+  let current = true; d.state.holdRequests = true;
+  const pending = store.save('stale prepared image change', { images: [{ id: 'stale-image', blob: new Blob(['stale']) }], isCurrent: () => current });
+  const rejected = assert.rejects(pending, { code: 'WORKSPACE_CHANGED' });
+  await tick(); assert.equal(d.state.requestJobs.length, 1); assert.equal(d.state.transactions.at(-1).operations.length, 0);
+  current = false; d.state.requestJobs.shift()(); await rejected; d.state.holdRequests = false;
+  assert.equal(await store.read(), 'original'); assert(!d.state.stores.get('images').has('stale-image'));
+  mark('current-owner check repeats inside the transaction before any metadata or image put');
+}
+{
+  const d = driver(), store = create(d); await store.open();
+  const original = { id: 'production', version: 999, serialized: '\r\n{ damaged saved text\u0000', savedAt: 123, unknownMetadata: { kept: ['all', 'facts'] } };
+  d.state.stores.get('workspaces').set('production', original);
+  await assert.rejects(store.read(), { code: 'WORKSPACE_INVALID' });
+  const recovery = await store.readRecovery(); assert.equal(recovery.rawText, original.serialized);
+  recovery.record.unknownMetadata.kept[0] = 'untrusted mutation';
+  await assert.rejects(store.save('ordinary write'), { code: 'WORKSPACE_INVALID' });
+  const oldBlob = new Blob(['old pixels']); d.state.stores.get('images').set('old', { id: 'old', blob: oldBlob });
+  const receipt = await store.recover('validated new data', { recovery, images: [{ id: 'new', blob: new Blob(['new pixels']) }] });
+  assert.equal(await store.read(), 'validated new data');
+  assert.deepEqual(JSON.parse(JSON.stringify(d.state.stores.get('workspaces').get(receipt.archiveKey).record)), original);
+  assert.equal(d.state.stores.get('workspaces').get(receipt.archiveKey).rawText, original.serialized);
+  assert.equal(d.state.stores.get('images').get('old').blob, oldBlob);
+  await store.rollbackRecovery(receipt);
+  assert.deepEqual(JSON.parse(JSON.stringify(d.state.stores.get('workspaces').get('production'))), original);
+  assert(!d.state.stores.get('workspaces').has(receipt.archiveKey)); assert(!d.state.stores.get('images').has('new'));
+  assert.equal(d.state.stores.get('images').get('old').blob, oldBlob);
+  await assert.rejects(store.rollbackRecovery(receipt), { code: 'WORKSPACE_RECOVERY_INVALID' });
+  mark('raw corrupt recovery archive and atomic rollback preserve exact original record and preexisting pixels');
+}
+{
+  const d = driver(), store = create(d); await store.open();
+  const original = { id: 'production', version: 0, serialized: 'original raw' }; d.state.stores.get('workspaces').set('production', original);
+  let recovery = await store.readRecovery(); d.state.nextWriteFailure = 'QuotaExceededError';
+  await assert.rejects(store.recover('replacement', { recovery, images: [{ id: 'new', blob: new Blob(['incoming']) }] }), { code: 'WORKSPACE_QUOTA' });
+  assert.deepEqual(d.state.stores.get('workspaces').get('production'), original); assert(!d.state.stores.get('images').has('new')); assert.equal(d.state.stores.get('workspaces').size, 1);
+  const receipt = await store.recover('replacement', { recovery, images: [{ id: 'new', blob: new Blob(['incoming']) }] });
+  d.state.nextWriteFailure = 'QuotaExceededError'; await assert.rejects(store.rollbackRecovery(receipt), { code: 'WORKSPACE_QUOTA' });
+  assert.equal(d.state.stores.get('workspaces').get('production').serialized, 'replacement'); assert(d.state.stores.get('images').has('new'));
+  assert.deepEqual(JSON.parse(JSON.stringify(d.state.stores.get('workspaces').get(receipt.archiveKey).record)), original);
+  await store.rollbackRecovery(receipt); assert.deepEqual(d.state.stores.get('workspaces').get('production'), original);
+  mark('recovery and rollback quota failures are atomic and original archive remains retryable');
+}
+{
+  const d = driver(), first = create(d), second = create(d); await first.save('original raw');
+  const recovery = await first.readRecovery(); await second.read(); await second.save('accepted other-tab record');
+  await assert.rejects(first.recover('stale recovery', { recovery, images: [{ id: 'unaccepted', blob: new Blob(['not saved']) }] }), { code: 'WORKSPACE_CONFLICT' });
+  assert.equal(await second.read(), 'accepted other-tab record'); assert(!d.state.stores.get('images').has('unaccepted')); assert.equal(d.state.stores.get('workspaces').size, 1);
+  await assert.rejects(second.recover('foreign token', { recovery }), { code: 'WORKSPACE_RECOVERY_INVALID' });
+  mark('fresh raw recovery CAS rejects another-tab change and foreign token before staging');
+}
+{
+  const d = driver(), first = create(d), second = create(d); await first.save('original raw');
+  const receipt = await first.recover('recovered', { recovery: await first.readRecovery(), images: [{ id: 'new', blob: new Blob(['saved']) }] });
+  await second.read(); await second.save('newer accepted changes');
+  await assert.rejects(first.rollbackRecovery(receipt), { code: 'WORKSPACE_CONFLICT' });
+  assert.equal(await second.read(), 'newer accepted changes'); assert(d.state.stores.get('images').has('new')); assert(d.state.stores.get('workspaces').has(receipt.archiveKey));
+  mark('recovery rollback never overwrites a newer saved record or removes its pixels');
+}
+{
+  const d = driver(), store = create(d); await store.save('original');
+  let current = true; const recovery = await store.readRecovery(); d.state.holdRequests = true;
+  const pending = store.recover('stale replacement', { recovery, isCurrent: () => current, images: [{ id: 'stale', blob: new Blob(['stale']) }] });
+  const rejected = assert.rejects(pending, { code: 'WORKSPACE_CHANGED' }); await tick(); current = false; d.state.requestJobs.shift()(); await rejected; d.state.holdRequests = false;
+  assert.equal(await store.read(), 'original'); assert(!d.state.stores.get('images').has('stale')); assert.equal(d.state.stores.get('workspaces').size, 1);
+  mark('recovery owner fence repeats under transaction lock before any writes');
+}
+{
+  const d = driver(), store = create(d); await store.save('original');
+  const originalBlob = new Blob(['original image']); d.state.stores.get('images').set('already-existing', { id: 'already-existing', blob: originalBlob });
+  const recovery = await store.readRecovery();
+  await assert.rejects(store.recover('replacement', { recovery, images: [{ id: 'already-existing', blob: new Blob(['replacement']) }] }), { code: 'WORKSPACE_RECOVERY_IMAGES' });
+  assert.equal(await store.read(), 'original'); assert.equal(d.state.stores.get('images').get('already-existing').blob, originalBlob);
+  const receipt = await store.recover('replacement', { recovery, images: [{ id: 'new', blob: new Blob(['new']) }] });
+  const newerBlob = new Blob(['changed independently']); d.state.stores.get('images').set('new', { id: 'new', blob: newerBlob });
+  await assert.rejects(store.rollbackRecovery(receipt), { code: 'WORKSPACE_CONFLICT' });
+  assert.equal(d.state.stores.get('images').get('new').blob, newerBlob); assert.equal(await store.read(), 'replacement'); assert(d.state.stores.get('workspaces').has(receipt.archiveKey));
+  mark('recovery rejects existing image IDs and rollback preserves independently replaced pixels');
+}
+{
+  const d = driver(), store = create(d); assert.equal(await store.read(), null);
+  const recovery = await store.readRecovery(); assert.equal(recovery.rawText, null); assert.equal(recovery.record, undefined);
+  const receipt = await store.recover('legacy replacement', { recovery }); assert.equal(await store.read(), 'legacy replacement');
+  await store.rollbackRecovery(receipt); assert.equal(await store.read(), null); assert.equal(d.state.stores.get('workspaces').size, 0);
+  mark('legacy recovery with originally missing DB key can restore exact absence');
+}
+{
+  const d = driver(), store = create(d); await store.open();
+  const original = { id: 'production', version: 0, serialized: 'raw', metadata: { slots: new Array(3), number: -0, absent: undefined } };
+  d.state.stores.get('workspaces').set('production', original);
+  const recovery = await store.readRecovery();
+  d.state.stores.get('workspaces').set('production', { ...original, metadata: { ...original.metadata, slots: new Array(4) } });
+  await assert.rejects(store.recover('stale sparse-array record', { recovery }), { code: 'WORKSPACE_CONFLICT' });
+  d.state.stores.get('workspaces').set('production', { ...original, metadata: { ...original.metadata, number: 0 } });
+  await assert.rejects(store.recover('stale signed-zero record', { recovery }), { code: 'WORKSPACE_CONFLICT' });
+  d.state.stores.get('workspaces').set('production', original);
+  const receipt = await store.recover('replacement', { recovery }); await store.rollbackRecovery(receipt);
+  const restored = d.state.stores.get('workspaces').get('production'); assert.equal(restored.metadata.slots.length, 3); assert.equal(Object.keys(restored.metadata.slots).length, 0); assert(Object.is(restored.metadata.number, -0)); assert(Object.hasOwn(restored.metadata, 'absent'));
+  mark('raw recovery signatures and rollback retain sparse-array length, signed zero and undefined own fields');
+}
+console.log('Workspace store checks passed: ' + cases.length + ' bounded durability, quota, migration, atomic image, ordering, recovery CAS/rollback and retry cases.');

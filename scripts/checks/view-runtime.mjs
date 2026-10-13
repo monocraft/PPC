@@ -25,6 +25,20 @@ const root = { requestAnimationFrame: request, cancelAnimationFrame: cancel,
   addEventListener(name, callback) { events.set(name, callback); }, document: { createElement: node } };
 vm.createContext(root); vm.runInContext(runtimeSource, root);
 const runtime = root.PortfolioViewRuntime;
+// Frozen chrome must copy the visible backing layer after large boards switch
+// the logical event canvas to one backing pixel; ordinary canvases still work.
+{
+  const copies = [], make = root.document.createElement;
+  root.devicePixelRatio = 2;
+  root.document.createElement = () => ({ ...node(), getContext: () => ({ clearRect() {}, drawImage: (...args) => copies.push(args) }) });
+  const source = { width: 1200, height: 900 }, logical = { _ppcViewportLayer: source };
+  const scroll = { parentElement: node(), clientWidth: 600, offsetLeft: 10, offsetTop: 20, scrollLeft: 4000, scrollTop: 2500 };
+  runtime.stickyHeader(logical, scroll, 88).sync();
+  assert.equal(copies[0][0], source); assert.deepEqual(copies[0].slice(1), [0, 0, 1200, 176, 0, 0, 1200, 176]);
+  const full = { width: 20000, height: 12000 }; runtime.stickyHeader(full, scroll, 88).sync();
+  assert.equal(copies[1][0], full); assert.equal(copies[1][1], 8000); assert.equal(copies[1][2], 5000);
+  root.document.createElement = make; delete root.devicePixelRatio;
+}
 
 // Event bursts must produce one paint of the latest state, and no idle render loop.
 let renders = 0, current = 0, painted = 0;
@@ -213,7 +227,7 @@ layoutContext.productLaneGeometry = layout => {
   const extra = (600 / .9 - layout.cardHeight) * layoutContext.viewerInfoProgress;
   return { height: layout.laneHeight + extra, rows: [{ lane: board.lanes[0], top: 50, contentHeight: layout.cardHeight + extra }] };
 };
-vm.runInContext(extract("getCanvasDimensions") + extract("setupCanvas"), layoutContext);
+vm.runInContext(extract("getCanvasDimensions") + extract("viewportCanvasContext") + extract("setupCanvas"), layoutContext);
 const sizes = [];
 for (const progress of [0, .01, .1, .3, .6, .8, 1]) {
   layoutContext.viewerInfoProgress = progress;
@@ -226,8 +240,17 @@ for (const size of sizes) {
 let canvasResizes = 0, pixelsWide = 0, pixelsHigh = 0;
 const testCanvas = { style: {}, getContext: () => ({ setTransform() {} }) };
 Object.defineProperties(testCanvas, { width: { get: () => pixelsWide, set(value) { pixelsWide = value; canvasResizes++; } }, height: { get: () => pixelsHigh, set(value) { pixelsHigh = value; canvasResizes++; } } });
+let viewportResizes = 0, viewportWidth = 0, viewportHeight = 0;
+const viewportCanvas = { style: {}, setAttribute() {}, getContext: () => ({ setTransform() {} }) };
+Object.defineProperties(viewportCanvas, { width: { get: () => viewportWidth, set(value) { viewportWidth = value; viewportResizes++; } }, height: { get: () => viewportHeight, set(value) { viewportHeight = value; viewportResizes++; } } });
+testCanvas.parentElement = { insertBefore() {} };
+layoutContext.document = { createElement: () => viewportCanvas };
 for (const progress of [0, .01, .1, .3, .6, .8, 1]) { layoutContext.viewerInfoProgress = progress; layoutContext.setupCanvas(testCanvas); }
 assert.equal(canvasResizes, 2, "opening allocates each canvas dimension once rather than reallocating every animation frame");
+assert.equal(viewportResizes, 2, "viewport pixels are allocated once across the same opening frames");
+assert.equal(viewportWidth, 1000); assert.equal(viewportHeight, 600);
+assert.equal(pixelsWide, 1); assert.equal(pixelsHigh, 1);
+assert.ok(Math.abs(parseFloat(testCanvas.style.width) - sizes[0].allocationWidth * layoutContext.zoom) < 1e-8, "the full main reading-area allocation remains the logical scroll extent");
 
 // Actual board drawing culls only the interactive viewport; export keeps all IDs.
 const draws = [], clears = [];

@@ -71,6 +71,7 @@ vm.createContext(context); new vm.Script(functions).runInContext(context);
     visibleProducts: () => board.products.filter((product) => !visibleIds || visibleIds.has(product.id)),
     productCardLayout: () => layout, productLaneGeometry: () => ({ rows: laneRows }), getCanvasDimensions: () => dimensions,
     setupCanvas() { counts.setups++; return { context: paints, dimensions }; },
+    viewportCanvasContext: () => paints,
     roundRect(_paint, x, y, width, height, radius, fill, stroke) { const mark = { type: "roundRect", x, y, width, height, radius, fill, stroke }; marks.push(mark); paintOrder.push(mark); },
     drawCard(_paint, product, x, y, selected, _layout, interactive) { const card = { id: product.id, x, y, selected, interactive, alpha: _paint.globalAlpha }; cards.push(card); paintOrder.push({ type: "card", ...card }); },
     syncBoardNavigator() {}, syncLaneRail() {}, renderStatus() { counts.status++; }, renderLaneRail() {}, syncViewZoomControls() {}, renderInspector() {}, positionViewerInfo() {}, updateProductLayoutEditControls() {}, syncControls() {},

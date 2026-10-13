@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createMasterGateway, sha256, canonicalJson } from '../../supabase/functions/ppc-master/gateway.mjs';
@@ -333,12 +333,19 @@ assert(sql.includes('primary key (session_id, request_id)'), 'request receipt id
 assert(sql.includes("security definer set search_path = ''"));
 assert(!sql.includes('create policy'), 'no browser policy exposes private manifest or receipts');
 
+if (process.env.PPC_REQUIRE_SQL_TESTS === '1' && !process.env.PPC_TEST_PGLITE_MODULE) {
+  throw new Error('SQL verification is required. Configure PPC_TEST_PGLITE_MODULE before running this check.');
+}
+if (!process.env.PPC_TEST_PGLITE_MODULE) console.warn('SKIPPED: PostgreSQL migration execution; set PPC_TEST_PGLITE_MODULE to enable it.');
 if (process.env.PPC_TEST_PGLITE_MODULE) {
   const { PGlite } = await import(pathToFileURL(resolve(process.env.PPC_TEST_PGLITE_MODULE)).href);
   const postgres = new PGlite();
   try {
     await postgres.exec('create role anon; create role authenticated; create role service_role bypassrls;');
-    await postgres.exec(sql);
+    const migrations = resolve('supabase/migrations');
+    for (const filename of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) {
+      await postgres.exec(await readFile(resolve(migrations, filename), 'utf8'));
+    }
     const rpc = async (operation, payload) => (await postgres.query(`select public.ppc_master_${operation}($1::jsonb) as result`, [JSON.stringify(payload)])).rows[0].result;
     const hash = await sha256(canonicalJson({ manifest: seed, sourceSha }));
     assert.equal((await rpc('bootstrap', { manifest: seed, sourceSha, fingerprint: hash })).status, 'initialized');
@@ -393,6 +400,16 @@ if (process.env.PPC_TEST_PGLITE_MODULE) {
     assert.equal(actualMaster.storageRevision, 4);
     const actualValues = model.snapshot(actualMaster.manifest).products[0].values;
     assert.equal(actualValues.generalAvailabilityDate, '2027-03-01'); assert.equal(actualValues.specs[0].value, '57 mm');
+    const large = clone(actualMaster.manifest);
+    large.customOwnerData = Array.from({ length: 40000 }, () => ({ a: 0, b: 1 }));
+    large.customOwnerPadding = 'x'.repeat(4194304 - 100 - Buffer.byteLength(JSON.stringify(large)) - Buffer.byteLength(',"customOwnerPadding":""'));
+    assert(Buffer.byteLength(JSON.stringify(large)) < 4194304);
+    const storedBytes = (await postgres.query('select octet_length(($1::jsonb)::text) as bytes', [JSON.stringify(large)])).rows[0].bytes;
+    assert(storedBytes > 4194304, 'PostgreSQL representation can exceed the compact JavaScript byte count.');
+    assert.equal((await rpc('bootstrap', { manifest: large, sourceSha, fingerprint: hash })).status, 'manifest_too_large');
+    assert.equal((await rpc('commit', { ...commitPayload, expectedRevision: actualMaster.storageRevision, manifest: large, requestId: 'sql-oversize-save' })).status, 'manifest_too_large');
+    assert.deepEqual(await rpc('read', {}), actualMaster, 'Capacity failure changes neither master nor publication state.');
+    assert.equal((await rpc('read', { sessionId: commitPayload.sessionId, requestId: 'sql-oversize-save' })).receipt, undefined);
     console.log('Supabase migration executed in PostgreSQL; actual RPC CAS, durable receipts, roster expiry, rate limits, publication monotonicity and role permissions verified.');
   } finally { await postgres.close(); }
 }

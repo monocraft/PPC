@@ -6,6 +6,8 @@
   const conflictKey = (productId, path) => JSON.stringify([productId, path]);
   const model = () => root.PortfolioMasterModel;
   const valuesOf = (product) => product?.values ? clone(product.values) : model().productValues(product);
+  const legacySnapshotEndpoints = new Set();
+  const legacyConflictEndpoints = new Set();
 
   function normalizeEndpoint(value, baseUrl = root.location?.href) {
     const text = String(value || "").trim();
@@ -65,11 +67,11 @@
 
   function errorOf(message, code, status) { const error = new Error(message); error.code = code; error.status = status; return error; }
 
-  async function readJson(response) {
-    const limit = 12 * 1024 * 1024, advertised = response.headers?.get("content-length");
+  async function readJson(response, limit = 12 * 1024 * 1024) {
+    const advertised = response.headers?.get("content-length");
     if (advertised !== null && advertised !== undefined && (!/^\d+$/.test(advertised) || Number(advertised) > limit)) { await response.body?.cancel().catch(() => {}); throw new Error(); }
     const reader = response.body?.getReader();
-    if (!reader) { const text = await response.text(); if (text.length > limit) throw new Error(); return JSON.parse(text); }
+    if (!reader) { const text = await response.text(); if (new TextEncoder().encode(text).length > limit) throw new Error(); return JSON.parse(text); }
     let bytes = 0, text = ""; const decoder = new TextDecoder();
     try {
       for (;;) { const chunk = await reader.read(); if (chunk.done) break; bytes += chunk.value.byteLength; if (bytes > limit) throw new Error(); text += decoder.decode(chunk.value, { stream: true }); }
@@ -78,9 +80,12 @@
     finally { reader.releaseLock(); }
   }
 
-  async function performRequest({ endpoint, operation, key, editorToken, team = false, fetchImpl = root.fetch, signal, keepalive = false, ...payload }) {
+  async function performRequest({ endpoint, operation, key, editorToken, team = false, fetchImpl = root.fetch, signal, keepalive = false, compact = true, conflictCompact = true, ...payload }) {
     if (!["latest", "save", "presence", "review"].includes(operation)) throw new Error("The update action is invalid.");
-    const url = `${normalizeEndpoint(endpoint)}/${operation}`;
+    const normalizedEndpoint = normalizeEndpoint(endpoint), url = `${normalizedEndpoint}/${operation}`;
+    const compactRequest = compact && operation !== "presence" && !legacySnapshotEndpoints.has(normalizedEndpoint);
+    const conflictPlanRequest = compactRequest && conflictCompact && operation === "save" && !legacyConflictEndpoints.has(normalizedEndpoint);
+    const submittedChanges = conflictPlanRequest && Array.isArray(payload.changes) ? clone(payload.changes) : payload.changes;
     let normalizedKey;
     try { normalizedKey = root.PortfolioPackage?.normalizeKey ? root.PortfolioPackage.normalizeKey(key) : String(key || "").trim(); }
     catch { throw errorOf("That master package key is incomplete. Check the key and try again.", "INVALID_KEY", 401); }
@@ -90,7 +95,9 @@
       response = await fetchImpl(url, {
         method: "POST", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal, keepalive: Boolean(keepalive && operation === "presence"),
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ key: normalizedKey, ...(!team && editorToken ? { editorToken } : {}), ...payload }),
+        body: JSON.stringify({ key: normalizedKey, ...(!team && editorToken ? { editorToken } : {}),
+          ...(compactRequest ? { snapshotFormat: conflictPlanRequest ? "compact-conflict-v1" : "compact-v1" } : {}), ...payload,
+          ...(conflictPlanRequest ? { changes: submittedChanges } : {}) }),
       });
     } catch (error) {
       if (error?.name === "AbortError") throw error;
@@ -100,12 +107,40 @@
     if (response.status === 429) throw errorOf("Too many attempts. Wait a minute and try again. Your local changes are safe.", "RATE_LIMIT", 429);
     if (response.status === 404 || response.status >= 500) throw errorOf("The master is unavailable. Your changes are saved on this device; try again later.", "UNAVAILABLE", response.status);
     let data;
-    try { data = await readJson(response); }
+    // A review adds complete product records (jointly bounded by the 4 MiB
+    // manifest) to a compact <=12 MiB snapshot. Keep a derived 20 MiB envelope
+    // ceiling for that operation, and retain the original limit for the rest.
+    // A negotiated conflict plan adds at most 500 bounded descriptors to its
+    // compact <=12 MiB snapshot; complete decision values stay in the retained
+    // request and snapshot. Its derived 16 MiB wire limit covers that envelope.
+    try { data = await readJson(response, operation === "review" ? 20 * 1024 * 1024 : operation === "save" && response.status === 409 && conflictPlanRequest ? 16 * 1024 * 1024 : undefined); }
     catch { throw errorOf("The master response could not be read. Your local changes are safe.", "INVALID_RESPONSE", response.status); }
+    // Older services reject unknown fields before any mutation. Retry that
+    // explicit validation rejection once using their existing request shape,
+    // and remember the endpoint to avoid doubling its subsequent requests.
+    if (compactRequest && response.status === 400 && data.code === "INVALID_REQUEST") {
+      if (conflictPlanRequest) {
+        const result = await performRequest({ endpoint, operation, key, editorToken, team, fetchImpl, signal, keepalive, compact, conflictCompact: false, ...payload, changes: submittedChanges });
+        if (legacyConflictEndpoints.size >= 32) legacyConflictEndpoints.delete(legacyConflictEndpoints.values().next().value);
+        legacyConflictEndpoints.add(normalizedEndpoint);
+        return result;
+      }
+      const result = await performRequest({ endpoint, operation, key, editorToken, team, fetchImpl, signal, keepalive, compact: false, ...payload });
+      if (legacySnapshotEndpoints.size >= 32) legacySnapshotEndpoints.delete(legacySnapshotEndpoints.values().next().value);
+      legacySnapshotEndpoints.add(normalizedEndpoint);
+      return result;
+    }
     if (response.status === 403) {
       if (team) throw errorOf("Team saving needs to be connected by the portfolio owner. Your changes remain on this device.", "TEAM_SETUP_REQUIRED", 403);
       const disabled = data.code === "WRITES_DISABLED";
       throw errorOf(disabled ? "Saving to master is not enabled yet. Ask the portfolio owner to enable sharing. Your changes remain on this device." : "Enter the team editing key to save changes to the master.", disabled ? "WRITES_DISABLED" : "EDITOR_KEY_REQUIRED", 403);
+    }
+    if (response.status === 409 && data.code === "MASTER_CONFLICT" && data.conflictPlan !== undefined) {
+      try {
+        if (!conflictPlanRequest) throw new Error();
+        const snapshot = normalizeSnapshot(data.snapshot);
+        return { ...data, conflicts: model().restoreConflictPlan(data.conflictPlan, snapshot, submittedChanges), snapshot };
+      } catch { throw errorOf("The complete conflict response could not be verified. Your local changes are safe.", "INVALID_RESPONSE", 409); }
     }
     if (response.status === 409 && data.code === "MASTER_CONFLICT" && Array.isArray(data.conflicts)) return { ...data, snapshot: normalizeSnapshot(data.snapshot) };
     if (!response.ok) throw errorOf(response.status === 400 ? "These changes could not be saved. Check your product details and try again." : "The master could not save these changes. Your local changes are safe.", String(data.code || "SAVE_FAILED"), response.status);

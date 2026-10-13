@@ -58,7 +58,7 @@ const functionNames = [
   "imageStorePut", "imageStoreGet", "imageStoreDelete", "imageStoreClear", "imageStoreWriteBatch", "imageStoreDeleteBatch",
   "dataUriToBlob", "extensionForImageAsset", "createImageAssetMetadata", "ensureImageAssetRegistry", "migrateLegacyProductImages",
   "loadLocalImageAsset", "normalizeAscmSnapshot", "createDefaultPortfolio", "ensurePortfolioSchema", "normalizeImportedPortfolio",
-  "scheduleSave", "showLocalSaveFailure", "flushWorkspaceSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
+  "persistPortfolioStorage", "reportWorkspaceSaveFailure", "scheduleSave", "showLocalSaveFailure", "flushWorkspaceSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
   "localPackageImageIds", "clearPackageImageCaches", "commitPackageDraft",
   "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage", "parsePortfolioImportText", "importJson",
 ];
@@ -105,7 +105,7 @@ function harness(initial = portfolioFixture()) {
           };
         },
       };
-      queueMicrotask(() => {
+      queueMicrotask(() => queueMicrotask(() => {
         const writeFailure = faults.transaction && operations.some(([kind]) => kind === "put");
         const deleteFailure = faults.deleteTransaction && operations.some(([kind]) => kind === "delete");
         if (aborted || (mode === "readwrite" && (writeFailure || deleteFailure))) {
@@ -122,7 +122,7 @@ function harness(initial = portfolioFixture()) {
           if (kind === "clear") images.clear();
         }
         transaction.oncomplete?.();
-      });
+      }));
       return transaction;
     },
   };
@@ -132,7 +132,7 @@ function harness(initial = portfolioFixture()) {
     STORAGE_KEY: storageKey, PREVIOUS_STORAGE_KEY: "previous", PACKAGE_RECOVERY_KEY: recoveryKey,
     MAX_PACKAGE_MANIFEST_BYTES: 64 * 1024 * 1024, IMAGE_STORE_NAME: "images",
     CATEGORY_DEFINITIONS: clone(definitions), pendingLegacyImageBlobs: [],
-    imageAssetUrlCache: new Map(), imageAssetLoadPromises: new Map(), missingImageAssetIds: new Set(),
+    imageCache: new Map(), imageAssetUrlCache: new Map(), imageAssetLoadPromises: new Map(), missingImageAssetIds: new Set(),
     imageAssetGeneration: 0, packageOperationInProgress: false, workspaceOpening: false,
     workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, saveTimer: null,
     portfolio: clone(initial), activeCategoryId: initial.activeCategoryId,

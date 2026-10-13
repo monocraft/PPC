@@ -21,6 +21,21 @@
   <aside id="workspaceOpeningStatus" class="workspace-opening-status hidden" role="status" aria-live="polite">
     <p id="workspaceOpeningMessage">Opening the saved portfolio…</p>
     <button id="workspaceOpeningRetry" type="button" hidden>Retry opening</button>
+    <section id="workspaceRecoveryControls" class="workspace-recovery-controls" hidden aria-labelledby="workspaceRecoveryTitle">
+      <h2 id="workspaceRecoveryTitle">Recover your saved portfolio</h2>
+      <p>Export the saved data before restoring a backup. Your saved copy and images stay protected until you review and confirm a valid backup.</p>
+      <button id="workspaceRecoveryExport" type="button">Export saved data for recovery</button>
+      <form id="workspaceRecoveryForm">
+        <label>Portfolio backup<input id="workspaceRecoveryFile" type="file" accept=".data,.json,.pkg,application/json,application/octet-stream" required></label>
+        <label>Package access key, if encrypted<input id="workspaceRecoveryKey" type="password" autocomplete="off" spellcheck="false"></label>
+        <button id="workspaceRecoveryReview" type="submit">Review backup</button>
+      </form>
+      <div id="workspaceRecoveryPreview" hidden>
+        <p id="workspaceRecoverySummary"></p>
+        <button id="workspaceRecoveryRestore" type="button" class="primary-button">Restore this backup</button>
+      </div>
+      <p id="workspaceRecoveryStatus" role="status" aria-live="polite"></p>
+    </section>
   </aside>
   <main class="app-shell">
     <div class="workspace-main">

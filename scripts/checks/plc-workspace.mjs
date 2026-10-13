@@ -49,8 +49,9 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
     ensurePortfolioSchema: normalizeDraft, activateCategory() { calls.renders += 1; }, renderInspector() {}, renderActiveView() {},
     setTimeout(callback) { const id = timers.size + 1; timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); },
     localStorage: { setItem(key, text) { assert.equal(key, 'synthetic-workspace'); if (storageBlocked) throw new Error('Synthetic browser quota exceeded'); stored = text; calls.writes.push(JSON.parse(text)); }, removeItem() {} },
-    workspaceStorage: { async save(text) {
+    workspaceStorage: { async save(text, { isCurrent } = {}) {
       if (holdWrite) { holdWrite = false; await new Promise(resolve => { releaseWrite = resolve; }); }
+      if (isCurrent && !isCurrent()) throw Object.assign(new Error('The workspace changed before its durable write'), { code: 'WORKSPACE_CHANGED' });
       if (storageBlocked) throw new Error('Synthetic browser quota exceeded');
       stored = text; calls.writes.push(JSON.parse(text));
     } },
@@ -86,7 +87,7 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
     },
   });
   vm.createContext(sandbox);
-  for (const name of ['scheduleSave', 'showLocalSaveFailure', 'flushWorkspaceSave', 'productDateHistoryOptions', 'persistPlcDraft', 'retryPlcSharing', 'commitPlcPlan']) {
+  for (const name of ['scheduleSave', 'showLocalSaveFailure', 'flushWorkspaceSave', 'productDateHistoryOptions', 'persistPortfolioStorage', 'persistPlcDraft', 'retryPlcSharing', 'commitPlcPlan']) {
     const definition = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, 'm'));
     assert.ok(definition, `Workspace must expose its ${name} integration function.`);
     vm.runInContext(definition[0], sandbox);
@@ -106,6 +107,26 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
   assert.deepEqual(h.workspace, before, 'PLC activation waits for the full durable commit'); assert.deepEqual(h.stored, storedBefore); assert.equal(h.calls.scoped, 0); assert.equal(h.calls.saves.length, 0);
   assert.equal(h.timers.size, 0, 'older deferred autosave is quiesced before awaiting the new reviewed PLC commit');
   h.releaseWrite(); await committing; assert.equal(h.calls.scoped, 1); assert(h.calls.writes[0].plcSharePending.patches.length); assert.equal(h.calls.writes[0].categories[0].board.products[0].plc.fields.ffsDate.value, '2026-11-05');
+}
+{
+  const h = harness(), before = h.stored;
+  h.holdNextWrite(); const pending = h.commit(h.plan());
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  currentProduct(h.workspace).name = 'Newer edit while PLC transaction waits';
+  h.releaseWrite(); await assert.rejects(pending, /workspace changed/i);
+  assert.deepEqual(h.stored, before, 'A delayed PLC transaction cannot persist a stale plan over newer edits');
+  assert.equal(currentProduct(h.workspace).name, 'Newer edit while PLC transaction waits');
+  assert.equal(h.calls.scoped, 0);
+}
+{
+  const h = harness(), before = h.stored;
+  h.sandbox.scheduleSave(); h.holdNextWrite(); const pending = h.flush();
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  h.sandbox.portfolio = clone(seed); currentProduct(h.workspace).name = 'Replacement workspace';
+  h.releaseWrite(); assert.equal(await pending, false);
+  assert.deepEqual(h.stored, before, 'A queued autosave cannot restore the replaced workspace');
+  assert.equal(currentProduct(h.workspace).name, 'Replacement workspace');
+  assert.equal(h.calls.notices.at(-1).id, 'workspace-local-save');
 }
 {
   const h = harness(); currentProduct(h.workspace).specs[0].value = 'Retained local draft'; h.sandbox.scheduleSave(); h.blockStorage(true);
