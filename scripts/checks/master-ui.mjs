@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import "../../public/js/master-model.js";
+import "../../public/js/workspace-notifications.js";
 
 const source = await readFile(new URL("../../public/js/master-ui.js", import.meta.url), "utf8");
 const model = globalThis.PortfolioMasterModel;
@@ -11,8 +12,11 @@ const byClass = (node, name) => all(node).filter((entry) => String(entry.classNa
 const byTag = (node, tag) => all(node).filter((entry) => entry.tagName === tag.toUpperCase());
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
 
-function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" } } = {}) {
+function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null } = {}) {
   const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [], beforeSaves: 0 };
+  const notificationEvents = [], messageStore = globalThis.PortfolioNotifications.createStore({ acknowledgmentStorage });
+  const syncNotices = () => { notices.clear(); for (const item of messageStore.getState().items) notices.set(item.id, item); };
+  messageStore.subscribe(event => { notificationEvents.push(event); syncNotices(); });
   const document = { activeElement: null, visibilityState: "visible", addEventListener() {} };
   document.createElement = (tag) => {
     const handlers = new Map(), attributes = new Map(), classes = new Set();
@@ -34,10 +38,11 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   const state = { configured, hasKey, connected: false, pending: structuredClone(initialPending), snapshot: { publication } };
   let saveHandler = async () => { state.pending = []; return { saved: true, snapshot: state.snapshot }; };
   let scopedSaveHandler = async () => ({ status: "saved", saved: true, message: "Imported values shared." });
+  let refreshHandler = async () => { state.connected = true; };
   let discardedPending = [], discardFailure = false;
   const session = {
     getState: () => state, track: () => state.pending,
-    async refresh() { calls.refreshes += 1; state.connected = true; },
+    async refresh() { calls.refreshes += 1; return refreshHandler(); },
     async connect(options) { calls.connects.push(options); state.hasKey = true; },
     async save(options) { calls.saves.push(options); return saveHandler(options); },
     async saveScoped(options) { calls.scopedSaves.push(options); return scopedSaveHandler(options); },
@@ -56,13 +61,13 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   const sandbox = { document, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
     PortfolioMasterClient: { createSession: () => session }, PortfolioMasterModel: model,
     PortfolioProductMergeAdapter: { getImageSource: (id) => id === "local-image" ? "blob:local-preview" : id === "latest-image" ? "blob:latest-preview" : "" },
-    PortfolioNotifications: { publish(notice) { notices.set(notice.id, notice); }, resolve(id) { notices.delete(id); }, show() {} },
+    PortfolioNotifications: { publish(notice) { const result = messageStore.publish(notice); syncNotices(); return result; }, resolve: messageStore.resolve, show() {} },
     addEventListener(name, handler) { listeners.set(name, handler); }, dispatchEvent() {}, setInterval: () => 1, clearInterval() {},
   };
   vm.createContext(sandbox); new vm.Script(source).runInContext(sandbox);
   const api = sandbox.PortfolioMasterUI.initialize({ source: { mode: "service", team: true, endpoint: "https://private.example/api/master" }, adapter });
   const dialog = document.getElementById("masterDialog");
-  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, calls, notices, state, listeners, setSave: (handler) => { saveHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
+  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, calls, notices, state, listeners, messageStore, notificationEvents, setSave: (handler) => { saveHandler = handler; }, setRefresh: (handler) => { refreshHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
 }
 
 const base = model.productValues({ id: "p1", name: "Headset", specs: [{ id: "s1", label: "Weight", value: "200g" }, { id: "s2", label: "Notes", value: "Original" }], partSkus: [], variantGroups: [], roadmap: { startMonth: "2027-01", endMonth: "2028-01" } });
@@ -128,6 +133,16 @@ failed.setSave(async () => { throw new Error("GitHub failed to publish public/da
 const failedFlow = failed.api.save(); failed.submit(); await failedFlow;
 assert.match(failed.notices.get("master-sync-error").message, /Could not save.*changes are safe/);
 assert.doesNotMatch(failed.notices.get("master-sync-error").message, /GitHub|master_ppc|private\.example|secret/);
+assert.equal(failed.notices.get("master-sync-error").dismissible, false, "a rejected team save remains actionable and cannot be dismissed");
+assert.equal(failed.messageStore.dismiss("master-sync-error"), false);
+await failed.api.refresh();
+assert.match(failed.notices.get("master-sync-error").message, /Could not save/, "successful background reads do not hide an unsaved write failure");
+const retryCancelled = failed.api.save();
+byTag(failed.dialog, "button").find(button => button.textContent === "Keep editing").dispatchEvent({ type: "click" }); await retryCancelled;
+assert.equal(failed.notices.get("master-sync-error").dismissible, false, "cancelling a retry review does not clear the failed save");
+failed.setSave(async () => { failed.state.pending = []; return { saved: true }; });
+const retrySaved = failed.api.save(); failed.submit(); await retrySaved;
+assert.equal(failed.notices.has("master-sync-error"), false, "the write failure resolves after an accepted save");
 
 const staleMergeUi = createUi([pending[3]]);
 staleMergeUi.setSave(async () => { const error = new Error("A private master merge changed"); error.code = "MERGE_REVIEW_REQUIRED"; throw error; });
@@ -198,6 +213,43 @@ assert.doesNotMatch(text(unavailable.dialog), /master|GitHub|private/i);
 assert.match(unavailable.notices.get("master-publication").message, /saved changes are available to the team/);
 byTag(unavailable.dialog, "button").find((button) => button.textContent === "Keep editing").dispatchEvent({ type: "click" }); await unavailableFlow;
 
+const acknowledgmentBytes = new Map();
+const acknowledgmentStorage = { getItem: key => acknowledgmentBytes.get(key) || null, setItem: (key, value) => acknowledgmentBytes.set(key, value), removeItem: key => acknowledgmentBytes.delete(key) };
+const publicationFailure = { status: "error", requestedRevision: 15, publishedRevision: 14 };
+const delayed = createUi([], { publication: publicationFailure, acknowledgmentStorage }); await flush();
+const publicationEvents = ui => ui.notificationEvents.filter(event => event.type === "publish" && event.item.id === "master-publication");
+assert.equal(publicationEvents(delayed).length, 1);
+assert.equal(publicationEvents(delayed)[0].toast, false, "the follow-up publisher does not interrupt work with a toast");
+assert.equal(delayed.messageStore.dismiss("master-publication"), true);
+assert.equal(acknowledgmentBytes.size, 1);
+assert.ok([...acknowledgmentBytes.values()].every(value => !/productId|token|private\.example|secret/i.test(value)), "the isolated preference contains no product data or access credentials");
+assert.equal(delayed.messageStore.getState().attentionCount, 0);
+assert.equal(delayed.notices.get("master-publication").acknowledged, true, "a quiet status remains available after acknowledgment");
+assert.equal(delayed.notices.get("master-publication").actions[0].label, "Check status");
+assert.match(delayed.button.title, /saved changes.*team.*downloadable copy/i);
+for (let attempt = 0; attempt < 5; attempt++) {
+  delayed.state.snapshot.publication = { status: "pending", requestedRevision: 16, publishedRevision: 14 }; delayed.api.updateStatus();
+  delayed.state.snapshot.publication = { ...publicationFailure, requestedRevision: 16 }; await delayed.api.refresh();
+  delayed.api.updateStatus();
+}
+assert.equal(publicationEvents(delayed).length, 1, "pending/error background retry cycles do not reset the same acknowledged warning");
+const beforeStatusCheck = delayed.calls.refreshes; await delayed.notices.get("master-publication").actions[0].onClick();
+assert.equal(delayed.calls.refreshes, beforeStatusCheck + 1, "checking status reads the shared state without saving again");
+assert.equal(delayed.calls.saves.length, 0);
+const reopenedDelayed = createUi([], { publication: publicationFailure, acknowledgmentStorage }); await flush();
+assert.equal(reopenedDelayed.notices.get("master-publication").acknowledged, true, "the same acknowledgment survives a page reload");
+assert.equal(publicationEvents(reopenedDelayed)[0].announce, false);
+assert.equal(reopenedDelayed.messageStore.getState().attentionCount, 0);
+reopenedDelayed.state.snapshot = null; reopenedDelayed.api.updateStatus();
+reopenedDelayed.state.snapshot = { publication: publicationFailure }; reopenedDelayed.api.updateStatus();
+assert.equal(reopenedDelayed.notices.get("master-publication").acknowledged, true, "temporary package snapshot absence does not count as publisher recovery");
+reopenedDelayed.state.snapshot.publication = { status: "current", requestedRevision: 16, publishedRevision: 16 }; reopenedDelayed.api.updateStatus();
+assert.equal(reopenedDelayed.notices.has("master-publication"), false);
+assert.equal(acknowledgmentBytes.size, 0, "confirmed recovery retires its durable acknowledgment");
+reopenedDelayed.state.snapshot.publication = { ...publicationFailure, requestedRevision: 17 }; reopenedDelayed.api.updateStatus();
+assert.equal(reopenedDelayed.notices.get("master-publication").acknowledged, false, "a failure after a confirmed recovery is a new meaningful warning");
+assert.equal(reopenedDelayed.messageStore.getState().attentionCount, 1);
+
 const discardCancelled = createUi([edited, pending[1]]);
 const discardCancelledFlow = discardCancelled.api.save();
 byClass(discardCancelled.dialog, "master-discard-product")[0].dispatchEvent({ type: "click" }); await flush();
@@ -257,4 +309,4 @@ byTag(automatic.dialog, "button").find((button) => button.textContent === "Keep 
 automatic.setScopedSave(async () => ({ status: "local", saved: false, code: "SHARING_ACCESS_REQUIRED" }));
 assert.equal((await automatic.publicApi.saveScoped(automaticOptions)).status, "local");
 assert.equal(automatic.dialog.open, false); assert.equal(automatic.calls.connects.length, 0, "missing access leaves collected data local without a credential prompt");
-console.log("Master UI checks passed: compact accessible disclosures, summaries, search, bounded values, notes, safe save/conflict decisions, discard confirmation/cancel/single/all/Undo/failure, automatic scoped PLC sharing and deferred conflicts without dialogs, no visible disconnect and private-friendly messages.");
+console.log("Master UI checks passed: compact accessible disclosures, safe save/conflict/discard decisions, scoped PLC sharing, publisher acknowledgment through retry/reload/recovery with retained status action, critical write failures retained through background reads and cancelled review, and private-friendly messages.");
