@@ -77,13 +77,29 @@ for (const failure of [() => { throw new Error("font unavailable"); }, () => Pro
   vm.createContext(fallbackSandbox); vm.runInContext(themeSource, fallbackSandbox);
   const document = { fonts: { load: failure, ready: Promise.resolve() }, documentElement: { style: { setProperty(name, value) { fallbackCss.set(name, value); } } } };
   assert.equal(await fallbackSandbox.PortfolioTheme.fontsReady(document), false, "unavailable font cannot block access to a valid saved portfolio");
-  assert.equal(fallbackSandbox.PortfolioTheme.fontFace, "Arial", "canvas and PowerPoint receive the same available fallback");
+  assert.equal(fallbackSandbox.PortfolioTheme.fontFace, "Arial", "the website can fall back without changing the independent PowerPoint font policy");
   assert.equal(fallbackCss.get("--font-ui"), "Arial, sans-serif");
   fallbackSandbox.PortfolioTheme.apply(document);
   assert.equal(fallbackCss.get("--font-ui"), "Arial, sans-serif", "reapplying the theme preserves the available fallback font");
 }
 
 for (const file of ["js/portfolio-model.js", "js/card-specs.js", "js/pptx-editable.js"]) vm.runInContext(await read(file), sandbox);
+const pptxFont = "HP Forma DJR Office";
+assert.equal(sandbox.PPTXEditable.FONT_FACE, pptxFont, "all PowerPoint exports use the supplied HP family");
+assert.equal(theme.fontFace, "Jost", "the PowerPoint-only font change preserves the website font");
+const hpFontLoads = [];
+sandbox.document.fonts = { load(font) { hpFontLoads.push(font); return Promise.resolve([font]); }, check(font) { return font === `400 16px "${pptxFont}"`; } };
+assert.equal(await sandbox.PPTXEditable.fontsReady(), true);
+assert.deepEqual(hpFontLoads.sort(), [400, 500, 700].map(weight => `${weight} 16px "${pptxFont}"`).sort(), "native export measurements wait for the installed HP faces");
+assert.equal(theme.fontFace, "Jost");
+const missingHpSandbox = { document: { fonts: { load: () => Promise.reject(new Error("HP face is not installed")), check: () => false } }, PortfolioTheme: theme };
+vm.createContext(missingHpSandbox); vm.runInContext(await read("js/pptx-editable.js"), missingHpSandbox);
+assert.equal(await missingHpSandbox.PPTXEditable.fontsReady(), false, "a missing HP font is reported as unavailable instead of claiming exact HP metrics");
+assert.equal(missingHpSandbox.PPTXEditable.FONT_FACE, pptxFont, "PowerPoint never switches its declared font to the website fallback");
+assert.equal(theme.fontFace, "Jost", "HP availability checking leaves normal product browsing unchanged");
+for (const filename of ["HPFormaDJROffice-Regular", "HPFormaDJROffice-Bold", "HPFormaDJROffice-Italic", "HPFormaDJROffice-BoldItalic", "HPFormaDJROffice-Medium", "HPFormaDJROffice-MediumItalic"]) {
+  assert.ok(fontCss.includes(`local("${filename}")`), "the user's installed HP Office faces are referenced locally");
+}
 for (const [statusType, accent] of [["new", "newProduct"], ["embargo", "embargo"], ["in-development", "inDevelopment"], ["sunsetting", "sunsetting"]]) {
   const product = { statusType };
   assert.equal(sandbox.PortfolioModel.productTone(product), theme.accents[accent]);
@@ -134,7 +150,7 @@ assert.equal(rows.length, 5);
 assert.ok(!rows.some((row) => /warranty|platform/i.test(row.label)));
 const elements = sandbox.recordCardElementsForPptx(canvas(), microphone, layout);
 const texts = elements.filter((element) => element.kind === "text");
-assert.ok(texts.every((element) => element.fontFace === theme.fontFace));
+assert.ok(texts.every((element) => element.fontFace === theme.fontFace), "ordinary website recording retains Jost; native export applies its separate HP policy");
 assert.ok(texts.some((element) => element.text === "Reference microphone" && element.color === theme.colors.text));
 assert.ok(texts.some((element) => element.text === "USB-C" && element.color === theme.colors.text), "front values use the bright reference value tone");
 assert.ok(texts.some((element) => element.text.includes("USB mode only")), "technical conditions remain visible");
@@ -157,8 +173,10 @@ assert.equal(JSON.stringify(microphone), productBefore, "rendering never rewrite
 vm.runInContext(await read("vendor/pptxgen.bundle.js"), sandbox, { timeout: 5000 });
 const deck = new sandbox.PptxGenJS(); deck.layout = "LAYOUT_WIDE";
 assert.ok(/pptx\.theme = \{ headFontFace: UI_FONT_FACE, bodyFontFace: UI_FONT_FACE, lang: "en-US" \}/.test(appSource), "new PowerPoint text inherits the same resolved presentation font");
-deck.theme = { headFontFace: theme.fontFace, bodyFontFace: theme.fontFace, lang: "en-US" };
-sandbox.addPptxPortfolioSlide(deck, "Microphones", { data: canvas().toDataURL(), width: 700, height: 800, products: [{ kind: "card", id: microphone.id, name: microphone.name, x: 10, y: 10, width: 246, height: 552, elements }] });
+assert.ok(appSource.includes("UI_FONT_FACE = PPTXEditable.FONT_FACE;") && appSource.includes("UI_FONT_FACE = previousUiFontFace;"), "PowerPoint planning/recording uses HP and restores the previous website font");
+deck.theme = { headFontFace: pptxFont, bodyFontFace: pptxFont, lang: "en-US" };
+const nativeSlide = sandbox.addPptxPortfolioSlide(deck, "Microphones", { data: canvas().toDataURL(), width: 700, height: 800, products: [{ kind: "card", id: microphone.id, name: microphone.name, x: 10, y: 10, width: 246, height: 552, elements }] });
+nativeSlide.addNotes("PowerPoint-only font verification");
 const bytes = await sandbox.PPTXEditable.serialize(deck);
 const archive = await sandbox.JSZip.loadAsync(bytes, { checkCRC32: true });
 const slide = await archive.file("ppt/slides/slide1.xml").async("string");
@@ -166,12 +184,20 @@ assert.match(slide, /<p:grpSp>/, "a product remains an editable group");
 const nativeCardGroup = slide.match(/<p:grpSp>[\s\S]*?<\/p:grpSp>/)?.[0];
 const nativeCardLines = [...nativeCardGroup.matchAll(/<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/g)].map((match) => match[0]);
 assert.ok(nativeCardLines.every((line) => /^<a:ln>\s*<\/a:ln>$/.test(line) || /<a:noFill\s*\/?>|<a:alpha\b[^>]*\bval="0"/.test(line)), `the delivered editable card group has no visible decorative perimeter or row rules: ${nativeCardLines.join(" | ")}`);
-assert.ok(slide.includes('<a:latin typeface="Jost"'), "actual PPTX native text retains the shared font");
+assert.ok(slide.includes(`<a:latin typeface="${pptxFont}"`), "actual PPTX native text uses HP while website font remains Jost");
 assert.ok(slide.includes('<a:srgbClr val="1A1B1C"') && slide.includes('<a:srgbClr val="242527"') && slide.includes('<a:srgbClr val="D5D7DC"'));
 assert.ok(slide.includes("<a:t>USB-C</a:t>") && slide.includes("<a:t>TEST123</a:t>") && slide.includes("<p:pic>"));
 const declarations = [...(await archive.file("[Content_Types].xml").async("string")).matchAll(/PartName="([^"]+)"/g)].map((match) => match[1].slice(1));
 assert.ok(declarations.every((part) => archive.file(part)), "the actual serializer emits no missing declared presentation parts");
 const exportedTheme = await archive.file("ppt/theme/theme1.xml").async("string");
-assert.ok(exportedTheme.includes('<a:majorFont><a:latin typeface="Jost"') && exportedTheme.includes('<a:minorFont><a:latin typeface="Jost"'), "new native text and existing cards share Jost in the delivered theme");
+assert.ok(exportedTheme.includes(`<a:majorFont><a:latin typeface="${pptxFont}"`) && exportedTheme.includes(`<a:minorFont><a:latin typeface="${pptxFont}"`), "new native text inherits HP in the delivered theme");
+const allowedPptxFonts = new Set([pptxFont, `${pptxFont} Medium`]);
+for (const filename of Object.keys(archive.files).filter(name => name.startsWith("ppt/") && name.endsWith(".xml"))) {
+  const xml = await archive.file(filename).async("string");
+  const faces = [...xml.matchAll(/<a:(?:latin|ea|cs|font|sym|buFont)\b[^>]*\btypeface="([^"]*)"/g)].map(match => match[1]);
+  assert.ok(faces.every(face => allowedPptxFonts.has(face)), `${filename} has only HP fonts, including master bullets, notes and unused defaults`);
+}
+assert.equal(theme.fontFace, "Jost");
+assert.equal(sandbox.UI_FONT_FACE, "Jost", "native serialization does not alter the website's font state");
 assert.equal(JSON.stringify(microphone), productBefore);
-console.log("Reference theme checks passed: shared reference tones, readable labels/values/controls, local licensed Jost, font readiness and failure fallback, immutable data, five relevant microphone features, retained images, and actual grouped editable PowerPoint font/color parity.");
+console.log("Reference theme checks passed: readable reference tones, website Jost/readiness/fallback, independent installed HP PowerPoint font readiness and every native slide/theme/master/notes font, immutable data, five relevant microphone features, retained images and grouped editable export color parity.");

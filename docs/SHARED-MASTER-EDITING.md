@@ -2,6 +2,10 @@
 
 The recommended team connection is now the private [Supabase shared master setup](SUPABASE-SETUP.md). Teammates use the existing package unlock key and an optional name, without personal GitHub tokens or another login. It supports product creation/removal, specifications, SKU/colorway updates, every shared lifecycle date, live category/product presence, and explicit concurrent conflict choices. Accepted updates are immediately available to connected teammates; the encrypted GitHub package is published automatically with separate pending/error status. The direct GitHub and local service instructions below remain available as fallbacks.
 
+Product lane and card order changes are saved through the same review, whether made by dragging in Reorder products or by choosing a lane in Edit product. The shared model treats lane and order as one placement value and validates the lane within the product's category. Changes to an affected lane by another teammate require a conflict choice; unrelated specification edits can merge normally. After acceptance, the updated placement is used by refresh and package publication. Closing an editor or choosing Done saves the local draft; Save to master shares it.
+
+Once the current tab is connected, the main Pull latest data action refreshes the accepted shared snapshot. It does not replace the workspace with a downloadable package that may still be behind. An unconnected tab uses the normal package unlock flow. This also lets the first placement-capable snapshot establish older placement baselines while retaining local lane and order differences for review.
+
 PPC saves supported product edits directly to the encrypted `public/data/master_ppc.pkg` in `monocraft/PPC`, on `main`. GitHub stores the master and accepts updates; a separate server is not required. The checked-in app and Pages configuration select this GitHub mode by default.
 
 ## The user flow

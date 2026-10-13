@@ -96,6 +96,10 @@ The existing package-key authentication and `verify_jwt = false` setting were pr
 
 For rollback, restore the previous function deployment or its prior model while preserving the existing function settings and secrets. The retained previous model has SHA-256 `3a93b167d315e7201af8ba9ca4c2b691bf2de394b13caa644dfc840a1bc67e28`. Pause or roll back the importer frontend first if it has been released: the previous backend rejects new PLC evidence saves, which remain pending locally. A function rollback does not require resetting, reseeding, or replacing the database.
 
+## Placement update verified on October 13, 2026
+
+The production `ppc-master` function now uses the canonical placement-capable model with SHA-256 `c2fb724cb2cd11319930d89783b80c3744d7997644ad2dd10933112cf4dca086`. After deployment and a dashboard reload, the complete source matched the tested generated model exactly. It advertises `cardPlacementVersion: 1`, accepts lane and order together, and validates affected lane versions before applying a move. The update required no SQL migration, secrets change or authentication setting change. Anonymous smoke checks returned HTTP 204 for the site's preflight and HTTP 401 / `INVALID_KEY` without an unlock key. The previous deployed source is retained privately for rollback. The browser and local encrypted-server roundtrip checks are separate from authenticated production-data verification.
+
 ## References
 
 - [Supabase Edge Function secrets](https://supabase.com/docs/guides/functions/secrets)

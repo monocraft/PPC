@@ -26,6 +26,7 @@
   function normalizeSnapshot(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.products) || snapshot.products.length > 30000) throw new Error("The master returned an incomplete response. Your local changes are safe.");
     const invalid = () => { throw new Error("The master returned invalid product details. Your local changes are safe."); };
+    if (snapshot.cardPlacementVersion !== undefined && snapshot.cardPlacementVersion !== 1) invalid();
     const validId = (id) => typeof id === "string" && id.length > 0 && id.length <= 180 && !["__proto__", "prototype", "constructor"].includes(id);
     const revisionsOf = (value) => {
       if (value === undefined) return {};
@@ -42,6 +43,7 @@
       let values;
       try { values = model().validateValues(product.values, { checkDuplicates: false, checkDateOrder: false }); }
       catch { throw new Error("The master returned invalid product details. Your local changes are safe."); }
+      if (values.cardPlacement && values.cardPlacement.laneId !== product.laneId) invalid();
       return { ...product, productId, productName: String(product.productName || ""), categoryId: String(product.categoryId || ""), laneId: String(product.laneId || ""), values, revisions: revisionsOf(product.revisions) };
     });
     if (snapshot.tombstones !== undefined && (!Array.isArray(snapshot.tombstones) || snapshot.tombstones.length > 30000)) invalid();
@@ -229,6 +231,7 @@
           continue;
         }
         const mine = valuesOf(product), patch = model().diffValues(base.values, mine);
+        if (!base.values.cardPlacement && snapshot?.cardPlacementVersion !== 1 && (!mine.cardPlacement || mine.cardPlacement.laneId === base.laneId)) delete patch.cardPlacement;
         if (Object.keys(patch).length) pending.push({ productId, productName: String(product.name || product.productName || productId), categoryId: String(base.categoryId || product.categoryId || ""), laneId: String(base.laneId || product.laneId || ""), base: clone(base.values), baseRevisions: clone(base.revisions), mine, patch });
       }
       for (const [productId, base] of baseline) if (!currentIds.has(productId) && !mergedIds.has(productId)) pending.push({ kind: "delete", productId, productName: String(base.productName || base.values.name || productId), categoryId: String(base.categoryId || ""), laneId: String(base.laneId || ""), base: clone(base.values), baseRevisions: clone(base.revisions), baseProductVersion: base.productVersion, mine: null });
@@ -337,7 +340,12 @@
         // A local new record must remain an explicit creation until the user
         // resolves an identity collision; refreshing cannot silently adopt it.
         if (!old && !submitted) continue;
-        const mine = valuesOf(product), base = submitted ? submitted.mine : old?.values || mine;
+        const mine = valuesOf(product), base = clone(submitted ? submitted.mine : old?.values || mine);
+        // Legacy baselines had a lane label but no authoritative order. Adopt
+        // the capable snapshot as the origin; retain current local placement
+        // as a reviewable draft instead of resetting or guessing its order.
+        if (!base.cardPlacement && incoming.cardPlacementVersion === 1 && remote.values.cardPlacement) base.cardPlacement = clone(remote.values.cardPlacement);
+        if (!mine.cardPlacement && incoming.cardPlacementVersion === 1 && remote.values.cardPlacement) mine.cardPlacement = clone(remote.values.cardPlacement);
         if (submitted?.kind === "delete") {
           updates.push({ productId: remote.productId, values: mine, patch: mine });
           nextBaseline.set(remote.productId, clone(remote));
@@ -541,7 +549,9 @@
       if (!key) throw errorOf("Connect to the master before saving.", "INVALID_KEY", 401);
       const originals = scopedPatches === undefined ? new Map(track().map((item) => [item.productId, item])) : scopedOriginals(scopedPatches);
       if (!originals.size) return { saved: false, snapshot };
+      if ([...originals.values()].some(item => Object.hasOwn(item.patch || {}, "cardPlacement")) && snapshot?.cardPlacementVersion !== 1) throw errorOf("These product positions remain saved on this device. The shared service needs its placement update before they can be shared.", "PLACEMENT_UNAVAILABLE");
       let changes = [...originals.values()].map(toChange);
+      changes = changes.map(change => placementFences(change, [...baseline.values()]));
       let rebase = null, attempt = 0, keptFences = [], recheckChanges = [];
       const operationGeneration = generation, operationVersion = accessVersion;
       busy = true;
@@ -560,6 +570,10 @@
               const before = priorProducts.get(String(conflict.productId)), after = latestProducts.get(String(conflict.productId));
               if (conflict.path === "@product") return JSON.stringify(before || null) !== JSON.stringify(after || null) || JSON.stringify((rebase.tombstones || []).find((item) => item.productId === conflict.productId) || null) !== JSON.stringify((latest.tombstones || []).find((item) => item.productId === conflict.productId) || null);
               if (!before || !after) return true;
+              if (conflict.path === "cardPlacement" && conflict.reason === "lane-order-changed") {
+                const lanes = new Set([conflict.base?.laneId, conflict.mine?.laneId, conflict.master?.laneId].filter(Boolean));
+                if ([...lanes].some(laneId => model().laneVersion(rebase.products, before.categoryId, laneId) !== model().laneVersion(latest.products, after.categoryId, laneId))) return true;
+              }
               const paths = conflict.path === "@lifecycle" ? ["@launch", "@end"] : [conflict.path, conflict.conflictingPath].filter(Boolean);
               if (model().diffOperations(before.values, after.values).some((operation) => paths.some((path) => overlap(operation.path, path)))) return true;
               return [...new Set([...Object.keys(before.revisions), ...Object.keys(after.revisions)])].some((path) => paths.some((fence) => overlap(path, fence)) && (before.revisions[path] || 0) !== (after.revisions[path] || 0));
@@ -587,6 +601,10 @@
             const remote = remoteProducts.get(change.productId);
             if (change.kind === "create" || change.kind === "delete" || !remote) { localPlans.set(change.productId, null); continue; }
             localPlans.set(change.productId, model().planMerge(change.base, { ...change.base, ...change.patch }, remote.values, change.baseRevisions, remote.revisions));
+          }
+          for (const conflict of result.conflicts) {
+            const plan = localPlans.get(conflict.productId);
+            if (plan && conflict.path === "cardPlacement" && conflict.reason === "lane-order-changed" && !plan.conflicts.some(item => item.path === "cardPlacement")) plan.conflicts.push(clone(conflict));
           }
           const conflicts = result.conflicts.map((conflict) => {
             const original = originals.get(String(conflict.productId));
@@ -621,8 +639,8 @@
             const resolved = model().resolveConflicts(plan, choices), patch = model().diffValues(remote.values, resolved);
             const mineResolved = model().resolveConflicts(plan, Object.fromEntries(plan.conflicts.map((conflict) => [conflict.path, ["removed-colorway", "changed-colorway"].includes(conflict.reason) ? "master" : "mine"])));
             const minePatch = model().diffValues(remote.values, mineResolved);
-            if (Object.keys(minePatch).length) recheckChanges.push({ productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch: minePatch });
-            if (Object.keys(patch).length) nextChanges.push({ productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch });
+            if (Object.keys(minePatch).length) recheckChanges.push(placementFences({ productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch: minePatch }, result.snapshot.products));
+            if (Object.keys(patch).length) nextChanges.push(placementFences({ productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch }, result.snapshot.products));
           }
           changes = nextChanges; rebase = result.snapshot; attempt += 1;
           if (attempt >= 12) throw new Error("The master is changing frequently. Your local changes are safe; try saving again shortly.");
@@ -677,9 +695,22 @@
       }
     }
 
+    function placementFences(change, entries) {
+      if (!change.patch?.cardPlacement) return change;
+      const current = entries.find(entry => idOf(entry) === change.productId);
+      const categoryId = change.categoryId ?? current?.categoryId;
+      const sourceLaneId = change.base?.cardPlacement?.laneId || current?.laneId;
+      const lanes = [...new Set([sourceLaneId, change.patch.cardPlacement.laneId])];
+      return { ...change, categoryId, laneId: sourceLaneId, placementLaneVersions: lanes.map(laneId => ({ laneId, version: model().laneVersion(entries, categoryId, laneId) })) };
+    }
+
     function toChange(item) {
       if (item.kind === "merge") return { kind: "merge", productId: item.productId, sourceProductId: item.sourceProductId, categoryId: item.categoryId, laneId: item.laneId, sourceCategoryId: item.sourceCategoryId, sourceLaneId: item.sourceLaneId, choices: clone(item.choices || {}), base: clone(item.base), sourceBase: clone(item.sourceBase), ...(item.base ? { baseProductVersion: item.baseProductVersion } : {}), ...(item.sourceBase ? { sourceBaseProductVersion: item.sourceBaseProductVersion } : {}), keeperProduct: adapter.serializeNewProduct?.(item.keeperProduct) || clone(item.keeperProduct), sourceProduct: adapter.serializeNewProduct?.(item.sourceProduct) || clone(item.sourceProduct), mine: clone(item.mine) };
-      if (item.kind === "create") return { kind: "create", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, mine: clone(item.mine), baseRevisions: clone(item.baseRevisions) };
+      if (item.kind === "create") {
+        const mine = clone(item.mine);
+        if (snapshot?.cardPlacementVersion !== 1) delete mine.cardPlacement;
+        return { kind: "create", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, mine, baseRevisions: clone(item.baseRevisions) };
+      }
       if (item.kind === "delete") return { kind: "delete", productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, base: clone(item.base), baseRevisions: clone(item.baseRevisions), baseProductVersion: item.baseProductVersion };
       return { productId: item.productId, categoryId: item.categoryId, laneId: item.laneId, base: clone(item.base), baseRevisions: clone(item.baseRevisions), patch: clone(item.patch) };
     }
@@ -688,6 +719,7 @@
       if (change.kind === "delete") return remote ? { ...change, categoryId: remote.categoryId, laneId: remote.laneId, base: clone(remote.values), baseRevisions: clone(remote.revisions), baseProductVersion: remote.productVersion } : null;
       const mine = change.kind === "create" ? change.mine : model().patchValues(change.base, change.patch);
       if (remote) {
+        if (!mine.cardPlacement && remote.values.cardPlacement) mine.cardPlacement = clone(remote.values.cardPlacement);
         const patch = model().diffValues(remote.values, mine);
         return Object.keys(patch).length ? { productId: change.productId, base: clone(remote.values), baseRevisions: clone(remote.revisions), patch } : null;
       }

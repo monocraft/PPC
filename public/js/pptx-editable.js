@@ -3,6 +3,14 @@
 
   const deckSlides = new WeakMap();
   const EMUS_PER_INCH = 914400;
+  const FONT_FACE = "HP Forma DJR Office";
+  const FONT_FACES = new Set([FONT_FACE, `${FONT_FACE} Medium`]);
+  let fontReadiness;
+  function fontsReady() {
+    if (!globalObject.document?.fonts?.load) return Promise.resolve(false);
+    return fontReadiness ||= Promise.allSettled([400, 500, 700].map(weight => globalObject.document.fonts.load(`${weight} 16px "${FONT_FACE}"`)))
+      .then(() => typeof globalObject.document.fonts.check === "function" && globalObject.document.fonts.check(`400 16px "${FONT_FACE}"`)).catch(() => false);
+  }
   const escapeXml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]);
 
@@ -41,7 +49,7 @@
         slide.addImage({ ...rect, data: element.data, altText: element.altText || product.name || "Product artwork" });
       } else if (element.kind === "text") {
         slide.addText(element.text, {
-          ...rect, fontFace: element.fontFace || globalObject.PortfolioTheme?.fontFace || "Arial", fontSize: Math.max(1, Math.min(4000, element.fontSize * scale * 72)),
+          ...rect, fontFace: FONT_FACES.has(element.fontFace) ? element.fontFace : FONT_FACE, fontSize: Math.max(1, Math.min(4000, element.fontSize * scale * 72)),
           color: colorOptions(element.color).color, bold: Boolean(element.bold), italic: Boolean(element.italic),
           align: element.align || "left", valign: "top", margin: 0,
           breakLine: false, wrap: false, fit: "shrink", paraSpaceAfter: 0,
@@ -216,6 +224,13 @@
     if (slides.some((groups, index) => groups.length && !archive.file(`ppt/slides/slide${index + 1}.xml`))) {
       throw new Error("PowerPoint could not find a product slide.");
     }
+    // Apply the portfolio's PowerPoint font policy to native text, masters,
+    // notes and theme defaults, including the generator's unused locale faces.
+    for (const filename of Object.keys(archive.files).filter(name => name.startsWith("ppt/") && name.endsWith(".xml"))) {
+      const original = await archive.file(filename).async("string");
+      const updated = original.replace(/<a:(?:latin|ea|cs|font|sym|buFont)\b[^>]*>/g, element => element.replace(/\btypeface="([^"]*)"/, (_, face) => `typeface="${FONT_FACES.has(face) ? face : FONT_FACE}"`));
+      if (updated !== original) archive.file(filename, updated);
+    }
     return archive.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
@@ -224,5 +239,5 @@
     download(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }), options.fileName);
   }
 
-  globalObject.PPTXEditable = Object.freeze({ containTop, addCard, registerSlide, groupSlideXml, serialize, writeFile });
+  globalObject.PPTXEditable = Object.freeze({ FONT_FACE, fontsReady, containTop, addCard, registerSlide, groupSlideXml, serialize, writeFile });
 }(globalThis));

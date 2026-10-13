@@ -7,6 +7,15 @@
   font-weight: 100 900;
   font-display: swap;
 }
+
+/* PowerPoint metrics use the user's installed Office font. These local-only
+   faces do not change the website font or redistribute the supplied files. */
+@font-face { font-family: "HP Forma DJR Office"; src: local("HP Forma DJR Office Regular"), local("HPFormaDJROffice-Regular"); font-style: normal; font-weight: 400; }
+@font-face { font-family: "HP Forma DJR Office"; src: local("HP Forma DJR Office Medium"), local("HPFormaDJROffice-Medium"); font-style: normal; font-weight: 500; }
+@font-face { font-family: "HP Forma DJR Office"; src: local("HP Forma DJR Office Bold"), local("HPFormaDJROffice-Bold"); font-style: normal; font-weight: 600 900; }
+@font-face { font-family: "HP Forma DJR Office"; src: local("HP Forma DJR Office Italic"), local("HPFormaDJROffice-Italic"); font-style: italic; font-weight: 400; }
+@font-face { font-family: "HP Forma DJR Office"; src: local("HP Forma DJR Office Medium Italic"), local("HPFormaDJROffice-MediumItalic"); font-style: italic; font-weight: 500; }
+@font-face { font-family: "HP Forma DJR Office"; src: local("HP Forma DJR Office Bold Italic"), local("HPFormaDJROffice-BoldItalic"); font-style: italic; font-weight: 600 900; }
 @font-face {
   font-family: "Jost";
   src: url("../assets/fonts/Jost-Italic-Variable.ttf") format("truetype");
