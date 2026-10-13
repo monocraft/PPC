@@ -46,9 +46,8 @@ const FULL_SPEC_IMAGE_HEIGHT = 210;
 const FULL_SPEC_TITLE_TOP = STATUS_BANNER_HEIGHT + 10 + FULL_SPEC_IMAGE_HEIGHT + 8;
 const FULL_SPEC_DETAILS_TOP_OFFSET = 66;
 
-// Canvas colors mirror the CSS design tokens in styles.css. Product/SKU colors
-// remain independent because they describe merchandise rather than application UI.
-const UI_PALETTE = Object.freeze({
+// Canvas colors come from the shared theme. Saved product-color defaults stay independent.
+const SAVED_PRODUCT_PALETTE = Object.freeze({
   trueBlack: "#121212",
   inkBlack: "#171717",
   carbon: "#202020",
@@ -73,15 +72,17 @@ const UI_PALETTE = Object.freeze({
   starDust: "#e2ddda",
   selection: "#6e7973",
 });
+const UI_PALETTE = globalThis.PortfolioTheme.uiPalette;
+let UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
 
 const COLOR_PRESETS = [
-  { value: UI_PALETTE.gunmetal, label: "Gunmetal" },
-  { value: UI_PALETTE.indigo, label: "Japanese indigo" },
-  { value: UI_PALETTE.steelTeal, label: "Steel teal" },
-  { value: UI_PALETTE.foggy, label: "Foggy" },
-  { value: UI_PALETTE.midGrey, label: "Mid grey" },
-  { value: UI_PALETTE.starDust, label: "Star dust" },
-  { value: UI_PALETTE.amaranth, label: "Amaranth" },
+  { value: SAVED_PRODUCT_PALETTE.gunmetal, label: "Gunmetal" },
+  { value: SAVED_PRODUCT_PALETTE.indigo, label: "Japanese indigo" },
+  { value: SAVED_PRODUCT_PALETTE.steelTeal, label: "Steel teal" },
+  { value: SAVED_PRODUCT_PALETTE.foggy, label: "Foggy" },
+  { value: SAVED_PRODUCT_PALETTE.midGrey, label: "Mid grey" },
+  { value: SAVED_PRODUCT_PALETTE.starDust, label: "Star dust" },
+  { value: SAVED_PRODUCT_PALETTE.amaranth, label: "Amaranth" },
 ];
 
 const STANDARD_PRODUCT_COLORS = [
@@ -1056,31 +1057,31 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     categoryLabel: definition.categoryLabel,
     familyOrder: [...definition.familyOrder],
     statusColors: {
-      launched: UI_PALETTE.gunmetal,
-      "in-development": UI_PALETTE.steelTeal,
-      "in-planning": UI_PALETTE.foggyDark,
+      launched: SAVED_PRODUCT_PALETTE.gunmetal,
+      "in-development": SAVED_PRODUCT_PALETTE.steelTeal,
+      "in-planning": SAVED_PRODUCT_PALETTE.foggyDark,
     },
     ...(target.settings.roadmap || {}),
   };
   target.settings.roadmap.statusColors = {
-    launched: UI_PALETTE.gunmetal,
-    "in-development": UI_PALETTE.steelTeal,
-    "in-planning": UI_PALETTE.foggyDark,
+    launched: SAVED_PRODUCT_PALETTE.gunmetal,
+    "in-development": SAVED_PRODUCT_PALETTE.steelTeal,
+    "in-planning": SAVED_PRODUCT_PALETTE.foggyDark,
     ...(target.settings.roadmap.statusColors || {}),
   };
   const legacyRoadmapColors = {
-    launched: ["#666c66", UI_PALETTE.gunmetal],
-    "in-development": ["#4e8136", UI_PALETTE.steelTeal],
-    "in-planning": ["#8b7136", UI_PALETTE.foggyDark],
+    launched: ["#666c66", SAVED_PRODUCT_PALETTE.gunmetal],
+    "in-development": ["#4e8136", SAVED_PRODUCT_PALETTE.steelTeal],
+    "in-planning": ["#8b7136", SAVED_PRODUCT_PALETTE.foggyDark],
   };
   Object.entries(legacyRoadmapColors).forEach(([status, [legacyColor, replacement]]) => {
     if (String(target.settings.roadmap.statusColors[status] || "").toLowerCase() === legacyColor) {
       target.settings.roadmap.statusColors[status] = replacement;
     }
   });
-  target.settings.roadmap.statusColors.launched = normalizeHexColor(target.settings.roadmap.statusColors.launched, UI_PALETTE.gunmetal);
-  target.settings.roadmap.statusColors["in-development"] = normalizeHexColor(target.settings.roadmap.statusColors["in-development"], UI_PALETTE.steelTeal);
-  target.settings.roadmap.statusColors["in-planning"] = normalizeHexColor(target.settings.roadmap.statusColors["in-planning"], UI_PALETTE.foggyDark);
+  target.settings.roadmap.statusColors.launched = normalizeHexColor(target.settings.roadmap.statusColors.launched, SAVED_PRODUCT_PALETTE.gunmetal);
+  target.settings.roadmap.statusColors["in-development"] = normalizeHexColor(target.settings.roadmap.statusColors["in-development"], SAVED_PRODUCT_PALETTE.steelTeal);
+  target.settings.roadmap.statusColors["in-planning"] = normalizeHexColor(target.settings.roadmap.statusColors["in-planning"], SAVED_PRODUCT_PALETTE.foggyDark);
   target.settings.roadmap.familyOrder = Array.isArray(target.settings.roadmap.familyOrder)
     ? target.settings.roadmap.familyOrder
     : [...definition.familyOrder];
@@ -1114,15 +1115,15 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
       .map((item, partSkuIndex) => normalizePartSku(item, partSkuIndex));
     if (product.statusType === "custom") {
       product.variantLabel = product.variantLabel || product.statusLabel || "VARIANT";
-      product.variantColor = product.variantColor || product.highlightColor || UI_PALETTE.steelTeal;
+      product.variantColor = product.variantColor || product.highlightColor || SAVED_PRODUCT_PALETTE.steelTeal;
       product.statusType = "none";
     }
     product.statusType = normalizeCardStatusType(product.statusType);
     product.statusLabel = standardizedStatus(product.statusType).label;
     product.variantLabel = String(product.variantLabel || "");
-    product.variantColor = String(product.variantColor || product.highlightColor || UI_PALETTE.steelTeal);
-    if (product.variantColor.toLowerCase() === "#3f6f91") product.variantColor = UI_PALETTE.steelTeal;
-    product.variantColor = normalizeHexColor(product.variantColor, UI_PALETTE.steelTeal);
+    product.variantColor = String(product.variantColor || product.highlightColor || SAVED_PRODUCT_PALETTE.steelTeal);
+    if (product.variantColor.toLowerCase() === "#3f6f91") product.variantColor = SAVED_PRODUCT_PALETTE.steelTeal;
+    product.variantColor = normalizeHexColor(product.variantColor, SAVED_PRODUCT_PALETTE.steelTeal);
     product.highlightEnabled = false;
     product.highlightColor = product.variantColor;
     product.specs = PortfolioModel.normalizeSpecifications(product.specs, id);
@@ -1177,9 +1178,9 @@ function makeProduct(productId, name, price, laneId, order, options = {}) {
     statusType,
     statusLabel: standardizedStatus(statusType).label,
     variantLabel: String(options.variantLabel || ""),
-    variantColor: normalizeHexColor(options.variantColor, UI_PALETTE.steelTeal),
+    variantColor: normalizeHexColor(options.variantColor, SAVED_PRODUCT_PALETTE.steelTeal),
     highlightEnabled: false,
-    highlightColor: normalizeHexColor(options.variantColor || options.highlightColor, UI_PALETTE.steelTeal),
+    highlightColor: normalizeHexColor(options.variantColor || options.highlightColor, SAVED_PRODUCT_PALETTE.steelTeal),
     roadmap: options.roadmap || null,
     specs: options.specs || [],
     featuredVariantId: String(options.featuredVariantId || ""),
@@ -1260,7 +1261,7 @@ function productFromBlueprint(blueprint, definition, index) {
     statusType: status,
     statusLabel: standardizedStatus(status).label,
     variantLabel: blueprint.variantLabel || "",
-    variantColor: blueprint.variantColor || UI_PALETTE.steelTeal,
+    variantColor: blueprint.variantColor || SAVED_PRODUCT_PALETTE.steelTeal,
     roadmap: makeRoadmap(
       blueprint.family || "Other",
       launchMonth,
@@ -1914,7 +1915,7 @@ function drawVariantFooter(context, product, x, y, layout) {
   let cursorY = y + 9;
   layout.groups.forEach((group, groupIndex) => {
     context.fillStyle = UI_PALETTE.steelTealLight;
-    context.font = "700 9px Arial";
+    context.font = `700 9px ${UI_FONT_FACE}`;
     context.textAlign = "left";
     context.fillText(group.label.toUpperCase(), x + 12, cursorY + 8);
     if (groupIndex === 0 && layout.hiddenGroupCount > 0) {
@@ -1922,10 +1923,10 @@ function drawVariantFooter(context, product, x, y, layout) {
       const groupChipHeight = 14;
       const groupChipX = x + CARD_WIDTH - 12 - groupChipWidth;
       const groupChipY = cursorY - 3;
-      roundRect(context, groupChipX, groupChipY, groupChipWidth, groupChipHeight, 7, "rgba(40,40,40,.88)", "rgba(156,174,170,.30)", .75);
+      roundRect(context, groupChipX, groupChipY, groupChipWidth, groupChipHeight, 7, "rgba(40,40,40,.88)", globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .30), .75);
       context.textAlign = "center";
       context.fillStyle = UI_PALETTE.steelTealLight;
-      context.font = "700 8px Arial";
+      context.font = `700 8px ${UI_FONT_FACE}`;
       context.fillText(`+${layout.hiddenGroupCount} GROUP`, groupChipX + groupChipWidth / 2, groupChipY + 10);
       registerVariantOverflowRegion({
         productId: product.id,
@@ -1952,9 +1953,9 @@ function drawVariantFooter(context, product, x, y, layout) {
         const chipHeight = 14;
         const chipX = cellX - 2;
         const chipY = cellY - 2;
-        roundRect(context, chipX, chipY, chipWidth, chipHeight, 7, "rgba(40,40,40,.88)", "rgba(156,174,170,.30)", .75);
+        roundRect(context, chipX, chipY, chipWidth, chipHeight, 7, "rgba(40,40,40,.88)", globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .30), .75);
         context.fillStyle = UI_PALETTE.silver;
-        context.font = "800 9px Arial";
+        context.font = `800 9px ${UI_FONT_FACE}`;
         context.textAlign = "center";
         context.fillText(item.code, chipX + chipWidth / 2, chipY + 10);
         registerVariantOverflowRegion({
@@ -1973,7 +1974,7 @@ function drawVariantFooter(context, product, x, y, layout) {
         const hasHeroImage = Boolean(item.imageAssetId);
         const isActiveHero = activeHeroVariantId === item.id;
         context.fillStyle = isActiveHero ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
-        context.font = `${isActiveHero ? "800" : "700"} 9.5px Arial`;
+        context.font = `${isActiveHero ? "800" : "700"} 9.5px ${UI_FONT_FACE}`;
         drawSkuSwatch(context, cellX, cellY + 1, 10, 10, item.colorHex, item.colorHex2);
         if (hasHeroImage) {
           context.save();
@@ -1997,7 +1998,7 @@ function drawVariantFooter(context, product, x, y, layout) {
         context.fillText(truncate(String(item.code || "SKU"), 9), cellX + 15, cellY + 10, Math.max(10, cellWidth - 17));
       } else {
         context.fillStyle = UI_PALETTE.whiteSmoke;
-        context.font = "700 9.5px Arial";
+        context.font = `700 9.5px ${UI_FONT_FACE}`;
         context.fillText(truncate(String(item.code || "SKU"), group.type === "layout" ? 7 : 9), cellX, cellY + 10, Math.max(10, cellWidth - 4));
       }
     });
@@ -2078,11 +2079,11 @@ function drawDetailedFamilyHeaders(context, laneProducts, laneY) {
     const startX = cardXForDisplayIndex(laneProducts, run.startIndex);
     const endX = cardXForDisplayIndex(laneProducts, run.endIndex) + CARD_WIDTH;
     const centerX = startX + (endX - startX) / 2;
-    context.fillStyle = "rgba(226,221,218,.18)";
-    context.font = "700 10px Arial";
+    context.fillStyle = UI_PALETTE.greyOlive;
+    context.font = `700 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
     context.fillText(run.family.toUpperCase(), centerX, laneY - 13, Math.max(20, endX - startX - 8));
-    context.strokeStyle = "rgba(226,221,218,.08)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.greyOlive, .12);
     context.beginPath();
     context.moveTo(startX, laneY - 8);
     context.lineTo(endX, laneY - 8);
@@ -2129,10 +2130,11 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
     if (drag.dropTarget) {
       context.save();
       context.setLineDash([7, 5]);
-      roundRect(context, drag.dropTarget.x, drag.dropTarget.y, CARD_WIDTH, layout.cardHeight, 5, "rgba(126,158,139,.055)", "rgba(156,190,168,.7)", 1.5);
+      roundRect(context, drag.dropTarget.x, drag.dropTarget.y, CARD_WIDTH, layout.cardHeight, 5,
+        globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .055), globalThis.PortfolioTheme.alpha(UI_PALETTE.selection, .7), 1.5);
       context.setLineDash([]);
       context.fillStyle = UI_PALETTE.steelTealLight;
-      context.font = "600 11px Arial";
+      context.font = `600 11px ${UI_FONT_FACE}`;
       context.textAlign = "center";
       context.fillText("Move here", drag.dropTarget.x + CARD_WIDTH / 2, drag.dropTarget.y + layout.cardHeight / 2);
       context.restore();
@@ -2144,7 +2146,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
       .sort((a, b) => a.order - b.order);
     if (dimensions.pptxPage) {
       context.fillStyle = UI_PALETTE.silver;
-      context.font = "700 11px Arial";
+      context.font = `700 11px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       const label = lane.name || lane.label || lane.id || "Products";
       context.fillText(`${label}${continued ? " (continued)" : ""}`, GUTTER, laneY - (layout.detailed ? 31 : 13), dimensions.width - GUTTER - SIDE_PADDING);
@@ -2165,7 +2167,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
     // A thin source outline stays legible even after neighbours fill its slot.
     context.save();
     context.setLineDash([3, 6]);
-    roundRect(context, drag.source.x + 1.5, drag.source.y + 1.5, CARD_WIDTH - 3, layout.cardHeight - 3, 4, null, "rgba(190,197,194,.3)", 1);
+    roundRect(context, drag.source.x + 1.5, drag.source.y + 1.5, CARD_WIDTH - 3, layout.cardHeight - 3, 4, null, globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .3), 1);
     context.restore();
   }
   if (includeProducts && liftedId) {
@@ -2334,12 +2336,12 @@ function contrastTextColor(fill) {
 }
 
 function detailedValueColor() {
-  return UI_PALETTE.silver;
+  return UI_PALETTE.whiteSmoke;
 }
 
 function drawDetailedSpecLabel(context, label, x, y, maxWidth) {
   context.fillStyle = UI_PALETTE.greyOlive;
-  context.font = "700 8px Arial";
+  context.font = `700 8px ${UI_FONT_FACE}`;
   context.textAlign = "left";
   context.fillText(String(label || "Specification").toUpperCase(), x, y, maxWidth);
 }
@@ -2365,7 +2367,7 @@ function drawDetailedSpecs(context, product, x, startY, categoryId = activeCateg
         const itemX = contentX + index * columnWidth;
         drawDetailedSpecLabel(context, item.label, itemX, cursorY + 13, columnWidth - 5);
         context.fillStyle = detailedValueColor(item.value);
-        context.font = "700 9.5px Arial";
+        context.font = `700 9.5px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         wrapText(context, String(item.value || "—"), itemX, cursorY + 31, columnWidth - 5, 11, 2, "left");
       });
@@ -2376,7 +2378,7 @@ function drawDetailedSpecs(context, product, x, startY, categoryId = activeCateg
         const itemX = x + 38 + index * (leftWidth + 8);
         drawDetailedSpecLabel(context, item.label, itemX, cursorY + 12, leftWidth);
         context.fillStyle = detailedValueColor(item.value);
-        context.font = "11px Arial";
+        context.font = `11px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         wrapText(context, String(item.value || "—"), itemX, cursorY + 29, leftWidth, 13, 3, "left");
       });
@@ -2385,7 +2387,7 @@ function drawDetailedSpecs(context, product, x, startY, categoryId = activeCateg
       drawSpecIcon(context, item?.label, x + 20, cursorY + 17);
       drawDetailedSpecLabel(context, item?.label, x + 38, cursorY + 12, CARD_WIDTH - 50);
       context.fillStyle = detailedValueColor(item?.value);
-      context.font = "11px Arial";
+      context.font = `11px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       wrapText(context, String(item?.value || "—"), x + 38, cursorY + 29, CARD_WIDTH - 50, 13, 3, "left");
     }
@@ -2415,7 +2417,7 @@ function drawProductInfoButton(context, product, x, y, layout) {
     1,
   );
   context.fillStyle = isOpen ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
-  context.font = "600 10px Arial";
+  context.font = `600 10px ${UI_FONT_FACE}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(isOpen ? "Close" : "Details", buttonX + INFO_BUTTON_WIDTH / 2, buttonY + INFO_BUTTON_HEIGHT / 2 + .5);
@@ -2436,16 +2438,16 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     ? PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)) : UI_PALETTE.silver;
   const cardHeight = layout.cardHeight;
   context.save();
-  context.shadowColor = "rgba(0,0,0,.28)";
-  context.shadowBlur = 4;
-  context.shadowOffsetY = 1;
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
+  context.shadowOffsetY = 0;
   roundRect(context, x, y, CARD_WIDTH, cardHeight, 4, UI_PALETTE.carbon, UI_PALETTE.charcoal500, 1);
   context.restore();
 
   if (presentation.primaryLabel) {
     roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
     context.fillStyle = labelColor;
-    context.font = "700 10px Arial";
+    context.font = `700 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
     context.fillText(presentation.primaryLabel.toUpperCase(), x + CARD_WIDTH / 2, y + 16);
   }
@@ -2455,7 +2457,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   if (presentation.secondaryLabel) {
     const label = presentation.secondaryLabel.toUpperCase();
-    context.font = "700 8px Arial";
+    context.font = `700 8px ${UI_FONT_FACE}`;
     const badgeWidth = Math.min(CARD_WIDTH - INFO_BUTTON_WIDTH - 32, Math.max(74, context.measureText(label).width + 18));
     roundRect(context, x + 8, y + STATUS_BANNER_HEIGHT + 5, badgeWidth, 18, 4, presentation.primaryColor, presentation.primaryColor, .75);
     context.fillStyle = labelColor;
@@ -2465,13 +2467,13 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   const titleTop = y + layout.titleBlockTop;
   context.fillStyle = UI_PALETTE.whiteSmoke;
-  context.font = "700 16px Arial";
+  context.font = `700 16px ${UI_FONT_FACE}`;
   context.textAlign = "center";
   wrapText(context, productCardTitle(product, layout.categoryId), x + CARD_WIDTH / 2, titleTop + 15, CARD_WIDTH - 24, 18, 2, "center");
 
   if (board.settings.showPrices) {
     context.fillStyle = UI_PALETTE.greyOlive;
-    context.font = "16px Arial";
+    context.font = `16px ${UI_FONT_FACE}`;
     context.fillText(productPriceText(product), x + CARD_WIDTH / 2, titleTop + layout.priceBaselineOffset);
   }
 
@@ -2494,8 +2496,8 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
       const rowY = rowsTop + index * rowHeight;
       // Align with the first line's visual center, retaining room for a second line.
       drawSpecIcon(context, item.label, x + 22, rowY + 6);
-      context.fillStyle = UI_PALETTE.silver;
-      context.font = "11.5px Arial";
+      context.fillStyle = UI_PALETTE.whiteSmoke;
+      context.font = `11.5px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       wrapText(context, item.value, x + 43, rowY + 10, CARD_WIDTH - 55, 13, 2, "left");
       context.strokeStyle = UI_PALETTE.charcoal700;
@@ -2529,7 +2531,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     roundRect(context, x + 8, markerY, 64, 18, 4, UI_PALETTE.charcoal700, UI_PALETTE.charcoal500, .75);
     context.fillStyle = UI_PALETTE.steelTealLight;
     context.fillRect(x + 14, markerY + 7, 3, 3);
-    context.font = "600 9px Arial";
+    context.font = `600 9px ${UI_FONT_FACE}`;
     context.textAlign = "left";
     context.textBaseline = "middle";
     context.fillStyle = UI_PALETTE.silver;
@@ -2649,7 +2651,7 @@ function drawFixedVerticalRoadmapLabel(context, label, x, top, availableHeight) 
   if (!text || innerHeight < 48) return;
 
   context.save();
-  context.font = `700 ${ROADMAP_CATEGORY_LABEL_FONT_SIZE}px Arial`;
+  context.font = `700 ${ROADMAP_CATEGORY_LABEL_FONT_SIZE}px ${UI_FONT_FACE}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
 
@@ -2789,7 +2791,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const absolute = range.start + month;
     if (absolute % 12 === 0 || absolute % 3 !== 0) continue;
     const x = timelineX + month * roadmapMonthWidth;
-    context.strokeStyle = "rgba(190,197,194,.055)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .055);
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT);
@@ -2804,7 +2806,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   groups.forEach((group) => {
     context.fillStyle = UI_PALETTE.inkBlack;
     context.fillRect(timelineX, rowY, timelineWidth, ROADMAP_GROUP_HEADER_HEIGHT);
-    context.strokeStyle = "rgba(190,197,194,.14)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .14);
     context.beginPath();
     context.moveTo(timelineX, rowY + .5);
     context.lineTo(timelineX + timelineWidth, rowY + .5);
@@ -2818,7 +2820,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       if (includeSelection && !exportMode) rows.push({ productId: product.id, family: group.family, y: rowTop, height: ROADMAP_ROW_HEIGHT });
       context.fillStyle = productIndex % 2 ? "rgba(255,255,255,.012)" : "rgba(0,0,0,.08)";
       context.fillRect(timelineX, rowTop, timelineWidth, ROADMAP_ROW_HEIGHT);
-      context.strokeStyle = "rgba(190,197,194,.045)";
+      context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .045);
       context.beginPath();
       context.moveTo(timelineX, rowTop + ROADMAP_ROW_HEIGHT);
       context.lineTo(timelineX + timelineWidth, rowTop + ROADMAP_ROW_HEIGHT);
@@ -2850,7 +2852,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         context.rect(barX + 8, barY, Math.max(0, barWidth - 16), barHeight);
         context.clip();
         context.fillStyle = PortfolioModel.productLabelColor(product, contrastTextColor(color));
-        context.font = portfolio?.settings?.showRoadmapMsrp ? "700 11px Arial" : "700 12px Arial";
+        context.font = `${portfolio?.settings?.showRoadmapMsrp ? "700 11px" : "700 12px"} ${UI_FONT_FACE}`;
         context.textAlign = "center";
         context.textBaseline = "middle";
         context.fillText(roadmapProductBarLabel(product), barX + barWidth / 2, barY + barHeight / 2 + .5);
@@ -2872,9 +2874,9 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
 
         if (editingThisSlot && barWidth > 28) {
           context.save();
-          context.fillStyle = "rgba(239,239,237,.94)";
-          if (startVisible) roundRect(context, barX + 3, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
-          if (endVisible) roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
+          context.fillStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.whiteSmoke, .94);
+          if (startVisible) roundRect(context, barX + 3, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, globalThis.PortfolioTheme.alpha(UI_PALETTE.whiteSmoke, .92));
+          if (endVisible) roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, globalThis.PortfolioTheme.alpha(UI_PALETTE.whiteSmoke, .92));
           context.restore();
         }
 
@@ -2901,7 +2903,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const today = new Date();
     const fraction = Math.min(.98, Math.max(.02, (today.getDate() - 1) / new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()));
     const x = timelineX + (todayIndex - range.start + fraction) * roadmapMonthWidth;
-    context.strokeStyle = "rgba(156,174,170,.72)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .72);
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT - 8);
@@ -2934,35 +2936,35 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const groupHeight = ROADMAP_GROUP_HEADER_HEIGHT + group.products.length * ROADMAP_ROW_HEIGHT;
     context.fillStyle = UI_PALETTE.inkBlack;
     context.fillRect(stickyX + 48, rowY, ROADMAP_LEFT_WIDTH - 48, groupHeight);
-    context.strokeStyle = "rgba(190,197,194,.14)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .14);
     context.beginPath();
     context.moveTo(stickyX + 48, rowY + .5);
     context.lineTo(stickyX + ROADMAP_LEFT_WIDTH, rowY + .5);
     context.stroke();
     context.fillStyle = UI_PALETTE.starDust;
-    context.font = "700 12px Arial";
+    context.font = `700 12px ${UI_FONT_FACE}`;
     context.textAlign = "left";
     context.textBaseline = "middle";
     const familyHeadingY = rowY + ROADMAP_GROUP_HEADER_HEIGHT / 2;
     context.fillText(truncate(group.family.toUpperCase(), 17), stickyX + 61, familyHeadingY);
     if (group.continued) {
       context.fillStyle = UI_PALETTE.foggy;
-      context.font = "700 8px Arial";
+      context.font = `700 8px ${UI_FONT_FACE}`;
       context.fillText("CONTINUED", stickyX + 61, familyHeadingY + 14);
     }
     if (includeSelection && !exportMode && includeProducts) {
       group.products.forEach((product, index) => {
         const y = rowY + ROADMAP_GROUP_HEADER_HEIGHT + index * ROADMAP_ROW_HEIGHT;
         if (product.id === selectedId) {
-          context.fillStyle = "rgba(174,198,181,.09)";
+          context.fillStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .09);
           context.fillRect(stickyX + 48, y, ROADMAP_LEFT_WIDTH - 48, ROADMAP_ROW_HEIGHT);
         }
         const activeRow = product.id === selectedId || roadmapHoveredProductIds.get(targetCanvas) === product.id;
-        context.fillStyle = activeRow ? "rgba(195,200,197,.55)" : "rgba(149,155,151,.22)";
+        context.fillStyle = activeRow ? globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .55) : globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .22);
         for (let column = 0; roadmapInteractionMode === "dates" && column < 2; column += 1) {
           for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 54 + column * 3.5, y + 14 + dot * 4.5, 1.4, 1.4);
         }
-        context.font = "10px Arial";
+        context.font = `10px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         context.textBaseline = "middle";
         context.fillStyle = activeRow ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
@@ -2982,18 +2984,18 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     context.beginPath();
     context.rect(viewportLeft, stickyY + ROADMAP_HEADER_HEIGHT, viewportRight - viewportLeft, targetScroll.clientHeight - ROADMAP_HEADER_HEIGHT);
     context.clip();
-    context.strokeStyle = "rgba(174,198,181,.6)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .6);
     context.setLineDash([5, 4]);
     context.strokeRect(viewportLeft + 2, drag.sourceY + 2, viewportRight - viewportLeft - 4, ROADMAP_ROW_HEIGHT - 4);
     context.setLineDash([]);
     if (drag.mode === "reorder" && drag.dropTarget) {
-      context.strokeStyle = "#aecaB7";
+      context.strokeStyle = UI_PALETTE.selection;
       context.lineWidth = 2;
       context.beginPath();
       context.moveTo(viewportLeft, drag.dropTarget.lineY);
       context.lineTo(viewportRight, drag.dropTarget.lineY);
       context.stroke();
-      context.fillStyle = "#aecab7";
+      context.fillStyle = UI_PALETTE.selection;
       context.beginPath();
       context.arc(viewportLeft + 3, drag.dropTarget.lineY, 4, 0, Math.PI * 2);
       context.fill();
@@ -3003,22 +3005,22 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       context.shadowColor = "rgba(0,0,0,.45)";
       context.shadowBlur = 12;
       context.shadowOffsetY = 5;
-      roundRect(context, floatingX, floatingY + 4, Math.max(140, floatingWidth), ROADMAP_ROW_HEIGHT - 8, 4, roadmapStatusColor(selectedProduct()), "#c3d8cb", 1.5);
+      roundRect(context, floatingX, floatingY + 4, Math.max(140, floatingWidth), ROADMAP_ROW_HEIGHT - 8, 4, roadmapStatusColor(selectedProduct()), UI_PALETTE.selection, 1.5);
       context.shadowBlur = 0;
       context.shadowOffsetY = 0;
       context.fillStyle = PortfolioModel.productLabelColor(selectedProduct(), contrastTextColor(roadmapStatusColor(selectedProduct())));
-      context.font = "700 11px Arial";
+      context.font = `700 11px ${UI_FONT_FACE}`;
       context.textBaseline = "middle";
       context.fillText(truncate(selectedProduct()?.name || "Product", 34), floatingX + 12, floatingY + ROADMAP_ROW_HEIGHT / 2);
     } else if (roadmapDraft) {
       if (drag.sourceBar) {
         context.setLineDash([5, 4]);
-        context.strokeStyle = "rgba(195,216,203,.65)";
+        context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .65);
         context.strokeRect(drag.sourceBar.x, drag.sourceBar.y, drag.sourceBar.width, drag.sourceBar.height);
       }
       const draft = roadmapDraft.roadmap;
       const edges = [monthIndex(draft.startMonth), monthIndex(draft.endMonth) + 1];
-      context.strokeStyle = "rgba(174,202,183,.7)";
+      context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .7);
       context.setLineDash([3, 4]);
       edges.forEach((month) => {
         const x = ROADMAP_LEFT_WIDTH + (month - range.start) * roadmapMonthWidth;
@@ -3059,7 +3061,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       context.rect(visibleYearLeft, stickyY, visibleYearRight - visibleYearLeft, 38);
       context.clip();
       context.fillStyle = UI_PALETTE.whiteSmoke;
-      context.font = "800 26px Arial";
+      context.font = `800 26px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       context.fillText(String(year), visibleYearLeft + 10, stickyY + 31);
       context.restore();
@@ -3074,11 +3076,11 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const x = timelineX + (quarterCursor - range.start) * roadmapMonthWidth;
     const quarterWidth = (quarterEnd - quarterCursor + 1) * roadmapMonthWidth;
     context.fillStyle = UI_PALETTE.greyOlive;
-    context.font = "600 10px Arial";
+    context.font = `600 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
     context.fillText(`Q${quarter}`, x + quarterWidth / 2, stickyY + 52);
     if (quarterCursor % 12 !== 0 && quarterCursor % 3 === 0) {
-      context.strokeStyle = "rgba(190,197,194,.14)";
+      context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .14);
       context.lineWidth = 1;
       context.beginPath();
       context.moveTo(Math.round(x) + .5, stickyY + 42);
@@ -3098,7 +3100,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const monthText = roadmapMonthWidth >= 60 ? fullMonthNames[month]
       : roadmapMonthWidth >= 28 || narrow ? shortMonthNames[month] : String(month + 1);
     context.fillStyle = UI_PALETTE.silver;
-    context.font = roadmapMonthWidth >= 60 ? "11px Arial" : "10px Arial";
+    context.font = `${roadmapMonthWidth >= 60 ? "11px" : "10px"} ${UI_FONT_FACE}`;
     context.textAlign = "center";
     const labelSpan = narrow ? Math.min(3 - month % 3, range.count - i) : 1;
     context.fillText(monthText, x + labelSpan * roadmapMonthWidth / 2, stickyY + 74);
@@ -3117,20 +3119,20 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.textBaseline = "alphabetic";
   context.textAlign = "left";
   context.fillStyle = UI_PALETTE.midGrey;
-  context.font = "700 9px Arial";
+  context.font = `700 9px ${UI_FONT_FACE}`;
   context.fillText("PORTFOLIO ROADMAP", stickyX + 14, stickyY + 20);
   context.fillStyle = UI_PALETTE.starDust;
-  context.font = "700 14px Arial";
+  context.font = `700 14px ${UI_FONT_FACE}`;
   context.fillText(roadmapSpanLabel(range.count), stickyX + 14, stickyY + 42);
   context.fillStyle = UI_PALETTE.greyOlive;
-  context.font = "10px Arial";
+  context.font = `10px ${UI_FONT_FACE}`;
   if (selectedGuides) {
     context.fillText(`Launch · ${roadmapLabel(selectedGuides.roadmap.startMonth)}`, stickyX + 14, stickyY + 62);
     context.fillText(`End · ${roadmapLabel(selectedGuides.roadmap.endMonth)}`, stickyX + 14, stickyY + 77);
   } else {
     context.fillText("Launch → lifecycle end", stickyX + 14, stickyY + 66);
   }
-  context.strokeStyle = "rgba(190,197,194,.18)";
+  context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .18);
   context.lineWidth = 1;
   context.beginPath();
   context.moveTo(stickyX, stickyY + ROADMAP_HEADER_HEIGHT - .5);
@@ -6055,7 +6057,7 @@ function recordCardElementsForPptx(cardCanvas, product, layout) {
           const textColor = color(target.fillStyle);
           elements.push({
             kind: "text", text: String(text), ...rectangle(transform, left, y - baselineOffset, boxWidth, fontSize * 1.3),
-            fontSize: fontSize * Math.abs(transform.a), fontFace: target.font.slice(target.font.indexOf("px") + 2).trim() || "Arial",
+            fontSize: fontSize * Math.abs(transform.a), fontFace: target.font.slice(target.font.indexOf("px") + 2).trim() || UI_FONT_FACE,
             color: textColor.color, opacity: textColor.opacity * target.globalAlpha,
             align, bold: /\b(?:bold|[6-9]00)\b/.test(target.font), fit: "shrink", baseline: point(transform, x, y).y,
           });
@@ -6302,15 +6304,15 @@ async function renderCategoryRoadmapImageForPptx(category, groups = null) {
 
 function addPptxPortfolioSlide(pptx, title, image) {
   const slide = pptx.addSlide();
-  slide.background = { color: "171717" };
+  slide.background = { color: UI_PALETTE.inkBlack.replace(/^#/, "") };
   slide.addText(title, {
     x: .38, y: .16, w: 11.9, h: .38,
-    fontFace: "Arial", fontSize: 20, bold: true,
-    color: "F0F2F0", margin: 0, breakLine: false,
+    fontFace: UI_FONT_FACE, fontSize: 20, bold: true,
+    color: UI_PALETTE.whiteSmoke.replace(/^#/, ""), margin: 0, breakLine: false,
   });
   slide.addShape(pptx.ShapeType.line, {
     x: .38, y: .62, w: 12.55, h: 0,
-    line: { color: "2B2E2B", width: .4, transparency: 25 },
+    line: { color: UI_PALETTE.charcoal600.replace(/^#/, ""), width: .4, transparency: 25 },
   });
   const placement = containRect(image.width, image.height, .38, .74, 12.55, 6.33, "left");
   slide.addImage({ data: image.data, ...placement, objectName: "Calendar and category background" });
@@ -6334,7 +6336,7 @@ function addPptxPortfolioSlide(pptx, title, image) {
     }
     slide.addText(product.label, {
       ...rect, objectName, shape: pptx.ShapeType.roundRect,
-      fontFace: "Arial", fontSize: product.fontSize * scale * 72, bold: true,
+      fontFace: UI_FONT_FACE, fontSize: product.fontSize * scale * 72, bold: true,
       color: product.textColor.replace(/^#/, ""),
       fill: { color: product.fill.replace(/^#/, "") },
       line: { color: product.lineColor.replace(/^#/, ""), width: scale * 72,
@@ -6482,6 +6484,8 @@ function pptxExportFilename(scope) {
 }
 
 async function exportPptx(scope = "both", selectedCategoryIds = null) {
+  await globalThis.PortfolioTheme.fontsReady();
+  UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
   stopProductCardDrag();
   closePopupMenus();
   if (typeof PptxGenJS !== "function") throw new Error("The PowerPoint export library did not load. Refresh the page and try again.");
@@ -6490,6 +6494,7 @@ async function exportPptx(scope = "both", selectedCategoryIds = null) {
 
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
+  pptx.theme = { headFontFace: UI_FONT_FACE, bodyFontFace: UI_FONT_FACE, lang: "en-US" };
   pptx.author = "Product Portfolio Canvas";
   pptx.company = "Product Portfolio";
   pptx.subject = scope === "products"
@@ -7654,6 +7659,8 @@ async function initializeWorkspace() {
   if (openingRetry) { openingRetry.hidden = true; openingRetry.onclick = () => { void startWorkspace(); }; }
   const pendingStart = pendingLegacyImageBlobs.length;
   try {
+    await globalThis.PortfolioTheme.fontsReady();
+    UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
     const saved = await workspaceStorage.read();
     // An unreadable database must never become an empty replacement workspace.
     let loaded;

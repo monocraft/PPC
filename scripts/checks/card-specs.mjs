@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 await import("../../public/js/card-specs.js");
 await import("../../public/js/launch-records.js");
 const api = globalThis.PortfolioCardSpecs;
@@ -95,6 +96,7 @@ const sandbox = {
   drawContainedImage: (...args) => images.push(args.slice(1)), productPriceText: () => "$79.99", drawSpecIcon() {}, detailedValueColor: () => "#999999",
   wrapText: (context, value) => context.fillText(value), drawVariantFooter: (_context, saved) => footers.push(saved.partSkus), drawProductInfoButton() {},
 };
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(app.slice(app.indexOf("const CARD_WIDTH"), app.indexOf("const PLACEHOLDER_IMAGE")) + app.slice(app.indexOf("const FULL_SPEC_MIN_CARD_HEIGHT"), app.indexOf("// Canvas colors"))
   + functions.map(name => app.match(new RegExp(`^function ${name}\\([^]*?^\\}`, "m"))[0]).join("\n"), sandbox);
