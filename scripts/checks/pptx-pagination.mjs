@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 
 await import("../../public/js/pptx-pagination.js");
 await import("../../public/js/pptx-editable.js");
@@ -138,6 +139,7 @@ const rendererSandbox = {
     }),
   },
 };
+Object.assign(rendererSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(rendererSandbox);
 vm.runInContext(appSource.slice(monthStart, monthEnd) + appSource.slice(rectStart, drawEnd) + appSource.slice(rendererStart, rendererEnd), rendererSandbox);
 rendererSandbox.roadmapRange = () => {
@@ -195,7 +197,7 @@ assert.deepEqual(Array.from(renderedRoadmap.products, (product) => product.label
 assert.equal(renderedRoadmap.products[1].concept, true);
 assert.equal(renderedRoadmap.products[1].lineColor, "#999999");
 assert.equal(renderedRoadmap.products[2].lineColor, "#E85270", "embargo outline colors remain distinct");
-assert.equal(renderedRoadmap.products[2].textColor, "#ffffff", "The editable roadmap export preserves white embargo labels.");
+assert.equal(renderedRoadmap.products[2].textColor, "#1A1B1C", "The editable roadmap export preserves readable dark labels on the bright red embargo fill.");
 assert.equal(renderedRoadmap.products[0].textColor, "#171717", "Ordinary product labels keep their existing contrast choice.");
 assert.equal(renderedRoadmap.products[0].y, 121);
 assert.equal(renderedRoadmap.products[2].y, 235, "out-of-range rows retain their place in the background layout");
@@ -261,6 +263,7 @@ function recordImage(kind, category, page = null) {
   return image;
 }
 const sandbox = {
+  UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
   PPTXPagination: globalThis.PPTXPagination, paginateRoadmapGroupsForPptx: paginateRoadmapGroups,
   CARD_WIDTH: 246, CARD_GAP: 10, GUTTER: 18, SIDE_PADDING: 40, LANE_TOP: 34,
   portfolio: { categories: exportCategories }, pptxSelectedCategoryIds: null, pptxExportInProgress: false,
@@ -284,6 +287,7 @@ const sandbox = {
   renderCategoryImageForPptx: async (category, page) => recordImage("products", category, page),
   renderCategoryRoadmapImageForPptx: async (category, groups) => recordImage("roadmap", category, groups),
 };
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(appSource.slice(productPagesStart, productPagesEnd) + appSource.slice(sectionStart, sectionEnd), sandbox);
 const productBoundaryCategory = (productCount, laneCount = 1) => ({
@@ -424,6 +428,7 @@ for (const [scope, expectedKinds, expectedFilename] of [
     }
   }
   deck.slides.forEach((slide, index) => {
+    assert.deepEqual(structuredClone(deck.theme), { headFontFace: "Jost", bodyFontFace: "Jost", lang: "en-US" }, "PowerPoint theme fonts match its native text objects.");
     const call = renderCalls[index];
     const category = exportCategories.find((item) => item.id === call.categoryId);
     const previousSameView = renderCalls.slice(0, index).some((earlier) => earlier.kind === call.kind && earlier.categoryId === call.categoryId);
@@ -431,9 +436,9 @@ for (const [scope, expectedKinds, expectedFilename] of [
     const nativeProductTexts = slide.texts.slice(1);
     assert.equal(slide.texts.length, 1 + expectedProducts.length * (call.kind === "roadmap" ? 1 : 4), "product labels, prices, specifications, and SKUs remain native editable text beside the slide title");
     assert.equal(slide.texts[0].text, `${category.name} — ${call.kind === "products" ? "Product Portfolio" : "Roadmap"}${previousSameView ? " (continued)" : ""}`, "both portfolio and roadmap continuation titles retain user content without numeric pagination");
-    assert.equal(slide.background.color, "171717");
+    assert.equal(slide.background.color, "1A1B1C");
     assert.equal(slide.shapes.length, 1 + (call.kind === "products" ? expectedProducts.length : 0), "each portfolio card retains its own editable rounded rectangle");
-    assert.deepEqual(structuredClone(slide.shapes[0].options.line), { color: "2B2E2B", width: .4, transparency: 25 }, "slide divider remains faint");
+    assert.deepEqual(structuredClone(slide.shapes[0].options.line), { color: "333538", width: .4, transparency: 25 }, "slide divider remains faint");
     assert.equal(slide.images.length, 1 + (call.kind === "products" ? expectedProducts.length : 0), "only artwork is a picture within each editable portfolio card");
     const image = slide.images[0];
     assert.equal(image.data, `${call.kind}:${call.categoryId}`);
@@ -501,6 +506,7 @@ assert.equal(JSON.stringify(exportCategories), sourceCategoriesBefore, "selectio
 // Serialize a real slide through the shipped library, then inspect its actual
 // OOXML and image payload with the same bundle's ZIP reader.
 const librarySandbox = { console, setTimeout, clearTimeout, setImmediate, clearImmediate, Buffer, Blob, URL, TextEncoder, TextDecoder };
+Object.assign(librarySandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(librarySandbox);
 vm.runInContext(await readFile(new URL("../../public/vendor/pptxgen.bundle.js", import.meta.url), "utf8"), librarySandbox, { timeout: 5000 });
 assert.equal(typeof librarySandbox.PptxGenJS, "function");
@@ -527,7 +533,7 @@ assert.deepEqual(savedTexts, [realTitle, ...realProducts.map((product) => produc
 assert.ok(!/<p:ph\b[^>]*\btype="(?:sldNum|ftr|dt)"/i.test(slideXml), "the saved slide has no number/footer/date placeholders");
 const dividerXml = slideXml.match(/<a:ln\b[^>]*\bw="5080"[^>]*>([\s\S]*?)<\/a:ln>/);
 assert.ok(dividerXml, "the saved divider is exactly 0.4pt (5080 EMU)");
-assert.match(dividerXml[1], /<a:srgbClr\b[^>]*\bval="2B2E2B"/);
+assert.match(dividerXml[1], /<a:srgbClr\b[^>]*\bval="333538"/);
 assert.match(dividerXml[1], /<a:alpha\b[^>]*\bval="75000"/, "the saved divider retains 25% transparency");
 const pictureXml = [...slideXml.matchAll(/<p:pic>[\s\S]*?<\/p:pic>/g)];
 assert.equal(pictureXml.length, 1, "the saved slide contains one roadmap background image");

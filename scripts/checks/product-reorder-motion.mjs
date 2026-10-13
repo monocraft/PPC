@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 
 const source = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 // Keep dependencies between application helpers real. UI, persistence, and
@@ -61,7 +62,8 @@ function harness({ reduced = false, zoom = 1 } = {}) {
     performance: { now: () => clock }, devicePixelRatio: 1, matchMedia: () => ({ matches: reduced }), window: { matchMedia: () => ({ matches: reduced }) },
     requestAnimationFrame(callback) { const id = ++nextFrame; frames.set(id, callback); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
   };
-  vm.createContext(context); new vm.Script(functions).runInContext(context);
+  Object.assign(context, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
+vm.createContext(context); new vm.Script(functions).runInContext(context);
   const realRenderBoard = context.renderBoard;
   const dimensions = { width: 3000, height: 1800, layout, laneRows };
   Object.assign(context, {
