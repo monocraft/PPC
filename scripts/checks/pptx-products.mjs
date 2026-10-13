@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 
 const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const appSection = (start, end) => {
@@ -127,6 +128,7 @@ const sandbox = {
     },
   },
 };
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(
   appSection("function productCardTitle(", "function normalizedSpecLabel(") +

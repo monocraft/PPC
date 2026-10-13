@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 await import("../../public/js/card-specs.js");
 
 await import("../../public/js/portfolio-model.js");
@@ -21,6 +22,7 @@ function runTimer(id) {
   timer.callback();
 }
 function runAllTimers() { for (const id of [...timers.keys()]) runTimer(id); }
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 new vm.Script(await readFile(new URL("../../public/js/product-details.js", import.meta.url), "utf8")).runInContext(sandbox);
 const details = sandbox.PortfolioDetails;
@@ -474,7 +476,8 @@ function clipboardFixture({ nativeFailure = false, nativeAvailable = true, fallb
   };
   const navigator = nativeAvailable ? { clipboard: { async writeText(value) { nativeValues.push(value); if (nativeFailure) throw new Error("Clipboard denied"); } } } : {};
   const clipboardSandbox = { document, navigator };
-  vm.createContext(clipboardSandbox);
+  Object.assign(clipboardSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
+vm.createContext(clipboardSandbox);
   new vm.Script(clipboardSource).runInContext(clipboardSandbox);
   return { copy: clipboardSandbox.copyTextToClipboard, events, nativeValues, textareas };
 }
@@ -530,6 +533,7 @@ const dateShortcutSandbox = {
     },
   },
 };
+Object.assign(dateShortcutSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(dateShortcutSandbox);
 new vm.Script(dateShortcutHandler).runInContext(dateShortcutSandbox);
 dateShortcutButton.onclick();
@@ -541,6 +545,7 @@ const appModelSandbox = {
   activeCategoryRecord: () => ({ name: "PC Gaming Audio" }),
   categoryDefinition: () => ({ name: "PC Gaming Audio" }),
 };
+Object.assign(appModelSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(appModelSandbox);
 const adapterFunctions = ["productDetailsModel", "normalizeAscmProductMetadata", "normalizeAscmRecord", "normalizeProductInfoDate", "formatProductInfoDate", "normalizePartSku", "productPartSkus", "productVariantGroups", "productTier", "monthIndex", "roadmapLabel", "splitRoadmapStatusLabel"];
 for (const name of adapterFunctions) {
@@ -756,6 +761,7 @@ Object.defineProperty(paneSandbox, "viewerInfoContentHeight", {
   get() { throw new Error("Content length must never determine the inline pane's height"); },
   set() { throw new Error("Content length must never determine the inline pane's height"); },
 });
+Object.assign(paneSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(paneSandbox);
 const paneFunctions = [
   "cardSpecifications", "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedSpecsHeight", "productCardLayout",

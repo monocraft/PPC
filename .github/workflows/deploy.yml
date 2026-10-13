@@ -51,6 +51,8 @@ jobs:
           cp public/js/launch-records.js _site/js/
           cp public/js/card-specs.js _site/js/
           cp public/js/workspace-store.js _site/js/
+          cp public/js/reference-theme.js _site/js/
+          cp public/css/fonts.css _site/css/
           cp public/css/date-history.css _site/css/
           cp public/js/plc-import.js public/js/plc-import-ui.js _site/js/
           cp public/css/plc-import.css _site/css/
@@ -75,6 +77,11 @@ jobs:
           test -f _site/js/launch-records.js
           test -f _site/js/card-specs.js
           test -f _site/js/workspace-store.js
+          test -f _site/js/reference-theme.js
+          test -f _site/css/fonts.css
+          test -f _site/assets/fonts/Jost-Variable.ttf
+          test -f _site/assets/fonts/Jost-Italic-Variable.ttf
+          test -f _site/assets/fonts/Jost-OFL.txt
           test -f _site/css/date-history.css
           test -f _site/js/plc-import.js
           test -f _site/js/plc-import-ui.js

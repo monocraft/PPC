@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 
 const source = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const start = source.indexOf("  // One neutral calendar surface: typography, sparse ticks, and year seams.");
@@ -11,6 +12,7 @@ const sandbox = {
   UI_PALETTE: { inkBlack: "#171717", whiteSmoke: "#eeeeec", greyOlive: "#929593", silver: "#c3c8c5", midGrey: "#949896", starDust: "#deded9" },
   drawYearSeamSegment() {}, roadmapSpanLabel: (count) => `${count} MONTH VIEW`, roadmapLabel: (month) => month,
 };
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(`function drawHeader(context, { range, stickyX = 0, stickyY = 0, clientWidth = 800, exportMode = false, selectedGuides = null }) {
   const timelineX = ROADMAP_LEFT_WIDTH, timelineWidth = range.count * roadmapMonthWidth, width = timelineX + timelineWidth + 24;
@@ -44,7 +46,7 @@ function paint({ start = month(2026), end = month(2028, 12), left = 0, top = 0, 
   const result = recordingContext(); sandbox.roadmapMonthWidth = monthWidth;
   sandbox.drawHeader(result.context, { range: range(start, end), stickyX: exportMode ? 0 : left, stickyY: exportMode ? 0 : top, clientWidth: width, exportMode });
   assert.equal(result.stack.length, 0);
-  const years = result.records.filter((record) => record.font === "800 26px Arial");
+  const years = result.records.filter((record) => record.font === `800 26px ${globalThis.PortfolioTheme.fontFace}`);
   const labels = result.records.filter((record) => !/^\d{4}$/.test(record.text));
   return { ...result, years, labels };
 }

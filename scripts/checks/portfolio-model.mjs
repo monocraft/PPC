@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 await import("../../public/js/card-specs.js");
 await import("../../public/js/portfolio-model.js");
 const model = globalThis.PortfolioModel;
@@ -202,7 +203,8 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
     syncControls() {}, renderInspector() {}, setView() {}, initializeWorkspaceFeatures() { features.push(true); },
     packageCodec: () => ({ normalizePackageInfo: value => value || null }),
   };
-  vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${initializeDefinition}\n${startDefinition}`, boot);
+  Object.assign(boot, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
+vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${initializeDefinition}\n${startDefinition}`, boot);
   return { boot, activation, stored, baselineReads, writes, notices, events, features, shell, retry, release: value => release(value), get durable() { return durable; } };
 }
 for (const [label, saved, prior, expected] of [
@@ -250,6 +252,7 @@ for (const [label, options] of [
 {
   const database = startupPortfolio('console'), h = bootHarness({ saved: startupPortfolio('audio'), database, holdRead: true });
   const loading = h.boot.startWorkspace(); assert.equal(h.activation.length, 0); assert.equal(h.writes.length, 0); assert.equal(h.shell.inert, true);
+  await new Promise(setImmediate); // Font readiness precedes the durable database read.
   h.release(JSON.stringify(database)); await loading;
   assert.equal(h.boot.activeCategoryId, 'console', 'the durable DB wins over an older legacy selection'); assert.equal(h.writes.length, 0); assert.equal(h.shell.inert, false);
 }
@@ -259,10 +262,10 @@ for (const [label, options] of [
   assert.equal(h.boot.portfolio.masterLocalMerges[0].sourceProduct.specs[0].raw, 'retained'); assert.equal(h.boot.portfolio.masterLocalAssetIds.old, 'local'); assert.equal(h.boot.portfolio.unknownEvidence.length, 5 * 1024 * 1024);
 }
 const standardStatusCases = [
-  ["new", "NEW PRODUCT", "#5fd6c1"],
-  ["embargo", "UPCOMING UNDER EMBARGO", "#ef5b5b"],
-  ["in-development", "IN-DEVELOPMENT", "#7aa2cc"],
-  ["sunsetting", "SUNSETTING", "#d4a56a"],
+  ["new", "NEW PRODUCT", "#BBBCC0"],
+  ["embargo", "UPCOMING UNDER EMBARGO", "#FF2525"],
+  ["in-development", "IN-DEVELOPMENT", "#676A70"],
+  ["sunsetting", "SUNSETTING", "#4D5054"],
 ];
 const standardStatusSource =
   appSource.slice(appSource.indexOf("const STANDARD_CARD_STATUSES"), appSource.indexOf("const PRODUCT_TIER_OPTIONS")) +
@@ -272,6 +275,7 @@ const action = appSource.slice(appSource.indexOf("function setRoadmapYearSpan(")
 const sandbox = { board: portfolio.categories[0].board, activeView: "roadmap", monthIndex: (value) => Number(value.slice(0, 4)) * 12 + Number(value.slice(5)) - 1,
   monthStringFromDate: () => "2026-10", updateTimelineSettings: (patch) => model.syncTimelineSettings(portfolio, patch),
   requestAnimationFrame: (callback) => callback(), fitRoadmapTimeline: () => {}, roadmapScroll: { scrollTo: () => {} } };
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(action, sandbox);
 for (const years of [3, 5, 10]) {
@@ -291,6 +295,7 @@ const layoutSandbox = {
   variantFooterLayout: (item) => ({ height: item.footerHeight || 0 }),
   visibleProducts: () => { throw new Error("Search results must not control category geometry"); },
 };
+Object.assign(layoutSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(layoutSandbox);
 vm.runInContext(
   appSource.slice(appSource.indexOf("const CARD_WIDTH"), appSource.indexOf("const PLACEHOLDER_IMAGE")) +
@@ -328,6 +333,7 @@ assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty single-la
 
 const presentationSandbox = { PortfolioModel: model, UI_PALETTE: { charcoal600: "#2c2c2c", carbon: "#111111" },
   normalizeRoadmapStatus: (stage) => stage || "in-planning" };
+Object.assign(presentationSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(presentationSandbox);
 vm.runInContext(
   standardStatusSource +
@@ -357,12 +363,12 @@ for (const invalidStatus of [undefined, null, "", "unknown", "constructor", "toS
 }
 for (const statusType of ["none", ...standardStatusCases.map(([status]) => status)]) {
   const product = { statusType, roadmap: { status: "embargo" } };
-  assert.equal(model.productTone(product), "#ef5b5b", "embargo remains visible even when another preset is selected");
-  assert.equal(presentationSandbox.productPresentation(product).primaryColor, "#ef5b5b", "embargo precedence also applies to the actual card presentation");
-  assert.equal(presentationSandbox.roadmapStatusColor(product), "#ef5b5b", "embargo precedence remains consistent on the roadmap");
-  assert.equal(model.productLabelColor(product, "#111111"), "#ffffff", "Every red embargo surface uses white label text.");
+  assert.equal(model.productTone(product), "#FF2525", "embargo remains visible even when another preset is selected");
+  assert.equal(presentationSandbox.productPresentation(product).primaryColor, "#FF2525", "embargo precedence also applies to the actual card presentation");
+  assert.equal(presentationSandbox.roadmapStatusColor(product), "#FF2525", "embargo precedence remains consistent on the roadmap");
+  assert.equal(model.productLabelColor(product, "#111111"), "#1A1B1C", "Every bright red embargo surface uses dark label text for readable contrast.");
 }
-assert.equal(model.productLabelColor({ statusType: "embargo" }, "#111111"), "#ffffff");
+assert.equal(model.productLabelColor({ statusType: "embargo" }, "#111111"), "#1A1B1C");
 for (const product of [null, {}, ...standardStatusCases.filter(([type]) => type !== "embargo").map(([statusType]) => ({ statusType })), { statusType: "none", roadmap: { status: "in-development" } }]) {
   assert.equal(model.productLabelColor(product, "#111111"), "#111111", "The embargo preference leaves normal contrast choices intact.");
 }
@@ -410,7 +416,7 @@ for (const [statusType, label, color] of standardStatusCases) {
       presentationSandbox.drawCard(consoleContext, consoleProduct, 0, 0, false, { ...consoleLayout, detailed }, false);
       assert.equal(consoleText[0], label, "both compact and detailed cards start with the shared status label");
       assert.equal(consoleShapes[1][6], color, "the main banner uses the theme accent");
-      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#ffffff" : "#111111", "Compact, detailed, and exported card rendering use white embargo text and dark text on the teal, blue, and amber presets.");
+      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#1A1B1C" : "#111111", "Compact, detailed, and exported cards share the same readable embargo label color.");
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
         assert.equal(consoleShapes[2][6], color, "the variant badge matches the status banner color");
@@ -421,9 +427,9 @@ for (const [statusType, label, color] of standardStatusCases) {
     }
     presentationSandbox.renderSplitProduct();
     assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`>${label}</div>`), "roadmap details retain the same primary status");
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#ffffff" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#1A1B1C" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
     assert.equal(presentationSandbox.splitProduct.innerHTML.includes('class="split-platform-label"'), Boolean(presentation.secondaryLabel));
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${color};--product-label-color:${statusType === "embargo" ? "#ffffff" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${color};--product-label-color:${statusType === "embargo" ? "#1A1B1C" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
     assert.equal(JSON.stringify(consoleProduct), before, "presentation never changes the saved manual status or platform label");
   }
 }
@@ -467,6 +473,7 @@ const priceSandbox = {
   roundRect: () => {}, loadImage: () => ({ ready: false }), productImageSource: () => "",
   wrapText: () => {}, drawProductInfoButton: () => {}, viewerInfoProductId: null, viewerInfoProgress: 0,
 };
+Object.assign(priceSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(priceSandbox);
 vm.runInContext(
   appSource.slice(appSource.indexOf("function productCardTitle("), appSource.indexOf("function normalizedSpecLabel(")) +
@@ -571,6 +578,7 @@ function appSection(start, end) {
   assert.ok(startIndex >= 0 && endIndex > startIndex, `application section is present: ${start}`);
   return appSource.slice(startIndex, endIndex);
 }
+Object.assign(laneSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(laneSandbox);
 vm.runInContext(
   appSection("function viewerInfoReserveLogical(", "function setupCanvas(") +
@@ -721,6 +729,7 @@ function timelineScrollAdapter(clientWidth, scrollLeft) {
 }
 viewSandbox.roadmapScroll = timelineScrollAdapter(900, 500);
 viewSandbox.splitRoadmapScroll = timelineScrollAdapter(700, 320);
+Object.assign(viewSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(viewSandbox);
 vm.runInContext(
   ["clampViewZoom", "snappedViewZoom", "steppedViewZoom", "syncViewZoomControls", "setProductZoom", "setRoadmapZoom", "fitRoadmapTimeline", "fitProductBoard"].map(applicationFunction).join("\n") +

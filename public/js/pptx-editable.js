@@ -34,7 +34,7 @@
         slide.addImage({ ...rect, data: element.data, altText: element.altText || product.name || "Product artwork" });
       } else if (element.kind === "text") {
         slide.addText(element.text, {
-          ...rect, fontFace: element.fontFace || "Arial", fontSize: Math.max(1, Math.min(4000, element.fontSize * scale * 72)),
+          ...rect, fontFace: element.fontFace || globalObject.PortfolioTheme?.fontFace || "Arial", fontSize: Math.max(1, Math.min(4000, element.fontSize * scale * 72)),
           color: colorOptions(element.color).color, bold: Boolean(element.bold), italic: Boolean(element.italic),
           align: element.align || "left", valign: "top", margin: 0,
           breakLine: false, wrap: false, fit: "shrink", paraSpaceAfter: 0,
