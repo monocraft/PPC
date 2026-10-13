@@ -118,6 +118,49 @@
       `<a:close/></a:path></a:pathLst></a:custGeom>`;
   }
 
+  async function reconcileContentTypes(archive, xml) {
+    const overrides = [...xml.matchAll(/<Override\b[^>]*\/>/g)].map((match) => ({
+      xml: match[0], partName: match[0].match(/\bPartName="([^"]+)"/)?.[1],
+      type: match[0].match(/\bContentType="([^"]+)"/)?.[1],
+    }));
+    const missing = overrides.filter((entry) => entry.partName && !archive.file(entry.partName.replace(/^\//, "")));
+    // PptxGenJS 4 declares a slide master for every slide but writes one shared
+    // master. Drop only those unused declarations, never a referenced part.
+    const referencedParts = new Set();
+    for (const filename of Object.keys(archive.files).filter((name) => name.endsWith(".rels"))) {
+      const relationships = await archive.file(filename).async("string");
+      const owner = filename === "_rels/.rels" ? "" : filename.replace(/(^|\/)_rels\//, "$1").replace(/\.rels$/, "");
+      const directory = owner.slice(0, owner.lastIndexOf("/") + 1);
+      for (const match of relationships.matchAll(/<Relationship\b[^>]*\/>/g)) {
+        if (/\bTargetMode="External"/.test(match[0])) continue;
+        const target = match[0].match(/\bTarget="([^"]+)"/)?.[1];
+        if (!target) continue;
+        const parts = [];
+        for (const segment of (target.startsWith("/") ? target.slice(1) : directory + target).split("/")) {
+          if (segment === "..") parts.pop();
+          else if (segment && segment !== ".") parts.push(segment);
+        }
+        referencedParts.add(parts.join("/"));
+      }
+    }
+    // A broken relationship can name a master that was never declared, even
+    // in a one-slide file with no missing content-type entries.
+    for (const part of referencedParts) {
+      if (/^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(part) && !archive.file(part)) {
+        throw new Error("PowerPoint could not find a referenced slide master.");
+      }
+    }
+    for (const entry of missing) {
+      const part = entry.partName.slice(1);
+      if (!/^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(part) ||
+          entry.type !== "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml") {
+        throw new Error("PowerPoint could not find a declared presentation part.");
+      }
+      xml = xml.replace(entry.xml, "");
+    }
+    return xml;
+  }
+
   async function serialize(pptx) {
     const data = await pptx.write({ outputType: "arraybuffer" });
     const slides = deckSlides.get(pptx) || [];
@@ -138,7 +181,7 @@
     // generator shares the slide-master theme, which Office rejects once the
     // notes-master list is in its valid position.
     let nextTheme = Math.max(0, ...Object.keys(archive.files).map((name) => Number(name.match(/^ppt\/theme\/theme(\d+)\.xml$/)?.[1] || 0))) + 1;
-    let contentTypes = await archive.file("[Content_Types].xml").async("string");
+    let contentTypes = await reconcileContentTypes(archive, await archive.file("[Content_Types].xml").async("string"));
     for (const filename of Object.keys(archive.files).filter((name) => /^ppt\/notesMasters\/_rels\/notesMaster\d+\.xml\.rels$/.test(name))) {
       let relationships = await archive.file(filename).async("string");
       const themeRelationship = [...relationships.matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => match[0])

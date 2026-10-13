@@ -660,6 +660,54 @@ assert.ok(downloadedFile.blob instanceof Blob);
 const deliveredArchive = await librarySandbox.JSZip.loadAsync(Buffer.from(await downloadedFile.blob.arrayBuffer()), { checkCRC32: true });
 assert.equal(await deliveredArchive.file("ppt/slides/slide1.xml").async("string"), portfolioXml, "the actual downloaded file contains grouped editable products");
 
+// The shipped generator emits one shared master, but declares nonexistent
+// masters for every extra slide. Validate the delivered package, not only its
+// slide XML, and retain real masters while rejecting genuinely missing parts.
+const declaredParts = async (archive) => [...(await archive.file("[Content_Types].xml").async("string"))
+  .matchAll(/<Override\b[^>]*\bPartName="([^"]+)"[^>]*\/>/g)].map((match) => match[1].slice(1));
+const missingDeclaredParts = async (archive) => (await declaredParts(archive)).filter((part) => !archive.file(part));
+assert.deepEqual(await missingDeclaredParts(beforeGroupingArchive), ["ppt/slideMasters/slideMaster2.xml"], "the browser bundle itself reproduces the extra-master defect");
+assert.deepEqual(await missingDeclaredParts(deliveredArchive), [], "the actual download must not declare missing parts");
+assert.equal(await deliveredArchive.file("ppt/slideMasters/slideMaster1.xml").async("string"), await beforeGroupingArchive.file("ppt/slideMasters/slideMaster1.xml").async("string"), "compatibility keeps the real shared master unchanged");
+const threeSlideDeck = new librarySandbox.PptxGenJS();
+for (let index = 0; index < 3; index++) threeSlideDeck.addSlide().addText(`Slide ${index + 1}`, { x: 1, y: 1, w: 3, h: 1 });
+const threeSlideRaw = await threeSlideDeck.write({ outputType: "arraybuffer" });
+const threeSlideArchive = await librarySandbox.JSZip.loadAsync(threeSlideRaw);
+assert.equal((await missingDeclaredParts(threeSlideArchive)).length, 2, "a minimal three-slide bundle export reproduces both spurious declarations");
+const threeSlideDelivered = await librarySandbox.JSZip.loadAsync(await librarySandbox.PPTXEditable.serialize(threeSlideDeck), { checkCRC32: true });
+assert.deepEqual(await missingDeclaredParts(threeSlideDelivered), []);
+for (let index = 1; index <= 3; index++) assert.equal(await threeSlideDelivered.file(`ppt/slides/slide${index}.xml`).async("string"), await threeSlideArchive.file(`ppt/slides/slide${index}.xml`).async("string"), "master declaration repair preserves every native slide object");
+const alteredExport = async (alter) => {
+  const archive = await librarySandbox.JSZip.loadAsync(threeSlideRaw);
+  await alter(archive);
+  const data = await archive.generateAsync({ type: "arraybuffer" });
+  return librarySandbox.PPTXEditable.serialize({ write: async () => data });
+};
+const retainedMasterArchive = await librarySandbox.JSZip.loadAsync(await alteredExport(async (archive) => {
+  archive.file("ppt/slideMasters/slideMaster2.xml", await archive.file("ppt/slideMasters/slideMaster1.xml").async("string"));
+}));
+assert.ok((await declaredParts(retainedMasterArchive)).includes("ppt/slideMasters/slideMaster2.xml"), "an existing master and its declaration are retained even if unreferenced");
+assert.deepEqual(await missingDeclaredParts(retainedMasterArchive), []);
+await assert.rejects(alteredExport(async (archive) => {
+  const filename = "ppt/slideLayouts/_rels/slideLayout1.xml.rels";
+  archive.file(filename, (await archive.file(filename).async("string")).replace("../slideMasters/slideMaster1.xml", "../slideMasters/slideMaster2.xml"));
+}), /referenced slide master/, "a missing master referenced by a layout must fail rather than be hidden");
+await assert.rejects(alteredExport(async (archive) => {
+  const filename = "_rels/.rels";
+  archive.file(filename, (await archive.file(filename).async("string")).replace("</Relationships>", '<Relationship Id="broken-master" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="/ppt/slideMasters/slideMaster3.xml"/></Relationships>'));
+}), /referenced slide master/, "absolute root relationship targets are also protected");
+const undeclaredMasterArchive = await librarySandbox.JSZip.loadAsync(serializedPptx);
+const singleLayoutRelationships = "ppt/slideLayouts/_rels/slideLayout1.xml.rels";
+undeclaredMasterArchive.file(singleLayoutRelationships, (await undeclaredMasterArchive.file(singleLayoutRelationships).async("string"))
+  .replace("../slideMasters/slideMaster1.xml", "../slideMasters/slideMaster99.xml"));
+assert.deepEqual(await missingDeclaredParts(undeclaredMasterArchive), [], "the one-slide regression has no missing Override entries");
+assert.ok(!(await declaredParts(undeclaredMasterArchive)).includes("ppt/slideMasters/slideMaster99.xml"), "the referenced missing master was never declared");
+const undeclaredMasterBytes = await undeclaredMasterArchive.generateAsync({ type: "arraybuffer" });
+await assert.rejects(librarySandbox.PPTXEditable.serialize({ write: async () => undeclaredMasterBytes }), /referenced slide master/, "a one-slide file referencing an undeclared missing master must also fail");
+await assert.rejects(alteredExport(async (archive) => {
+  archive.remove("ppt/slides/slide2.xml");
+}), /declared presentation part/, "missing real slide content cannot be masked by the compatibility pass");
+
 // A very dense category used to emit 0.53pt text, which PowerPoint asks to
 // repair. Exercise both card creation and the final no-card delivery path.
 const denseDeck = new librarySandbox.PptxGenJS();
