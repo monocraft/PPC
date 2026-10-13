@@ -128,6 +128,25 @@
         addText(read(item, "value"));
       } else addText(item);
     });
+    // Tracker facts remain searchable in their own records. Source files,
+    // fingerprints, edit clocks and relocation audit rows are not keywords.
+    const launch = read(read(product, "plc"), "launchAvailability");
+    const launchRecords = read(launch, "records");
+    if (Array.isArray(launchRecords)) eachItem(launchRecords, (record) => {
+      const identity = read(record, "identity");
+      for (const field of ["productName", "codename", "sourceCategory", "skuText", "tier"]) addText(read(identity, field));
+      eachItem(read(record, "skus"), (code) => addCode(skus, seenSkus, code));
+      const pricing = read(record, "pricing");
+      for (const currency of ["usd", "eur"]) { const value = read(pricing, currency); if (value !== null && value !== undefined && value !== "") { addText(currency); addText(value); } }
+      for (const group of ["milestones", "regions"]) eachItem(read(record, group), (item) => { addText(read(item, "label")); addText(read(item, "value")); });
+      eachItem(read(record, "notes"), (note) => addText(read(note, "value")));
+    });
+    else eachItem(read(launch, "rows"), (record) => {
+      eachItem(read(record, "skus"), (code) => addCode(skus, seenSkus, code));
+      const values = read(record, "values");
+      if (!Array.isArray(values)) return;
+      eachItem(values, (value) => addText(typeof value === "string" ? value.replace(/T00:00:00$/, "") : value), 22);
+    });
     return { fields, skus, variants, name };
   }
 

@@ -45,6 +45,87 @@ const awayBase = model.snapshot(away).products[0];
 const back = model.mergeChanges(away, [change(awayBase, { codename: base.values.codename })], { requestId: 'aba-back', now: '2026-10-13T01:01:00.000Z' }).manifest;
 verifyPlan(back, [change(base, { codename: 'Mine after ABA' })]);
 
+// A move by another card changes a whole-lane fence without changing this
+// card's own values. Its conflict must survive compact transport and choices.
+const placementSeed = { ...clone(seed), categories: [{ id: 'mice', board: {
+  lanes: [{ id: 'wired' }, { id: 'wireless' }, { id: 'aux' }],
+  products: [['a', 'wired', 0], ['b', 'wired', 1], ['c', 'wired', 2], ['t', 'wireless', 0], ['u', 'wireless', 1], ['d', 'aux', 0]]
+    .map(([id, laneId, order]) => ({ id, name: id, laneId, order, privateOwner: `Complete ${id} original` })),
+} }] };
+const placementChange = (manifest, productId, placement) => {
+  const snapshot = model.snapshot(manifest), product = snapshot.products.find(entry => entry.productId === productId);
+  return { ...change(product, { cardPlacement: placement }), categoryId: product.categoryId, laneId: product.laneId,
+    placementLaneVersions: [...new Set([product.values.cardPlacement.laneId, placement.laneId])]
+      .map(laneId => ({ laneId, version: model.laneVersion(snapshot.products, product.categoryId, laneId) })) };
+};
+let placementChoiceCount = 0, placementPlanCount = 0;
+for (const choice of ['mine', 'master', 'cancel']) {
+  let remotePlacement = clone(placementSeed), placementRevision = 1, placementCommits = 0, placementMutations = 0;
+  let localPlacement = clone(placementSeed.categories[0].board.products).map(product => ({ ...product, categoryId: 'mice' }));
+  const placementReceipts = new Map(), endpoint = `https://placement-${choice}.example/api/master`;
+  const placementGateway = createMasterGateway({ env, rpc: async (operation, payload) => {
+    const document = () => ({ ...state(clone(remotePlacement)), storageRevision: placementRevision });
+    if (operation === 'rate') return { allowed: true };
+    if (operation === 'read') {
+      const value = document(), receipt = placementReceipts.get(payload.requestId);
+      if (receipt) value.receipt = receipt;
+      return value;
+    }
+    if (operation === 'commit') {
+      if (payload.expectedRevision !== placementRevision) return { ...document(), status: 'raced' };
+      if (payload.changed) { remotePlacement = clone(payload.manifest); placementRevision += 1; placementCommits += 1; }
+      placementReceipts.set(payload.requestId, { fingerprint: payload.fingerprint, savedFields: payload.savedFields, savedProducts: payload.savedProducts });
+      return { ...document(), status: 'saved', savedFields: payload.savedFields, savedProducts: payload.savedProducts };
+    }
+    throw new Error('Unexpected placement RPC.');
+  } });
+  const placementSession = client.createSession({ endpoint, source: { team: true }, adapter: {
+    getProducts: () => localPlacement,
+    applyProductValues: updates => {
+      placementMutations += 1;
+      localPlacement = localPlacement.map(product => {
+        const update = updates.find(entry => entry.productId === product.id);
+        return update ? model.applyProductValues(product, update.values) : product;
+      });
+    },
+  }, fetchImpl: async (url, options) => {
+    const response = await placementGateway(new Request(url, options));
+    if (response.status === 409) {
+      const data = await response.clone().json(), submitted = JSON.parse(options.body).changes;
+      assert(data.conflictPlan, 'The real gateway uses the negotiated bounded conflict plan.');
+      assert.deepEqual(model.restoreConflictPlan(data.conflictPlan, client.normalizeSnapshot(data.snapshot), submitted), model.mergeChanges(remotePlacement, submitted).conflicts);
+      placementPlanCount += 1;
+    }
+    return response;
+  } });
+  await placementSession.connect(key);
+  const localDraft = localPlacement.find(product => product.id === 'd'); localDraft.laneId = 'wireless'; localDraft.order = 2;
+  remotePlacement = model.mergeChanges(remotePlacement, [placementChange(remotePlacement, 'a', { laneId: 'wireless', order: 2 })], { requestId: `remote-placement-${choice}` }).manifest;
+  placementRevision += 1;
+  const beforeChoice = placementMutations;
+  const outcome = await placementSession.save({ resolveConflicts: conflicts => {
+    placementChoiceCount += 1;
+    assert.equal(conflicts.length, 1); assert.equal(conflicts[0].reason, 'lane-order-changed');
+    assert.deepEqual(conflicts[0].base, { laneId: 'aux', order: 0 });
+    assert.deepEqual(conflicts[0].mine, { laneId: 'wireless', order: 2 });
+    assert.deepEqual(conflicts[0].master, { laneId: 'aux', order: 0 });
+    return choice === 'cancel' ? null : Object.fromEntries(conflicts.map(conflict => [conflict.key, choice]));
+  } });
+  const stored = id => remotePlacement.categories[0].board.products.find(product => product.id === id);
+  if (choice === 'cancel') {
+    assert(outcome.cancelled); assert.equal(placementMutations, beforeChoice); assert.equal(placementCommits, 0);
+    assert.equal(localDraft.laneId, 'wireless'); assert(placementSession.track().length);
+  } else {
+    assert(outcome.saved); assert.equal(placementSession.track().length, 0);
+    assert.equal(placementCommits, choice === 'mine' ? 1 : 0);
+    assert.equal(stored('d').laneId, choice === 'mine' ? 'wireless' : 'aux');
+    assert.equal(stored('a').order, choice === 'mine' ? 3 : 2);
+    assert.equal(localPlacement.find(product => product.id === 'd').laneId, stored('d').laneId);
+  }
+  for (const product of remotePlacement.categories[0].board.products) assert.equal(product.privateOwner, `Complete ${product.id} original`);
+}
+assert.equal(placementChoiceCount, 3); assert.equal(placementPlanCount, 3);
+
 const wide = clone(seed); wide.categories[0].id = 'c'.repeat(180);
 wide.categories[0].board.products = Array.from({ length: 30000 }, (_, index) => ({ id: `p${index}`, name: `N${index}`, laneId: 'lane' }));
 wide.categories[0].board.products[0].plc = { version: 1, note: 'R'.repeat(32768) };
@@ -163,4 +244,5 @@ assert.equal(oversizedResponse.status, 413); assert.equal((await oversizedRespon
 console.log(JSON.stringify({ manifestBytes: Buffer.byteLength(JSON.stringify(wide)), legacyBytes, planBytes, fullDecisionBytes: 32768 * 3,
   maxDescriptors: manyPlan.groups.length, descriptorBytes, worstDescriptorBytes, legacyCalls, noStreamUtf8Rejected: true, cancelledWithoutMutation: true,
   badDigestRejectedBeforeChoices: true, resolvedCommits: saveCommits, idempotentWireFormatReplay: true, abaChoices,
-  privateMergeReviewed: true, tombstoneAndAbaPreserved: true, oversizedServerRejected: true }));
+  privateMergeReviewed: true, tombstoneAndAbaPreserved: true, oversizedServerRejected: true,
+  realGatewayLaneRacePlans: placementPlanCount, placementChoices: ['mine', 'master', 'cancel'], placementPrivateRecordsPreserved: true }));

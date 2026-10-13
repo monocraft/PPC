@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 await import("../../public/js/package-codec.js");
+await import("../../public/js/workspace-store.js");
+await import("../../public/js/master-model.js");
 const codec = globalThis.PortfolioPackage;
 const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const catalogSandbox = { window: {} };
@@ -56,9 +58,9 @@ const functionNames = [
   "imageStorePut", "imageStoreGet", "imageStoreDelete", "imageStoreClear", "imageStoreWriteBatch", "imageStoreDeleteBatch",
   "dataUriToBlob", "extensionForImageAsset", "createImageAssetMetadata", "ensureImageAssetRegistry", "migrateLegacyProductImages",
   "loadLocalImageAsset", "normalizeAscmSnapshot", "createDefaultPortfolio", "ensurePortfolioSchema", "normalizeImportedPortfolio",
-  "persistPortfolioStorage", "reportWorkspaceSaveFailure", "scheduleSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
+  "persistPortfolioStorage", "reportWorkspaceSaveFailure", "scheduleSave", "showLocalSaveFailure", "flushWorkspaceSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
   "localPackageImageIds", "clearPackageImageCaches", "commitPackageDraft",
-  "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage",
+  "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage", "parsePortfolioImportText", "importJson",
 ];
 const actualFunctions = functionNames.map((name) => {
   const match = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, "m"));
@@ -70,12 +72,14 @@ assert.doesNotMatch(appSource, /^(?:async )?function (?:readPackageRecovery|hasP
 function harness(initial = portfolioFixture()) {
   const images = new Map(initial.imageAssets.filter((asset) => asset.sourceType === "local").map((asset) => [asset.id, imageBlob(`original:${asset.id}`)]));
   const stored = new Map([[storageKey, JSON.stringify(initial)]]);
-  const faults = { transaction: false, deleteTransaction: false, synchronousPut: 0, storageKey: "", removeKey: "", activation: false };
-  const calls = { writes: 0, clears: 0, deletes: [], revokes: [], creates: 0, downloads: [], activations: [] };
+  const faults = { transaction: false, deleteTransaction: false, synchronousPut: 0, storageKey: "", removeKey: "", activation: false, rollbackStorage: false };
+  const calls = { writes: 0, workspaceWrites: 0, clears: 0, deletes: [], revokes: [], creates: 0, downloads: [], activations: [], notices: [] };
   const timers = new Map();
   let timerId = 0;
   let nextId = 0;
   const database = {
+    close() {},
+    objectStoreNames: { contains: () => true },
     transaction(_name, mode) {
       const operations = [];
       let aborted = false;
@@ -83,24 +87,25 @@ function harness(initial = portfolioFixture()) {
       const transaction = {
         error: null,
         abort() { aborted = true; },
-        objectStore() {
+        objectStore(storeName) {
           return {
             put(record) {
               puts += 1;
               if (faults.synchronousPut === puts) { faults.synchronousPut = 0; throw new Error("Image write failed"); }
-              operations.push(["put", record]);
+              if (storeName === "workspaces" && faults.storageKey === record.id) { faults.storageKey = ""; throw Object.assign(new Error("Browser storage is full"), { name: "QuotaExceededError" }); }
+              operations.push(["put", record, storeName]);
             },
             delete(assetId) { operations.push(["delete", assetId]); },
             clear() { calls.clears += 1; operations.push(["clear"]); },
             get(assetId) {
               const request = {};
-              queueMicrotask(() => { request.result = images.has(assetId) ? { id: assetId, blob: images.get(assetId) } : undefined; request.onsuccess?.(); });
+              queueMicrotask(() => { request.result = storeName === "workspaces" ? stored.has(assetId) ? { id: assetId, version: 1, serialized: stored.get(assetId) } : undefined : images.has(assetId) ? { id: assetId, blob: images.get(assetId) } : undefined; request.onsuccess?.(); });
               return request;
             },
           };
         },
       };
-      queueMicrotask(() => {
+      queueMicrotask(() => queueMicrotask(() => {
         const writeFailure = faults.transaction && operations.some(([kind]) => kind === "put");
         const deleteFailure = faults.deleteTransaction && operations.some(([kind]) => kind === "delete");
         if (aborted || (mode === "readwrite" && (writeFailure || deleteFailure))) {
@@ -110,13 +115,14 @@ function harness(initial = portfolioFixture()) {
           transaction.onabort?.();
           return;
         }
-        for (const [kind, record] of operations) {
-          if (kind === "put") { calls.writes += 1; images.set(record.id, record.blob); }
+        for (const [kind, record, storeName] of operations) {
+          if (kind === "put" && storeName === "workspaces") { calls.workspaceWrites++; stored.set(record.id, record.serialized); }
+          if (kind === "put" && storeName !== "workspaces") { calls.writes += 1; images.set(record.id, record.blob); }
           if (kind === "delete") { calls.deletes.push(record); images.delete(record); }
           if (kind === "clear") images.clear();
         }
         transaction.oncomplete?.();
-      });
+      }));
       return transaction;
     },
   };
@@ -124,12 +130,11 @@ function harness(initial = portfolioFixture()) {
     Blob, Uint8Array, ArrayBuffer, DataView, TextEncoder, TextDecoder, Map, Set, Date, atob,
     PortfolioPackage: codec, PortfolioModel: { syncTimelineSettings() {} },
     STORAGE_KEY: storageKey, PREVIOUS_STORAGE_KEY: "previous", PACKAGE_RECOVERY_KEY: recoveryKey,
-    MAX_PACKAGE_MANIFEST_BYTES: 4 * 1024 * 1024, IMAGE_STORE_NAME: "images",
+    MAX_PACKAGE_MANIFEST_BYTES: 64 * 1024 * 1024, IMAGE_STORE_NAME: "images",
     CATEGORY_DEFINITIONS: clone(definitions), pendingLegacyImageBlobs: [],
     imageCache: new Map(), imageAssetUrlCache: new Map(), imageAssetLoadPromises: new Map(), missingImageAssetIds: new Set(),
-    imageAssetGeneration: 0, packageOperationInProgress: false, saveTimer: null,
-    persistedWorkspaceStorage: stored.get(storageKey) ?? null, unreadableWorkspaceStorage: null,
-    navigator: { locks: { request: async (_name, callback) => callback() } }, showWorkspaceNotice() {},
+    imageAssetGeneration: 0, packageOperationInProgress: false, workspaceOpening: false,
+    workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, saveTimer: null,
     portfolio: clone(initial), activeCategoryId: initial.activeCategoryId,
     id: () => `fresh-${++nextId}`,
     openImageDatabase: async () => database,
@@ -142,7 +147,7 @@ function harness(initial = portfolioFixture()) {
     },
     activateCategory: (categoryId) => {
       calls.activations.push({ imageIds: [...images.keys()], recovery: stored.get(recoveryKey) });
-      if (faults.activation) { faults.activation = false; throw new Error("Activation failed"); }
+      if (faults.activation) { faults.activation = false; if (faults.rollbackStorage) { faults.storageKey = storageKey; faults.rollbackStorage = false; } throw new Error("Activation failed"); }
       sandbox.activeCategoryId = categoryId;
       sandbox.portfolio.activeCategoryId = categoryId;
       sandbox.scheduleSave();
@@ -151,6 +156,7 @@ function harness(initial = portfolioFixture()) {
     clearTimeout: (savedId) => timers.delete(savedId),
     closePopupMenus() {}, renderActiveView() {}, renderInspector() {},
     downloadBlob: (blob, name) => calls.downloads.push({ blob, name }),
+    PortfolioNotifications: { publish: notice => calls.notices.push(notice), resolve() {} },
     localStorage: {
       getItem: (key) => stored.get(key) ?? null,
       removeItem(key) {
@@ -168,6 +174,11 @@ function harness(initial = portfolioFixture()) {
       createObjectURL: () => { calls.creates += 1; return "blob:generated"; },
     },
   };
+  sandbox.workspaceStorage = globalThis.PortfolioWorkspaceStore.create({ databaseName: "synthetic-package-images", workspaceKey: storageKey, indexedDB: { open() {
+    const request = {};
+    queueMicrotask(() => { request.result = database; request.onsuccess?.(); });
+    return request;
+  } } });
   vm.createContext(sandbox);
   new vm.Script(actualFunctions).runInContext(sandbox);
   return { sandbox, images, stored, faults, calls, timers };
@@ -344,7 +355,7 @@ for (const fault of ["transaction", "synchronousPut", "storageKey", "activation"
   if (fault === "synchronousPut") subject.faults[fault] = 2;
   else if (fault === "storageKey") subject.faults[fault] = storageKey;
   else subject.faults[fault] = true;
-  await assert.rejects(subject.sandbox.importProjectPackage(new Blob([packageBytes(newManifest)])), /failed|aborted|full/i);
+  await assert.rejects(subject.sandbox.importProjectPackage(new Blob([packageBytes(newManifest)])), error => ['WORKSPACE_STORAGE', 'WORKSPACE_QUOTA'].includes(error.code) || /failed|aborted|full/i.test(error.message));
   assert.equal(JSON.stringify(subject.sandbox.portfolio), original, `${fault} must preserve the active workspace`);
   assert.equal(subject.stored.get(storageKey), original, `${fault} must preserve saved data`);
   assert.equal(subject.stored.get(recoveryKey), oldRecovery, `${fault} must leave legacy recovery metadata untouched`);
@@ -354,6 +365,79 @@ for (const fault of ["transaction", "synchronousPut", "storageKey", "activation"
   assert.ok(subject.calls.activations.every((call) => call.recovery === oldRecovery), `${fault} must preserve legacy recovery metadata through activation and rollback`);
   assert.equal(subject.calls.clears, 0);
 }
+
+const failedRollback = harness();
+failedRollback.faults.activation = true;
+failedRollback.faults.rollbackStorage = true;
+await assert.rejects(failedRollback.sandbox.importProjectPackage(new Blob([packageBytes(newManifest)])), /previous saved copy could not be restored/i);
+assert.equal(failedRollback.sandbox.portfolio.categories[0].board.products[0].name, "Original", "failed activation retains the open prior workspace");
+const committedAfterFailedRollback = JSON.parse(failedRollback.stored.get(storageKey));
+assert.equal(committedAfterFailedRollback.categories[0].board.products[0].name, "Updated", "a failed durable rollback is reported as the actual imported saved state");
+for (const asset of committedAfterFailedRollback.imageAssets) assert.ok(failedRollback.images.has(asset.id), "never delete an incoming image still referenced by the committed saved record");
+assert.ok(failedRollback.images.has("shared-image"), "the prior open workspace's image also remains available");
+assert.equal(failedRollback.calls.clears, 0);
+
+const largeManifest = portfolioFixture("Large source", ["shared-image", "variant-image"]);
+largeManifest.categories[0].board.products = Array.from({ length: 20 }, (_, index) => ({
+  ...clone(largeManifest.categories[0].board.products[0]), id: `large-${index}`, name: `Large synthetic ${index}`, order: index,
+  specs: Array.from({ length: 120 }, (_, spec) => ({ id: `large-${index}-spec-${spec}`, label: `Field ${spec}`, value: "x".repeat(900) })),
+  variantGroups: [{ id: `group-${index}`, type: "color", label: "Color", items: [{ id: `variant-${index}`, code: "BK", imageAssetId: "variant-image", customSource: "Retained variant metadata" }] }],
+  partSkus: [{ id: `sku-${index}`, code: `SYNTHETIC-${index}`, variantId: `variant-${index}`, privateSource: "Retained SKU metadata" }],
+}));
+const largeWorkspace = harness();
+largeWorkspace.sandbox.PortfolioMasterModel = globalThis.PortfolioMasterModel;
+await largeWorkspace.sandbox.importProjectPackage(new Blob([packageBytes(largeManifest)]));
+const largeStored = JSON.parse(largeWorkspace.stored.get(storageKey));
+assert.ok(encoder.encode(JSON.stringify(largeStored)).length > 4 * 1024 * 1024, "real baseline generation pushes the valid imported workspace beyond the former cap");
+assert.equal(largeStored.masterLocalBaseline.length, 20);
+assert.equal(largeStored.categories[0].board.products[0].specs[119].value, largeManifest.categories[0].board.products[0].specs[119].value);
+assert.equal(largeStored.categories[0].board.products[0].variantGroups[0].items[0].customSource, "Retained variant metadata");
+assert.equal(largeStored.categories[0].board.products[0].partSkus[0].privateSource, "Retained SKU metadata");
+assert.equal(largeStored.masterLocalAssetIds["variant-image"], largeStored.categories[0].board.products[0].variantGroups[0].items[0].imageAssetId, "incoming-to-local image aliases survive the large atomic commit");
+assert.ok(largeWorkspace.images.has(largeStored.masterLocalAssetIds["variant-image"]));
+
+function plaintextHarness() {
+  const subject = harness();
+  subject.calls.readerLoads = []; subject.calls.alerts = []; subject.calls.disconnects = 0; subject.calls.marked = [];
+  subject.sandbox.FileReader = class {
+    readAsText(file) { this.result = file.raw; subject.calls.readerLoads.push(this.onload()); }
+  };
+  subject.sandbox.PortfolioDialogs = { alert: message => subject.calls.alerts.push(message) };
+  subject.sandbox.PortfolioMasterUI = { getSession: () => null, disconnect() { subject.calls.disconnects++; }, markImported(baseline) { subject.calls.marked.push(baseline); } };
+  return subject;
+}
+const plaintext = plaintextHarness(), actualPlainStore = plaintext.sandbox.workspaceStorage;
+let finishPlainCommit; const plainGate = new Promise(resolve => { finishPlainCommit = resolve; });
+plaintext.sandbox.workspaceStorage = { ...actualPlainStore, save: (...args) => plainGate.then(() => actualPlainStore.save(...args)) };
+plaintext.sandbox.importJson({ raw: JSON.stringify(newManifest) });
+assert.equal(plaintext.sandbox.portfolio.categories[0].board.products[0].name, "Original");
+assert.equal(plaintext.calls.activations.length, 0); assert.equal(plaintext.calls.disconnects, 0); assert.equal(plaintext.calls.marked.length, 0);
+finishPlainCommit(); await plaintext.calls.readerLoads.at(-1);
+assert.equal(plaintext.sandbox.portfolio.categories[0].board.products[0].name, "Updated"); assert.equal(JSON.parse(plaintext.stored.get(storageKey)).categories[0].board.products[0].name, "Updated");
+assert.equal(plaintext.calls.disconnects, 1); assert.equal(plaintext.calls.marked.length, 1); assert.ok(plaintext.images.has("shared-image"), "plain data import preserves existing binary image library");
+const plaintextFailure = plaintextHarness(); plaintextFailure.faults.storageKey = storageKey;
+plaintextFailure.sandbox.importJson({ raw: JSON.stringify(newManifest) }); await plaintextFailure.calls.readerLoads.at(-1);
+assert.equal(plaintextFailure.sandbox.portfolio.categories[0].board.products[0].name, "Original"); assert.equal(JSON.parse(plaintextFailure.stored.get(storageKey)).categories[0].board.products[0].name, "Original");
+assert.equal(plaintextFailure.calls.activations.length, 0); assert.equal(plaintextFailure.calls.disconnects, 0); assert.equal(plaintextFailure.calls.marked.length, 0); assert.ok(plaintextFailure.calls.alerts.length, "durable plain-import failure is surfaced");
+
+const pendingBackup = portfolioFixture("Pending manual name");
+pendingBackup.masterLocalBaseline = clone(globalThis.PortfolioMasterModel.snapshot(portfolioFixture("Accepted old name")).products);
+pendingBackup.masterLocalMerges = [{ productId: "product-1", sourceProductId: "removed-source", choices: { name: "keeper" }, sourceProduct: { id: "removed-source", specs: [{ id: "source-spec", label: "Source", value: "Retained original" }], privateSource: "Retained donor metadata" } }];
+pendingBackup.masterLocalRemovedProducts = { "removed-source": { id: "removed-source", privateSource: "Retained removed source" } };
+pendingBackup.masterLocalTombstones = [{ productId: "removed-source", revisions: { "@product": 3 } }];
+pendingBackup.masterLocalAssetIds = { "original-package-image": "shared-image" };
+pendingBackup.plcReview = { entries: [{ row: "Retained unresolved source" }] };
+pendingBackup.plcSharePending = { patches: [{ productId: "product-1", patch: { plc: { evidence: "Retained queued source" } } }] };
+pendingBackup.dateLocalEdits = { "product-1": { ffsDate: { at: "2026-10-13T03:10:00Z", value: "2027-02-01" } } };
+pendingBackup.privateSourceEvidence = { raw: "Full backup source evidence" };
+const restoringPending = plaintextHarness(); restoringPending.sandbox.PortfolioMasterModel = globalThis.PortfolioMasterModel;
+restoringPending.sandbox.importJson({ raw: JSON.stringify(pendingBackup) }); await restoringPending.calls.readerLoads.at(-1);
+assert.equal(restoringPending.calls.alerts.length, 0);
+const restoredPending = JSON.parse(restoringPending.stored.get(storageKey));
+for (const field of ["masterLocalBaseline", "masterLocalMerges", "masterLocalRemovedProducts", "masterLocalTombstones", "masterLocalAssetIds", "plcReview", "plcSharePending", "dateLocalEdits", "privateSourceEvidence"]) assert.deepEqual(restoredPending[field], pendingBackup[field], `full data backup restores ${field} unchanged`);
+assert.deepEqual(clone(restoringPending.calls.marked[0]), pendingBackup.masterLocalBaseline, "the imported session keeps the original comparison baseline");
+assert.equal(restoredPending.masterLocalBaseline[0].values.name, "Accepted old name");
+assert.equal(restoredPending.categories[0].board.products[0].name, "Pending manual name", "pending manual name remains distinct from its original comparison baseline");
 
 const legacy = harness();
 legacy.sandbox.pendingLegacyImageBlobs.push({ id: "already-pending", blob: imageBlob("existing pending") });

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
+await import("../../public/js/card-specs.js");
 
 await import("../../public/js/portfolio-model.js");
 const modelRules = globalThis.PortfolioModel;
@@ -20,6 +22,7 @@ function runTimer(id) {
   timer.callback();
 }
 function runAllTimers() { for (const id of [...timers.keys()]) runTimer(id); }
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 new vm.Script(await readFile(new URL("../../public/js/product-details.js", import.meta.url), "utf8")).runInContext(sandbox);
 const details = sandbox.PortfolioDetails;
@@ -45,14 +48,19 @@ const longModel = {
 const originalModel = structuredClone(longModel);
 const initialHtml = details.render(longModel, { surface: "split" });
 const overviewPanel = initialHtml.match(/<section\b[^>]*data-detail-panel="overview"[^>]*>([\s\S]*?)<\/section>/);
-assert.ok(overviewPanel, "key dates and specifications must share an accessible Overview panel");
-assert.ok(!overviewPanel[0].split(">")[0].includes("hidden"), "Overview must be visible on initial render");
-for (const label of dateLabels) assert.ok(overviewPanel[1].includes(`<span>${label}</span>`), `${label} must appear in Overview`);
-assert.deepEqual([...overviewPanel[1].matchAll(/data-date-kind="([^"]+)"/g)].map((match) => match[1]), dateKeys, "each date must expose its semantic styling hook independently of the displayed label");
-assert.ok(overviewPanel[1].includes("In development"), "Overview must include the lifecycle summary with dates and specifications");
-assert.match(initialHtml, /role="tab"[^>]*id="product-detail-split-overview-tab"[^>]*aria-controls="product-detail-split-overview"[^>]*aria-selected="true"[^>]*tabindex="0"[^>]*>Overview<\/button>/);
+assert.ok(overviewPanel, "all specifications retain the stable accessible overview panel key");
+assert.ok(!overviewPanel[0].split(">")[0].includes("hidden"), "Specifications must be visible on initial render");
+const datesPanel = initialHtml.match(/<section\b[^>]*data-detail-panel="dates"[^>]*>([\s\S]*?)<\/section>/);
+assert.ok(datesPanel && datesPanel[0].split(">")[0].includes("hidden"), "Dates is a separate initially hidden tab");
+for (const label of dateLabels) assert.ok(datesPanel[1].includes(`<span>${label}</span>`), `${label} must appear in Dates`);
+assert.deepEqual([...datesPanel[1].matchAll(/data-date-kind="([^"]+)"/g)].map((match) => match[1]), dateKeys, "each date retains its semantic hook in Dates");
+assert.ok(datesPanel[1].includes("In development"), "Dates includes the preserved lifecycle summary");
+assert.ok(!overviewPanel[1].includes("data-date-kind") && !overviewPanel[1].includes("product-detail-calendar"), "date columns cannot consume the specification reading area");
+assert.ok(!overviewPanel[1].includes("product-detail-section-title"), "the selected Specifications tab supplies the accessible title without a repeated content heading");
+assert.ok(!datesPanel[1].includes(">Key dates</h3>"), "Dates starts with its six facts rather than a duplicate tab heading");
+assert.match(initialHtml, /role="tab"[^>]*id="product-detail-split-overview-tab"[^>]*aria-controls="product-detail-split-overview"[^>]*aria-selected="true"[^>]*tabindex="0"[^>]*>Specifications<\/button>/);
 assert.match(overviewPanel[0], /role="tabpanel"[^>]*aria-labelledby="product-detail-split-overview-tab"/);
-assert.ok(!initialHtml.includes('data-detail-tab="specs"'), "specifications must not have a separate tab");
+assert.ok(!initialHtml.includes('data-detail-tab="specs"'), "Specifications retains its stable overview state key");
 assert.ok(!initialHtml.includes('data-detail-page-group="specs"'), "specifications must not be paginated");
 assert.ok(!initialHtml.includes('aria-label="Previous specs"') && !initialHtml.includes('aria-label="Next specs"'), "specifications must not require Previous/Next controls");
 assert.ok(!overviewPanel[1].includes("data-detail-page-index") && ![...overviewPanel[1].matchAll(/\bclass="([^"]*)"/g)].some((match) => match[1].split(/\s+/).includes("hidden")), "complete Overview specifications must not be hidden behind pages");
@@ -107,6 +115,12 @@ function fixtureFor(html) {
   const moreTabs = tagElements("button", "data-detail-more");
   const panels = tagElements("section", "data-detail-panel");
   const morePanels = tagElements("div", "data-detail-more-panel");
+  const launchPickerTag = html.match(/<select\b[^>]*\bdata-detail-launch-record(?:="[^"]*")?[^>]*>/)?.[0];
+  const launchPicker = launchPickerTag ? elementFromTag(launchPickerTag) : null;
+  if (launchPicker) launchPicker.value = decode(html.match(/<option\b[^>]*value="([^"]*)"[^>]*\bselected[^>]*>/)?.[1] || "");
+  const launchContents = tagElements("div", "data-detail-launch-content");
+  const availabilityTabs = tagElements("button", "data-detail-availability");
+  const availabilityPanels = tagElements("div", "data-detail-availability-panel");
   const copies = tagElements("button", "data-detail-copy");
   const rows = [...html.matchAll(/<li\b[^>]*\bclass="hp-sku-entry[^\"]*"[^>]*>/g)].map((match) => elementFromTag(match[0]));
   for (const [index, button] of copies.entries()) {
@@ -136,11 +150,11 @@ function fixtureFor(html) {
     group.querySelector = (selector) => selector === "[data-detail-page-label]" ? group.label : group.buttons.find((button) => selector.includes(`="${button.dataset.detailPageStep}"`));
     return group;
   });
-  workspace.querySelectorAll = (selector) => ({ "[data-detail-tab]": tabs, "[data-detail-more]": moreTabs, "[data-detail-panel]": panels, "[data-detail-more-panel]": morePanels, "[data-detail-page-group]": groups, "[data-detail-copy]": copies })[selector] || [];
-  workspace.querySelector = (selector) => selector === "[data-detail-copy-status]" ? copyStatus : null;
+  workspace.querySelectorAll = (selector) => ({ "[data-detail-tab]": tabs, "[data-detail-more]": moreTabs, "[data-detail-panel]": panels, "[data-detail-more-panel]": morePanels, "[data-detail-page-group]": groups, "[data-detail-copy]": copies, "[data-detail-launch-content]": launchContents, "[data-detail-availability]": availabilityTabs, "[data-detail-availability-panel]": availabilityPanels })[selector] || [];
+  workspace.querySelector = (selector) => selector === "[data-detail-copy-status]" ? copyStatus : selector === "[data-detail-launch-record]" ? launchPicker : null;
   const close = elementFromTag("<button>");
   const container = { querySelector: (selector) => selector === "[data-detail-surface]" ? workspace : selector === "[data-detail-close]" ? close : null };
-  return { container, workspace, tabs, moreTabs, panels, morePanels, copies, rows, copyStatus, groups, close };
+  return { container, workspace, tabs, moreTabs, panels, morePanels, copies, rows, copyStatus, groups, close, launchPicker, launchContents, availabilityTabs, availabilityPanels };
 }
 const fixture = fixtureFor(initialHtml);
 function assertKeyboardScrollAccess(html, surface) {
@@ -149,25 +163,17 @@ function assertKeyboardScrollAccess(html, surface) {
     assert.equal(panel.tabIndex, 0, `${surface} ${panel.dataset.detailPanel} must be keyboard-focusable for internal scrolling`);
     assert.ok(panel.attributes.get("aria-labelledby"), "scrollable tab panels must retain their accessible tab name");
   }
-  const regions = [...html.matchAll(/<div\b[^>]*\bclass="product-detail-(?:calendar|spec-scroll)"[^>]*>/g)]
-    .map((match) => elementFromTag(match[0]));
-  assert.equal(regions.length, 2, "Overview must retain separate calendar and complete-specification scroll regions");
-  assert.deepEqual(regions.map((region) => region.attributes.get("aria-label")), ["Key dates and lifecycle", "All product specifications"], "internal scroll regions must describe the information they contain");
-  for (const region of regions) {
-    assert.equal(region.tabIndex, 0, "keyboard users must be able to focus each independently scrolling Overview column");
-    assert.equal(region.attributes.get("role"), "group", "named scroll regions must use a role that exposes their accessible label");
-  }
+  assert.equal(panels.length, 4, "Specifications, Dates, HP SKUs and More each have one keyboard-accessible panel");
+  assert.ok(!html.includes("product-detail-spec-scroll") && !html.includes("product-detail-overview-grid"), "specifications have one outer scroll area without a nested calendar or list scrollbar");
   for (const page of [...html.matchAll(/<div\b[^>]*\bdata-detail-page-index="[^"]*"[^>]*>/g)].map((match) => elementFromTag(match[0]))) {
     assert.equal(page.tabIndex, 0, "long secondary-list pages must support keyboard scrolling independently of pagination");
     assert.equal(page.attributes.get("role"), "group");
     assert.ok(page.attributes.get("aria-label"), "each focusable secondary page must have an accessible name");
   }
-  const calendarStart = html.indexOf('class="product-detail-calendar"');
-  const specificationsStart = html.indexOf('class="product-detail-all-specs"');
-  const calendarContents = html.slice(calendarStart, specificationsStart);
+  const calendarContents = html.match(/<section\b[^>]*data-detail-panel="dates"[^>]*>([\s\S]*?)<\/section>/)?.[1];
   for (const date of longModel.dates) assert.ok(calendarContents.includes(date.label) && calendarContents.includes(date.value), "all six dates must remain inside the accessible calendar region");
   assert.ok(calendarContents.includes("In development"), "lifecycle data must remain in the same accessible calendar region");
-  const specificationsContents = html.match(/<div\b[^>]*class="product-detail-spec-scroll"[^>]*>(<dl\b[\s\S]*?<\/dl>)/)?.[1];
+  const specificationsContents = html.match(/<section\b[^>]*data-detail-panel="overview"[^>]*>([\s\S]*?)<\/section>/)?.[1];
   assert.ok(specificationsContents, "the complete specification list must remain inside its accessible scroll region");
   for (const specification of longModel.specs) assert.ok(specificationsContents.includes(`<dt>${specification.label}</dt>`) && specificationsContents.includes(`<dd>${specification.value}</dd>`), "internal overflow must retain every complete specification");
 }
@@ -176,8 +182,8 @@ let copiedSku = "";
 let closed = false;
 details.bind(fixture.container, { onCopy: async (value) => { copiedSku = value; return true; }, onClose: () => { closed = true; } });
 const expectedPageCounts = { SKUs: 3, options: 3, "source records": 4 };
-assert.deepEqual(fixture.tabs.map((button) => button.dataset.detailTab), ["overview", "skus", "more"], "only Overview, HP SKUs and More should remain as primary tabs");
-assert.deepEqual(fixture.moreTabs.map((button) => button.dataset.detailMore), ["identity", "source"], "More must retain identity and source without a redundant Variants tab");
+assert.deepEqual(fixture.tabs.map((button) => button.dataset.detailTab), ["overview", "dates", "skus", "more"], "Specifications, Dates, HP SKUs and More remain separate primary tabs");
+assert.deepEqual(fixture.moreTabs.map((button) => button.dataset.detailMore), ["identity", "pricing", "availability", "source"], "More must organize identity, pricing, availability and source without a redundant Variants tab");
 assert.deepEqual(fixture.groups.map((group) => group.dataset.detailPageGroup), ["SKUs", "options", "source records"], "paging must retain SKUs, additional options and source records");
 for (const group of fixture.groups) {
   const count = expectedPageCounts[group.dataset.detailPageGroup];
@@ -298,6 +304,12 @@ runAllTimers();
 prefersReducedMotion = false;
 
 const skuTab = fixture.tabs.find((button) => button.dataset.detailTab === "skus");
+const datesTab = fixture.tabs.find((button) => button.dataset.detailTab === "dates");
+await datesTab.fire("click");
+assert.equal(datesTab.attributes.get("aria-selected"), "true", "Dates must be reachable as a primary reading tab");
+assert.ok(!fixture.panels.find((panel) => panel.dataset.detailPanel === "dates").classList.contains("hidden"));
+assert.ok(fixture.panels.find((panel) => panel.dataset.detailPanel === "overview").classList.contains("hidden"));
+assert.match(details.render(longModel, { surface: "split" }), /data-detail-tab="dates"[^>]*aria-selected="true"/, "re-rendering the same product must preserve an intentional Dates visit");
 await skuTab.fire("click");
 assert.ok(fixture.panels.find((panel) => panel.dataset.detailPanel === "overview").classList.contains("hidden"));
 assert.equal(skuTab.attributes.get("aria-selected"), "true");
@@ -332,6 +344,27 @@ const reduced = fixtureFor(details.render(reducedModel, { surface: "split" }));
 assert.ok(!reduced.groups.find((group) => group.dataset.detailPageGroup === "SKUs").entries[0].classList.contains("hidden"), "shrinking a list must clamp its saved page to valid content");
 const another = fixtureFor(details.render({ ...longModel, id: "different-product" }, { surface: "split" }));
 assert.ok(!another.groups.find((group) => group.dataset.detailPageGroup === "SKUs").entries[0].classList.contains("hidden"), "switching products must reset pagination");
+assert.equal(another.tabs.find((button) => button.dataset.detailTab === "overview").attributes.get("aria-selected"), "true", "each newly selected product must open its complete Specifications first");
+
+const directDateModel = { ...structuredClone(longModel), id: "direct-date-product" }, directDateBefore = structuredClone(directDateModel);
+assert.equal(details.openTab(directDateModel, { surface: "viewer", tab: "dates" }), true, "the closed-card Dates action can select Dates before the wing is rendered");
+const directDateHtml = details.render(directDateModel, { surface: "viewer" });
+assert.match(directDateHtml, /data-detail-tab="dates"[^>]*aria-selected="true"/, "direct Dates access must not require a second tab click");
+const directDateFixture = fixtureFor(directDateHtml);
+details.bind(directDateFixture.container);
+assert.ok(!directDateFixture.panels.find(panel => panel.dataset.detailPanel === "dates").classList.contains("hidden"));
+assert.equal(details.openTab(directDateModel, { surface: "viewer", tab: "overview" }), true, "the Specifications action can switch an already mounted wing without rebuilding its controls");
+assert.equal(directDateFixture.tabs.find(button => button.dataset.detailTab === "overview").attributes.get("aria-selected"), "true");
+assert.equal(directDateFixture.tabs.find(button => button.dataset.detailTab === "overview").tabIndex, 0);
+assert.ok(!directDateFixture.panels.find(panel => panel.dataset.detailPanel === "overview").classList.contains("hidden"));
+assert.ok(directDateFixture.panels.find(panel => panel.dataset.detailPanel === "dates").classList.contains("hidden"));
+assert.equal(details.openTab(directDateModel, { surface: "viewer", tab: "unsupported" }), false, "unrecognized action routes cannot mutate selected tab state");
+assert.equal(details.openTab(null, { surface: "viewer", tab: "dates" }), false, "a missing source card cannot open or change a reading panel");
+assert.match(details.render(directDateModel, { surface: "viewer" }), /data-detail-tab="overview"[^>]*aria-selected="true"/);
+assert.match(details.render(directDateModel, { surface: "split" }), /data-detail-tab="overview"[^>]*aria-selected="true"/, "direct viewer Dates routes retain an independent split-view state");
+details.focusMatch(directDateModel, { surface: "viewer", sku: "HP-SKU-10" });
+assert.match(details.render(directDateModel, { surface: "viewer" }), /data-detail-tab="skus"[^>]*aria-selected="true"/, "direct card actions retain the separate exact-SKU search route");
+assert.deepEqual(directDateModel, directDateBefore, "card action routing and mounted tab changes preserve every specification, date, SKU and source value");
 
 const hostile = `<img src=x onerror="alert('attack')"> & <script>attack()</script>`;
 const hostileModel = {
@@ -351,6 +384,67 @@ assert.ok(hostileHtml.includes("&lt;img") && hostileHtml.includes("&amp;") && ho
 assert.ok(!hostileHtml.includes("url(javascript:") && !hostileHtml.includes("--sku-primary:red"), "swatch styles must reject arbitrary CSS and URL values");
 assert.match(hostileHtml, /data-detail-surface="split"/, "unrecognized surface options must use a valid state and ID namespace");
 assert.ok(!hostileHtml.includes("data-date-kind") && !hostileHtml.includes("data-lifecycle-kind"), "unknown or injected semantic keys must never create styling attributes");
+
+const launchModel = {
+  id: "many-launch-variants", priceText: "$99.99", identity: [{ label: "Category", value: "Keyboards" }], specs: [{ label: "Switches", value: "Mechanical" }],
+  launch: { sourceFile: "Launch tracker.xlsx", sourceSheet: "WW", checkedDate: "2026-10-12", canonicalRow: 2, organizedAt: "2026-10-12T18:00:00Z",
+    records: Array.from({ length: 100 }, (_, index) => ({ id: `launch-${index}`, row: index + 1, canonical: index === 1, skus: [`SKU-${index}`],
+      identity: { productName: `Variant ${index}`, codename: `Codename ${index}`, sourceCategory: "Keyboards", skuText: `SKU-${index}`, tier: "Star" },
+      pricing: { usd: index + 100, eur: index === 1 ? "Pending" : index + 90 },
+      regions: ["US/Canada", "LATAM", "Europe/North Africa", "Middle East/Central/South Africa", "GA", "GC", "GI"].map((label, region) => ({ key: `region-${region}`, label, value: ["2026-04-28", "Phase 2 September", "TBD", "October–November 2026", "2027-03-20", "Pending", ""][region] })),
+      milestones: ["FFS", "Global announcement", "Web readiness", "Final assets"].map((label) => ({ key: label, label, value: "2026-04-14" })),
+      notes: [{ column: "Notes", value: `Private source note ${index}`, cell: `V${index + 1}` }],
+      source: { file: "Launch tracker.xlsx", sheet: "WW", range: `A${index + 1}:V${index + 1}`, checkedDate: "2026-10-12", observedAt: "2026-10-12T16:00:00Z" },
+    })) },
+  source: { records: [{ code: "ASCM-KEEP", description: "Separate ASCM source", ga: "TBD", em: "TBD" }] },
+};
+const launchBefore = structuredClone(launchModel);
+const launchHtml = details.render(launchModel, { surface: "split" });
+assert.equal(occurrences(launchHtml, "data-detail-launch-record"), 1, "one native selector must choose the tracker variant across all More sections");
+assert.match(launchHtml, /<option value="launch-1" selected>/, "the canonical tracker row must be selected initially");
+assert.equal(occurrences(launchHtml, "<dt>US/Canada</dt>"), 1, "only the selected record's seven market rows may be rendered");
+assert.equal(occurrences(launchHtml, "<dt>FFS</dt>"), 1, "milestones must render once for the selected variant");
+assert.ok(!launchHtml.includes("Private source note 99"), "a hundred variants must not become a hundred source-detail blocks");
+for (const text of ["Apr 28, 2026", "Mar 20, 2027", "Phase 2 September", "October–November 2026", "TBD", "Pending", "$101.00", "$99.99", "Tracker MSRP · EUR"]) assert.ok(launchHtml.includes(text), `selected tracker details must preserve ${text}`);
+assert.match(launchHtml, /data-detail-availability-panel="markets"[^>]*class=""/, "compact markets must be the initial Availability view");
+assert.match(launchHtml, /data-detail-availability-panel="milestones"[^>]*class="hidden"/, "four tracker milestones must not extend the market list");
+assert.match(launchHtml, /<details class="product-detail-source-disclosure"><summary>Source notes/, "source notes must begin collapsed");
+assert.match(launchHtml, /<details class="product-detail-source-disclosure"><summary>Record history/, "record history must begin collapsed");
+assert.match(launchHtml, /<details class="product-detail-source-disclosure product-detail-ascm-source"><summary>ASCM source records/, "existing ASCM records must remain separately collapsed beside tracker provenance");
+const launchFixture = fixtureFor(launchHtml);
+details.bind(launchFixture.container);
+await launchFixture.availabilityTabs[0].fire("keydown", { key: "ArrowRight" });
+assert.equal(launchFixture.availabilityTabs[1].getAttribute("aria-selected"), "true", "keyboard arrows must select tracker milestones");
+assert.ok(launchFixture.availabilityTabs[1].focused, "keyboard tracker navigation must keep focus on the selected control");
+assert.ok(launchFixture.availabilityPanels[0].classList.contains("hidden"));
+assert.ok(!launchFixture.availabilityPanels[1].classList.contains("hidden"));
+const launchViewerFixture = fixtureFor(details.render(launchModel, { surface: "viewer" }));
+details.bind(launchViewerFixture.container);
+const launchSurfaceIds = [...`${launchHtml}${details.render(launchModel, { surface: "viewer" })}`.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+assert.equal(new Set(launchSurfaceIds).size, launchSurfaceIds.length, "variant selectors and Availability tabs need distinct IDs on split and viewer surfaces");
+for (const button of launchFixture.availabilityTabs) {
+  assert.ok(button.getAttribute("aria-controls"), "Availability controls must identify the panel they reveal");
+  assert.ok(button.getAttribute("id"));
+}
+launchFixture.launchPicker.value = "launch-99";
+await launchFixture.launchPicker.fire("change", { target: launchFixture.launchPicker });
+assert.equal(launchViewerFixture.launchPicker.value, "launch-99", "open split and viewer surfaces must synchronize the selected variant");
+assert.ok(launchFixture.launchContents.find((panel) => panel.dataset.detailLaunchContent === "pricing").innerHTML.includes("$199.00"), "changing the native selector must update price content immediately");
+assert.ok(launchViewerFixture.launchContents.find((panel) => panel.dataset.detailLaunchContent === "identity").innerHTML.includes("Variant 99"), "changing the native selector must update the other open surface immediately");
+assert.match(details.render(launchModel, { surface: "split" }), /<option value="launch-99" selected>/, "selection must survive a product rerender");
+assert.match(details.render(launchModel, { surface: "viewer" }), /<option value="launch-99" selected>/, "selection must survive a render on the second surface");
+details.render({ id: "another-launch-product" }, { surface: "split" });
+assert.match(details.render(launchModel, { surface: "split" }), /<option value="launch-1" selected>/, "changing products must reset to the canonical tracker variant");
+assert.deepEqual(launchModel, launchBefore, "selector rendering and navigation must leave saved source data intact");
+const hostileLaunch = structuredClone(launchModel);
+hostileLaunch.id = "hostile-launch";
+hostileLaunch.launch.overrides = [{ id: "edited-source", row: 2, label: hostile, value: hostile, original: { label: "Tracker metadata", value: "Earlier value" } }];
+hostileLaunch.launch.records = [{ ...hostileLaunch.launch.records[1], id: hostile, identity: { productName: hostile, codename: hostile, sourceCategory: hostile, skuText: hostile, tier: hostile }, pricing: { usd: hostile, eur: hostile }, regions: [{ label: hostile, value: hostile }], notes: [{ column: hostile, value: hostile }], source: { file: hostile, sheet: hostile, range: hostile, checkedDate: hostile } }];
+const hostileLaunchHtml = details.render(hostileLaunch);
+assert.ok(!hostileLaunchHtml.includes("<img") && !hostileLaunchHtml.includes("<script>"), "all tracker values, option IDs, source labels, prices and notes must be escaped");
+assert.ok(hostileLaunchHtml.includes("&lt;img"));
+assert.match(hostileLaunchHtml, /<details class="product-detail-source-disclosure"><summary>Preserved edits \(1\)/, "manual edits to imported metadata must remain accessible in a collapsed Source disclosure");
+
 const knownKindsHtml = details.render({
   id: "known-semantic-kinds",
   dates: dateKeys.map((key) => ({ key, label: "Custom label", value: "TBD", empty: true })),
@@ -406,7 +500,8 @@ function clipboardFixture({ nativeFailure = false, nativeAvailable = true, fallb
   };
   const navigator = nativeAvailable ? { clipboard: { async writeText(value) { nativeValues.push(value); if (nativeFailure) throw new Error("Clipboard denied"); } } } : {};
   const clipboardSandbox = { document, navigator };
-  vm.createContext(clipboardSandbox);
+  Object.assign(clipboardSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
+vm.createContext(clipboardSandbox);
   new vm.Script(clipboardSource).runInContext(clipboardSandbox);
   return { copy: clipboardSandbox.copyTextToClipboard, events, nativeValues, textareas };
 }
@@ -462,6 +557,7 @@ const dateShortcutSandbox = {
     },
   },
 };
+Object.assign(dateShortcutSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(dateShortcutSandbox);
 new vm.Script(dateShortcutHandler).runInContext(dateShortcutSandbox);
 dateShortcutButton.onclick();
@@ -473,6 +569,7 @@ const appModelSandbox = {
   activeCategoryRecord: () => ({ name: "PC Gaming Audio" }),
   categoryDefinition: () => ({ name: "PC Gaming Audio" }),
 };
+Object.assign(appModelSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(appModelSandbox);
 const adapterFunctions = ["productDetailsModel", "normalizeAscmProductMetadata", "normalizeAscmRecord", "normalizeProductInfoDate", "formatProductInfoDate", "normalizePartSku", "productPartSkus", "productVariantGroups", "productTier", "monthIndex", "roadmapLabel", "splitRoadmapStatusLabel"];
 for (const name of adapterFunctions) {
@@ -500,8 +597,8 @@ assert.deepEqual(JSON.parse(JSON.stringify(actualDetailModel.dates.map((item) =>
 assert.deepEqual(JSON.parse(JSON.stringify(actualDetailModel.lifecycle.map((item) => item.key))), ["stage", "confidence"], "matching launch/end months must not duplicate GA/EM dates in Overview");
 assert.deepEqual(JSON.parse(JSON.stringify(actualDetailModel.dates.map((item) => item.value))), ["Jan 1, 2026", "Jan 2, 2026", "Jan 3, 2026", "Jan 4, 2026", "Jan 5, 2026", "Jan 6, 2026"]);
 const actualDatesHtml = details.render(actualDetailModel, { surface: "viewer" });
-const actualDatesPanel = actualDatesHtml.match(/<section\b[^>]*data-detail-panel="overview"[^>]*>([\s\S]*?)<\/section>/);
-assert.ok(!actualDatesPanel[0].split(">")[0].includes("hidden"));
+const actualDatesPanel = actualDatesHtml.match(/<section\b[^>]*data-detail-panel="dates"[^>]*>([\s\S]*?)<\/section>/);
+assert.ok(actualDatesPanel[0].split(">")[0].includes("hidden"), "Dates stays separate from the default Specifications view");
 for (const date of actualDetailModel.dates) assert.ok(actualDatesPanel[1].includes(`<span>${date.label}</span>`) && actualDatesPanel[1].includes(date.value), "actual product dates must remain visible in the primary information panel");
 assert.deepEqual([...actualDatesPanel[1].matchAll(/data-date-kind="([^"]+)"/g)].map((match) => match[1]), dateKeys, "actual milestone keys must survive the application-to-renderer boundary");
 assert.deepEqual([...actualDatesPanel[1].matchAll(/data-lifecycle-kind="([^"]+)"/g)].map((match) => match[1]), ["stage", "confidence"], "matching date months must render only Stage/Confidence in the lifecycle summary");
@@ -663,6 +760,7 @@ function paneElement() {
 const viewerPane = paneElement();
 const viewerOutline = paneElement();
 const paneSandbox = {
+  activeCategoryId: "pc-gaming-audio", PortfolioCardSpecs: globalThis.PortfolioCardSpecs,
   PortfolioModel: modelRules,
   PortfolioDetails: { render: details.render, bind: (container, callbacks) => bindCalls.push({ container, callbacks }) },
   board: { products: [], settings: { showSkus: false, fullSingleLaneSpecs: false } },
@@ -677,9 +775,11 @@ const paneSandbox = {
   selectedProduct: () => null,
   productDetailsModel: (product) => ({ ...longModel, id: product.id, specs: product.specs }),
   productDateHistoryOptions: () => ({}),
+  productPresentation: () => ({ primaryLabel: "", primaryColor: "#242527" }),
+  UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
   escapeHtml: decode,
   inspectorOpen: false, inspector: { offsetWidth: 0 },
-  canvasScroll: { clientWidth: 360, clientHeight: 76 },
+  canvasScroll: { clientWidth: 1280, clientHeight: 700, scrollTop: 120 },
   copyTextToClipboard() {}, closeViewerInfo() {},
 };
 paneSandbox.visibleProducts = () => paneSandbox.board.products;
@@ -687,10 +787,11 @@ Object.defineProperty(paneSandbox, "viewerInfoContentHeight", {
   get() { throw new Error("Content length must never determine the inline pane's height"); },
   set() { throw new Error("Content length must never determine the inline pane's height"); },
 });
+Object.assign(paneSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(paneSandbox);
 const paneFunctions = [
-  "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedSpecsHeight", "productCardLayout",
-  "infoProduct", "viewerInfoVisualWidth", "viewerInfoVisualHeight", "setViewerInfoSize", "viewerInfoReserveLogical", "viewerInfoGapIndex", "cardXForDisplayIndex", "productLaneGeometry", "getCanvasDimensions", "renderViewerInfo", "positionViewerInfo",
+  "cardSpecifications", "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedSpecsHeight", "productCardLayout",
+  "infoProduct", "viewerInfoVisualWidth", "viewerInfoVisualHeight", "viewerInfoStacked", "setViewerInfoSize", "viewerInfoReserveLogical", "viewerInfoGapIndex", "cardXForDisplayIndex", "productLaneGeometry", "getCanvasDimensions", "renderViewerInfo", "positionViewerInfo",
 ];
 const paneDefinitions = paneFunctions.map((name) => {
   const definition = appSource.match(new RegExp(`^function ${name}\\([^]*?^\\}`, "m"));
@@ -714,16 +815,17 @@ const paneScenarios = [
 for (const scenario of paneScenarios) {
   paneSandbox.categoryDefinition = () => ({ fullSpecCards: scenario.full });
   paneSandbox.board.products = paneLanes.map((lane) => ({ id: `pane-${lane.id}`, name: "Product details", laneId: lane.id, specs: scenario.specs }));
-  // A populated first lane makes the horizontal reserve observable beyond the
-  // board's minimum canvas width, even at the smallest supported zoom.
+  // A populated first lane tests the temporary reading reserve alongside the
+  // viewport minimum, which can dominate content width at small card zoom.
   paneSandbox.board.products.push(...Array.from({ length: 6 }, (_, index) => ({ id: `following-${index}`, laneId: "first", specs: scenario.specs })));
   const layout = paneSandbox.productCardLayout();
   assert.equal(layout.detailed, scenario.full, "pane scenarios must retain automatic supported-category and compact multi-lane parent geometry");
-  if (scenario.full) assert.ok(layout.detailed && layout.cardHeight > 552, "full-spec parent geometry must be exercised above the compact maximum");
+  if (scenario.full) assert.ok(layout.detailed && layout.cardHeight <= 552, "long complete Details content cannot inflate the front summary card");
   for (const drawZoom of [.2, .5, .65, 1, 1.5, 2]) {
     paneSandbox.zoom = drawZoom;
     paneSandbox.viewerInfoProgress = 0;
     const closedDimensions = paneSandbox.getCanvasDimensions();
+    const contentWidth = 18 + Math.max(...paneLanes.map((lane) => paneSandbox.board.products.filter((product) => product.laneId === lane.id).length)) * (246 + 10) + 40;
     for (const lane of paneLanes) {
       paneSandbox.viewerInfoProductId = `pane-${lane.id}`;
       paneSandbox.viewerInfoOpen = true;
@@ -731,31 +833,42 @@ for (const scenario of paneScenarios) {
       const card = { productId: `pane-${lane.id}`, x: 18, y: row.top, width: 246, height: layout.cardHeight };
       paneSandbox.renderedCards = [card];
       const parentHeight = card.height * drawZoom;
-      const expectedWidth = 720;
-      closeEnough(paneSandbox.viewerInfoVisualHeight(), parentHeight, "fallback height exactly follows the parent's rendered height");
-      assert.equal(paneSandbox.viewerInfoVisualWidth(), expectedWidth, "all parent heights receive horizontal room for compact date rows and readable specifications");
+      const expectedWidth = 500, expectedHeight = Math.max(parentHeight, 600);
+      closeEnough(paneSandbox.viewerInfoVisualHeight(), expectedHeight, "the joined card retains comfortable reading height at small card zoom");
+      assert.equal(paneSandbox.viewerInfoVisualWidth(), expectedWidth, "the inline extension has a moderate physical width");
       paneSandbox.renderViewerInfo();
       assert.ok(viewerPane.innerHTML.includes('data-detail-surface="viewer"'), "the app must mount the shared detail controls on the viewer surface");
       assert.equal(bindCalls.at(-1).container, viewerPane);
       assert.equal(bindCalls.at(-1).callbacks.onCopy, paneSandbox.copyTextToClipboard);
       assert.equal(bindCalls.at(-1).callbacks.onClose, paneSandbox.closeViewerInfo);
+      assert.ok(!viewerPane.innerHTML.includes("viewer-detail-eyebrow") && !viewerPane.innerHTML.includes("viewer-detail-title"), "the source card remains the visible image/name anchor without a duplicate pane heading");
       for (const progress of [.01, .25, .5, 1]) {
         paneSandbox.viewerInfoProgress = progress;
         const dimensions = paneSandbox.getCanvasDimensions();
-        assert.equal(dimensions.height, closedDimensions.height, "opening any pane must leave total board height unchanged");
-        assert.deepEqual(laneSnapshot(dimensions), laneSnapshot(closedDimensions), "all lane positions and heights must remain stable throughout opening");
-        const reserve = (expectedWidth + 10) / drawZoom * progress;
-        closeEnough(dimensions.width - closedDimensions.width, reserve, "opening increases only horizontal canvas space");
-        closeEnough(paneSandbox.viewerInfoReserveLogical(), reserve, "horizontal animation reserve matches the visible pane width plus its gap");
+        const extraHeight = (expectedHeight / drawZoom - layout.cardHeight) * progress;
+        closeEnough(dimensions.height, closedDimensions.height + extraHeight, "only the temporary selected lane height grows during opening");
+        for (const [index, expandedRow] of dimensions.laneRows.entries()) {
+          const originalRow = closedDimensions.laneRows[index], selectedIndex = paneLanes.findIndex((item) => item.id === lane.id);
+          closeEnough(expandedRow.top, originalRow.top + (index > selectedIndex ? extraHeight : 0), "following lanes smoothly reflow below the joined card");
+          closeEnough(expandedRow.contentHeight, originalRow.contentHeight + (index === selectedIndex ? extraHeight : 0), "unrelated lanes retain their original card height");
+        }
+        card.height = layout.cardHeight + extraHeight;
+        card.viewerIntegrated = true; card.viewerStacked = false;
+        card.integrationX = card.x; card.integrationHeight = card.height;
+        const reserve = expectedWidth / drawZoom * progress;
+        closeEnough(dimensions.width, Math.max(closedDimensions.width, contentWidth + reserve), "opening adds horizontal reading space only beyond the viewport minimum");
+        closeEnough(paneSandbox.viewerInfoReserveLogical(), reserve, "the extension pushes neighbors by its width without a detached gap");
         const placement = paneSandbox.positionViewerInfo();
-        closeEnough(Number.parseFloat(viewerPane.style.getPropertyValue("--viewer-info-height")), parentHeight, "pane height equals its actual rendered parent at every zoom and animation step");
-        closeEnough(Number.parseFloat(viewerOutline.style.height), parentHeight, "the surrounding outline has the same parent height");
-        closeEnough(placement.paneBottom, (card.y + card.height) * drawZoom, "pane bottom aligns exactly with the product bottom");
-        closeEnough(Number.parseFloat(viewerPane.style.top), card.y * drawZoom, "pane top aligns exactly with the product top");
-        closeEnough(placement.paneLeft, (card.x + card.width) * drawZoom + 10, "pane remains beside its own product");
+        const animatedHeight = parentHeight + extraHeight * drawZoom;
+        closeEnough(Number.parseFloat(viewerPane.style.getPropertyValue("--viewer-info-height")), animatedHeight, "the source card and extension grow to the same reading height");
+        closeEnough(Number.parseFloat(viewerOutline.style.height), animatedHeight, "one combined outline follows the complete source and extension");
+        closeEnough(Number.parseFloat(viewerOutline.style.width), 246 * drawZoom + expectedWidth * progress, "the combined selected outline includes the opening extension");
+        closeEnough(placement.paneBottom, card.y * drawZoom + animatedHeight, "card and extension share their bottom edge");
+        closeEnough(Number.parseFloat(viewerPane.style.top), card.y * drawZoom, "the extension stays anchored to its own lane instead of floating in the viewport");
+        closeEnough(placement.paneLeft, (card.x + card.width) * drawZoom, "the extension joins its source product flush");
         closeEnough(placement.paneRight - placement.paneLeft, expectedWidth * progress, "opening reveals the pane horizontally");
-        assert.equal(viewerPane.dataset.compactHeight, String(parentHeight <= 180));
-        assert.equal(viewerPane.dataset.detailColumns, "1", "specifications retain a readable single column beside the wider dates at every zoom");
+        assert.equal(viewerPane.dataset.compactHeight, "false", "card zoom cannot enable compact text squeezing");
+        assert.equal(viewerPane.dataset.detailColumns, "1", "specifications retain a readable single column without a competing date column at every zoom");
         assert.equal(viewerPane.style.pointerEvents, progress > .96 ? "auto" : "none", "controls become interactive when the pane finishes opening");
         const exported = paneSandbox.getCanvasDimensions({ includeViewer: false });
         assert.equal(exported.width, closedDimensions.width, "exports omit the temporary horizontal detail reserve");
@@ -771,7 +884,7 @@ for (const scenario of paneScenarios) {
 const positionedProductId = paneSandbox.viewerInfoProductId;
 paneSandbox.viewerInfoProductId = "pane-first";
 const boundaryProduct = paneSandbox.board.products.find((item) => item.id === "pane-first");
-for (const [height, expectedWidth] of [[180, 720], [180.01, 720], [280, 720], [280.01, 720], [1000, 720]]) {
+for (const [height, expectedWidth] of [[180, 500], [180.01, 500], [280, 500], [280.01, 500], [1000, 500]]) {
   assert.equal(paneSandbox.viewerInfoVisualWidth(height), expectedWidth, "date rows retain horizontal room across compact parent-height boundaries");
 }
 for (const [value, height, expectedColumns] of [
@@ -785,15 +898,61 @@ for (const [value, height, expectedColumns] of [
   assert.equal(viewerPane.dataset.detailColumns, expectedColumns, "the dates layout must not squeeze short or long specifications into narrow columns");
 }
 boundaryProduct.specs = Array.from({ length: 100 }, (_, index) => ({ label: `Specification ${index}`, value: "Short" }));
-assert.equal(paneSandbox.viewerInfoVisualWidth(500), 720, "many short specifications must not inflate the normal pane width");
+assert.equal(paneSandbox.viewerInfoVisualWidth(500), 500, "many short specifications must not inflate the normal extension width");
 paneSandbox.viewerInfoProductId = positionedProductId;
 
-// Use a deliberately different rendered height to catch accidental dependence
-// on category/card estimates when positioning the live pane.
+// Narrow workspaces attach the extension below the image/name anchor. Its
+// reading area fits the viewport width while the lane grows vertically; the
+// desktop version remains beside its source card without floating.
+const viewportSnapshot = { ...paneSandbox.canvasScroll };
 paneSandbox.zoom = .65;
+for (const [width, height, scrollTop] of [[1850, 700, 0], [1232, 559, 320], [342, 650, 48], [256, 420, 120]]) {
+  Object.assign(paneSandbox.canvasScroll, { clientWidth: width, clientHeight: height, scrollTop });
+  paneSandbox.viewerInfoProgress = 1;
+  const dimensions = paneSandbox.getCanvasDimensions();
+  const row = dimensions.laneRows.find((item) => `pane-${item.lane.id}` === paneSandbox.viewerInfoProductId);
+  const layout = paneSandbox.productCardLayout(), stacked = width < 600;
+  const card = { productId: paneSandbox.viewerInfoProductId, x: 18, y: row.top, width: 246, height: stacked ? layout.cardHeight : row.contentHeight, viewerIntegrated: true, viewerStacked: stacked, integrationX: 18, integrationWidth: 246 + paneSandbox.viewerInfoReserveLogical(), integrationHeight: row.contentHeight };
+  if (stacked) card.x += paneSandbox.viewerInfoReserveLogical() / 2;
+  paneSandbox.renderedCards = [card];
+  const placement = paneSandbox.positionViewerInfo();
+  const expectedWidth = stacked ? width - 16 : 500, expectedHeight = Math.min(600, height - 16);
+  closeEnough(placement.paneRight - placement.paneLeft, expectedWidth, "the attached reading area has a moderate desktop width and fits mobile gutters");
+  closeEnough(Number.parseFloat(viewerPane.style.top), (row.top + (stacked ? layout.cardHeight : 0)) * .65, "the extension follows the card rather than the viewport scroll position");
+  closeEnough(placement.paneBottom, (row.top + row.contentHeight) * .65, "the combined card's lane contains the complete reading area");
+  closeEnough(Number.parseFloat(viewerPane.style.getPropertyValue("--viewer-info-height")), expectedHeight, "responsive reading height remains comfortable at small zoom");
+  assert.equal(viewerPane.dataset.stacked, String(stacked));
+  assert.equal(viewerPane.dataset.compactHeight, "false", "narrow workspaces cannot squeeze the specification text");
+}
+Object.assign(paneSandbox.canvasScroll, viewportSnapshot);
+
+// An ordinary Details open starts at Specifications; a search route can keep
+// its deliberate SKU/variant tab without being reset during the opening.
+const openViewerDefinition = appSource.match(/^function openViewerInfo\([^]*?^\}/m)?.[0];
+assert.ok(openViewerDefinition);
+const openEvents = [];
+const openSandbox = {
+  selectedId: null, viewerInfoOpen: false, viewerInfoProductId: null, activeView: "products",
+  infoProduct: () => ({ id: "opening-product" }), productDetailsModel: (product) => product,
+  PortfolioDetails: { focusMatch(model, options) { openEvents.push(["focus", model.id, options.surface]); } },
+  renderInspector() {}, renderViewerInfo() {}, renderBoard() {}, closeViewerInfo() { openEvents.push(["close"]); },
+  requestAnimationFrame(callback) { callback(); }, animateViewerInfo(progress, callback) { callback(); }, revealViewerInfoBesideProduct() {},
+};
+vm.createContext(openSandbox);
+vm.runInContext(openViewerDefinition, openSandbox);
+openSandbox.openViewerInfo("opening-product");
+assert.deepEqual(openEvents, [["focus", "opening-product", "viewer"]], "opening Details resets the default reading tab through the existing model API");
+openSandbox.viewerInfoOpen = false;
+openSandbox.openViewerInfo("opening-product", { preserveDetailTab: true });
+assert.equal(openEvents.length, 1, "a matching SKU search must preserve the requested details tab");
+
+// The wing must share the actual rendered source height at every animation
+// step, rather than diverging from it based on natural content measurements.
+paneSandbox.zoom = .65;
+paneSandbox.renderedCards[0].viewerStacked = false;
 paneSandbox.renderedCards[0].height = 317;
 paneSandbox.positionViewerInfo();
-closeEnough(Number.parseFloat(viewerPane.style.getPropertyValue("--viewer-info-height")), 317 * .65, "live positioning always uses the actual rendered parent rectangle");
+closeEnough(Number.parseFloat(viewerPane.style.getPropertyValue("--viewer-info-height")), 317 * .65, "the joined extension always matches its source card's rendered height");
 paneSandbox.renderedCards = [];
 assert.equal(paneSandbox.positionViewerInfo(), null, "a filtered-out or stale parent must have no positioned detail pane");
 assert.equal(viewerPane.attributes.get("aria-hidden"), "true");
@@ -804,4 +963,4 @@ paneSandbox.viewerInfoProgress = 0;
 paneSandbox.renderViewerInfo();
 assert.equal(viewerPane.innerHTML, "", "closing must clear the pane's obsolete content");
 
-console.log("Product detail checks passed: compact SKU grids and consolidated options, copy feedback and asynchronous retries, clipboard fallback cleanup, complete information and accessible controls, escaped markup, exact parent-height panes, stable lanes, horizontal reserves, and preserved clearing structure.");
+console.log("Product detail checks passed: complete Specifications and separate Dates, compact SKU grids and consolidated options, copy feedback and asynchronous retries, clipboard fallback cleanup, accessible controls, escaped markup, fluid joined card extensions, selected-lane reflow, narrow stacked reading areas, unchanged exports, and preserved clearing structure.");

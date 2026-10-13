@@ -54,17 +54,23 @@ jobs:
           cp public/js/workspace-notifications.js public/js/product-issues.js public/js/product-merge.js public/js/product-merge-ui.js _site/js/
           cp public/js/portfolio-search.js public/js/portfolio-search-ui.js _site/js/
           cp public/js/date-history.js public/js/date-precision.js _site/js/
+          cp public/js/launch-records.js _site/js/
+          cp public/js/card-specs.js _site/js/
+          cp public/js/workspace-store.js _site/js/
+          cp public/js/reference-theme.js _site/js/
+          cp public/css/fonts.css _site/css/
           cp public/css/date-history.css _site/css/
           cp public/js/plc-import.js public/js/plc-import-ui.js _site/js/
           cp public/css/plc-import.css _site/css/
           cp public/js/roadmap-hover.js _site/js/
+          cp public/js/view-runtime.js public/js/pptx-export-planner.js _site/js/
           cp public/js/app.js public/js/app-dialogs.js public/js/workspace-ui.js public/js/portfolio-model.js public/js/master-model.js public/js/master-github.js public/js/master-client.js public/js/master-ui.js public/js/master-presence.js public/js/roadmap-interaction.js public/js/product-details.js public/js/ascm-import.js public/js/catalog-data.js public/js/pptx-pagination.js public/js/pptx-editable.js public/js/package-codec.js public/js/package-source.js public/js/package-client.js public/js/package-ui.js _site/js/
           node scripts/configure-package-source.mjs
           node scripts/configure-site-version.mjs
           cp public/data/master_ppc.pkg _site/data/
           cp -R public/assets public/vendor _site/
 
-          for required_path in index.html css/styles.css css/workspace-notifications.css css/product-issues.css css/product-merge.css css/portfolio-search.css js/portfolio-search.js js/portfolio-search-ui.js js/product-merge.js js/product-merge-ui.js js/workspace-notifications.js js/product-issues.js js/app.js js/app-dialogs.js js/workspace-ui.js js/portfolio-model.js js/master-model.js js/master-github.js js/master-client.js js/master-ui.js js/master-presence.js js/roadmap-interaction.js js/product-details.js js/ascm-import.js js/catalog-data.js js/pptx-pagination.js js/pptx-editable.js js/package-codec.js js/package-source.js js/package-client.js js/package-ui.js assets vendor; do
+          for required_path in index.html css/styles.css css/workspace-notifications.css css/product-issues.css css/product-merge.css css/portfolio-search.css js/portfolio-search.js js/portfolio-search-ui.js js/product-merge.js js/product-merge-ui.js js/workspace-notifications.js js/product-issues.js js/app.js js/app-dialogs.js js/workspace-ui.js js/workspace-store.js js/portfolio-model.js js/master-model.js js/master-github.js js/master-client.js js/master-ui.js js/master-presence.js js/roadmap-interaction.js js/product-details.js js/ascm-import.js js/catalog-data.js js/pptx-pagination.js js/pptx-editable.js js/package-codec.js js/package-source.js js/package-client.js js/package-ui.js assets vendor; do
             test -e "_site/${required_path}"
           done
           test ! -e _site/project-data/private
@@ -75,11 +81,21 @@ jobs:
           test -f _site/data/master_ppc.pkg
           test -f _site/js/date-history.js
           test -f _site/js/date-precision.js
+          test -f _site/js/launch-records.js
+          test -f _site/js/card-specs.js
+          test -f _site/js/workspace-store.js
+          test -f _site/js/reference-theme.js
+          test -f _site/css/fonts.css
+          test -f _site/assets/fonts/Jost-Variable.ttf
+          test -f _site/assets/fonts/Jost-Italic-Variable.ttf
+          test -f _site/assets/fonts/Jost-OFL.txt
           test -f _site/css/date-history.css
           test -f _site/js/plc-import.js
           test -f _site/js/plc-import-ui.js
           test -f _site/css/plc-import.css
           test -f _site/js/roadmap-hover.js
+          test -f _site/js/view-runtime.js
+          test -f _site/js/pptx-export-planner.js
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
 
 await import("../../public/js/pptx-pagination.js");
 await import("../../public/js/pptx-editable.js");
@@ -138,6 +139,7 @@ const rendererSandbox = {
     }),
   },
 };
+Object.assign(rendererSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(rendererSandbox);
 vm.runInContext(appSource.slice(monthStart, monthEnd) + appSource.slice(rectStart, drawEnd) + appSource.slice(rendererStart, rendererEnd), rendererSandbox);
 rendererSandbox.roadmapRange = () => {
@@ -193,9 +195,8 @@ assert.ok(renderProducts.every((product) => !paintedLabels.includes(product.name
 assert.deepEqual(Array.from(renderedRoadmap.products, (product) => product.id), ["normal", "concept", "embargo"], "the renderer creates one overlay per visible product and omits dates outside the export range");
 assert.deepEqual(Array.from(renderedRoadmap.products, (product) => product.label), ["RELEASED PRODUCT", "CONCEPT PRODUCT", "EMBARGO PRODUCT"]);
 assert.equal(renderedRoadmap.products[1].concept, true);
-assert.equal(renderedRoadmap.products[1].lineColor, "#999999");
-assert.equal(renderedRoadmap.products[2].lineColor, "#E85270", "embargo outline colors remain distinct");
-assert.equal(renderedRoadmap.products[2].textColor, "#ffffff", "The editable roadmap export preserves white embargo labels.");
+assert.ok(renderedRoadmap.products.every((product) => !Object.hasOwn(product, "lineColor")), "ordinary roadmap products carry no decorative outline, including concept and embargo stages");
+assert.equal(renderedRoadmap.products[2].textColor, "#1A1B1C", "The editable roadmap export preserves readable dark labels on the bright red embargo fill.");
 assert.equal(renderedRoadmap.products[0].textColor, "#171717", "Ordinary product labels keep their existing contrast choice.");
 assert.equal(renderedRoadmap.products[0].y, 121);
 assert.equal(renderedRoadmap.products[2].y, 235, "out-of-range rows retain their place in the background layout");
@@ -236,6 +237,7 @@ class RecordingPptx {
     return slide;
   }
   async writeFile({ fileName }) { this.fileName = fileName; }
+  defineLayout(layout) { this.customLayout = layout; }
 }
 function recordImage(kind, category, page = null) {
   const pageProducts = kind === "products" ? page.rows.flatMap((row) => row.products) : page.flatMap((group) => group.products);
@@ -260,13 +262,15 @@ function recordImage(kind, category, page = null) {
   renderCalls.push({ kind, categoryId: category.id, productIds, image, page });
   return image;
 }
+const limitControl = { id: "pptxRoadmapLimit", checked: false };
 const sandbox = {
+  UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
   PPTXPagination: globalThis.PPTXPagination, paginateRoadmapGroupsForPptx: paginateRoadmapGroups,
   CARD_WIDTH: 246, CARD_GAP: 10, GUTTER: 18, SIDE_PADDING: 40, LANE_TOP: 34,
   portfolio: { categories: exportCategories }, pptxSelectedCategoryIds: null, pptxExportInProgress: false,
   pptxExportDialog: { classList: { add() {}, remove() {} } }, confirmPptxExportButton: { disabled: false },
   pptxExportForm: {
-    querySelector: () => ({ value: selectedScope }),
+    querySelector: selector => selector === "#pptxRoadmapLimit" ? limitControl : { value: selectedScope },
     querySelectorAll: (selector) => selector.includes(":checked") ? categoryInputs.filter((input) => input.checked) : categoryInputs,
   },
   $: (selector) => exportControls.get(selector),
@@ -284,6 +288,7 @@ const sandbox = {
   renderCategoryImageForPptx: async (category, page) => recordImage("products", category, page),
   renderCategoryRoadmapImageForPptx: async (category, groups) => recordImage("roadmap", category, groups),
 };
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(appSource.slice(productPagesStart, productPagesEnd) + appSource.slice(sectionStart, sectionEnd), sandbox);
 const productBoundaryCategory = (productCount, laneCount = 1) => ({
@@ -334,8 +339,8 @@ const unequalPlan = sandbox.buildPptxExportPlan("products", [unequalCategory]);
 assert.deepEqual(Array.from(unequalPlan, (slide) => Array.from(slide.page.rows, (row) => [row.lane.id, row.slot, row.products.length])), [
   [["lane-0", 0, 13], ["lane-1", 1, 13]],
   [["lane-0", 0, 1], ["lane-1", 1, 13]],
-  [["lane-1", 1, 1]],
-], "the actual plan keeps wired and wireless lanes together and preserves their slots through unequal overflow");
+  [["lane-1", 0, 1]],
+], "the actual plan keeps wired and wireless together and packs occupied continuation lanes from the top");
 for (const laneId of ["lane-0", "lane-1"]) {
   assert.deepEqual(Array.from(unequalPlan).flatMap((slide) => Array.from(slide.page.rows).filter((row) => row.lane.id === laneId).flatMap((row) => Array.from(row.products, (product) => product.id))), unequalCategory.board.products.filter((product) => product.laneId === laneId).map((product) => product.id), "parallel lane continuation retains all products in each lane's saved order");
 }
@@ -376,8 +381,10 @@ sandbox.pptxExportDialog.classList = { add: (name) => modalClasses.add(name), re
 sandbox.document = { activeElement: originalControl, querySelector: (selector) => selector === ".app-shell" ? appShell : null };
 sandbox.requestAnimationFrame = (callback) => callback();
 sandbox.pptxReturnFocus = null;
-sandbox.pptxExportForm.querySelector = () => ({ value: selectedScope, focus: () => { scopeFocus += 1; } });
+sandbox.pptxExportForm.querySelector = selector => selector === "#pptxRoadmapLimit" ? limitControl : { value: selectedScope, focus: () => { scopeFocus += 1; } };
+limitControl.checked = true;
 sandbox.openPptxExportDialog();
+assert.equal(limitControl.checked, false, "reopening the chooser requires a fresh explicit cutoff choice");
 assert.equal(sandbox.confirmPptxExportButton.disabled, true);
 assert.equal(modalClasses.has("hidden"), false);
 assert.equal(appShell.inert, true);
@@ -396,6 +403,16 @@ sandbox.closePptxExportDialog();
 assert.equal(modalClasses.has("hidden"), false, "an active file export keeps its chooser open");
 assert.equal(appShell.inert, true);
 sandbox.pptxExportInProgress = false;
+for (const id of ["pptxRoadmapStart", "pptxRoadmapEnd", "pptxRoadmapMode", "pptxExportScope", "pptxExportCategory"]) {
+  limitControl.checked = true;
+  sandbox.handlePptxSelectionChange({ target: { id } });
+  assert.equal(limitControl.checked, false, "changing the selection or calendar clears consent to a previous fitting range");
+}
+limitControl.checked = true;
+sandbox.handlePptxSelectionChange({ target: limitControl });
+assert.equal(limitControl.checked, true, "checking the cutoff choice preserves the user's explicit choice");
+sandbox.setPptxCategorySelection(["beta"]);
+assert.equal(limitControl.checked, false, "category shortcut controls clear prior cutoff consent too");
 sandbox.closePptxExportDialog();
 assert.equal(returnedFocus, 2);
 assert.equal(appShell.inert, false);
@@ -424,6 +441,7 @@ for (const [scope, expectedKinds, expectedFilename] of [
     }
   }
   deck.slides.forEach((slide, index) => {
+    assert.deepEqual(structuredClone(deck.theme), { headFontFace: "HP Forma DJR Office", bodyFontFace: "HP Forma DJR Office", lang: "en-US" }, "all PowerPoint themes use the required HP Office font.");
     const call = renderCalls[index];
     const category = exportCategories.find((item) => item.id === call.categoryId);
     const previousSameView = renderCalls.slice(0, index).some((earlier) => earlier.kind === call.kind && earlier.categoryId === call.categoryId);
@@ -431,9 +449,9 @@ for (const [scope, expectedKinds, expectedFilename] of [
     const nativeProductTexts = slide.texts.slice(1);
     assert.equal(slide.texts.length, 1 + expectedProducts.length * (call.kind === "roadmap" ? 1 : 4), "product labels, prices, specifications, and SKUs remain native editable text beside the slide title");
     assert.equal(slide.texts[0].text, `${category.name} — ${call.kind === "products" ? "Product Portfolio" : "Roadmap"}${previousSameView ? " (continued)" : ""}`, "both portfolio and roadmap continuation titles retain user content without numeric pagination");
-    assert.equal(slide.background.color, "171717");
+    assert.equal(slide.background.color, "1A1B1C");
     assert.equal(slide.shapes.length, 1 + (call.kind === "products" ? expectedProducts.length : 0), "each portfolio card retains its own editable rounded rectangle");
-    assert.deepEqual(structuredClone(slide.shapes[0].options.line), { color: "2B2E2B", width: .4, transparency: 25 }, "slide divider remains faint");
+    assert.deepEqual(structuredClone(slide.shapes[0].options.line), { color: "333538", width: .4, transparency: 25 }, "slide divider remains faint");
     assert.equal(slide.images.length, 1 + (call.kind === "products" ? expectedProducts.length : 0), "only artwork is a picture within each editable portfolio card");
     const image = slide.images[0];
     assert.equal(image.data, `${call.kind}:${call.categoryId}`);
@@ -481,8 +499,9 @@ for (const [scope, expectedKinds, expectedFilename] of [
       assert.equal(options.shape, "roundRect");
       assert.equal(options.fill.color, expectedProduct.fill.slice(1));
       assert.equal(options.color, expectedProduct.textColor.slice(1));
-      assert.equal(options.line.color, expectedProduct.lineColor.slice(1));
-      assert.equal(options.line.dashType || "solid", expectedProduct.concept ? "dash" : "solid", "concept products retain their dashed border");
+      assert.equal(options.line.width, 0);
+      assert.equal(options.line.transparency, 100, "all native roadmap borders are invisible, including legacy concept products");
+      assert.equal(options.line.dashType, undefined);
     });
   });
   const productSlides = deck.slides.filter((_, index) => renderCalls[index].kind === "products");
@@ -501,6 +520,7 @@ assert.equal(JSON.stringify(exportCategories), sourceCategoriesBefore, "selectio
 // Serialize a real slide through the shipped library, then inspect its actual
 // OOXML and image payload with the same bundle's ZIP reader.
 const librarySandbox = { console, setTimeout, clearTimeout, setImmediate, clearImmediate, Buffer, Blob, URL, TextEncoder, TextDecoder };
+Object.assign(librarySandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(librarySandbox);
 vm.runInContext(await readFile(new URL("../../public/vendor/pptxgen.bundle.js", import.meta.url), "utf8"), librarySandbox, { timeout: 5000 });
 assert.equal(typeof librarySandbox.PptxGenJS, "function");
@@ -527,7 +547,7 @@ assert.deepEqual(savedTexts, [realTitle, ...realProducts.map((product) => produc
 assert.ok(!/<p:ph\b[^>]*\btype="(?:sldNum|ftr|dt)"/i.test(slideXml), "the saved slide has no number/footer/date placeholders");
 const dividerXml = slideXml.match(/<a:ln\b[^>]*\bw="5080"[^>]*>([\s\S]*?)<\/a:ln>/);
 assert.ok(dividerXml, "the saved divider is exactly 0.4pt (5080 EMU)");
-assert.match(dividerXml[1], /<a:srgbClr\b[^>]*\bval="2B2E2B"/);
+assert.match(dividerXml[1], /<a:srgbClr\b[^>]*\bval="333538"/);
 assert.match(dividerXml[1], /<a:alpha\b[^>]*\bval="75000"/, "the saved divider retains 25% transparency");
 const pictureXml = [...slideXml.matchAll(/<p:pic>[\s\S]*?<\/p:pic>/g)];
 assert.equal(pictureXml.length, 1, "the saved slide contains one roadmap background image");
@@ -544,9 +564,9 @@ productShapeXml.forEach((xml, index) => {
   assert.match(xml, /<a:prstGeom\b[^>]*\bprst="roundRect"/, "the product label and bar are one native rounded shape");
   assert.ok(xml.includes(`<a:t>${product.label.replaceAll("&", "&amp;")}</a:t>`), "the saved product label is editable text rather than raster content");
   assert.ok(xml.includes(`<a:srgbClr val="${product.fill.slice(1)}"`), "saved product fills retain lifecycle colors");
-  assert.ok(xml.includes(`<a:srgbClr val="${product.lineColor.slice(1)}"`), "saved product outlines retain their original status color");
-  if (product.concept) assert.ok(xml.includes('<a:prstDash val="dash"'), "saved concept borders remain dashed");
-  else assert.ok(!/<a:prstDash\b[^>]*\bval="(?!solid")[^"]+"/.test(xml), "saved regular borders retain the default solid stroke");
+  const productLine = xml.match(/<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/)?.[0];
+  assert.ok(productLine && /<a:alpha\b[^>]*\bval="0"/.test(productLine), "the delivered native product shape has a fully transparent outline");
+  assert.ok(!/<a:prstDash\b[^>]*\bval="dash"/.test(xml), "concept metadata does not create a dashed perimeter");
   const transform = xml.match(/<a:xfrm[^>]*>\s*<a:off x="(\d+)" y="(\d+)"\/>\s*<a:ext cx="(\d+)" cy="(\d+)"\/>/);
   assert.ok(transform, "saved products have native placement and dimensions");
   const expectedTransform = [
@@ -660,6 +680,54 @@ assert.ok(downloadedFile.blob instanceof Blob);
 const deliveredArchive = await librarySandbox.JSZip.loadAsync(Buffer.from(await downloadedFile.blob.arrayBuffer()), { checkCRC32: true });
 assert.equal(await deliveredArchive.file("ppt/slides/slide1.xml").async("string"), portfolioXml, "the actual downloaded file contains grouped editable products");
 
+// The shipped generator emits one shared master, but declares nonexistent
+// masters for every extra slide. Validate the delivered package, not only its
+// slide XML, and retain real masters while rejecting genuinely missing parts.
+const declaredParts = async (archive) => [...(await archive.file("[Content_Types].xml").async("string"))
+  .matchAll(/<Override\b[^>]*\bPartName="([^"]+)"[^>]*\/>/g)].map((match) => match[1].slice(1));
+const missingDeclaredParts = async (archive) => (await declaredParts(archive)).filter((part) => !archive.file(part));
+assert.deepEqual(await missingDeclaredParts(beforeGroupingArchive), ["ppt/slideMasters/slideMaster2.xml"], "the browser bundle itself reproduces the extra-master defect");
+assert.deepEqual(await missingDeclaredParts(deliveredArchive), [], "the actual download must not declare missing parts");
+assert.equal((await deliveredArchive.file("ppt/slideMasters/slideMaster1.xml").async("string")).replace(/typeface="[^"]*"/g, 'typeface="FONT"'), (await beforeGroupingArchive.file("ppt/slideMasters/slideMaster1.xml").async("string")).replace(/typeface="[^"]*"/g, 'typeface="FONT"'), "compatibility preserves the shared master except the required HP font policy");
+const threeSlideDeck = new librarySandbox.PptxGenJS();
+for (let index = 0; index < 3; index++) threeSlideDeck.addSlide().addText(`Slide ${index + 1}`, { x: 1, y: 1, w: 3, h: 1 });
+const threeSlideRaw = await threeSlideDeck.write({ outputType: "arraybuffer" });
+const threeSlideArchive = await librarySandbox.JSZip.loadAsync(threeSlideRaw);
+assert.equal((await missingDeclaredParts(threeSlideArchive)).length, 2, "a minimal three-slide bundle export reproduces both spurious declarations");
+const threeSlideDelivered = await librarySandbox.JSZip.loadAsync(await librarySandbox.PPTXEditable.serialize(threeSlideDeck), { checkCRC32: true });
+assert.deepEqual(await missingDeclaredParts(threeSlideDelivered), []);
+for (let index = 1; index <= 3; index++) assert.equal(await threeSlideDelivered.file(`ppt/slides/slide${index}.xml`).async("string"), await threeSlideArchive.file(`ppt/slides/slide${index}.xml`).async("string"), "master declaration repair preserves every native slide object");
+const alteredExport = async (alter) => {
+  const archive = await librarySandbox.JSZip.loadAsync(threeSlideRaw);
+  await alter(archive);
+  const data = await archive.generateAsync({ type: "arraybuffer" });
+  return librarySandbox.PPTXEditable.serialize({ write: async () => data });
+};
+const retainedMasterArchive = await librarySandbox.JSZip.loadAsync(await alteredExport(async (archive) => {
+  archive.file("ppt/slideMasters/slideMaster2.xml", await archive.file("ppt/slideMasters/slideMaster1.xml").async("string"));
+}));
+assert.ok((await declaredParts(retainedMasterArchive)).includes("ppt/slideMasters/slideMaster2.xml"), "an existing master and its declaration are retained even if unreferenced");
+assert.deepEqual(await missingDeclaredParts(retainedMasterArchive), []);
+await assert.rejects(alteredExport(async (archive) => {
+  const filename = "ppt/slideLayouts/_rels/slideLayout1.xml.rels";
+  archive.file(filename, (await archive.file(filename).async("string")).replace("../slideMasters/slideMaster1.xml", "../slideMasters/slideMaster2.xml"));
+}), /referenced slide master/, "a missing master referenced by a layout must fail rather than be hidden");
+await assert.rejects(alteredExport(async (archive) => {
+  const filename = "_rels/.rels";
+  archive.file(filename, (await archive.file(filename).async("string")).replace("</Relationships>", '<Relationship Id="broken-master" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="/ppt/slideMasters/slideMaster3.xml"/></Relationships>'));
+}), /referenced slide master/, "absolute root relationship targets are also protected");
+const undeclaredMasterArchive = await librarySandbox.JSZip.loadAsync(serializedPptx);
+const singleLayoutRelationships = "ppt/slideLayouts/_rels/slideLayout1.xml.rels";
+undeclaredMasterArchive.file(singleLayoutRelationships, (await undeclaredMasterArchive.file(singleLayoutRelationships).async("string"))
+  .replace("../slideMasters/slideMaster1.xml", "../slideMasters/slideMaster99.xml"));
+assert.deepEqual(await missingDeclaredParts(undeclaredMasterArchive), [], "the one-slide regression has no missing Override entries");
+assert.ok(!(await declaredParts(undeclaredMasterArchive)).includes("ppt/slideMasters/slideMaster99.xml"), "the referenced missing master was never declared");
+const undeclaredMasterBytes = await undeclaredMasterArchive.generateAsync({ type: "arraybuffer" });
+await assert.rejects(librarySandbox.PPTXEditable.serialize({ write: async () => undeclaredMasterBytes }), /referenced slide master/, "a one-slide file referencing an undeclared missing master must also fail");
+await assert.rejects(alteredExport(async (archive) => {
+  archive.remove("ppt/slides/slide2.xml");
+}), /declared presentation part/, "missing real slide content cannot be masked by the compatibility pass");
+
 // A very dense category used to emit 0.53pt text, which PowerPoint asks to
 // repair. Exercise both card creation and the final no-card delivery path.
 const denseDeck = new librarySandbox.PptxGenJS();
@@ -705,4 +773,106 @@ const tinyCornerXml = librarySandbox.PPTXEditable.groupSlideXml('<p:sp><p:nvSpPr
   roundedCorners: { "tiny-part-0": { width: 3, height: 3, radii: [2] } },
 }]);
 assert.ok([...tinyCornerXml.matchAll(/<a:pt x="([^"]+)" y="([^"]+)"/g)].every((match) => match.slice(1).every((coordinate) => /^\d+$/.test(coordinate))), "clamped corner coordinates remain schema-valid integers for odd dimensions");
-console.log(`PPTX checks passed: pagination, category selection, grouped native portfolio cards with editable name/price/spec/SKU and preserved artwork, editable roadmap shapes, clipped date geometry, product-free backgrounds, restored export state, numberless slide chrome, and real delivered-file OOXML (${groupedBytes.byteLength} bytes).`);
+// Exercise the actual app's new dialog/renderer adapter with the real planner.
+await import("../../public/js/pptx-export-planner.js");
+Object.assign(sandbox, { PPTXExportPlanner: globalThis.PPTXExportPlanner, PortfolioModel: globalThis.PortfolioModel,
+  effectiveRoadmap: product => product.roadmap || {}, roadmapStatusColor: () => "#333538", contrastTextColor: () => "#D5D7DC",
+  standardizedStatus: () => ({ label: "" }), splitRoadmapStatusLabel: status => status || "Not set", productPriceText: product => product.price || "" });
+sandbox.portfolio.settings = { timeline: { startMonth: "2026-01", endMonth: "2028-12" }, showRoadmapMsrp: true };
+const nativeCategories = [productBoundaryCategory(26)];
+nativeCategories[0].board.products.forEach((product, index) => {
+  Object.assign(product, { family: "Headsets", price: "$99", roadmap: { startMonth: index === 25 ? "2030-01" : "2026-01", endMonth: index === 25 ? "2030-12" : "2028-12", status: "launched" } });
+});
+const nativeBefore = JSON.stringify(nativeCategories);
+const compactPlan = sandbox.buildPptxExportPlan("roadmap", nativeCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
+assert.equal(compactPlan.roadmapPlan.requiresDecision, false, "the compact actual-product layout fits a selection rejected by the old12pt layout");
+assert.equal(compactPlan.length, 1);
+assert.equal(compactPlan[0].kind, "roadmap-merged");
+assert.equal(compactPlan.roadmapPlan.outsideRangeCount, 1, "the selected period explicitly excludes dated products outside it");
+const rows = Array.from(compactPlan).flatMap(item => Array.from(item.roadmapSlide.rows));
+const productRows = rows.filter(row => row.kind === "product");
+assert.equal(productRows.length, 25); assert.equal(new Set(productRows.map(row => row.product.id)).size, 25);
+assert.ok(productRows.every(row => row.product.family === "Headsets" && row.product.priceLabel === "$99"));
+assert.equal(JSON.stringify(nativeCategories), nativeBefore, "the app export adapter leaves every saved product unchanged");
+const oldRenderCount = renderCalls.length;
+const originalFixtureCategories = sandbox.portfolio.categories;
+const originalSerializer = sandbox.PPTXEditable;
+try {
+  sandbox.portfolio.categories = nativeCategories;
+  sandbox.PPTXEditable = { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) };
+  await sandbox.exportPptx("roadmap", nativeCategories.map(category => category.id), { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
+} finally { sandbox.portfolio.categories = originalFixtureCategories; sandbox.PPTXEditable = originalSerializer; }
+const nativeDeck = decks.at(-1);
+assert.equal(renderCalls.length, oldRenderCount, "native roadmap plans bypass the canvas image renderer");
+assert.equal(nativeDeck.slides.length, compactPlan.length);
+assert.ok(nativeDeck.slides.every(slide => slide.images.length === 0 && slide.texts.some(text => text.options.fontSize === 7)));
+const denseCategories = [productBoundaryCategory(140)];
+denseCategories[0].board.products.forEach(product => Object.assign(product, { family: "Headsets", price: "$99", roadmap: { startMonth: "2026-01", endMonth: "2028-12", status: "launched" } }));
+const denseBefore = JSON.stringify(denseCategories);
+const densePlan = sandbox.buildPptxExportPlan("both", denseCategories, { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
+assert.equal(densePlan.roadmapPlan.requiresDecision, false);
+assert.equal(densePlan.roadmapPlan.slides.length, 1);
+assert.ok(densePlan.roadmapPlan.canvas.width > 40 / 3, "a dense single slide gets a larger native canvas");
+assert.ok(Math.abs(densePlan.roadmapPlan.canvas.width / densePlan.roadmapPlan.canvas.height - 16 / 9) < 1e-9);
+assert.equal(densePlan.roadmapPlan.slides[0].columns.length, 1, "the merged slide has exactly one shared timeline");
+assert.equal(densePlan.roadmapPlan.slides[0].rows.filter(row => row.kind === "product").length, 140);
+try {
+  sandbox.portfolio.categories = denseCategories;
+  sandbox.PPTXEditable = { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) };
+  await sandbox.exportPptx("both", denseCategories.map(category => category.id), { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" });
+} finally { sandbox.portfolio.categories = originalFixtureCategories; sandbox.PPTXEditable = originalSerializer; }
+const singleTimelineDeck = decks.at(-1), factor = densePlan.roadmapPlan.canvas.width / (40 / 3);
+assert.equal(singleTimelineDeck.customLayout.width, densePlan.roadmapPlan.canvas.width);
+assert.equal(singleTimelineDeck.customLayout.height, densePlan.roadmapPlan.canvas.height);
+assert.equal(singleTimelineDeck.slides.length, densePlan.length, "Both keeps all product pages and exactly one merged roadmap");
+assert.equal(singleTimelineDeck.slides[0].images[0].y, .74 * factor, "product pages stay top aligned on the shared enlarged canvas");
+assert.equal(singleTimelineDeck.slides[0].texts[0].options.fontSize, 20 * factor, "the product presentation scales proportionally as a whole");
+assert.equal(JSON.stringify(denseCategories), denseBefore);
+const overflowCategories = [productBoundaryCategory(220)];
+overflowCategories[0].board.products.forEach((product, index) => Object.assign(product, { name: `Ordered headset ${index + 1}`, family: "Headsets", roadmap: { startMonth: "2026-01", endMonth: "2028-12", status: "launched" } }));
+const overflowOptions = { mode: "merged", startMonth: "2026-01", endMonth: "2028-12" };
+const blockedPlan = sandbox.buildPptxExportPlan("roadmap", overflowCategories, overflowOptions);
+assert.equal(blockedPlan.roadmapPlan.requiresDecision, true, "overflow cannot create a file before the cutoff is accepted");
+assert.equal(blockedPlan.length, 0);
+const cutoff = blockedPlan.roadmapPlan.cutoff;
+assert.ok(cutoff.includedCount > 0 && cutoff.excludedCount > 0);
+assert.equal(cutoff.includedCount + cutoff.excludedCount, 220);
+assert.equal(cutoff.lastIncluded.name, overflowCategories[0].board.products[cutoff.includedCount - 1].name);
+assert.equal(cutoff.firstExcluded.name, overflowCategories[0].board.products[cutoff.includedCount].name);
+const acceptedPlan = sandbox.buildPptxExportPlan("roadmap", overflowCategories, { ...overflowOptions, limitToFit: true });
+assert.equal(acceptedPlan.roadmapPlan.requiresDecision, false);
+assert.equal(acceptedPlan.length, 1);
+assert.equal(acceptedPlan.roadmapPlan.selectedProductCount, 220);
+assert.equal(acceptedPlan.roadmapPlan.includedProductCount, cutoff.includedCount);
+assert.equal(acceptedPlan.roadmapPlan.excludedProductCount, cutoff.excludedCount);
+assert.deepEqual(acceptedPlan[0].roadmapSlide.rows.filter(row => row.kind === "product").map(row => row.product.id), overflowCategories[0].board.products.slice(0, cutoff.includedCount).map(product => product.id), "the explicit fitting range is exactly the ordered prefix shown before export");
+const deckCountBeforeBlockedExport = decks.length;
+try {
+  sandbox.portfolio.categories = overflowCategories;
+  sandbox.PPTXEditable = { ...globalThis.PPTXEditable, writeFile: (pptx, options) => pptx.writeFile(options) };
+  await assert.rejects(sandbox.exportPptx("roadmap", overflowCategories.map(category => category.id), overflowOptions), /fit|selection|products|slide/i);
+  assert.equal(decks.length, deckCountBeforeBlockedExport, "no deck is created by a blocked export");
+  await sandbox.exportPptx("roadmap", overflowCategories.map(category => category.id), { ...overflowOptions, limitToFit: true });
+  assert.equal(decks.at(-1).slides.length, 1);
+  const names = decks.at(-1).slides[0].texts.map(text => text.text);
+  assert.ok(names.includes(cutoff.lastIncluded.name));
+  assert.ok(!names.includes(cutoff.firstExcluded.name), "the native export observes the announced boundary");
+} finally { sandbox.portfolio.categories = originalFixtureCategories; sandbox.PPTXEditable = originalSerializer; }
+assert.equal(sandbox.UI_FONT_FACE, "Jost", "PowerPoint rendering restores the website font after completion");
+await assert.rejects(sandbox.exportPptx("roadmap", originalFixtureCategories.map(category => category.id), { mode: "merged", startMonth: "2028-12", endMonth: "2026-01" }), /valid start and end month/);
+assert.equal(sandbox.UI_FONT_FACE, "Jost", "an invalid export also restores the website font");
+const priorFontsApi = sandbox.document.fonts;
+const priorFontLoader = sandbox.PPTXEditable.fontsReady;
+const decksBeforeMissingFont = decks.length;
+try {
+  sandbox.document.fonts = {};
+  sandbox.PPTXEditable = { ...sandbox.PPTXEditable, fontsReady: async () => false };
+  await assert.rejects(sandbox.exportPptx("products", originalFixtureCategories.map(category => category.id)), /Install the supplied HP Forma DJR Office fonts/);
+  assert.equal(decks.length, decksBeforeMissingFont, "a browser missing the required HP font cannot deliver a file measured with fallback glyphs");
+  assert.equal(sandbox.UI_FONT_FACE, "Jost");
+} finally {
+  if (priorFontsApi === undefined) delete sandbox.document.fonts;
+  else sandbox.document.fonts = priorFontsApi;
+  sandbox.PPTXEditable = { ...sandbox.PPTXEditable, fontsReady: priorFontLoader };
+}
+console.log(`PPTX checks passed: pagination, category selection and cutoff consent reset, grouped native portfolio cards, top-filled sparse pages, compact7pt roadmap/range adapter, one shared16:9 timeline with retained prices/families, proportionally scaled Both pages and unchanged data, and real delivered-file OOXML (${groupedBytes.byteLength} bytes).`);

@@ -35,6 +35,26 @@ assert.deepEqual(store.getState().items.map((item) => item.id).sort(), ["duplica
 store.publish({ id: "markup", title: "Literal input", message: "<img src=x onerror=alert(1)>\nNever interpreted as HTML", actions: [{ label: "Missing callback" }, { label: "", onClick() {} }] });
 assert.equal(store.getState().items.find((item) => item.id === "markup").actions.length, 0);
 
+const acknowledgmentValues = new Map(), acknowledgmentStorage = { getItem: key => acknowledgmentValues.get(key) || null, setItem: (key, value) => acknowledgmentValues.set(key, value), removeItem: key => acknowledgmentValues.delete(key) };
+const publicationNotice = { id: "master-publication", severity: "warning", title: "Downloadable copy delayed", message: "Accepted changes are shared. The downloadable copy will retry.", revision: "publication-retry", acknowledgeOnDismiss: true, actions: [{ id: "status", label: "Check status", onClick() {} }], toast: false };
+const acknowledgmentStore = notifications.createStore({ acknowledgmentStorage });
+acknowledgmentStore.publish(publicationNotice); acknowledgmentStore.dismiss("master-publication");
+assert.equal(acknowledgmentValues.size, 1, "only the explicitly supported publisher status writes its tiny acknowledgment preference");
+const loadedAcknowledgmentStore = notifications.createStore({ acknowledgmentStorage }); const acknowledgmentEvents = [];
+loadedAcknowledgmentStore.subscribe(event => acknowledgmentEvents.push(event)); loadedAcknowledgmentStore.publish(publicationNotice);
+assert.equal(loadedAcknowledgmentStore.getState().count, 0);
+assert.equal(loadedAcknowledgmentStore.getState().items[0].actions[0].label, "Check status", "acknowledgment keeps the reason and action reachable without an attention badge");
+assert.equal(acknowledgmentEvents[0].announce, false);
+loadedAcknowledgmentStore.publish({ ...publicationNotice, message: "A different follow-up issue requires review." });
+assert.equal(loadedAcknowledgmentStore.getState().attentionCount, 1, "a changed failure is not suppressed by the previous acknowledgment");
+loadedAcknowledgmentStore.publish({ id: "critical-save", severity: "error", title: "Changes still need saving", message: "Write rejected", dismissible: false, acknowledgeOnDismiss: true });
+assert.equal(loadedAcknowledgmentStore.dismiss("critical-save"), false);
+loadedAcknowledgmentStore.publish({ id: "another-warning", severity: "warning", acknowledgeOnDismiss: true }); loadedAcknowledgmentStore.dismiss("another-warning");
+assert.equal(JSON.parse([...acknowledgmentValues.values()][0]).entries.length, 1, "unrelated notifications cannot persist acknowledgments");
+const deniedStorage = { getItem() { throw new Error("Storage unavailable"); }, setItem() { throw new Error("Storage unavailable"); }, removeItem() { throw new Error("Storage unavailable"); } };
+const deniedStore = notifications.createStore({ acknowledgmentStorage: deniedStorage }); deniedStore.publish(publicationNotice); deniedStore.dismiss("master-publication"); deniedStore.publish(publicationNotice);
+assert.equal(deniedStore.getState().attentionCount, 0, "blocked storage still keeps same-tab acknowledgment stable");
+
 const source = await readFile(new URL("../../public/js/workspace-notifications.js", import.meta.url), "utf8");
 function createUi({ withPull = true } = {}) {
   let nextTimer = 0;
@@ -134,4 +154,15 @@ assert.equal(ui.notifications.getState().items.some((entry) => entry.severity ==
 assert.equal(ui.notifications.getState().items.some((entry) => entry.id === "literal"), true, "clearing updates preserves warnings and errors");
 ui.panel.dispatch("cancel"); assert.equal(ui.panel.open, false);
 
-console.log("Workspace message checks passed: source deduplication and resolution, dismissal stability, persistent attention items, bounded informational history, safe text, modal focus and Escape, toast expiry and modal suppression, async action guards, and retained action errors.");
+const acknowledgmentUi = createUi(); acknowledgmentUi.notifications.publish(publicationNotice);
+acknowledgmentUi.notifications.show();
+acknowledgmentUi.find("workspace-message-dismiss")[0].dispatch("click");
+assert.equal(acknowledgmentUi.find("workspace-message-warning").length, 0);
+assert.equal(acknowledgmentUi.find("workspace-message-info").length, 1);
+assert.equal(acknowledgmentUi.find("workspace-message-kind")[0].textContent, "Acknowledged update");
+assert.equal(acknowledgmentUi.find("workspace-message-actions")[0].children[0].textContent, "Check status");
+assert.equal(acknowledgmentUi.find("workspace-messages-footer")[0].children[1].disabled, true, "clear history never removes an ongoing acknowledged status");
+assert.equal(acknowledgmentUi.button.classList.contains("has-attention"), false);
+assert.match(acknowledgmentUi.button.getAttribute("aria-label"), /no new messages/);
+
+console.log("Workspace message checks passed: source deduplication, durable publisher-only acknowledgment and recovery, quiet retained status/actions, critical-error isolation, unavailable-storage fallback, bounded history, safe text, modal focus and Escape, toast suppression, and guarded actions.");

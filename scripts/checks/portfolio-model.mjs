@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/reference-theme.js");
+await import("../../public/js/card-specs.js");
 await import("../../public/js/portfolio-model.js");
 const model = globalThis.PortfolioModel;
 
@@ -164,43 +166,59 @@ const appSource = await readFile(new URL("../../public/js/app.js", import.meta.u
 // Exercise the actual initialization path with a last-visited category saved on
 // the device. Opening the app chooses the first visible category, while normal
 // navigation and imported-workspace restoration retain their own selection.
-const bootStart = appSource.indexOf("\nportfolio = loadPortfolio();") + 1;
-const bootEnd = appSource.indexOf("\nasync function persistPlcDraft(", bootStart);
-assert.ok(bootStart > 0 && bootEnd > bootStart);
 const loadDefinition = appSource.match(/^function loadPortfolio\([^]*?^\}/m)?.[0];
 const importDefinition = appSource.match(/^function normalizeImportedPortfolio\([^]*?^\}/m)?.[0];
-assert.ok(loadDefinition && importDefinition);
+const initializeDefinition = appSource.match(/^async function initializeWorkspace\([^]*?^\}/m)?.[0];
+const startDefinition = appSource.match(/^function startWorkspace\([^]*?^\}/m)?.[0];
+assert.ok(loadDefinition && importDefinition && initializeDefinition && startDefinition);
 const startupPortfolio = (first = "audio", activeCategoryId = "mice", version = 4) => ({
   version, activeCategoryId, settings: { timeline: { startMonth: "2026-01", endMonth: "2030-12" } },
   categories: [first, ...["audio", "mice", "console"].filter(id => id !== first)].map(id => ({ id, name: id,
-    board: { products: [{ id: `${id}-product`, name: `${id} product`, ffsDate: "2028-04-01", roadmap: { startMonth: "2028-07", endMonth: "2030-12" } }] } })),
+    board: { lanes: [{ id: `${id}-lane` }], products: [{ id: `${id}-product`, name: `${id} product`, ffsDate: "2028-04-01", roadmap: { startMonth: "2028-07", endMonth: "2030-12" } }] } })),
 });
+function bootHarness({ saved = null, prior = null, legacy = null, database = null, failDatabase = false, denyLegacy = false, holdRead = false, defaultFirst = 'audio' } = {}) {
+  const activation = [], stored = new Map(), baselineReads = [], writes = [], notices = [], events = [], features = [];
+  if (saved != null) stored.set("current", typeof saved === "string" ? saved : JSON.stringify(saved));
+  if (prior != null) stored.set("previous", typeof prior === "string" ? prior : JSON.stringify(prior));
+  if (legacy != null) stored.set("legacy", typeof legacy === "string" ? legacy : JSON.stringify(legacy));
+  const shell = { inert: false, setAttribute() {}, removeAttribute() {} }, status = { classList: { add() {}, remove() {} } }, message = { textContent: "" }, retry = { hidden: true };
+  let durable = typeof database === "string" || database === null ? database : JSON.stringify(database), release;
+  const boot = {
+    portfolio: null, activeCategoryId: null, localDateBaseline: null, workspaceOpening: true, workspaceRecovery: null, workspaceRecoveryPlan: null,
+    pendingLegacyImageBlobs: [], workspaceValidationPending: false,
+    STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
+    localStorage: { getItem(key) { if (denyLegacy) throw new Error("Synthetic denied legacy storage"); return stored.get(key) ?? null; } },
+    workspaceStorage: {
+      async read() { if (failDatabase) throw new Error("Synthetic database read failure"); if (holdRead) return new Promise(resolve => { release = resolve; }); return durable; },
+      async save(raw, options) { writes.push({ raw, options }); durable = raw; },
+    },
+    document: { querySelector: () => shell, getElementById: id => ({ workspaceOpeningStatus: status, workspaceOpeningMessage: message, workspaceOpeningRetry: retry })[id] },
+    window: { dispatchEvent: event => events.push(event.type) }, CustomEvent: class { constructor(type) { this.type = type; } },
+    showWorkspaceNotice: (...args) => notices.push(args), showWorkspaceRecovery() {}, PortfolioNotifications: { resolve() {} },
+    ensurePortfolioSchema: value => ({ ...value, version: 4 }),
+    createDefaultPortfolio: () => startupPortfolio(defaultFirst, defaultFirst),
+    categoryDefinition: id => ({ id }), ensureBoardSchema: value => structuredClone(value), migrateLegacyProductImages() {},
+    PLCImporter: { snapshotDateValues(value) { baselineReads.push(structuredClone(value.categories)); return { unchanged: true }; } },
+    activateCategory(categoryId, options) { const category = boot.portfolio.categories.find(item => item.id === categoryId) || boot.portfolio.categories[0]; boot.activeCategoryId = category.id; boot.portfolio.activeCategoryId = category.id; activation.push({ id: category.id, options: { ...options } }); },
+    syncControls() {}, renderInspector() {}, setView() {}, initializeWorkspaceFeatures() { features.push(true); },
+    packageCodec: () => ({ normalizePackageInfo: value => value || null }),
+  };
+  Object.assign(boot, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
+vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${initializeDefinition}\n${startDefinition}`, boot);
+  return { boot, activation, stored, baselineReads, writes, notices, events, features, shell, retry, release: value => release(value), get durable() { return durable; } };
+}
 for (const [label, saved, prior, expected] of [
   ["saved last category", startupPortfolio(), null, "audio"],
   ["reordered category list", startupPortfolio("console"), null, "console"],
   ["previous workspace version", null, startupPortfolio("console", "mice", 3), "console"],
   ["first browser opening", null, null, "audio"],
-  ["unreadable local storage", "broken json", null, "audio"],
 ]) {
-  const activation = [], stored = new Map(), baselineReads = [];
-  if (saved != null) stored.set("current", typeof saved === "string" ? saved : JSON.stringify(saved));
-  if (prior != null) stored.set("previous", JSON.stringify(prior));
-  const boot = {
-    portfolio: null, activeCategoryId: null, localDateBaseline: null,
-    persistedWorkspaceStorage: undefined, unreadableWorkspaceStorage: null, queueMicrotask: callback => callback(), showWorkspaceNotice() {},
-    STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
-    localStorage: { getItem: key => stored.get(key) || null },
-    ensurePortfolioSchema: value => ({ ...value, version: 4 }),
-    createDefaultPortfolio: () => startupPortfolio("audio", "audio"),
-    PLCImporter: { snapshotDateValues(value) { baselineReads.push(structuredClone(value.categories)); return { unchanged: true }; } },
-    activateCategory(categoryId, options) { const category = boot.portfolio.categories.find(item => item.id === categoryId) || boot.portfolio.categories[0]; boot.activeCategoryId = category.id; boot.portfolio.activeCategoryId = category.id; activation.push({ id: category.id, options: { ...options } }); },
-    syncControls() {}, renderInspector() {}, setView() {}, flushPendingLegacyImages() {},
-    packageCodec: () => ({ normalizePackageInfo: value => value || null }),
-  };
-  vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${appSource.slice(bootStart, bootEnd)}`, boot);
+  const { boot, activation, stored, baselineReads, writes, events } = bootHarness({ saved, prior });
+  await boot.startWorkspace();
   assert.equal(boot.activeCategoryId, expected, `${label}: app initialization starts at the first listed category.`);
   assert.equal(activation.length, 1); assert.equal(activation[0].options.render, false); assert.equal(activation[0].options.fitVertical, true);
   assert.deepEqual(structuredClone(boot.portfolio.categories), baselineReads[0], "Startup navigation preserves every product, date, and roadmap record.");
+  assert.equal(writes.length, 1, "migration/default data must commit before startup activation"); assert.deepEqual(events, ['portfolio:workspace-ready']);
   if (saved && typeof saved !== "string") assert.equal(JSON.parse(stored.get("current")).activeCategoryId, "mice", "Loading does not rewrite the remembered selection before startup activation.");
   boot.activateCategory("mice", { render: true }); assert.equal(boot.activeCategoryId, "mice", "Normal navigation can still change categories in the same session.");
   const imported = boot.normalizeImportedPortfolio(startupPortfolio("audio", "console"));
@@ -208,11 +226,46 @@ for (const [label, saved, prior, expected] of [
   const preserved = boot.loadPortfolio();
   if (saved && typeof saved !== "string" || prior) assert.equal(preserved.activeCategoryId, "mice", "Schema loading remains independent of the fresh-opening category policy.");
 }
+for (const [label, options] of [
+  ['corrupt current legacy JSON', { saved: 'broken json' }],
+  ['wrong-shape current legacy JSON', { saved: '{}' }],
+  ['corrupt previous legacy JSON', { prior: 'broken json' }],
+  ['corrupt v1 legacy JSON', { legacy: 'broken json' }],
+  ['denied legacy storage read', { denyLegacy: true }],
+  ['failed database read', { failDatabase: true }],
+  ['corrupt durable JSON', { database: 'broken json', saved: startupPortfolio() }],
+  ['valid JSON wrong durable shape', { database: '{}' }],
+  ['null durable category array', { database: { version: 4, categories: null } }],
+  ['empty durable category array', { database: { version: 4, categories: [] } }],
+  ['wrong durable version', { database: { ...startupPortfolio(), version: 999 } }],
+]) {
+  const h = bootHarness(options), legacyBefore = Array.from(h.stored);
+  await assert.rejects(h.boot.startWorkspace(), undefined, label);
+  assert.equal(h.activation.length, 0, label + ': no rendered default activation'); assert.equal(h.writes.length, 0, label + ': no seed/replacement durable write'); assert.equal(h.features.length, 0, label + ': no initialized master/features');
+  assert.equal(h.boot.portfolio, null); assert.equal(h.boot.workspaceOpening, true); assert.deepEqual(Array.from(h.stored), legacyBefore); assert.equal(h.retry.hidden, false, 'failure exposes accessible retry');
+}
+{
+  const legacy = { version: 1, lanes: [{ id: 'original-lane' }], products: [{ id: 'original-product', name: 'Legacy product', laneId: 'original-lane', specs: [{ id: 'original-spec', label: 'Legacy', value: 'Retained' }], privateSource: 'Retained source' }] };
+  const h = bootHarness({ legacy, defaultFirst: 'pc-gaming-audio' }); await h.boot.startWorkspace();
+  assert.deepEqual(structuredClone(h.boot.portfolio.categories[0].board), legacy, 'the supported v1 board migration retains all original product/source rows'); assert.equal(h.writes.length, 1);
+}
+{
+  const database = startupPortfolio('console'), h = bootHarness({ saved: startupPortfolio('audio'), database, holdRead: true });
+  const loading = h.boot.startWorkspace(); assert.equal(h.activation.length, 0); assert.equal(h.writes.length, 0); assert.equal(h.shell.inert, true);
+  await new Promise(setImmediate); // Font readiness precedes the durable database read.
+  h.release(JSON.stringify(database)); await loading;
+  assert.equal(h.boot.activeCategoryId, 'console', 'the durable DB wins over an older legacy selection'); assert.equal(h.writes.length, 0); assert.equal(h.shell.inert, false);
+}
+{
+  const large = startupPortfolio(), h = bootHarness({ database: { ...large, masterLocalBaseline: [{ exact: 'retained' }], masterLocalMerges: [{ sourceProduct: { specs: [{ id: 'original', raw: 'retained' }] } }], masterLocalAssetIds: { old: 'local' }, unknownEvidence: 'x'.repeat(5 * 1024 * 1024) } });
+  const durableBefore = h.durable; await h.boot.startWorkspace(); assert.equal(h.writes.length, 0); assert.equal(h.durable, durableBefore);
+  assert.equal(h.boot.portfolio.masterLocalMerges[0].sourceProduct.specs[0].raw, 'retained'); assert.equal(h.boot.portfolio.masterLocalAssetIds.old, 'local'); assert.equal(h.boot.portfolio.unknownEvidence.length, 5 * 1024 * 1024);
+}
 const standardStatusCases = [
-  ["new", "NEW PRODUCT", "#5fd6c1"],
-  ["embargo", "UPCOMING UNDER EMBARGO", "#ef5b5b"],
-  ["in-development", "IN-DEVELOPMENT", "#7aa2cc"],
-  ["sunsetting", "SUNSETTING", "#d4a56a"],
+  ["new", "NEW PRODUCT", "#BBBCC0"],
+  ["embargo", "UPCOMING UNDER EMBARGO", "#FF2525"],
+  ["in-development", "IN-DEVELOPMENT", "#56595E"],
+  ["sunsetting", "SUNSETTING", "#4D5054"],
 ];
 const standardStatusSource =
   appSource.slice(appSource.indexOf("const STANDARD_CARD_STATUSES"), appSource.indexOf("const PRODUCT_TIER_OPTIONS")) +
@@ -222,6 +275,7 @@ const action = appSource.slice(appSource.indexOf("function setRoadmapYearSpan(")
 const sandbox = { board: portfolio.categories[0].board, activeView: "roadmap", monthIndex: (value) => Number(value.slice(0, 4)) * 12 + Number(value.slice(5)) - 1,
   monthStringFromDate: () => "2026-10", updateTimelineSettings: (patch) => model.syncTimelineSettings(portfolio, patch),
   requestAnimationFrame: (callback) => callback(), fitRoadmapTimeline: () => {}, roadmapScroll: { scrollTo: () => {} } };
+Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(action, sandbox);
 for (const years of [3, 5, 10]) {
@@ -230,36 +284,38 @@ for (const years of [3, 5, 10]) {
 }
 
 // Exercise the real canvas geometry: compact empty cards, stable category heights,
-// bounded overflow, and fully expanded detailed specifications.
+// ranked summaries, duplicate suppression, and complete SKU footer space.
 let layoutLaneCount = 2;
 let supportedFullSpecCategory = false;
 const layoutSandbox = {
+  activeCategoryId: "pc-gaming-audio", PortfolioCardSpecs: globalThis.PortfolioCardSpecs,
   board: { products: [], settings: { showSkus: true, fullSingleLaneSpecs: false } },
   sortedLanes: () => Array.from({ length: layoutLaneCount }, (_, index) => ({ id: `lane-${index}` })),
   categoryDefinition: () => ({ fullSpecCards: supportedFullSpecCategory }),
   variantFooterLayout: (item) => ({ height: item.footerHeight || 0 }),
   visibleProducts: () => { throw new Error("Search results must not control category geometry"); },
 };
+Object.assign(layoutSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(layoutSandbox);
 vm.runInContext(
   appSource.slice(appSource.indexOf("const CARD_WIDTH"), appSource.indexOf("const PLACEHOLDER_IMAGE")) +
   appSource.slice(appSource.indexOf("const FULL_SPEC_MIN_CARD_HEIGHT"), appSource.indexOf("// Canvas colors")) +
-  appSource.slice(appSource.indexOf("function normalizedSpecLabel("), appSource.indexOf("function viewerInfoVisualWidth(")),
+  appSource.slice(appSource.indexOf("function cardSpecifications("), appSource.indexOf("function viewerInfoVisualWidth(")),
   layoutSandbox,
 );
 layoutSandbox.board.products = [{ specs: [], footerHeight: 50 }];
 assert.equal(layoutSandbox.productCardLayout().cardHeight, 300, "empty spec space collapses");
 layoutSandbox.board.products.push({ specs: Array.from({ length: 4 }, () => ({ label: "Connection", value: "USB" })), footerHeight: 50 });
-assert.equal(layoutSandbox.productCardLayout().cardHeight, 415, "all products determine aligned category height");
+assert.equal(layoutSandbox.productCardLayout().cardHeight, 319, "equivalent saved rows occupy one front summary row");
 layoutSandbox.board.products.push({ specs: Array.from({ length: 20 }, () => ({ label: "Connection", value: "USB" })), footerHeight: 104 });
-assert.equal(layoutSandbox.productCardLayout().cardHeight, 552, "compact overflow remains bounded");
-assert.equal(layoutSandbox.productCardLayout().laneHeight, 622);
+assert.equal(layoutSandbox.productCardLayout().cardHeight, 373, "stored duplicate rows cannot inflate cards; full SKU footer space survives");
+assert.equal(layoutSandbox.productCardLayout().laneHeight, 443);
 const compactLayout = layoutSandbox.productCardLayout();
 layoutSandbox.board.settings.fullSingleLaneSpecs = true;
 assert.deepEqual(layoutSandbox.productCardLayout(), compactLayout, "a legacy true preference must not expand unsupported multi-lane cards");
 layoutLaneCount = 1;
 const singleLaneLayout = layoutSandbox.productCardLayout();
-assert.ok(singleLaneLayout.detailed && singleLaneLayout.cardHeight > 552, "single-lane cards automatically expand full specifications without clipping");
+assert.ok(singleLaneLayout.detailed && singleLaneLayout.cardHeight < 552, "single-lane cards retain their image and detailed styling with bounded summary height");
 layoutSandbox.board.settings.fullSingleLaneSpecs = false;
 assert.deepEqual(layoutSandbox.productCardLayout(), singleLaneLayout, "a legacy false preference must not suppress automatic full specifications");
 assert.equal(layoutSandbox.board.settings.fullSingleLaneSpecs, false, "layout rendering must preserve inert legacy preferences");
@@ -277,6 +333,7 @@ assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty single-la
 
 const presentationSandbox = { PortfolioModel: model, UI_PALETTE: { charcoal600: "#2c2c2c", carbon: "#111111" },
   normalizeRoadmapStatus: (stage) => stage || "in-planning" };
+Object.assign(presentationSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(presentationSandbox);
 vm.runInContext(
   standardStatusSource +
@@ -306,12 +363,12 @@ for (const invalidStatus of [undefined, null, "", "unknown", "constructor", "toS
 }
 for (const statusType of ["none", ...standardStatusCases.map(([status]) => status)]) {
   const product = { statusType, roadmap: { status: "embargo" } };
-  assert.equal(model.productTone(product), "#ef5b5b", "embargo remains visible even when another preset is selected");
-  assert.equal(presentationSandbox.productPresentation(product).primaryColor, "#ef5b5b", "embargo precedence also applies to the actual card presentation");
-  assert.equal(presentationSandbox.roadmapStatusColor(product), "#ef5b5b", "embargo precedence remains consistent on the roadmap");
-  assert.equal(model.productLabelColor(product, "#111111"), "#ffffff", "Every red embargo surface uses white label text.");
+  assert.equal(model.productTone(product), "#FF2525", "embargo remains visible even when another preset is selected");
+  assert.equal(presentationSandbox.productPresentation(product).primaryColor, "#FF2525", "embargo precedence also applies to the actual card presentation");
+  assert.equal(presentationSandbox.roadmapStatusColor(product), "#FF2525", "embargo precedence remains consistent on the roadmap");
+  assert.equal(model.productLabelColor(product, "#111111"), "#1A1B1C", "Every bright red embargo surface uses dark label text for readable contrast.");
 }
-assert.equal(model.productLabelColor({ statusType: "embargo" }, "#111111"), "#ffffff");
+assert.equal(model.productLabelColor({ statusType: "embargo" }, "#111111"), "#1A1B1C");
 for (const product of [null, {}, ...standardStatusCases.filter(([type]) => type !== "embargo").map(([statusType]) => ({ statusType })), { statusType: "none", roadmap: { status: "in-development" } }]) {
   assert.equal(model.productLabelColor(product, "#111111"), "#111111", "The embargo preference leaves normal contrast choices intact.");
 }
@@ -323,6 +380,7 @@ const consoleTextColors = [];
 const consoleShapes = [];
 let consoleProduct;
 Object.assign(presentationSandbox, {
+  cardSpecifications: (product) => globalThis.PortfolioCardSpecs.select(product, { categoryId: "console-gaming-audio" }),
   board: { settings: { showPrices: false, showSkus: false } }, portfolio: { settings: {} },
   UI_PALETTE: { charcoal600: "#2c2c2c", charcoal700: "#222222", charcoal500: "#333333", silver: "#cccccc" },
   CARD_WIDTH: 246, STATUS_BANNER_HEIGHT: 24, INFO_BUTTON_WIDTH: 54,
@@ -335,6 +393,7 @@ Object.assign(presentationSandbox, {
   PortfolioDetails: { render: () => "Details", bind() {} }, productDateHistoryOptions: () => ({}), copyTextToClipboard() {},
 });
 vm.runInContext(
+  appSource.slice(appSource.indexOf("function productCardTitle("), appSource.indexOf("function normalizedSpecLabel(")) +
   appSource.slice(appSource.indexOf("function drawCard("), appSource.indexOf("function roadmapRange(")) +
   appSource.slice(appSource.indexOf("function renderSplitProduct("), appSource.indexOf("function updateLinkedViewButton(")),
   presentationSandbox,
@@ -357,20 +416,20 @@ for (const [statusType, label, color] of standardStatusCases) {
       presentationSandbox.drawCard(consoleContext, consoleProduct, 0, 0, false, { ...consoleLayout, detailed }, false);
       assert.equal(consoleText[0], label, "both compact and detailed cards start with the shared status label");
       assert.equal(consoleShapes[1][6], color, "the main banner uses the theme accent");
-      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#ffffff" : "#111111", "Compact, detailed, and exported card rendering use white embargo text and dark text on the teal, blue, and amber presets.");
+      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#1A1B1C" : "#111111", "Compact, detailed, and exported cards share the same readable embargo label color.");
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
         assert.equal(consoleShapes[2][6], color, "the variant badge matches the status banner color");
-        assert.equal(consoleShapes[2][7], color, "the variant badge border matches its fill");
+        assert.equal(consoleShapes[2][7], undefined, "the variant badge uses its fill without a decorative border");
         assert.equal(consoleTextColors[1], consoleTextColors[0], "status and variant labels share readable text contrast");
         assert.ok(consoleShapes[2][1] + consoleShapes[2][3] < 246 - 54 - 8, "the platform badge leaves room for Details");
       }
     }
     presentationSandbox.renderSplitProduct();
     assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`>${label}</div>`), "roadmap details retain the same primary status");
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#ffffff" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#1A1B1C" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
     assert.equal(presentationSandbox.splitProduct.innerHTML.includes('class="split-platform-label"'), Boolean(presentation.secondaryLabel));
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${color};--product-label-color:${statusType === "embargo" ? "#ffffff" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${color};--product-label-color:${statusType === "embargo" ? "#1A1B1C" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
     assert.equal(JSON.stringify(consoleProduct), before, "presentation never changes the saved manual status or platform label");
   }
 }
@@ -405,6 +464,7 @@ const pricePortfolio = { settings: { showRoadmapMsrp: false }, categories: [{ id
 const controls = new Map([["#showPrices", {}], ["#roadmapShowMsrp", {}]]);
 let savedPriceChanges = 0;
 const priceSandbox = {
+  cardSpecifications: (product) => globalThis.PortfolioCardSpecs.select(product, { categoryId: "pc-gaming-audio" }),
   PortfolioModel: model, board: priceBoard, portfolio: pricePortfolio,
   $: (selector) => controls.get(selector), scheduleSave: () => { savedPriceChanges += 1; },
   syncControls: () => {}, renderActiveView: () => {}, renderRoadmaps: () => {},
@@ -413,8 +473,10 @@ const priceSandbox = {
   roundRect: () => {}, loadImage: () => ({ ready: false }), productImageSource: () => "",
   wrapText: () => {}, drawProductInfoButton: () => {}, viewerInfoProductId: null, viewerInfoProgress: 0,
 };
+Object.assign(priceSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(priceSandbox);
 vm.runInContext(
+  appSource.slice(appSource.indexOf("function productCardTitle("), appSource.indexOf("function normalizedSpecLabel(")) +
   appSource.slice(appSource.indexOf("function productPriceText("), appSource.indexOf("function parseHexColor(")) +
   appSource.slice(appSource.indexOf("function roadmapProductBarLabel("), appSource.indexOf("function drawRoadmapTo(")) +
   appSource.slice(appSource.indexOf("function drawCard("), appSource.indexOf("function roadmapRange(")) +
@@ -486,8 +548,8 @@ assert.equal(model.layoutProductLanes(geometryLanes, geometryLayout, { top: 80 }
 assert.deepEqual(model.layoutProductLanes([], geometryLayout), { rows: [], height: 0 });
 assert.equal(JSON.stringify({ lanes: geometryLanes, layout: geometryLayout }), geometryInputs, "geometry never changes saved lanes or card layout");
 
-// Inline details use horizontal room only. Dimensions, drawing, lane labels,
-// hit testing, and dragging keep every lane at its original position.
+// Inline details grow only their selected lane. Drawing, lane labels, hit
+// testing and dragging use the same reflowed rows; exports retain closed rows.
 const laneProducts = geometryLanes.map((lane) => ({ id: `p-${lane.id}`, laneId: lane.id, order: 0 }));
 laneProducts.push({ id: "p-following", laneId: "first", order: 1 });
 let visibleLaneProducts = laneProducts;
@@ -499,12 +561,12 @@ const laneSandbox = {
   activeCategoryId: "geometry", searchQuery: "", productCardMotion: null, productCardMotionFrame: null,
   viewerInfoProductId: "p-middle", viewerInfoProgress: 1,
   sortedLanes: () => geometryLanes, visibleProducts: () => visibleLaneProducts, productCardLayout: () => geometryLayout,
-  viewerInfoVisualWidth: () => 540,
+  viewerInfoVisualWidth: () => 500, viewerInfoVisualHeight: () => 600, viewerInfoStacked: () => false,
   PRODUCT_MIN_ZOOM: .2, LANE_TOP: 34, GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, SIDE_PADDING: 40,
   inspectorOpen: false, inspector: { offsetWidth: 0 }, canvasScroll: { clientWidth: 800, scrollTop: 0 },
   laneRailInner: { style: {}, innerHTML: "" }, UI_PALETTE: { charcoal800: "#171717" },
   roundRect: (...args) => { laneBackgrounds.push(args.slice(1, 5)); },
-  drawCard: (_context, item, x, y) => { drawnLaneCards.push({ id: item.id, x, y }); },
+  drawCard: (_context, item, x, y, selected, layout) => { drawnLaneCards.push({ id: item.id, x, y, selected, height: layout.cardHeight, extended: Boolean(layout.viewerExtended) }); },
   escapeHtml: (value) => String(value || ""), selectedId: null, renderedCards: [], dragState: null, panState: null, productLayoutEditing: true,
   canvas: { style: {}, hasPointerCapture: () => false },
   renderBoard() {},
@@ -516,6 +578,7 @@ function appSection(start, end) {
   assert.ok(startIndex >= 0 && endIndex > startIndex, `application section is present: ${start}`);
   return appSource.slice(startIndex, endIndex);
 }
+Object.assign(laneSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(laneSandbox);
 vm.runInContext(
   appSection("function viewerInfoReserveLogical(", "function setupCanvas(") +
@@ -532,7 +595,8 @@ for (const drawZoom of [.2, .65, 1, 1.5, 2]) {
   for (const lane of geometryLanes) {
     laneSandbox.viewerInfoProductId = `p-${lane.id}`;
     const dimensions = laneSandbox.getCanvasDimensions();
-    closeTo(dimensions.height, 34 + 1110 + 20, "opening details preserves the original canvas height");
+    const selectedIndex = geometryLanes.findIndex((item) => item.id === lane.id), extra = Math.max(0, 600 / drawZoom - geometryLayout.cardHeight);
+    closeTo(dimensions.height, 34 + 1110 + 20 + extra, "the temporary selected lane accommodates the complete attached reading area");
     drawnLaneCards.length = 0;
     laneBackgrounds.length = 0;
     laneSandbox.drawBoardTo(laneContext, dimensions);
@@ -540,9 +604,11 @@ for (const drawZoom of [.2, .65, 1, 1.5, 2]) {
     const railRows = [...laneSandbox.laneRailInner.innerHTML.matchAll(/style="top:([\d.]+)px;height:([\d.]+)px"/g)];
     assert.equal(railRows.length, geometryLanes.length);
     dimensions.laneRows.forEach((row, index) => {
-      closeTo(row.top, baseGeometry.rows[index].top, "opening details never moves a lane");
+      closeTo(row.top, baseGeometry.rows[index].top + (index > selectedIndex ? extra : 0), "only following lanes move smoothly below the expanded card");
       const item = drawnLaneCards.find((card) => card.id === `p-${row.lane.id}`);
       closeTo(item.y, row.top, "drawn card uses centralized lane position");
+      closeTo(item.height, geometryLayout.cardHeight + (index === selectedIndex ? extra : 0), "only the viewed source card stretches with its reading area");
+      assert.equal(item.extended, index === selectedIndex, "the joined source card delegates its outline to the combined surface");
       closeTo(laneBackgrounds[index][1], row.top - 4, "lane background follows row top");
       closeTo(laneBackgrounds[index][3], row.contentHeight + 8, "lane background retains the original card height");
       closeTo(Number(railRows[index][1]), (row.top - 4) * drawZoom, "lane rail follows the same scaled position");
@@ -555,7 +621,7 @@ laneSandbox.zoom = .65;
 laneSandbox.viewerInfoProductId = "p-first";
 const openDimensions = laneSandbox.getCanvasDimensions();
 laneSandbox.viewerInfoProgress = .01;
-assert.equal(laneSandbox.getCanvasDimensions().height, openDimensions.height, "opening animation never reserves vertical space");
+closeTo(laneSandbox.getCanvasDimensions().height, 34 + 1110 + 20 + (openDimensions.height - (34 + 1110 + 20)) * .01, "lane reflow follows the same opening progress instead of jumping");
 laneSandbox.viewerInfoProgress = 1;
 laneSandbox.dragState = {
   productId: "p-last", pointerId: 1, moved: true, board: laneSandbox.board,
@@ -586,10 +652,11 @@ drawnLaneCards.length = 0;
 laneSandbox.drawBoardTo(laneContext, laneSandbox.getCanvasDimensions());
 const liveFollowingX = drawnLaneCards.find((item) => item.id === "p-following").x;
 const exportDimensions = laneSandbox.getCanvasDimensions({ includeViewer: false });
-assert.equal(exportDimensions.height, 34 + 1110 + 20, "exports preserve the same vertical geometry as the live board");
+assert.equal(exportDimensions.height, 34 + 1110 + 20, "exports omit all temporary inline reading height");
 drawnLaneCards.length = 0;
 laneSandbox.drawBoardTo(laneContext, exportDimensions, false);
 assert.equal(drawnLaneCards.find((item) => item.id === "p-following").x, 18 + 256, "exports contain no temporary horizontal details gap");
+assert.ok(drawnLaneCards.every((item) => item.height === geometryLayout.cardHeight && !item.extended), "exported source cards retain the original geometry and do not acquire UI wings");
 assert.ok(liveFollowingX > 18 + 256, "the live board still makes horizontal room beside the viewed product");
 // View actions operate on independent product and timeline scales. Execute
 // their real bindings with small scroll/DOM adapters so moving a control
@@ -666,6 +733,7 @@ function timelineScrollAdapter(clientWidth, scrollLeft) {
 }
 viewSandbox.roadmapScroll = timelineScrollAdapter(900, 500);
 viewSandbox.splitRoadmapScroll = timelineScrollAdapter(700, 320);
+Object.assign(viewSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(viewSandbox);
 vm.runInContext(
   ["clampViewZoom", "snappedViewZoom", "steppedViewZoom", "syncViewZoomControls", "setProductZoom", "setRoadmapZoom", "fitRoadmapTimeline", "fitProductBoard"].map(applicationFunction).join("\n") +
