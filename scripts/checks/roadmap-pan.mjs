@@ -30,7 +30,7 @@ function harness() {
     RoadmapInteraction: globalThis.RoadmapInteraction,
     PortfolioModel: { mergeProductUpdate: (value, patch) => ({ ...value, roadmap: { ...value.roadmap, ...patch.roadmap } }) },
     requestAnimationFrame: (fn) => { frames.set(++nextFrame, fn); return nextFrame; }, cancelAnimationFrame: (id) => frames.delete(id),
-    roadmapDimensions: () => ({}), drawRoadmapTo: () => { counts.paints++; }, syncRoadmapNavigator() {}, renderRoadmapFor() {}, renderRoadmaps() {},
+    roadmapDimensions: () => ({}), viewportCanvasContext: (target) => target.getContext('2d'), drawRoadmapTo: () => { counts.paints++; }, syncRoadmapNavigator() {}, renderRoadmapFor() {}, renderRoadmaps() {},
     renderInspector() {}, renderSplitProduct() {}, renderStatus() {}, updateRoadmapEditControls() {}, announceRoadmapEdit() {},
     stopRoadmapSlotEditing() {}, clearSelection: () => { context.selectedId = null; }, selectedProduct: () => board.products.find((value) => value.id === context.selectedId),
     roadmapGroups: () => [{ family: 'Headsets', products: board.products }], roadmapGroupsForProducts: (products) => [{ family: 'Headsets', products }],

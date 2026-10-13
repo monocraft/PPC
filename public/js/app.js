@@ -2,11 +2,11 @@
 
 const STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v4-shared-demo" : "product-portfolio-canvas-v4";
 const PACKAGE_RECOVERY_KEY = `${STORAGE_KEY}-package-recovery`; // Legacy import snapshot; only read to clean up older saved data.
-const MAX_PACKAGE_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_PACKAGE_MANIFEST_BYTES = globalThis.PortfolioPackage.MAX_PACKAGE_BYTES;
 const PREVIOUS_STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v3-shared-demo" : "product-portfolio-canvas-v3";
 const LEGACY_STORAGE_KEY = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-canvas-v1-shared-demo" : "product-portfolio-canvas-v1";
 const IMAGE_DB_NAME = globalThis.PPC_MASTER_SOURCE?.demo ? "product-portfolio-image-assets-v1-shared-demo" : "product-portfolio-image-assets-v1";
-const IMAGE_DB_VERSION = 1;
+const IMAGE_DB_VERSION = 2;
 const IMAGE_STORE_NAME = "images";
 const CARD_WIDTH = 246;
 const CARD_HEIGHT = 552;
@@ -46,9 +46,8 @@ const FULL_SPEC_IMAGE_HEIGHT = 210;
 const FULL_SPEC_TITLE_TOP = STATUS_BANNER_HEIGHT + 10 + FULL_SPEC_IMAGE_HEIGHT + 8;
 const FULL_SPEC_DETAILS_TOP_OFFSET = 66;
 
-// Canvas colors mirror the CSS design tokens in styles.css. Product/SKU colors
-// remain independent because they describe merchandise rather than application UI.
-const UI_PALETTE = Object.freeze({
+// Canvas colors come from the shared theme. Saved product-color defaults stay independent.
+const SAVED_PRODUCT_PALETTE = Object.freeze({
   trueBlack: "#121212",
   inkBlack: "#171717",
   carbon: "#202020",
@@ -73,15 +72,17 @@ const UI_PALETTE = Object.freeze({
   starDust: "#e2ddda",
   selection: "#6e7973",
 });
+const UI_PALETTE = globalThis.PortfolioTheme.uiPalette;
+let UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
 
 const COLOR_PRESETS = [
-  { value: UI_PALETTE.gunmetal, label: "Gunmetal" },
-  { value: UI_PALETTE.indigo, label: "Japanese indigo" },
-  { value: UI_PALETTE.steelTeal, label: "Steel teal" },
-  { value: UI_PALETTE.foggy, label: "Foggy" },
-  { value: UI_PALETTE.midGrey, label: "Mid grey" },
-  { value: UI_PALETTE.starDust, label: "Star dust" },
-  { value: UI_PALETTE.amaranth, label: "Amaranth" },
+  { value: SAVED_PRODUCT_PALETTE.gunmetal, label: "Gunmetal" },
+  { value: SAVED_PRODUCT_PALETTE.indigo, label: "Japanese indigo" },
+  { value: SAVED_PRODUCT_PALETTE.steelTeal, label: "Steel teal" },
+  { value: SAVED_PRODUCT_PALETTE.foggy, label: "Foggy" },
+  { value: SAVED_PRODUCT_PALETTE.midGrey, label: "Mid grey" },
+  { value: SAVED_PRODUCT_PALETTE.starDust, label: "Star dust" },
+  { value: SAVED_PRODUCT_PALETTE.amaranth, label: "Amaranth" },
 ];
 
 const STANDARD_PRODUCT_COLORS = [
@@ -171,7 +172,15 @@ const missingImageAssetIds = new Set();
 const pendingLegacyImageBlobs = [];
 let imageAssetGeneration = 0;
 let packageOperationInProgress = false;
-let imageDbPromise = null;
+const workspaceStorage = globalThis.PortfolioWorkspaceStore.create({ databaseName: IMAGE_DB_NAME, databaseVersion: IMAGE_DB_VERSION, imageStoreName: IMAGE_STORE_NAME, workspaceKey: STORAGE_KEY });
+let workspaceOpening = true;
+let workspaceRecovery = null;
+let workspaceRecoveryPlan = null;
+let workspaceRecoveryBusy = false;
+let workspaceRecoveryExportText = null;
+let workspaceSavePending = false;
+let workspaceSaveRevision = 0;
+let workspaceSaveAttempt = 0;
 const productView = $("#productView");
 const roadmapView = $("#roadmapView");
 const splitView = $("#splitView");
@@ -244,8 +253,6 @@ let viewerInfoProductId = null;
 let viewerInfoProgress = 0;
 let viewerInfoAnimationFrame = null;
 let saveTimer = null;
-let persistedWorkspaceStorage = undefined;
-let unreadableWorkspaceStorage = null;
 let activeView = "products";
 let roadmapDetailsOpen = true;
 let roadmapSearchQuery = "";
@@ -262,6 +269,18 @@ let roadmapDraft = null;
 let initialVerticalFitPending = true;
 let productLayoutEditing = false;
 let productReorderSession = null;
+const categoryZoomPreferences = globalThis.PortfolioViewRuntime?.preferences({ key: `${STORAGE_KEY}-view-state-v1`, storage: () => localStorage });
+const queueImageViewRender = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && !pptxExportInProgress) renderActiveView(); });
+const queueBoardScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && activeView === "products" && !pptxExportInProgress) renderBoard(); });
+const queuedRoadmapRenders = new Map();
+const roadmapHeaderOverlays = new Map();
+let lastWorkspaceRenderSignature = "";
+let productCardHover = null;
+let productCardActionLayer = null;
+const productCardActionRows = new Map();
+let inspectorNavigationObserver = null;
+let viewerInfoIconOrigin = null;
+let viewerInfoPendingIconFocus = null;
 
 function id() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -269,21 +288,7 @@ function id() {
 }
 
 function openImageDatabase() {
-  if (imageDbPromise) return imageDbPromise;
-  imageDbPromise = new Promise((resolve, reject) => {
-    if (!globalThis.indexedDB) {
-      reject(new Error("This browser does not support the local image library."));
-      return;
-    }
-    const request = indexedDB.open(IMAGE_DB_NAME, IMAGE_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(IMAGE_STORE_NAME)) database.createObjectStore(IMAGE_STORE_NAME, { keyPath: "id" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Unable to open the image library."));
-  });
-  return imageDbPromise;
+  return workspaceStorage.open();
 }
 
 async function imageStorePut(assetId, blob) {
@@ -1029,11 +1034,22 @@ function formatProductInfoDate(value) {
   }).format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-async function copyTextToClipboard(value) {
+async function copyTextToClipboard(value, { timeoutMs = 0, onLateNative } = {}) {
   const text = String(value || "").trim();
   if (!text) return false;
   try {
-    await navigator.clipboard.writeText(text);
+    const nativeWrite = navigator.clipboard.writeText(text);
+    if (timeoutMs > 0) {
+      let timer, timedOut = false;
+      try {
+        await Promise.race([nativeWrite, new Promise((_, reject) => {
+          timer = setTimeout(() => { timedOut = true; reject(new Error("Clipboard request timed out.")); }, timeoutMs);
+        })]);
+      } finally {
+        clearTimeout(timer);
+        if (timedOut) void Promise.resolve(nativeWrite).then(() => { try { onLateNative?.(); } catch (_) {} }, () => {});
+      }
+    } else await nativeWrite;
     return true;
   } catch {
     const textarea = document.createElement("textarea");
@@ -1079,31 +1095,31 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     categoryLabel: definition.categoryLabel,
     familyOrder: [...definition.familyOrder],
     statusColors: {
-      launched: UI_PALETTE.gunmetal,
-      "in-development": UI_PALETTE.steelTeal,
-      "in-planning": UI_PALETTE.foggyDark,
+      launched: SAVED_PRODUCT_PALETTE.gunmetal,
+      "in-development": SAVED_PRODUCT_PALETTE.steelTeal,
+      "in-planning": SAVED_PRODUCT_PALETTE.foggyDark,
     },
     ...(target.settings.roadmap || {}),
   };
   target.settings.roadmap.statusColors = {
-    launched: UI_PALETTE.gunmetal,
-    "in-development": UI_PALETTE.steelTeal,
-    "in-planning": UI_PALETTE.foggyDark,
+    launched: SAVED_PRODUCT_PALETTE.gunmetal,
+    "in-development": SAVED_PRODUCT_PALETTE.steelTeal,
+    "in-planning": SAVED_PRODUCT_PALETTE.foggyDark,
     ...(target.settings.roadmap.statusColors || {}),
   };
   const legacyRoadmapColors = {
-    launched: ["#666c66", UI_PALETTE.gunmetal],
-    "in-development": ["#4e8136", UI_PALETTE.steelTeal],
-    "in-planning": ["#8b7136", UI_PALETTE.foggyDark],
+    launched: ["#666c66", SAVED_PRODUCT_PALETTE.gunmetal],
+    "in-development": ["#4e8136", SAVED_PRODUCT_PALETTE.steelTeal],
+    "in-planning": ["#8b7136", SAVED_PRODUCT_PALETTE.foggyDark],
   };
   Object.entries(legacyRoadmapColors).forEach(([status, [legacyColor, replacement]]) => {
     if (String(target.settings.roadmap.statusColors[status] || "").toLowerCase() === legacyColor) {
       target.settings.roadmap.statusColors[status] = replacement;
     }
   });
-  target.settings.roadmap.statusColors.launched = normalizeHexColor(target.settings.roadmap.statusColors.launched, UI_PALETTE.gunmetal);
-  target.settings.roadmap.statusColors["in-development"] = normalizeHexColor(target.settings.roadmap.statusColors["in-development"], UI_PALETTE.steelTeal);
-  target.settings.roadmap.statusColors["in-planning"] = normalizeHexColor(target.settings.roadmap.statusColors["in-planning"], UI_PALETTE.foggyDark);
+  target.settings.roadmap.statusColors.launched = normalizeHexColor(target.settings.roadmap.statusColors.launched, SAVED_PRODUCT_PALETTE.gunmetal);
+  target.settings.roadmap.statusColors["in-development"] = normalizeHexColor(target.settings.roadmap.statusColors["in-development"], SAVED_PRODUCT_PALETTE.steelTeal);
+  target.settings.roadmap.statusColors["in-planning"] = normalizeHexColor(target.settings.roadmap.statusColors["in-planning"], SAVED_PRODUCT_PALETTE.foggyDark);
   target.settings.roadmap.familyOrder = Array.isArray(target.settings.roadmap.familyOrder)
     ? target.settings.roadmap.familyOrder
     : [...definition.familyOrder];
@@ -1137,15 +1153,15 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
       .map((item, partSkuIndex) => normalizePartSku(item, partSkuIndex));
     if (product.statusType === "custom") {
       product.variantLabel = product.variantLabel || product.statusLabel || "VARIANT";
-      product.variantColor = product.variantColor || product.highlightColor || UI_PALETTE.steelTeal;
+      product.variantColor = product.variantColor || product.highlightColor || SAVED_PRODUCT_PALETTE.steelTeal;
       product.statusType = "none";
     }
     product.statusType = normalizeCardStatusType(product.statusType);
     product.statusLabel = standardizedStatus(product.statusType).label;
     product.variantLabel = String(product.variantLabel || "");
-    product.variantColor = String(product.variantColor || product.highlightColor || UI_PALETTE.steelTeal);
-    if (product.variantColor.toLowerCase() === "#3f6f91") product.variantColor = UI_PALETTE.steelTeal;
-    product.variantColor = normalizeHexColor(product.variantColor, UI_PALETTE.steelTeal);
+    product.variantColor = String(product.variantColor || product.highlightColor || SAVED_PRODUCT_PALETTE.steelTeal);
+    if (product.variantColor.toLowerCase() === "#3f6f91") product.variantColor = SAVED_PRODUCT_PALETTE.steelTeal;
+    product.variantColor = normalizeHexColor(product.variantColor, SAVED_PRODUCT_PALETTE.steelTeal);
     product.highlightEnabled = false;
     product.highlightColor = product.variantColor;
     product.specs = PortfolioModel.normalizeSpecifications(product.specs, id);
@@ -1200,9 +1216,9 @@ function makeProduct(productId, name, price, laneId, order, options = {}) {
     statusType,
     statusLabel: standardizedStatus(statusType).label,
     variantLabel: String(options.variantLabel || ""),
-    variantColor: normalizeHexColor(options.variantColor, UI_PALETTE.steelTeal),
+    variantColor: normalizeHexColor(options.variantColor, SAVED_PRODUCT_PALETTE.steelTeal),
     highlightEnabled: false,
-    highlightColor: normalizeHexColor(options.variantColor || options.highlightColor, UI_PALETTE.steelTeal),
+    highlightColor: normalizeHexColor(options.variantColor || options.highlightColor, SAVED_PRODUCT_PALETTE.steelTeal),
     roadmap: options.roadmap || null,
     specs: options.specs || [],
     featuredVariantId: String(options.featuredVariantId || ""),
@@ -1283,7 +1299,7 @@ function productFromBlueprint(blueprint, definition, index) {
     statusType: status,
     statusLabel: standardizedStatus(status).label,
     variantLabel: blueprint.variantLabel || "",
-    variantColor: blueprint.variantColor || UI_PALETTE.steelTeal,
+    variantColor: blueprint.variantColor || SAVED_PRODUCT_PALETTE.steelTeal,
     roadmap: makeRoadmap(
       blueprint.family || "Other",
       launchMonth,
@@ -1378,89 +1394,72 @@ function ensurePortfolioSchema(target) {
 }
 
 function loadPortfolio() {
-  try { persistedWorkspaceStorage = localStorage.getItem(STORAGE_KEY); } catch (_) { persistedWorkspaceStorage = undefined; }
-  try {
-    const parsed = JSON.parse(persistedWorkspaceStorage ?? localStorage.getItem(STORAGE_KEY));
-    if (parsed?.version === 4) return ensurePortfolioSchema(parsed);
-    if (persistedWorkspaceStorage !== null && persistedWorkspaceStorage !== undefined) throw new Error("The saved workspace uses an unsupported version.");
-  } catch (error) {
-    if (persistedWorkspaceStorage !== null && persistedWorkspaceStorage !== undefined) {
-      unreadableWorkspaceStorage = persistedWorkspaceStorage;
-      queueMicrotask(() => showWorkspaceNotice("The saved workspace could not be opened. Its original data is protected from autosave. Export it for recovery, or import a valid package to replace it.", {
-        id: "workspace-storage-recovery", title: "Saved workspace needs recovery", severity: "error",
-        actions: [{ label: "Export damaged saved data", onClick: () => downloadBlob(new Blob([unreadableWorkspaceStorage], { type: "application/json" }), "product-portfolio-recovery.data") }],
-      }));
-    }
-  }
-  try {
-    const previous = JSON.parse(localStorage.getItem(PREVIOUS_STORAGE_KEY));
-    if (previous?.version === 3 && Array.isArray(previous.categories)) return ensurePortfolioSchema(previous);
-  } catch (_) {}
-  try {
-    const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY));
-    if (legacy?.version === 1 && Array.isArray(legacy.products) && Array.isArray(legacy.lanes)) {
+  for (const [key, version] of [[STORAGE_KEY, 4], [PREVIOUS_STORAGE_KEY, 3], [LEGACY_STORAGE_KEY, 1]]) {
+    let raw, parsed;
+    try { raw = localStorage.getItem(key); }
+    catch (_) { throw new Error("This browser could not read the previous saved workspace. It has not been replaced. Retry opening the portfolio."); }
+    if (raw === null) continue;
+    try { parsed = JSON.parse(raw); }
+    catch (_) { throw new Error("The previous saved workspace data could not be read. It has not been replaced. Restore a backup or retry opening it."); }
+    if (parsed?.version === version && [4, 3].includes(version) && Array.isArray(parsed.categories) && parsed.categories.length
+      && parsed.categories.every(category => category?.board && Array.isArray(category.board.products) && Array.isArray(category.board.lanes))) return ensurePortfolioSchema(parsed);
+    if (version === 1 && parsed?.version === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.lanes)) {
       const migrated = createDefaultPortfolio();
       const audio = migrated.categories.find((item) => item.id === "pc-gaming-audio");
-      audio.board = ensureBoardSchema(legacy, categoryDefinition("pc-gaming-audio"));
+      audio.board = ensureBoardSchema(parsed, categoryDefinition("pc-gaming-audio"));
       migrateLegacyProductImages(migrated);
       return migrated;
     }
-  } catch (_) {}
+    throw new Error("The previous saved workspace format needs recovery. It has not been replaced. Restore a backup before replacing it.");
+  }
   return createDefaultPortfolio();
 }
 
-async function persistPortfolioStorage(serialized, { allowRecovery = false } = {}) {
-  if (unreadableWorkspaceStorage !== null && !allowRecovery) throw new Error("The damaged saved workspace is protected. Export it or explicitly import a replacement before saving new changes.");
-  const owner = portfolio;
-  const expectedCurrent = JSON.stringify(owner);
-  const commit = () => {
-    if (portfolio !== owner || JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while this save was waiting. Your latest changes remain in memory. Try saving or exporting again.");
-    const current = localStorage.getItem(STORAGE_KEY);
-    if (persistedWorkspaceStorage !== undefined && current !== persistedWorkspaceStorage) {
-      const error = new Error("Another tab saved this workspace. Your changes remain here in memory. Export a package before reloading to review the other tab's changes.");
-      error.code = "WORKSPACE_STORAGE_CONFLICT";
-      throw error;
-    }
-    if (serialized === null) localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, serialized);
-    persistedWorkspaceStorage = serialized;
-    if (allowRecovery) unreadableWorkspaceStorage = null;
-  };
-  const locks = globalThis.navigator?.locks;
-  if (locks?.request) return locks.request(STORAGE_KEY + "-write", commit);
-  const database = await openImageDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
-    let failure = null;
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(failure || transaction.error || new Error("Unable to coordinate workspace saves."));
-    transaction.onabort = () => reject(failure || transaction.error || new Error("Workspace save was cancelled."));
-    const request = transaction.objectStore(IMAGE_STORE_NAME).get(STORAGE_KEY + "-write");
-    request.onsuccess = () => {
-      try { commit(); } catch (error) { failure = error; transaction.abort(); }
-    };
+async function persistPortfolioStorage(serialized, { images = [], isCurrent } = {}) {
+  const owner = portfolio, expectedCurrent = JSON.stringify(owner);
+  return workspaceStorage.save(serialized, { images,
+    isCurrent: () => portfolio === owner && JSON.stringify(portfolio) === expectedCurrent && (!isCurrent || isCurrent()),
   });
 }
 
-function reportWorkspaceSaveFailure(error) {
-  showWorkspaceNotice(error?.message || "This browser could not save your latest changes. Export a project package to preserve them.", {
-    id: "workspace-autosave-failed", title: "Workspace changes need a backup", severity: "error",
-    actions: [{ label: "Export project package", onClick: () => { void exportProjectPackage().catch(failure => PortfolioDialogs.alert(failure.message || "Could not export package.", { title: "Package export failed" })); } }],
-  });
-}
+function reportWorkspaceSaveFailure(error) { showLocalSaveFailure(error); }
 
 function scheduleSave() {
   clearTimeout(saveTimer);
-  if (packageOperationInProgress) return;
+  if (packageOperationInProgress || workspaceOpening || !portfolio) return;
   if (globalThis.PLCImporter && typeof localDateBaseline !== "undefined" && localDateBaseline) localDateBaseline = globalThis.PLCImporter.recordDateChanges(localDateBaseline, portfolio);
-  saveTimer = setTimeout(async () => {
-    saveTimer = null;
-    try {
-      await persistPortfolioStorage(JSON.stringify(portfolio));
-      localStorage.removeItem(PREVIOUS_STORAGE_KEY);
-      globalThis.PortfolioNotifications?.resolve("workspace-autosave-failed");
-    } catch (error) { reportWorkspaceSaveFailure(error); }
-  }, 120);
+  workspaceSaveRevision += 1;
+  workspaceSavePending = true;
+  saveTimer = setTimeout(() => { void flushWorkspaceSave(); }, 120);
+}
+
+function showLocalSaveFailure(error) {
+  const message = error?.message || "This browser could not save your open changes. Export a backup before closing, then retry.";
+  if (!globalThis.PortfolioNotifications) { void PortfolioDialogs.alert(message, { title: "Changes are not saved on this device" }); return; }
+  globalThis.PortfolioNotifications.publish({ id: "workspace-local-save", severity: "error", title: "Changes are not saved on this device", message,
+    revision: error?.code || message, dismissible: false, actions: [
+      { label: "Retry saving", onClick: () => flushWorkspaceSave() },
+      { label: "Export data backup", onClick: () => downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data") },
+    ] });
+}
+
+async function flushWorkspaceSave() {
+  clearTimeout(saveTimer); saveTimer = null;
+  if (workspaceOpening || packageOperationInProgress || !portfolio) return false;
+  const revision = workspaceSaveRevision;
+  const attempt = ++workspaceSaveAttempt;
+  try {
+    const owner = portfolio, serialized = JSON.stringify(owner);
+    await workspaceStorage.save(serialized, { isCurrent: () => portfolio === owner && JSON.stringify(portfolio) === serialized });
+    if (revision === workspaceSaveRevision && attempt === workspaceSaveAttempt) {
+      workspaceSavePending = false;
+      globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+    }
+    return true;
+  } catch (error) {
+    if (attempt === workspaceSaveAttempt) { workspaceSavePending = true; showLocalSaveFailure(error); }
+    return false;
+  }
 }
 
 function activateCategory(categoryId, { render = true, fitVertical = true } = {}) {
@@ -1497,7 +1496,16 @@ function activateCategory(categoryId, { render = true, fitVertical = true } = {}
   hoveredHeroVariant = null;
   closeVariantPopover({ force: true });
   stopRoadmapSlotEditing();
-  initialVerticalFitPending = Boolean(fitVertical);
+  const rememberedZoom = typeof categoryZoomPreferences === "undefined" ? null : categoryZoomPreferences?.get(category.id);
+  if (rememberedZoom) {
+    zoom = rememberedZoom.productZoom;
+    roadmapMonthWidth = rememberedZoom.roadmapZoom * ROADMAP_DEFAULT_MONTH_WIDTH;
+  } else {
+    zoom = 1;
+    roadmapMonthWidth = ROADMAP_DEFAULT_MONTH_WIDTH;
+  }
+  initialVerticalFitPending = Boolean(fitVertical && !rememberedZoom);
+  if (typeof productCardHover !== "undefined") productCardHover?.clear();
   scheduleSave();
   syncControls();
   renderInspector();
@@ -1544,6 +1552,7 @@ function openPortfolioSearchResult(result) {
   activateCategory(category.id, { render: false, fitVertical: true });
   selectedId = product.id;
   globalThis.PortfolioDetails.focusMatch(productDetailsModel(product), { surface: nextView === "products" ? "viewer" : "split", sku: result.matchedSku || "", variant: result.matchedVariant || "" });
+  if (nextView === "split") globalThis.PortfolioViewRuntime?.panelCache.clear(splitProduct);
   setView(nextView, { focusSelected: true });
   const focusResult = () => {
     if (activeView !== nextView || selectedId !== product.id || activeCategoryId !== category.id) return;
@@ -1551,9 +1560,24 @@ function openPortfolioSearchResult(result) {
     const matchingCopy = result.matchedSku && [...target.querySelectorAll("[data-detail-copy]")].find((element) => element.dataset.detailCopy === result.matchedSku);
     (matchingCopy || target.querySelector('[role="tab"][aria-selected="true"]'))?.focus({ preventScroll: true });
   };
-  if (nextView === "products") openViewerInfo(product.id, { onReady: focusResult });
+  if (nextView === "products") openViewerInfo(product.id, { onReady: focusResult, preserveDetailTab: true });
   else requestAnimationFrame(focusResult);
   return true;
+}
+
+function cardSpecifications(product, categoryId = activeCategoryId) {
+  return PortfolioCardSpecs.select(product, {
+    categoryId,
+    specs: globalThis.PortfolioLaunchRecords?.specifications(product) || product?.specs,
+  });
+}
+
+function productCardTitle(product, categoryId) {
+  const name = String(product?.name || "");
+  // These canonical mat titles repeat the product type before their size.
+  // Keep the stored name complete, and preserve size/retail suffixes up front.
+  return categoryId === "accessories" && /^HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth \((?:M|L|XL|2XL)\)(?: WM)?$/.test(name)
+    ? name.replace(" - Gaming Mouse Pad", "") : name;
 }
 
 function normalizedSpecLabel(label) {
@@ -1614,24 +1638,33 @@ function detailedSpecRowHeight(row) {
   return 34 + Math.max(0, lines - 1) * 13;
 }
 
-function detailedSpecsHeight(product) {
-  return detailedSpecRows(product?.specs).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
+function detailedSpecsHeight(product, categoryId = activeCategoryId) {
+  return detailedSpecRows(cardSpecifications(product, categoryId)).reduce((sum, row) => sum + detailedSpecRowHeight(row), 0);
 }
 
-function productCardLayout(targetBoard = board, definition = categoryDefinition()) {
+function productCardLayout(targetBoard = board, definition = categoryDefinition(), { includeControls = true } = {}) {
+  const cache = globalThis.PortfolioViewRuntime?.layoutCache;
+  const actionHeight = globalThis.PortfolioViewRuntime && includeControls && targetBoard === board && activeView === "products" && !pptxExportInProgress ? 36 / zoom : 0;
+  const cacheKey = `${typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision}:${definition.id || ""}:${definition.fullSpecCards === true}:${targetBoard.settings.showSkus}:${targetBoard.products.length}:${targetBoard.lanes?.length || 0}:${actionHeight}`;
+  const cached = cache?.get(targetBoard, cacheKey);
+  if (cached) return cached;
   const lanes = targetBoard === board ? sortedLanes() : [...targetBoard.lanes].sort((a, b) => a.order - b.order);
   const supportsDetailedCards = lanes.length === 1 || definition.fullSpecCards === true;
   const products = targetBoard.products;
-  const detailed = supportsDetailedCards && products.some((product) => product.specs.length);
+  const categoryId = definition.id || activeCategoryId;
+  const detailed = supportsDetailedCards && products.some((product) => (globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs).length);
   if (!detailed) {
     // Size the category together so filtering never moves cards or their hit regions.
     const rowsTop = TITLE_BLOCK_TOP + DETAILS_TOP_OFFSET + 9;
     const maxContentHeight = Math.max(0, ...products.map((product) => (
-      rowsTop + product.specs.length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
+      rowsTop + cardSpecifications(product, categoryId).length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
     )));
-    const cardHeight = Math.max(300, Math.min(CARD_HEIGHT, maxContentHeight));
-    return {
+    const actionTop = Math.max(300, ...products.map(product => rowsTop + cardSpecifications(product, categoryId).length * 32 + 10));
+    const reservedFooterHeight = targetBoard.settings.showSkus ? Math.max(0, ...products.map(product => variantFooterLayout(product).height)) : 0;
+    const cardHeight = actionHeight ? actionTop + actionHeight + reservedFooterHeight : Math.max(300, maxContentHeight);
+    const result = {
       detailed: false,
+      categoryId,
       cardHeight,
       laneHeight: cardHeight + 70,
       imageSlotTop: IMAGE_SLOT_TOP,
@@ -1639,17 +1672,22 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
       titleBlockTop: TITLE_BLOCK_TOP,
       priceBaselineOffset: PRICE_BASELINE_OFFSET,
       detailsTopOffset: DETAILS_TOP_OFFSET,
+      actionHeight,
+      actionTop, reservedFooterHeight,
     };
+    return cache ? cache.set(targetBoard, cacheKey, result) : result;
   }
 
-  const maxDetailsHeight = Math.max(0, ...products.map((product) => detailedSpecsHeight(product)));
+  const maxDetailsHeight = Math.max(0, ...products.map((product) => detailedSpecsHeight(product, categoryId)));
   const maxFooterHeight = targetBoard.settings.showSkus
     ? Math.max(0, ...products.map((product) => variantFooterLayout(product).height))
     : 0;
   const detailsTop = FULL_SPEC_TITLE_TOP + FULL_SPEC_DETAILS_TOP_OFFSET;
-  const cardHeight = Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + maxFooterHeight + 10);
-  return {
+  const actionTop = Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + 10);
+  const cardHeight = actionHeight ? actionTop + actionHeight + maxFooterHeight : Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + maxFooterHeight + 10);
+  const result = {
     detailed: true,
+    categoryId,
     cardHeight,
     laneHeight: cardHeight + 70,
     imageSlotTop: STATUS_BANNER_HEIGHT + 10,
@@ -1657,27 +1695,37 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
     titleBlockTop: FULL_SPEC_TITLE_TOP,
     priceBaselineOffset: PRICE_BASELINE_OFFSET,
     detailsTopOffset: FULL_SPEC_DETAILS_TOP_OFFSET,
+    actionHeight,
+    actionTop, reservedFooterHeight: maxFooterHeight,
   };
+  return cache ? cache.set(targetBoard, cacheKey, result) : result;
 }
 
 function viewerInfoVisualWidth() {
-  return 720;
+  const available = (canvasScroll?.clientWidth || 896) - 16;
+  return Math.max(1, Math.min(500, viewerInfoStacked() ? available : Math.max(280, available - CARD_WIDTH * zoom)));
 }
 
 function viewerInfoVisualHeight() {
-  return productCardLayout().cardHeight * zoom;
+  const readingHeight = Math.max(1, Math.min(600, (canvasScroll?.clientHeight || 616) - 16));
+  return viewerInfoStacked() ? readingHeight : Math.max(productCardLayout().cardHeight * zoom, readingHeight);
+}
+
+function viewerInfoStacked() {
+  return (canvasScroll?.clientWidth || 896) < 600;
 }
 
 function setViewerInfoSize(width, height) {
-  viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
-  viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
-  viewerInfo.dataset.compactHeight = String(height <= 180);
-  viewerInfo.dataset.detailColumns = "1";
+  if (viewerInfo.style.getPropertyValue("--viewer-info-width") !== `${width}px`) viewerInfo.style.setProperty("--viewer-info-width", `${width}px`);
+  if (viewerInfo.style.getPropertyValue("--viewer-info-height") !== `${height}px`) viewerInfo.style.setProperty("--viewer-info-height", `${height}px`);
+  if (viewerInfo.dataset.compactHeight !== "false") viewerInfo.dataset.compactHeight = "false";
+  if (viewerInfo.dataset.detailColumns !== "1") viewerInfo.dataset.detailColumns = "1";
 }
 
 function viewerInfoReserveLogical() {
   if (activeView !== "products" || !viewerInfoProductId || viewerInfoProgress <= 0 || !visibleProducts().some((product) => product.id === viewerInfoProductId)) return 0;
-  return (viewerInfoVisualWidth() + 10) / Math.max(PRODUCT_MIN_ZOOM, zoom || 1) * viewerInfoProgress;
+  const width = viewerInfoStacked() ? Math.max(0, viewerInfoVisualWidth() - CARD_WIDTH * zoom) : viewerInfoVisualWidth();
+  return width / Math.max(PRODUCT_MIN_ZOOM, zoom || 1) * viewerInfoProgress;
 }
 
 function viewerInfoGapIndex(laneProducts) {
@@ -1691,8 +1739,16 @@ function cardXForDisplayIndex(laneProducts, displayIndex, includeViewer = true) 
   return GUTTER + displayIndex * (CARD_WIDTH + CARD_GAP) + shift;
 }
 
-function productLaneGeometry(layout = productCardLayout()) {
-  return PortfolioModel.layoutProductLanes(sortedLanes(), layout, { top: LANE_TOP });
+function productLaneGeometry(layout = productCardLayout(), { includeViewer = true } = {}) {
+  const product = includeViewer && activeView === "products" && viewerInfoProgress > 0
+    ? visibleProducts().find((item) => item.id === viewerInfoProductId) : null;
+  let detailHeight = 0;
+  if (product) {
+    const readingHeight = viewerInfoVisualHeight() / Math.max(PRODUCT_MIN_ZOOM, zoom || 1);
+    const targetHeight = viewerInfoStacked() ? layout.cardHeight + readingHeight : Math.max(layout.cardHeight, readingHeight);
+    detailHeight = layout.cardHeight + (targetHeight - layout.cardHeight) * viewerInfoProgress;
+  }
+  return PortfolioModel.layoutProductLanes(sortedLanes(), layout, { top: LANE_TOP, expandedLaneId: product?.laneId || "", detailHeight });
 }
 
 function productCardDropTarget(allProducts, visible, laneRows, draggedId, position) {
@@ -1813,12 +1869,12 @@ function startProductCardSettling(positions, liftedId, reserve = {}) {
 function getCanvasDimensions({ includeViewer = true } = {}) {
   const lanes = sortedLanes();
   const products = visibleProducts();
-  const layout = productCardLayout();
+  const layout = productCardLayout(board, typeof categoryDefinition === "function" ? categoryDefinition() : undefined, { includeControls: includeViewer });
   const maxCount = Math.max(1, ...lanes.map((lane) => products.filter((product) => product.laneId === lane.id).length + (includeViewer && dragState?.moved && dragState.dropTarget?.laneId === lane.id && board.products.find((product) => product.id === dragState.productId)?.laneId !== lane.id ? 1 : 0)));
   const editorRevealReserve = inspectorOpen && activeView === "products" && inspector?.offsetWidth
     ? Math.ceil((inspector.offsetWidth + 28) / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
     : 0;
-  const laneGeometry = productLaneGeometry(layout);
+  const laneGeometry = productLaneGeometry(layout, { includeViewer });
   const contentWidth = GUTTER + maxCount * (CARD_WIDTH + CARD_GAP) + SIDE_PADDING + editorRevealReserve + (includeViewer ? viewerInfoReserveLogical() : 0);
   const viewportLogicalWidth = canvasScroll?.clientWidth
     ? Math.ceil(canvasScroll.clientWidth / Math.max(PRODUCT_MIN_ZOOM, zoom || 1))
@@ -1826,10 +1882,26 @@ function getCanvasDimensions({ includeViewer = true } = {}) {
   const motion = includeViewer && productCardMotionValid(productCardMotion) ? productCardMotion : null;
   const movingWidth = motion ? Math.max(motion.widthReserve || 0, ...[...motion.positions.values()].map((position) => position.x + CARD_WIDTH + SIDE_PADDING)) : 0;
   const movingHeight = motion ? Math.max(motion.heightReserve || 0, ...[...motion.positions.values()].map((position) => position.y + layout.cardHeight + 20)) : 0;
+  const width = Math.max(1480, contentWidth, viewportLogicalWidth, movingWidth);
+  const height = Math.max(LANE_TOP + laneGeometry.height + 20, movingHeight);
+  // Allocate the final reading extent once, while card positions still glide
+  // with progress. Reallocating a wide canvas on every frame discards its pixels.
+  let allocationWidth = width, allocationHeight = height;
+  if (globalThis.PortfolioViewRuntime && includeViewer && activeView === "products" && (viewerInfoOpen || viewerInfoProgress > 0)) {
+    const product = products.find(item => item.id === viewerInfoProductId);
+    if (product) {
+      const fullWidth = viewerInfoStacked() ? Math.max(0, viewerInfoVisualWidth() - CARD_WIDTH * zoom) : viewerInfoVisualWidth();
+      allocationWidth = Math.max(1480, contentWidth - viewerInfoReserveLogical() + fullWidth / zoom, viewportLogicalWidth, movingWidth);
+      const readingHeight = viewerInfoVisualHeight() / zoom;
+      const fullHeight = viewerInfoStacked() ? layout.cardHeight + readingHeight : Math.max(layout.cardHeight, readingHeight);
+      const currentHeight = laneGeometry.rows.find(row => row.lane.id === product.laneId)?.contentHeight || layout.cardHeight;
+      allocationHeight = height + Math.max(0, fullHeight - currentHeight);
+    }
+  }
   return {
-    width: Math.max(1480, contentWidth, viewportLogicalWidth, movingWidth),
-    height: Math.max(LANE_TOP + laneGeometry.height + 20, movingHeight),
+    width, height, allocationWidth, allocationHeight,
     laneRows: laneGeometry.rows,
+    layout,
     includeViewer,
   };
 }
@@ -1846,7 +1918,7 @@ function viewportCanvasContext(targetCanvas, targetScroll, dimensions, drawZoom 
     targetCanvas.height = 1;
   }
   const dpr = window.devicePixelRatio || 1;
-  const fullWidth = dimensions.width * drawZoom, fullHeight = dimensions.height * drawZoom;
+  const fullWidth = (dimensions.allocationWidth || dimensions.width) * drawZoom, fullHeight = (dimensions.allocationHeight || dimensions.height) * drawZoom;
   targetCanvas.style.width = fullWidth + "px";
   targetCanvas.style.height = fullHeight + "px";
   const width = Math.max(1, Math.min(fullWidth, targetScroll.clientWidth || fullWidth));
@@ -1964,7 +2036,7 @@ function drawVariantFooter(context, product, x, y, layout) {
   let cursorY = y + 9;
   layout.groups.forEach((group, groupIndex) => {
     context.fillStyle = UI_PALETTE.steelTealLight;
-    context.font = "700 9px Arial";
+    context.font = `700 9px ${UI_FONT_FACE}`;
     context.textAlign = "left";
     context.fillText(group.label.toUpperCase(), x + 12, cursorY + 8);
     if (groupIndex === 0 && layout.hiddenGroupCount > 0) {
@@ -1972,10 +2044,10 @@ function drawVariantFooter(context, product, x, y, layout) {
       const groupChipHeight = 14;
       const groupChipX = x + CARD_WIDTH - 12 - groupChipWidth;
       const groupChipY = cursorY - 3;
-      roundRect(context, groupChipX, groupChipY, groupChipWidth, groupChipHeight, 7, "rgba(40,40,40,.88)", "rgba(156,174,170,.30)", .75);
+      roundRect(context, groupChipX, groupChipY, groupChipWidth, groupChipHeight, 7, "rgba(40,40,40,.88)");
       context.textAlign = "center";
       context.fillStyle = UI_PALETTE.steelTealLight;
-      context.font = "700 8px Arial";
+      context.font = `700 8px ${UI_FONT_FACE}`;
       context.fillText(`+${layout.hiddenGroupCount} GROUP`, groupChipX + groupChipWidth / 2, groupChipY + 10);
       registerVariantOverflowRegion({
         productId: product.id,
@@ -2002,9 +2074,9 @@ function drawVariantFooter(context, product, x, y, layout) {
         const chipHeight = 14;
         const chipX = cellX - 2;
         const chipY = cellY - 2;
-        roundRect(context, chipX, chipY, chipWidth, chipHeight, 7, "rgba(40,40,40,.88)", "rgba(156,174,170,.30)", .75);
+        roundRect(context, chipX, chipY, chipWidth, chipHeight, 7, "rgba(40,40,40,.88)");
         context.fillStyle = UI_PALETTE.silver;
-        context.font = "800 9px Arial";
+        context.font = `800 9px ${UI_FONT_FACE}`;
         context.textAlign = "center";
         context.fillText(item.code, chipX + chipWidth / 2, chipY + 10);
         registerVariantOverflowRegion({
@@ -2023,7 +2095,7 @@ function drawVariantFooter(context, product, x, y, layout) {
         const hasHeroImage = Boolean(item.imageAssetId);
         const isActiveHero = activeHeroVariantId === item.id;
         context.fillStyle = isActiveHero ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
-        context.font = `${isActiveHero ? "800" : "700"} 9.5px Arial`;
+        context.font = `${isActiveHero ? "800" : "700"} 9.5px ${UI_FONT_FACE}`;
         drawSkuSwatch(context, cellX, cellY + 1, 10, 10, item.colorHex, item.colorHex2);
         if (hasHeroImage) {
           context.save();
@@ -2047,17 +2119,12 @@ function drawVariantFooter(context, product, x, y, layout) {
         context.fillText(truncate(String(item.code || "SKU"), 9), cellX + 15, cellY + 10, Math.max(10, cellWidth - 17));
       } else {
         context.fillStyle = UI_PALETTE.whiteSmoke;
-        context.font = "700 9.5px Arial";
+        context.font = `700 9.5px ${UI_FONT_FACE}`;
         context.fillText(truncate(String(item.code || "SKU"), group.type === "layout" ? 7 : 9), cellX, cellY + 10, Math.max(10, cellWidth - 4));
       }
     });
     cursorY += group.rows * 18;
     if (groupIndex < layout.groups.length - 1) {
-      context.strokeStyle = "rgba(96,137,155,.3)";
-      context.beginPath();
-      context.moveTo(x + 12, cursorY + 1);
-      context.lineTo(x + CARD_WIDTH - 12, cursorY + 1);
-      context.stroke();
       cursorY += 4;
     }
   });
@@ -2074,9 +2141,10 @@ function wrapText(context, text, x, y, maxWidth, lineHeight, maxLines = 2, align
   for (const word of words) {
     const test = line ? `${line} ${word}` : word;
     if (context.measureText(test).width > maxWidth && line) {
+      // Fill the final permitted line before eliding any remaining words.
+      if (lines.length === maxLines - 1) break;
       lines.push(line);
       line = word;
-      if (lines.length === maxLines - 1) break;
     } else {
       line = test;
     }
@@ -2098,7 +2166,7 @@ function loadImage(src) {
   const image = new Image();
   image.crossOrigin = "anonymous";
   const record = { image, ready: false, failed: false };
-  image.onload = () => { record.ready = true; renderActiveView(); };
+  image.onload = () => { record.ready = true; if (typeof queueImageViewRender !== "undefined" && queueImageViewRender) queueImageViewRender(); else renderActiveView(); };
   image.onerror = () => { record.failed = true; };
   image.src = src;
   imageCache.set(src, record);
@@ -2127,15 +2195,10 @@ function drawDetailedFamilyHeaders(context, laneProducts, laneY) {
     const startX = cardXForDisplayIndex(laneProducts, run.startIndex);
     const endX = cardXForDisplayIndex(laneProducts, run.endIndex) + CARD_WIDTH;
     const centerX = startX + (endX - startX) / 2;
-    context.fillStyle = "rgba(226,221,218,.18)";
-    context.font = "700 10px Arial";
+    context.fillStyle = UI_PALETTE.greyOlive;
+    context.font = `700 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
     context.fillText(run.family.toUpperCase(), centerX, laneY - 13, Math.max(20, endX - startX - 8));
-    context.strokeStyle = "rgba(226,221,218,.08)";
-    context.beginPath();
-    context.moveTo(startX, laneY - 8);
-    context.lineTo(endX, laneY - 8);
-    context.stroke();
   });
 }
 
@@ -2145,7 +2208,12 @@ function drawProductBoardExportBackground(context, dimensions) {
 }
 
 function drawBoardTo(context, dimensions, includeSelection = true, includeBackground = false, includeProducts = true) {
-  context.clearRect(0, 0, dimensions.width, dimensions.height);
+  const viewportPaint = includeSelection && !dimensions.pptxPage && globalThis.PortfolioViewRuntime && canvasScroll?.clientHeight > 0;
+  if (viewportPaint) {
+    const left = canvasScroll.scrollLeft / zoom, top = canvasScroll.scrollTop / zoom;
+    context.save(); context.beginPath(); context.rect(left, top, canvasScroll.clientWidth / zoom, canvasScroll.clientHeight / zoom); context.clip();
+    context.clearRect(left, top, canvasScroll.clientWidth / zoom, canvasScroll.clientHeight / zoom);
+  } else context.clearRect(0, 0, dimensions.width, dimensions.height);
   if (includeBackground) drawProductBoardExportBackground(context, dimensions);
 
   const lanes = sortedLanes();
@@ -2178,10 +2246,11 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
     if (drag.dropTarget) {
       context.save();
       context.setLineDash([7, 5]);
-      roundRect(context, drag.dropTarget.x, drag.dropTarget.y, CARD_WIDTH, layout.cardHeight, 5, "rgba(126,158,139,.055)", "rgba(156,190,168,.7)", 1.5);
+      roundRect(context, drag.dropTarget.x, drag.dropTarget.y, CARD_WIDTH, layout.cardHeight, 5,
+        globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .055), globalThis.PortfolioTheme.alpha(UI_PALETTE.selection, .7), 1.5);
       context.setLineDash([]);
       context.fillStyle = UI_PALETTE.steelTealLight;
-      context.font = "600 11px Arial";
+      context.font = `600 11px ${UI_FONT_FACE}`;
       context.textAlign = "center";
       context.fillText("Move here", drag.dropTarget.x + CARD_WIDTH / 2, drag.dropTarget.y + layout.cardHeight / 2);
       context.restore();
@@ -2193,7 +2262,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
       .sort((a, b) => a.order - b.order);
     if (dimensions.pptxPage) {
       context.fillStyle = UI_PALETTE.silver;
-      context.font = "700 11px Arial";
+      context.font = `700 11px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       const label = lane.name || lane.label || lane.id || "Products";
       context.fillText(`${label}${continued ? " (continued)" : ""}`, GUTTER, laneY - (layout.detailed ? 31 : 13), dimensions.width - GUTTER - SIDE_PADDING);
@@ -2206,15 +2275,29 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
         if (includeProducts && product.id === liftedId) return;
         const automatic = { x: cardXForDisplayIndex(laneProducts, displayIndex, dimensions.includeViewer !== false), y: laneY };
         const position = motion?.positions.get(product.id) || automatic;
-        renderedCards.push({ productId: product.id, laneId: lane.id, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
-        drawCard(context, product, position.x, position.y, includeSelection && product.id === selectedId, layout, includeSelection && !productLayoutEditing);
+        const integrated = includeSelection && dimensions.includeViewer !== false && !dimensions.pptxPage && activeView === "products" && viewerInfoProgress > 0 && product.id === viewerInfoProductId;
+        const stacked = integrated && viewerInfoStacked();
+        const sourceOffset = stacked ? viewerInfoReserveLogical() / 2 : 0;
+        const sourceX = position.x + sourceOffset;
+        const cardLayout = integrated ? { ...layout, cardHeight: stacked ? layout.cardHeight : contentHeight, viewerExtended: true } : layout;
+        if (stacked) {
+          roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, layout.cardHeight, [4, 4, 0, 0], UI_PALETTE.carbon);
+          const presentation = productPresentation(product);
+          if (presentation.primaryLabel) roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
+        }
+        renderedCards.push({ productId: product.id, name: product.name, laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
+          ...(integrated ? { viewerIntegrated: true, viewerStacked: stacked, integrationX: position.x, integrationWidth: CARD_WIDTH + viewerInfoReserveLogical(), integrationHeight: contentHeight } : {}) });
+        const outsideViewport = includeSelection && !dimensions.pptxPage && !motion && canvasScroll?.clientHeight > 0 &&
+          ((sourceX + CARD_WIDTH) * zoom < canvasScroll.scrollLeft - 16 || sourceX * zoom > canvasScroll.scrollLeft + canvasScroll.clientWidth + 16 ||
+           (position.y + cardLayout.cardHeight) * zoom < canvasScroll.scrollTop - 16 || position.y * zoom > canvasScroll.scrollTop + canvasScroll.clientHeight + 16);
+        if (!outsideViewport) drawCard(context, product, sourceX, position.y, includeSelection && product.id === selectedId, cardLayout, includeSelection && !productLayoutEditing);
       });
   });
   if (includeProducts && drag) {
     // A thin source outline stays legible even after neighbours fill its slot.
     context.save();
     context.setLineDash([3, 6]);
-    roundRect(context, drag.source.x + 1.5, drag.source.y + 1.5, CARD_WIDTH - 3, layout.cardHeight - 3, 4, null, "rgba(190,197,194,.3)", 1);
+    roundRect(context, drag.source.x + 1.5, drag.source.y + 1.5, CARD_WIDTH - 3, layout.cardHeight - 3, 4, null, globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .3), 1);
     context.restore();
   }
   if (includeProducts && liftedId) {
@@ -2232,6 +2315,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
       renderedCards.push({ productId: product.id, laneId: drag?.dropTarget?.laneId || position.laneId || product.laneId, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
     }
   }
+  if (viewportPaint) context.restore();
 }
 
 function specIconKind(label) {
@@ -2383,27 +2467,22 @@ function contrastTextColor(fill) {
 }
 
 function detailedValueColor() {
-  return UI_PALETTE.silver;
+  return UI_PALETTE.whiteSmoke;
 }
 
 function drawDetailedSpecLabel(context, label, x, y, maxWidth) {
   context.fillStyle = UI_PALETTE.greyOlive;
-  context.font = "700 8px Arial";
+  context.font = `700 8px ${UI_FONT_FACE}`;
   context.textAlign = "left";
   context.fillText(String(label || "Specification").toUpperCase(), x, y, maxWidth);
 }
 
-function drawDetailedSpecs(context, product, x, startY) {
-  const rows = detailedSpecRows(product.specs);
+function drawDetailedSpecs(context, product, x, startY, categoryId = activeCategoryId) {
+  const rows = detailedSpecRows(cardSpecifications(product, categoryId));
   let cursorY = startY;
 
   rows.forEach((row) => {
     const height = detailedSpecRowHeight(row);
-    context.strokeStyle = UI_PALETTE.charcoal700;
-    context.beginPath();
-    context.moveTo(x + 10, cursorY + height - 1);
-    context.lineTo(x + CARD_WIDTH - 10, cursorY + height - 1);
-    context.stroke();
 
     if (row.type === "matrix") {
       drawSpecIcon(context, row.items[0]?.label, x + 20, cursorY + 17);
@@ -2414,7 +2493,7 @@ function drawDetailedSpecs(context, product, x, startY) {
         const itemX = contentX + index * columnWidth;
         drawDetailedSpecLabel(context, item.label, itemX, cursorY + 13, columnWidth - 5);
         context.fillStyle = detailedValueColor(item.value);
-        context.font = "700 9.5px Arial";
+        context.font = `700 9.5px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         wrapText(context, String(item.value || "—"), itemX, cursorY + 31, columnWidth - 5, 11, 2, "left");
       });
@@ -2425,7 +2504,7 @@ function drawDetailedSpecs(context, product, x, startY) {
         const itemX = x + 38 + index * (leftWidth + 8);
         drawDetailedSpecLabel(context, item.label, itemX, cursorY + 12, leftWidth);
         context.fillStyle = detailedValueColor(item.value);
-        context.font = "11px Arial";
+        context.font = `11px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         wrapText(context, String(item.value || "—"), itemX, cursorY + 29, leftWidth, 13, 3, "left");
       });
@@ -2434,7 +2513,7 @@ function drawDetailedSpecs(context, product, x, startY) {
       drawSpecIcon(context, item?.label, x + 20, cursorY + 17);
       drawDetailedSpecLabel(context, item?.label, x + 38, cursorY + 12, CARD_WIDTH - 50);
       context.fillStyle = detailedValueColor(item?.value);
-      context.font = "11px Arial";
+      context.font = `11px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       wrapText(context, String(item?.value || "—"), x + 38, cursorY + 29, CARD_WIDTH - 50, 13, 3, "left");
     }
@@ -2445,56 +2524,22 @@ function drawDetailedSpecs(context, product, x, startY) {
   return cursorY;
 }
 
-function drawProductInfoButton(context, product, x, y, layout) {
-  const buttonX = x + CARD_WIDTH - INFO_BUTTON_WIDTH - 8;
-  const buttonY = y + STATUS_BANNER_HEIGHT + 7;
-  const isOpen = viewerInfoProductId === product.id && viewerInfoProgress > .01;
-  const isHovered = hoveredInfoButtonProductId === product.id;
-
-  context.save();
-  roundRect(
-    context,
-    buttonX,
-    buttonY,
-    INFO_BUTTON_WIDTH,
-    INFO_BUTTON_HEIGHT,
-    4,
-    isOpen || isHovered ? UI_PALETTE.charcoal600 : UI_PALETTE.charcoal700,
-    isOpen || isHovered ? UI_PALETTE.gunmetal : UI_PALETTE.charcoal500,
-    1,
-  );
-  context.fillStyle = isOpen ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
-  context.font = "600 10px Arial";
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(isOpen ? "Close" : "Details", buttonX + INFO_BUTTON_WIDTH / 2, buttonY + INFO_BUTTON_HEIGHT / 2 + .5);
-  context.restore();
-
-  renderedInfoButtons.push({
-    productId: product.id,
-    x: buttonX,
-    y: buttonY,
-    width: INFO_BUTTON_WIDTH,
-    height: INFO_BUTTON_HEIGHT,
-  });
-}
-
 function drawCard(context, product, x, y, selected, layout = productCardLayout(), interactive = true) {
   const presentation = productPresentation(product);
   const labelColor = presentation.primaryLabel
     ? PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)) : UI_PALETTE.silver;
   const cardHeight = layout.cardHeight;
   context.save();
-  context.shadowColor = "rgba(0,0,0,.28)";
-  context.shadowBlur = 4;
-  context.shadowOffsetY = 1;
-  roundRect(context, x, y, CARD_WIDTH, cardHeight, 4, UI_PALETTE.carbon, UI_PALETTE.charcoal500, 1);
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
+  context.shadowOffsetY = 0;
+  roundRect(context, x, y, CARD_WIDTH, cardHeight, layout.viewerExtended ? 0 : 4, UI_PALETTE.carbon);
   context.restore();
 
   if (presentation.primaryLabel) {
-    roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
+    roundRect(context, x, y, CARD_WIDTH, STATUS_BANNER_HEIGHT, layout.viewerExtended ? 0 : [4, 4, 0, 0], presentation.primaryColor);
     context.fillStyle = labelColor;
-    context.font = "700 10px Arial";
+    context.font = `700 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
     context.fillText(presentation.primaryLabel.toUpperCase(), x + CARD_WIDTH / 2, y + 16);
   }
@@ -2504,9 +2549,9 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   if (presentation.secondaryLabel) {
     const label = presentation.secondaryLabel.toUpperCase();
-    context.font = "700 8px Arial";
+    context.font = `700 8px ${UI_FONT_FACE}`;
     const badgeWidth = Math.min(CARD_WIDTH - INFO_BUTTON_WIDTH - 32, Math.max(74, context.measureText(label).width + 18));
-    roundRect(context, x + 8, y + STATUS_BANNER_HEIGHT + 5, badgeWidth, 18, 4, presentation.primaryColor, presentation.primaryColor, .75);
+    roundRect(context, x + 8, y + STATUS_BANNER_HEIGHT + 5, badgeWidth, 18, 4, presentation.primaryColor);
     context.fillStyle = labelColor;
     context.textAlign = "center";
     context.fillText(label, x + 8 + badgeWidth / 2, y + STATUS_BANNER_HEIGHT + 17, badgeWidth - 12);
@@ -2514,57 +2559,38 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   const titleTop = y + layout.titleBlockTop;
   context.fillStyle = UI_PALETTE.whiteSmoke;
-  context.font = "700 16px Arial";
+  context.font = `700 16px ${UI_FONT_FACE}`;
   context.textAlign = "center";
-  wrapText(context, product.name, x + CARD_WIDTH / 2, titleTop + 15, CARD_WIDTH - 24, 18, 2, "center");
+  wrapText(context, productCardTitle(product, layout.categoryId), x + CARD_WIDTH / 2, titleTop + 15, CARD_WIDTH - 24, 18, 2, "center");
 
   if (board.settings.showPrices) {
     context.fillStyle = UI_PALETTE.greyOlive;
-    context.font = "16px Arial";
+    context.font = `16px ${UI_FONT_FACE}`;
     context.fillText(productPriceText(product), x + CARD_WIDTH / 2, titleTop + layout.priceBaselineOffset);
   }
 
   const detailsTop = titleTop + layout.detailsTopOffset;
-  context.strokeStyle = UI_PALETTE.charcoal600;
-  context.lineWidth = 1;
-  context.beginPath(); context.moveTo(x, detailsTop); context.lineTo(x + CARD_WIDTH, detailsTop); context.stroke();
 
   const footerLayout = board.settings.showSkus ? variantFooterLayout(product) : { height: 0, groups: [] };
   const footerHeight = footerLayout.height;
   const detailsBottom = y + cardHeight - footerHeight;
 
   if (layout.detailed) {
-    drawDetailedSpecs(context, product, x, detailsTop + 5);
+    drawDetailedSpecs(context, product, x, detailsTop + 5, layout.categoryId);
   } else {
     const rowHeight = 32;
     const rowsTop = detailsTop + 9;
-    const overflowNoteHeight = 24;
-    const availableHeight = Math.max(0, detailsBottom - rowsTop);
-    let visibleSpecCount = Math.max(0, Math.floor(availableHeight / rowHeight));
-    if (product.specs.length > visibleSpecCount) {
-      visibleSpecCount = Math.max(0, Math.floor((availableHeight - overflowNoteHeight - 8) / rowHeight));
-    }
-    const visibleSpecs = product.specs.slice(0, visibleSpecCount);
+    const visibleSpecs = cardSpecifications(product, layout.categoryId);
     visibleSpecs.forEach((item, index) => {
       const rowY = rowsTop + index * rowHeight;
       // Align with the first line's visual center, retaining room for a second line.
       drawSpecIcon(context, item.label, x + 22, rowY + 6);
-      context.fillStyle = UI_PALETTE.silver;
-      context.font = "11.5px Arial";
+      context.fillStyle = UI_PALETTE.whiteSmoke;
+      context.font = `11.5px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       wrapText(context, item.value, x + 43, rowY + 10, CARD_WIDTH - 55, 13, 2, "left");
-      context.strokeStyle = UI_PALETTE.charcoal700;
-      context.beginPath(); context.moveTo(x + 10, rowY + 26); context.lineTo(x + CARD_WIDTH - 10, rowY + 26); context.stroke();
     });
 
-    const hiddenSpecCount = product.specs.length - visibleSpecs.length;
-    if (hiddenSpecCount > 0) {
-      const noteY = detailsBottom - overflowNoteHeight - 7;
-      context.fillStyle = UI_PALETTE.greyOlive;
-      context.font = "10px Arial";
-      context.textAlign = "center";
-      context.fillText(`+${hiddenSpecCount} specification${hiddenSpecCount === 1 ? "" : "s"}`, x + CARD_WIDTH / 2, noteY + 16);
-    }
   }
 
   if (footerHeight) {
@@ -2572,27 +2598,15 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     drawVariantFooter(context, product, x, footerY, footerLayout);
   }
 
-  // A quiet frame leaves lifecycle emphasis in the banner and merchandise.
-  roundRect(
-    context,
-    x + 0.75,
-    y + 0.75,
-    CARD_WIDTH - 1.5,
-    cardHeight - 1.5,
-    4,
-    null,
-    UI_PALETTE.charcoal500,
-    1,
-  );
-
+  // Filled surfaces and gutters separate cards; outlines identify selection.
   if (selected) {
     context.save();
-    roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, UI_PALETTE.selection, 1.25);
+    if (!layout.viewerExtended) roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, UI_PALETTE.selection, 1.25);
     const markerY = y + STATUS_BANNER_HEIGHT + (presentation.secondaryLabel ? 28 : 9);
-    roundRect(context, x + 8, markerY, 64, 18, 4, UI_PALETTE.charcoal700, UI_PALETTE.charcoal500, .75);
+    roundRect(context, x + 8, markerY, 64, 18, 4, UI_PALETTE.charcoal700);
     context.fillStyle = UI_PALETTE.steelTealLight;
     context.fillRect(x + 14, markerY + 7, 3, 3);
-    context.font = "600 9px Arial";
+    context.font = `600 9px ${UI_FONT_FACE}`;
     context.textAlign = "left";
     context.textBaseline = "middle";
     context.fillStyle = UI_PALETTE.silver;
@@ -2600,8 +2614,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     context.restore();
   }
 
-  // Keep the explicit viewer control above the selected-card outline.
-  if (interactive) drawProductInfoButton(context, product, x, y, layout);
+  // Native text actions are mounted separately; exported cards contain no controls.
 }
 
 function roadmapRange() {
@@ -2712,7 +2725,7 @@ function drawFixedVerticalRoadmapLabel(context, label, x, top, availableHeight) 
   if (!text || innerHeight < 48) return;
 
   context.save();
-  context.font = `700 ${ROADMAP_CATEGORY_LABEL_FONT_SIZE}px Arial`;
+  context.font = `700 ${ROADMAP_CATEGORY_LABEL_FONT_SIZE}px ${UI_FONT_FACE}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
 
@@ -2791,7 +2804,11 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   const regions = [];
   const rows = [];
 
-  context.clearRect(0, 0, width, height);
+  const viewportPaint = includeSelection && !exportMode && globalThis.PortfolioViewRuntime && targetScroll.clientHeight > 0;
+  if (viewportPaint) {
+    context.save(); context.beginPath(); context.rect(stickyX, stickyY, targetScroll.clientWidth, targetScroll.clientHeight); context.clip();
+    context.clearRect(stickyX, stickyY, targetScroll.clientWidth, targetScroll.clientHeight);
+  } else context.clearRect(0, 0, width, height);
   context.fillStyle = UI_PALETTE.charcoal800;
   context.fillRect(0, 0, width, height);
 
@@ -2841,7 +2858,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const absolute = range.start + month;
     if (absolute % 12 === 0 || absolute % 3 !== 0) continue;
     const x = timelineX + month * roadmapMonthWidth;
-    context.strokeStyle = "rgba(190,197,194,.055)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .055);
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT);
@@ -2854,13 +2871,8 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
 
   let rowY = ROADMAP_HEADER_HEIGHT;
   groups.forEach((group) => {
-    context.fillStyle = UI_PALETTE.inkBlack;
+    context.fillStyle = UI_PALETTE.charcoal700;
     context.fillRect(timelineX, rowY, timelineWidth, ROADMAP_GROUP_HEADER_HEIGHT);
-    context.strokeStyle = "rgba(190,197,194,.14)";
-    context.beginPath();
-    context.moveTo(timelineX, rowY + .5);
-    context.lineTo(timelineX + timelineWidth, rowY + .5);
-    context.stroke();
     drawYearSeamSegment(rowY, rowY + ROADMAP_GROUP_HEADER_HEIGHT, .22);
     rowY += ROADMAP_GROUP_HEADER_HEIGHT;
 
@@ -2870,11 +2882,6 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       if (includeSelection && !exportMode) rows.push({ productId: product.id, family: group.family, y: rowTop, height: ROADMAP_ROW_HEIGHT });
       context.fillStyle = productIndex % 2 ? "rgba(255,255,255,.012)" : "rgba(0,0,0,.08)";
       context.fillRect(timelineX, rowTop, timelineWidth, ROADMAP_ROW_HEIGHT);
-      context.strokeStyle = "rgba(190,197,194,.045)";
-      context.beginPath();
-      context.moveTo(timelineX, rowTop + ROADMAP_ROW_HEIGHT);
-      context.lineTo(timelineX + timelineWidth, rowTop + ROADMAP_ROW_HEIGHT);
-      context.stroke();
       // Draw the year seam after the row surface but before the product bar.
       // This keeps the seam continuous through empty space while bars naturally
       // occlude it instead of having the line painted over product content.
@@ -2887,22 +2894,15 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         const color = roadmapStatusColor(product);
 
         context.save();
-        roundRect(context, barX, barY, barWidth, barHeight, 3, color, product.statusType === "embargo" ? UI_PALETTE.amaranth : UI_PALETTE.gunmetal, 1);
+        roundRect(context, barX, barY, barWidth, barHeight, 3, color);
         context.restore();
-
-        if (roadmap.status === "concept") {
-          context.save();
-          context.setLineDash([6, 4]);
-          roundRect(context, barX + 1, barY + 1, Math.max(2, barWidth - 2), barHeight - 2, 3, null, UI_PALETTE.midGrey, 1);
-          context.restore();
-        }
 
         context.save();
         context.beginPath();
         context.rect(barX + 8, barY, Math.max(0, barWidth - 16), barHeight);
         context.clip();
         context.fillStyle = PortfolioModel.productLabelColor(product, contrastTextColor(color));
-        context.font = portfolio?.settings?.showRoadmapMsrp ? "700 11px Arial" : "700 12px Arial";
+        context.font = `${portfolio?.settings?.showRoadmapMsrp ? "700 11px" : "700 12px"} ${UI_FONT_FACE}`;
         context.textAlign = "center";
         context.textBaseline = "middle";
         context.fillText(roadmapProductBarLabel(product), barX + barWidth / 2, barY + barHeight / 2 + .5);
@@ -2924,9 +2924,9 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
 
         if (editingThisSlot && barWidth > 28) {
           context.save();
-          context.fillStyle = "rgba(239,239,237,.94)";
-          if (startVisible) roundRect(context, barX + 3, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
-          if (endVisible) roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, "rgba(239,239,237,.92)");
+          context.fillStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.whiteSmoke, .94);
+          if (startVisible) roundRect(context, barX + 3, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, globalThis.PortfolioTheme.alpha(UI_PALETTE.whiteSmoke, .92));
+          if (endVisible) roundRect(context, barX + barWidth - handleWidth + 2, barY + 5, Math.max(3, handleWidth - 5), barHeight - 10, 2, globalThis.PortfolioTheme.alpha(UI_PALETTE.whiteSmoke, .92));
           context.restore();
         }
 
@@ -2953,7 +2953,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const today = new Date();
     const fraction = Math.min(.98, Math.max(.02, (today.getDate() - 1) / new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()));
     const x = timelineX + (todayIndex - range.start + fraction) * roadmapMonthWidth;
-    context.strokeStyle = "rgba(156,174,170,.72)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .72);
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT - 8);
@@ -2986,35 +2986,32 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const groupHeight = ROADMAP_GROUP_HEADER_HEIGHT + group.products.length * ROADMAP_ROW_HEIGHT;
     context.fillStyle = UI_PALETTE.inkBlack;
     context.fillRect(stickyX + 48, rowY, ROADMAP_LEFT_WIDTH - 48, groupHeight);
-    context.strokeStyle = "rgba(190,197,194,.14)";
-    context.beginPath();
-    context.moveTo(stickyX + 48, rowY + .5);
-    context.lineTo(stickyX + ROADMAP_LEFT_WIDTH, rowY + .5);
-    context.stroke();
+    context.fillStyle = UI_PALETTE.charcoal700;
+    context.fillRect(stickyX + 48, rowY, ROADMAP_LEFT_WIDTH - 48, ROADMAP_GROUP_HEADER_HEIGHT);
     context.fillStyle = UI_PALETTE.starDust;
-    context.font = "700 12px Arial";
+    context.font = `700 12px ${UI_FONT_FACE}`;
     context.textAlign = "left";
     context.textBaseline = "middle";
     const familyHeadingY = rowY + ROADMAP_GROUP_HEADER_HEIGHT / 2;
     context.fillText(truncate(group.family.toUpperCase(), 17), stickyX + 61, familyHeadingY);
     if (group.continued) {
       context.fillStyle = UI_PALETTE.foggy;
-      context.font = "700 8px Arial";
+      context.font = `700 8px ${UI_FONT_FACE}`;
       context.fillText("CONTINUED", stickyX + 61, familyHeadingY + 14);
     }
     if (includeSelection && !exportMode && includeProducts) {
       group.products.forEach((product, index) => {
         const y = rowY + ROADMAP_GROUP_HEADER_HEIGHT + index * ROADMAP_ROW_HEIGHT;
         if (product.id === selectedId) {
-          context.fillStyle = "rgba(174,198,181,.09)";
+          context.fillStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .09);
           context.fillRect(stickyX + 48, y, ROADMAP_LEFT_WIDTH - 48, ROADMAP_ROW_HEIGHT);
         }
         const activeRow = product.id === selectedId || roadmapHoveredProductIds.get(targetCanvas) === product.id;
-        context.fillStyle = activeRow ? "rgba(195,200,197,.55)" : "rgba(149,155,151,.22)";
+        context.fillStyle = activeRow ? globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .55) : globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .22);
         for (let column = 0; roadmapInteractionMode === "dates" && column < 2; column += 1) {
           for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 54 + column * 3.5, y + 14 + dot * 4.5, 1.4, 1.4);
         }
-        context.font = "10px Arial";
+        context.font = `10px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         context.textBaseline = "middle";
         context.fillStyle = activeRow ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
@@ -3034,18 +3031,18 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     context.beginPath();
     context.rect(viewportLeft, stickyY + ROADMAP_HEADER_HEIGHT, viewportRight - viewportLeft, targetScroll.clientHeight - ROADMAP_HEADER_HEIGHT);
     context.clip();
-    context.strokeStyle = "rgba(174,198,181,.6)";
+    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .6);
     context.setLineDash([5, 4]);
     context.strokeRect(viewportLeft + 2, drag.sourceY + 2, viewportRight - viewportLeft - 4, ROADMAP_ROW_HEIGHT - 4);
     context.setLineDash([]);
     if (drag.mode === "reorder" && drag.dropTarget) {
-      context.strokeStyle = "#aecaB7";
+      context.strokeStyle = UI_PALETTE.selection;
       context.lineWidth = 2;
       context.beginPath();
       context.moveTo(viewportLeft, drag.dropTarget.lineY);
       context.lineTo(viewportRight, drag.dropTarget.lineY);
       context.stroke();
-      context.fillStyle = "#aecab7";
+      context.fillStyle = UI_PALETTE.selection;
       context.beginPath();
       context.arc(viewportLeft + 3, drag.dropTarget.lineY, 4, 0, Math.PI * 2);
       context.fill();
@@ -3055,22 +3052,22 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       context.shadowColor = "rgba(0,0,0,.45)";
       context.shadowBlur = 12;
       context.shadowOffsetY = 5;
-      roundRect(context, floatingX, floatingY + 4, Math.max(140, floatingWidth), ROADMAP_ROW_HEIGHT - 8, 4, roadmapStatusColor(selectedProduct()), "#c3d8cb", 1.5);
+      roundRect(context, floatingX, floatingY + 4, Math.max(140, floatingWidth), ROADMAP_ROW_HEIGHT - 8, 4, roadmapStatusColor(selectedProduct()), UI_PALETTE.selection, 1.5);
       context.shadowBlur = 0;
       context.shadowOffsetY = 0;
       context.fillStyle = PortfolioModel.productLabelColor(selectedProduct(), contrastTextColor(roadmapStatusColor(selectedProduct())));
-      context.font = "700 11px Arial";
+      context.font = `700 11px ${UI_FONT_FACE}`;
       context.textBaseline = "middle";
       context.fillText(truncate(selectedProduct()?.name || "Product", 34), floatingX + 12, floatingY + ROADMAP_ROW_HEIGHT / 2);
     } else if (roadmapDraft) {
       if (drag.sourceBar) {
         context.setLineDash([5, 4]);
-        context.strokeStyle = "rgba(195,216,203,.65)";
+        context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .65);
         context.strokeRect(drag.sourceBar.x, drag.sourceBar.y, drag.sourceBar.width, drag.sourceBar.height);
       }
       const draft = roadmapDraft.roadmap;
       const edges = [monthIndex(draft.startMonth), monthIndex(draft.endMonth) + 1];
-      context.strokeStyle = "rgba(174,202,183,.7)";
+      context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .7);
       context.setLineDash([3, 4]);
       edges.forEach((month) => {
         const x = ROADMAP_LEFT_WIDTH + (month - range.start) * roadmapMonthWidth;
@@ -3111,7 +3108,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       context.rect(visibleYearLeft, stickyY, visibleYearRight - visibleYearLeft, 38);
       context.clip();
       context.fillStyle = UI_PALETTE.whiteSmoke;
-      context.font = "800 26px Arial";
+      context.font = `800 26px ${UI_FONT_FACE}`;
       context.textAlign = "left";
       context.fillText(String(year), visibleYearLeft + 10, stickyY + 31);
       context.restore();
@@ -3126,11 +3123,11 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const x = timelineX + (quarterCursor - range.start) * roadmapMonthWidth;
     const quarterWidth = (quarterEnd - quarterCursor + 1) * roadmapMonthWidth;
     context.fillStyle = UI_PALETTE.greyOlive;
-    context.font = "600 10px Arial";
+    context.font = `600 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
     context.fillText(`Q${quarter}`, x + quarterWidth / 2, stickyY + 52);
     if (quarterCursor % 12 !== 0 && quarterCursor % 3 === 0) {
-      context.strokeStyle = "rgba(190,197,194,.14)";
+      context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .14);
       context.lineWidth = 1;
       context.beginPath();
       context.moveTo(Math.round(x) + .5, stickyY + 42);
@@ -3150,7 +3147,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const monthText = roadmapMonthWidth >= 60 ? fullMonthNames[month]
       : roadmapMonthWidth >= 28 || narrow ? shortMonthNames[month] : String(month + 1);
     context.fillStyle = UI_PALETTE.silver;
-    context.font = roadmapMonthWidth >= 60 ? "11px Arial" : "10px Arial";
+    context.font = `${roadmapMonthWidth >= 60 ? "11px" : "10px"} ${UI_FONT_FACE}`;
     context.textAlign = "center";
     const labelSpan = narrow ? Math.min(3 - month % 3, range.count - i) : 1;
     context.fillText(monthText, x + labelSpan * roadmapMonthWidth / 2, stickyY + 74);
@@ -3169,20 +3166,20 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.textBaseline = "alphabetic";
   context.textAlign = "left";
   context.fillStyle = UI_PALETTE.midGrey;
-  context.font = "700 9px Arial";
+  context.font = `700 9px ${UI_FONT_FACE}`;
   context.fillText("PORTFOLIO ROADMAP", stickyX + 14, stickyY + 20);
   context.fillStyle = UI_PALETTE.starDust;
-  context.font = "700 14px Arial";
+  context.font = `700 14px ${UI_FONT_FACE}`;
   context.fillText(roadmapSpanLabel(range.count), stickyX + 14, stickyY + 42);
   context.fillStyle = UI_PALETTE.greyOlive;
-  context.font = "10px Arial";
+  context.font = `10px ${UI_FONT_FACE}`;
   if (selectedGuides) {
     context.fillText(`Launch · ${roadmapLabel(selectedGuides.roadmap.startMonth)}`, stickyX + 14, stickyY + 62);
     context.fillText(`End · ${roadmapLabel(selectedGuides.roadmap.endMonth)}`, stickyX + 14, stickyY + 77);
   } else {
     context.fillText("Launch → lifecycle end", stickyX + 14, stickyY + 66);
   }
-  context.strokeStyle = "rgba(190,197,194,.18)";
+  context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .18);
   context.lineWidth = 1;
   context.beginPath();
   context.moveTo(stickyX, stickyY + ROADMAP_HEADER_HEIGHT - .5);
@@ -3194,17 +3191,21 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     roadmapRowRegions.set(targetCanvas, rows);
     roadmapLaneHovers.get(targetCanvas)?.sync();
   }
+  if (viewportPaint) context.restore();
 }
 
 function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
   if (!targetCanvas || !targetScroll || targetCanvas.closest(".hidden")) return;
+  if (typeof queuedRoadmapRenders !== "undefined") queuedRoadmapRenders.get(targetCanvas)?.cancel?.();
   const previousLeft = targetScroll.scrollLeft;
   const previousTop = roadmapFilterScrollResetPending ? 0 : targetScroll.scrollTop;
   const dimensions = roadmapDimensions();
   const context = setupRoadmapCanvas(targetCanvas, dimensions);
-  targetScroll.scrollLeft = previousLeft;
-  targetScroll.scrollTop = previousTop;
+  // Equal assignments cancel native wheel/smooth-scroll momentum in Chromium.
+  if (targetScroll.scrollLeft !== previousLeft) targetScroll.scrollLeft = previousLeft;
+  if (targetScroll.scrollTop !== previousTop) targetScroll.scrollTop = previousTop;
   drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
+  if (typeof roadmapHeaderOverlays !== "undefined") roadmapHeaderOverlays.get(targetCanvas)?.sync();
   requestAnimationFrame(() => syncRoadmapNavigator(targetScroll, navigator));
 }
 
@@ -3297,10 +3298,12 @@ function syncViewZoomControls() {
   const roadmapMaximum = snappedViewZoom(ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH);
   const roadmapZoom = snappedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, roadmapMinimum, roadmapMaximum);
   roadmapMonthWidth = roadmapZoom * ROADMAP_DEFAULT_MONTH_WIDTH;
-  $("#zoomReset").textContent = `${Math.round(zoom * 100)}%`;
+  const productLabel = `${Math.round(zoom * 100)}%`;
+  if ($("#zoomReset").textContent !== productLabel) $("#zoomReset").textContent = productLabel;
   $("#zoomOut").disabled = zoom <= PRODUCT_MIN_ZOOM;
   $("#zoomIn").disabled = zoom >= PRODUCT_MAX_ZOOM;
-  $("#roadmapZoomReset").textContent = `${Math.round(roadmapZoom * 100)}%`;
+  const roadmapLabel = `${Math.round(roadmapZoom * 100)}%`;
+  if ($("#roadmapZoomReset").textContent !== roadmapLabel) $("#roadmapZoomReset").textContent = roadmapLabel;
   $("#roadmapZoomOut").disabled = roadmapZoom <= roadmapMinimum;
   $("#roadmapZoomIn").disabled = roadmapZoom >= roadmapMaximum;
 }
@@ -3311,6 +3314,7 @@ function setRoadmapZoom(nextMonthWidth) {
   const viewportCenter = Math.max(0, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH) / 2;
   const centerMonth = (targetScroll.scrollLeft + viewportCenter) / previousMonthWidth;
   roadmapMonthWidth = snappedViewZoom(nextMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, previousMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH;
+  if (typeof categoryZoomPreferences !== "undefined") categoryZoomPreferences?.set(activeCategoryId, { productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH });
   renderRoadmaps();
   targetScroll.scrollLeft = Math.max(0, centerMonth * roadmapMonthWidth - viewportCenter);
 }
@@ -3322,6 +3326,7 @@ function setProductZoom(nextZoom) {
   const centerX = (canvasScroll.scrollLeft + viewportX) / previousZoom;
   const centerY = (canvasScroll.scrollTop + viewportY) / previousZoom;
   zoom = snappedViewZoom(nextZoom, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM, previousZoom);
+  if (typeof categoryZoomPreferences !== "undefined") categoryZoomPreferences?.set(activeCategoryId, { productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH });
   renderBoard();
   canvasScroll.scrollLeft = Math.max(0, centerX * zoom - viewportX);
   canvasScroll.scrollTop = Math.max(0, centerY * zoom - viewportY);
@@ -3347,6 +3352,7 @@ function fitProductLanesVertically() {
   // An overview must remain readable. Additional lanes scroll vertically
   // instead of shrinking every card down to illegible labels.
   zoom = snappedViewZoom(fittedZoom, .7, 1, 1, "down");
+  if (typeof categoryZoomPreferences !== "undefined") categoryZoomPreferences?.set(activeCategoryId, { productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH });
   renderBoard();
   requestAnimationFrame(() => {
     canvasScroll.scrollTop = 0;
@@ -3429,6 +3435,11 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   feedback.className = "roadmap-drag-feedback hidden";
   document.body.append(feedback);
   let frame = null;
+  const headerOverlay = globalThis.PortfolioViewRuntime?.stickyHeader(targetCanvas, targetScroll, ROADMAP_HEADER_HEIGHT);
+  if (headerOverlay) roadmapHeaderOverlays.set(targetCanvas, headerOverlay);
+  const queueScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory()))
+    || (() => requestAnimationFrame(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory())));
+  if (typeof queuedRoadmapRenders !== "undefined") queuedRoadmapRenders.set(targetCanvas, queueScrollPaint);
   const laneHover = RoadmapLaneHover.create(targetCanvas, targetScroll, {
     headerHeight: ROADMAP_HEADER_HEIGHT,
     getRows: () => roadmapRowRegions.get(targetCanvas) || [],
@@ -3437,15 +3448,17 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     onChange: (productId) => {
       roadmapHoveredProductIds.set(targetCanvas, productId);
       targetCanvas.title = productId ? board.products.find((product) => product.id === productId)?.name || "" : "";
-      paintInteraction();
+      // The viewport guide handles hover movement without repainting all rows.
+      if (roadmapInteractionMode === "dates") queueScrollPaint();
     },
   });
   roadmapLaneHovers.set(targetCanvas, laneHover);
 
   function paintInteraction() {
     const dimensions = roadmapDimensions();
-    const context = targetCanvas.getContext("2d");
+    const context = viewportCanvasContext(targetCanvas, targetScroll, dimensions);
     drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
+    headerOverlay?.sync();
     syncRoadmapNavigator(targetScroll, navigatorRefsFactory());
   }
 
@@ -3679,13 +3692,8 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     renderRoadmaps();
   });
 
-  let scrollRenderFrame = null;
   targetScroll.addEventListener("scroll", () => {
-    if (scrollRenderFrame !== null) return;
-    scrollRenderFrame = requestAnimationFrame(() => {
-      scrollRenderFrame = null;
-      renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory());
-    });
+    queueScrollPaint();
   }, { passive: true });
 
   targetScroll.addEventListener("wheel", (event) => {
@@ -3693,7 +3701,8 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
     if (max <= 0 || !horizontalIntent) return;
     event.preventDefault();
-    targetScroll.scrollLeft += event.deltaX || event.deltaY;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? targetScroll.clientWidth : 1;
+    targetScroll.scrollLeft += (event.deltaX || event.deltaY) * unit;
   }, { passive: false });
 }
 
@@ -3739,7 +3748,9 @@ function productDetailsModel(product) {
       { key: "confidence", label: "Confidence", value: roadmap.confidence || "Not set" },
     ],
     skus: productPartSkus(product).map((sku) => ({ code: sku.code, colors: PortfolioModel.resolveSkuColors(sku, product) })),
-    specs: product.specs,
+    specs: globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs,
+    launch: globalThis.PortfolioLaunchRecords?.details(product) || null,
+    priceText: globalThis.PortfolioModel?.msrpText(product) || product.price || "",
     identity: [
       { label: "Category", value: activeCategoryRecord()?.name || categoryDefinition().name },
       { label: "Lane", value: lane?.label || "Unassigned" },
@@ -3836,9 +3847,13 @@ function renderSplitProduct() {
   const product = selectedProduct();
   if (!product) {
     splitProduct.replaceChildren();
+    globalThis.PortfolioViewRuntime?.panelCache.clear(splitProduct);
     return;
   }
   const presentation = productPresentation(product);
+  const model = productDetailsModel(product);
+  const signature = JSON.stringify([model, product.name, productImageSource(product), presentation, portfolio.settings?.showRoadmapMsrp]);
+  if (globalThis.PortfolioViewRuntime?.panelCache.unchanged(splitProduct, signature)) return;
   const labelColor = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
   splitProduct.innerHTML = `
     <article class="split-product-card split-product-card--detail" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)}">
@@ -3847,9 +3862,10 @@ function renderSplitProduct() {
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
         <div class="split-product-title"><span class="eyebrow">${escapeHtml(product.roadmap?.family || 'Portfolio product')}</span><h2>${escapeHtml(product.name)}</h2>${presentation.secondaryLabel ? `<span class="split-platform-label">${escapeHtml(presentation.secondaryLabel)}</span>` : ''}${portfolio.settings?.showRoadmapMsrp && productPriceText(product) ? `<div class="split-price">${escapeHtml(productPriceText(product))}</div>` : ''}</div>
       </div>
-      <div class="split-product-body">${PortfolioDetails.render(productDetailsModel(product), { surface: 'split' })}</div>
+      <div class="split-product-body">${PortfolioDetails.render(model, { surface: 'split' })}</div>
     </article>`;
   PortfolioDetails.bind(splitProduct, { onCopy: copyTextToClipboard, dateHistory: productDateHistoryOptions(product.id) });
+  globalThis.PortfolioViewRuntime?.panelCache.remember(splitProduct, signature);
 }
 function updateLinkedViewButton() {
   const hasSelection = Boolean(selectedProduct());
@@ -4074,7 +4090,7 @@ function renderLaneRail(dimensions = getCanvasDimensions()) {
   const layout = productCardLayout();
   laneRailInner.style.height = `${dimensions.height * zoom}px`;
   const laneRows = dimensions.laneRows || productLaneGeometry(layout).rows;
-  laneRailInner.innerHTML = laneRows.map(({ lane, top: laneTop, contentHeight }) => {
+  const markup = laneRows.map(({ lane, top: laneTop, contentHeight }) => {
     const top = (laneTop - 4) * zoom;
     const height = (contentHeight + 8) * zoom;
     return `<div class="lane-rail-item" style="top:${top}px;height:${height}px">
@@ -4084,6 +4100,7 @@ function renderLaneRail(dimensions = getCanvasDimensions()) {
       </div>
     </div>`;
   }).join("");
+  if (laneRailInner.innerHTML !== markup) laneRailInner.innerHTML = markup;
   syncLaneRail();
 }
 
@@ -4138,31 +4155,39 @@ function renderBoard() {
   syncViewZoomControls();
   renderStatus();
   positionViewerInfo();
+  if (typeof productCardActionLayer !== "undefined") syncProductCardActions();
+  if (typeof productCardHover !== "undefined") productCardHover?.sync();
   requestAnimationFrame(syncBoardNavigator);
 }
 
 function renderStatus() {
-  $("#statusbar").innerHTML = '<div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div><span id="workspaceSummary"></span>';
+  if (!$("#statusbarPackage")) $("#statusbar").innerHTML = '<div id="statusbarPackage" class="statusbar-package" aria-label="Last update"></div><span id="workspaceSummary"></span>';
   publishWorkspaceState();
 }
 
 function publishWorkspaceState() {
   if (!portfolio || !board) return;
-  window.dispatchEvent(new CustomEvent("portfolio:render", { detail: {
+  const detail = {
     categories: portfolio.categories.map((category) => ({ id: category.id, name: category.name, count: category.board.products.length })),
     activeCategoryId, title: board.title, selectedName: selectedProduct()?.name || "", productCount: board.products.length,
     visibleCount: activeView === "products" ? visibleProducts().length : visibleRoadmapProducts().length,
     activeView: activeView === "products" ? "products" : "roadmap", roadmapDetailsOpen, timeline: portfolio.settings.timeline,
-  } }));
+  };
+  const signature = JSON.stringify([detail, typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision]);
+  if (typeof lastWorkspaceRenderSignature !== "undefined") {
+    if (signature === lastWorkspaceRenderSignature) return;
+    lastWorkspaceRenderSignature = signature;
+  }
+  window.dispatchEvent(new CustomEvent("portfolio:render", { detail }));
 }
 
 function selectedProduct() {
   return board.products.find((product) => product.id === selectedId) || null;
 }
 
-function showWorkspaceNotice(message, { id = "workspace-operation", title = "Notice", severity = "error", actions = [] } = {}) {
+function showWorkspaceNotice(message, { id = "workspace-operation", title = "Notice", severity = "error", actions = [], dismissible = true } = {}) {
   if (!globalThis.PortfolioNotifications) return PortfolioDialogs.alert(message, { title });
-  globalThis.PortfolioNotifications.publish({ id, title, severity, message: String(message), actions, revision: Date.now(), toast: severity === "success" });
+  globalThis.PortfolioNotifications.publish({ id, title, severity, message: String(message), actions, dismissible, revision: Date.now(), toast: severity === "success" });
   if (severity === "error") globalThis.PortfolioNotifications.show(id);
   return Promise.resolve();
 }
@@ -4203,7 +4228,7 @@ function infoProduct() {
 }
 
 function productSpecValue(product, patterns) {
-  const specs = Array.isArray(product?.specs) ? product.specs : [];
+  const specs = globalThis.PortfolioLaunchRecords?.specifications(product) || (Array.isArray(product?.specs) ? product.specs : []);
   const matchers = patterns.map((pattern) => pattern instanceof RegExp ? pattern : new RegExp(String(pattern), "i"));
   const found = specs.find((item) => matchers.some((pattern) => pattern.test(String(item.label || ""))));
   return found?.value ? String(found.value) : "";
@@ -4219,20 +4244,23 @@ function productPartSkus(product) {
     .filter((item) => item.code);
 }
 
-function renderViewerInfo() {
+function renderViewerInfo({ force = false } = {}) {
   if (!viewerInfo) return;
   const product = infoProduct();
   const visible = Boolean(product && (viewerInfoOpen || viewerInfoProgress > .001));
   viewerInfo.classList.toggle('is-open', visible);
   viewerInfo.setAttribute('aria-hidden', String(!visible));
   if (!visible || !product) {
-    if (!viewerInfoOpen && viewerInfoProgress <= .001) viewerInfo.innerHTML = '';
+    if (!viewerInfoOpen && viewerInfoProgress <= .001) { viewerInfo.innerHTML = ''; globalThis.PortfolioViewRuntime?.panelCache.clear(viewerInfo); }
     if (viewerInfoOutline) { viewerInfoOutline.classList.remove('is-open'); viewerInfoOutline.style.width = '0px'; }
     return;
   }
-  viewerInfo.innerHTML = `<div class="viewer-info-body"><div class="viewer-detail-heading"><div class="viewer-detail-title"><span class="viewer-detail-eyebrow">Product details</span><h2>${escapeHtml(product.name)}</h2></div><button type="button" class="icon-button viewer-detail-close" data-detail-close aria-label="Close product information">×</button></div>${PortfolioDetails.render(productDetailsModel(product), { surface: 'viewer' })}</div>`;
+  const model = productDetailsModel(product), signature = JSON.stringify([model, product.name]);
   setViewerInfoSize(viewerInfoVisualWidth(), viewerInfoVisualHeight());
+  if (!force && globalThis.PortfolioViewRuntime?.panelCache.unchanged(viewerInfo, signature)) return;
+  viewerInfo.innerHTML = `<div class="viewer-info-body"><h2 class="visually-hidden">Details for ${escapeHtml(product.name)}</h2><button type="button" class="icon-button viewer-detail-close" data-detail-close aria-label="Close product information">×</button>${PortfolioDetails.render(model, { surface: 'viewer' })}</div>`;
   PortfolioDetails.bind(viewerInfo, { onCopy: copyTextToClipboard, onClose: closeViewerInfo, dateHistory: productDateHistoryOptions(product.id) });
+  globalThis.PortfolioViewRuntime?.panelCache.remember(viewerInfo, signature);
 }
 function positionViewerInfo() {
   if (!viewerInfo || !viewerInfoProductId || activeView !== "products" || viewerInfoProgress <= 0) return null;
@@ -4240,45 +4268,51 @@ function positionViewerInfo() {
   viewerInfo.classList.toggle("is-open", Boolean(card));
   viewerInfo.setAttribute("aria-hidden", String(!card));
   if (!card) return null;
-  const height = card.height * zoom;
-  const width = viewerInfoVisualWidth(height);
-  const left = (card.x + card.width) * zoom + 10;
-  const top = card.y * zoom;
+  const stacked = card.viewerStacked ?? viewerInfoStacked();
+  const height = stacked ? viewerInfoVisualHeight() : card.height * zoom;
+  const width = viewerInfoVisualWidth();
+  const left = stacked ? (card.integrationX ?? card.x) * zoom : (card.x + card.width) * zoom;
+  const top = (card.y + (stacked ? card.height : 0)) * zoom;
   const hiddenPercent = Math.max(0, Math.min(100, (1 - viewerInfoProgress) * 100));
-  const visibleWidth = width * viewerInfoProgress;
+  const visibleWidth = stacked ? Math.max(card.width * zoom, (card.integrationWidth || card.width) * zoom) : width * viewerInfoProgress;
 
-  setViewerInfoSize(width, height);
+  setViewerInfoSize(stacked ? visibleWidth : width, height);
+  const presentation = productPresentation(infoProduct());
+  viewerInfo.dataset.stacked = String(stacked);
+  viewerInfo.style.setProperty("--viewer-info-band-height", `${stacked ? 0 : STATUS_BANNER_HEIGHT * zoom}px`);
+  viewerInfo.style.setProperty("--viewer-info-band-color", presentation.primaryLabel ? presentation.primaryColor : UI_PALETTE.carbon);
   viewerInfo.style.left = `${left}px`;
   viewerInfo.style.top = `${top}px`;
   viewerInfo.style.transform = "none";
   viewerInfo.style.opacity = "1";
-  viewerInfo.style.clipPath = `inset(0 ${hiddenPercent}% 0 0)`;
+  viewerInfo.style.clipPath = stacked ? `inset(0 0 ${hiddenPercent}% 0)` : `inset(0 ${hiddenPercent}% 0 0)`;
   viewerInfo.style.pointerEvents = viewerInfoProgress > .96 ? "auto" : "none";
 
   if (viewerInfoOutline) {
-    const outlineWidth = (CARD_WIDTH * zoom) + visibleWidth;
+    const outlineWidth = stacked ? visibleWidth : (CARD_WIDTH * zoom) + visibleWidth;
     viewerInfoOutline.classList.toggle("is-open", viewerInfoProgress > .001);
-    viewerInfoOutline.style.left = `${card.x * zoom}px`;
-    viewerInfoOutline.style.top = `${top}px`;
+    viewerInfoOutline.style.left = `${(card.integrationX ?? card.x) * zoom}px`;
+    viewerInfoOutline.style.top = `${card.y * zoom}px`;
     viewerInfoOutline.style.width = `${outlineWidth}px`;
-    viewerInfoOutline.style.height = `${height}px`;
+    viewerInfoOutline.style.height = `${(card.integrationHeight ?? card.height) * zoom}px`;
   }
 
   return {
-    cardLeft: card.x * zoom,
+    cardLeft: (card.integrationX ?? card.x) * zoom,
     cardTop: card.y * zoom,
+    cardBottom: (card.y + card.height) * zoom,
     paneLeft: left,
     paneRight: left + visibleWidth,
-    paneBottom: top + height,
+    paneBottom: top + height * (stacked ? viewerInfoProgress : 1),
   };
 }
 
 function revealViewerInfoBesideProduct() {
   const placement = positionViewerInfo();
   if (!placement) return;
-  const padding = 18;
   const viewportWidth = canvasScroll.clientWidth;
   const viewportHeight = canvasScroll.clientHeight;
+  const padding = Math.min(18, Math.max(0, (viewportWidth - (placement.paneRight - placement.paneLeft)) / 2));
   const combinedWidth = placement.paneRight - placement.cardLeft;
   let targetLeft = canvasScroll.scrollLeft;
   if (combinedWidth <= viewportWidth - padding * 2) {
@@ -4291,7 +4325,7 @@ function revealViewerInfoBesideProduct() {
 
   let targetTop = canvasScroll.scrollTop;
   if (placement.cardTop < targetTop + padding || placement.paneBottom > targetTop + viewportHeight - padding) {
-    targetTop = Math.max(0, placement.cardTop - padding);
+    targetTop = Math.max(0, viewerInfoStacked() ? placement.cardTop - padding : placement.cardTop - 8);
   }
   canvasScroll.scrollTo({ left: targetLeft, top: targetTop, behavior: "smooth" });
 }
@@ -4334,33 +4368,61 @@ function animateViewerInfo(targetProgress, onComplete) {
   viewerInfoAnimationFrame = requestAnimationFrame(step);
 }
 
-function openViewerInfo(productId = selectedId, { onReady } = {}) {
+function openViewerInfo(productId = selectedId, { onReady, preserveDetailTab = false, tab = null, originButton = null } = {}) {
   if (!productId) return;
 
-  if (viewerInfoOpen && viewerInfoProductId === productId) {
+  if (viewerInfoOpen && viewerInfoProductId === productId && !tab) {
     closeViewerInfo();
     return;
   }
 
+  const wasOpen = viewerInfoOpen && viewerInfoProductId === productId;
+  const iconOrigin = originButton ? { productId, button: originButton, tab: tab || "overview" } : null;
+  if (typeof viewerInfoIconOrigin !== "undefined") viewerInfoIconOrigin = iconOrigin;
+  if (typeof viewerInfoPendingIconFocus !== "undefined") viewerInfoPendingIconFocus = null;
   viewerInfoProductId = productId;
   viewerInfoOpen = true;
   selectedId = productId;
+  if (tab) {
+    const product = infoProduct();
+    if (product) PortfolioDetails.openTab(productDetailsModel(product), { surface: "viewer", tab });
+  } else if (!preserveDetailTab) {
+    const product = infoProduct();
+    if (product) PortfolioDetails.focusMatch(productDetailsModel(product), { surface: "viewer" });
+  }
   renderInspector();
-  renderViewerInfo();
+  renderViewerInfo({ force: true });
   renderBoard();
 
+  const ready = () => {
+    if (!viewerInfoOpen || viewerInfoProductId !== productId || activeView !== "products") return;
+    if (iconOrigin && activeView === "products" && viewerInfoOpen && viewerInfoProductId === productId && viewerInfoIconOrigin === iconOrigin) {
+      if (document.activeElement === iconOrigin.button || viewerInfo.contains(document.activeElement)) viewerInfo.querySelector(`[data-detail-tab="${iconOrigin.tab}"]`)?.focus({ preventScroll: true });
+      syncProductCardActions();
+    }
+    onReady?.();
+  };
+  if (wasOpen && viewerInfoProgress >= .999) { ready(); return; }
+
   requestAnimationFrame(() => {
-    animateViewerInfo(1, () => requestAnimationFrame(() => { revealViewerInfoBesideProduct(); onReady?.(); }));
+    if (!viewerInfoOpen || viewerInfoProductId !== productId || activeView !== "products" || (iconOrigin && viewerInfoIconOrigin !== iconOrigin)) return;
+    animateViewerInfo(1, () => requestAnimationFrame(() => { revealViewerInfoBesideProduct(); ready(); }));
   });
 }
 
 function closeViewerInfo({ render = true } = {}) {
   if (!viewerInfoProductId && viewerInfoProgress <= .001) return;
   viewerInfoOpen = false;
+  const iconOrigin = typeof viewerInfoIconOrigin === "undefined" ? null : viewerInfoIconOrigin;
+  const focusAtClose = typeof document === "undefined" ? null : document.activeElement;
+  const retainFocusedOrigin = Boolean(iconOrigin && focusAtClose === iconOrigin.button);
+  const restoreIconFocus = Boolean(iconOrigin && (retainFocusedOrigin || viewerInfo?.contains(focusAtClose)));
+  if (typeof viewerInfoIconOrigin !== "undefined") viewerInfoIconOrigin = retainFocusedOrigin && render && activeView === "products" ? iconOrigin : null;
   cancelAnimationFrame(viewerInfoAnimationFrame);
   viewerInfoAnimationFrame = null;
 
   if (!render || activeView !== "products") {
+    if (typeof viewerInfoPendingIconFocus !== "undefined") viewerInfoPendingIconFocus = null;
     viewerInfoProgress = 0;
     viewerInfoProductId = null;
     if (viewerInfoOutline) {
@@ -4373,10 +4435,34 @@ function closeViewerInfo({ render = true } = {}) {
 
   animateViewerInfo(0, () => {
     viewerInfoProductId = null;
+    if (typeof viewerInfoIconOrigin !== "undefined") viewerInfoIconOrigin = null;
     renderViewerInfo();
+    if (typeof viewerInfoPendingIconFocus !== "undefined" && restoreIconFocus) viewerInfoPendingIconFocus = { ...iconOrigin, focusAtClose, createdAt: Date.now(), allowReveal: false };
     renderBoard();
-    requestAnimationFrame(scrollSelectedIntoView);
+    requestAnimationFrame(() => {
+      scrollSelectedIntoView();
+      if (typeof viewerInfoPendingIconFocus !== "undefined" && viewerInfoPendingIconFocus) { viewerInfoPendingIconFocus.allowReveal = true; restoreViewerInfoIconFocus(); }
+    });
   });
+}
+
+function restoreViewerInfoIconFocus() {
+  const pending = typeof viewerInfoPendingIconFocus === "undefined" ? null : viewerInfoPendingIconFocus;
+  if (!pending) return;
+  if (viewerInfoOpen || activeView !== "products" || !pending.button.isConnected || Date.now() - pending.createdAt > 2000 ||
+    (document.activeElement !== pending.focusAtClose && document.activeElement !== document.body && !viewerInfo.contains(document.activeElement) && document.activeElement !== pending.button)) {
+    viewerInfoPendingIconFocus = null; return;
+  }
+  if (document.activeElement === pending.button) { viewerInfoPendingIconFocus = null; return; }
+  if (pending.button.closest("[hidden]")) return;
+  const button = pending.button.getBoundingClientRect(), viewport = canvasScroll.getBoundingClientRect();
+  const visible = button.left >= viewport.left && button.right <= viewport.right && button.top >= viewport.top && button.bottom <= viewport.bottom;
+  if (!visible) {
+    if (pending.allowReveal && !pending.revealRequested) { pending.revealRequested = true; pending.button.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" }); }
+    return;
+  }
+  pending.button.focus({ preventScroll: true });
+  viewerInfoPendingIconFocus = null;
 }
 
 function clearSelection({ render = true } = {}) {
@@ -4704,7 +4790,11 @@ function setupEditorNavigation() {
   navigation.setAttribute("role", "tablist");
   navigation.setAttribute("aria-label", "Product editor sections");
   navigation.innerHTML = definitions.map(([key, label]) => `<button type="button" role="tab" id="editor-tab-${key}" data-editor-tab="${key}" aria-controls="editor-panel-${key}">${label}</button>`).join("");
-  inspector.querySelector(".inspector-heading").after(navigation);
+  const heading = inspector.querySelector(".inspector-heading");
+  const stickyNavigation = document.createElement("div");
+  stickyNavigation.className = "inspector-navigation";
+  heading.before(stickyNavigation);
+  stickyNavigation.append(heading, navigation);
   for (const [key] of definitions) {
     const panel = document.createElement("div");
     panel.id = `editor-panel-${key}`;
@@ -4740,10 +4830,24 @@ function setupEditorNavigation() {
     };
   });
   setEditorTab(editorActiveTab);
+  const measureNavigation = () => inspector.style.setProperty("--inspector-navigation-height", `${stickyNavigation.offsetHeight}px`);
+  requestAnimationFrame(measureNavigation);
+  if (typeof inspectorNavigationObserver !== "undefined") inspectorNavigationObserver?.disconnect();
+  if (typeof ResizeObserver === "function") {
+    inspectorNavigationObserver = new ResizeObserver(measureNavigation);
+    inspectorNavigationObserver.observe(stickyNavigation);
+  }
 }
 
 function renderInspector() {
   const product = selectedProduct();
+  if (!inspectorOpen) {
+    applyInspectorState(!product);
+    editSelectedButton.disabled = !product;
+    if (inspector.childElementCount) inspector.replaceChildren();
+    if (typeof inspectorNavigationObserver !== "undefined") inspectorNavigationObserver?.disconnect();
+    return;
+  }
   if (!product) {
     applyInspectorState(true);
     inspector.innerHTML = "<h2>Product details</h2><p>Select a product, then choose Edit product to update its information.</p>";
@@ -4752,6 +4856,7 @@ function renderInspector() {
   }
   applyInspectorState(false);
   editSelectedButton.disabled = false;
+  const featureSpecs = globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs;
   const imageAssetSummary = imageAssetSummaryHtml(product.imageAssetId, "No product image · category placeholder is used");
   inspector.innerHTML = `
     <div class="inspector-heading">
@@ -4921,7 +5026,7 @@ function renderInspector() {
         <label>Category common set<select id="specSetSelect">${categorySpecSets().map((set) => `<option value="${escapeHtml(set.id)}">${escapeHtml(set.label)}</option>`).join("")}</select></label>
         <button id="addSpecSet" class="small-button" type="button">+ Add missing fields</button>
       </div>
-      <div class="stack-list">${product.specs.length ? product.specs.map((item, index) => `
+      <div class="stack-list">${featureSpecs.length ? featureSpecs.map((item, index) => `
         <div class="editable-row" data-spec-id="${escapeHtml(item.id)}">
           <input data-spec-field="label" value="${escapeHtml(item.label)}" aria-label="Specification ${index + 1} label">
           <input data-spec-field="value" value="${escapeHtml(item.value)}" aria-label="Specification ${index + 1} value">
@@ -5357,10 +5462,11 @@ function normalizeLaneOrders(laneId) {
 function moveProductToLane(productId, laneId) {
   updateBoard((current) => {
     const product = current.products.find((item) => item.id === productId);
-    if (!product) return;
+    if (!product || product.laneId === laneId || !current.lanes.some((lane) => lane.id === laneId)) return;
     const oldLane = product.laneId;
     product.laneId = laneId;
-    product.order = current.products.filter((item) => item.laneId === laneId && item.id !== productId).length;
+    product.order = current.products.filter((item) => item.laneId === laneId && item.id !== productId)
+      .reduce((maximum, item) => Number.isFinite(item.order) ? Math.max(maximum, item.order) : maximum, -1) + 1;
     delete product.manualPosition;
     normalizeLaneOrders(oldLane);
     normalizeLaneOrders(laneId);
@@ -5490,6 +5596,78 @@ function hitInfoButton(point) {
   return [...renderedInfoButtons].reverse().find((region) => point.x >= region.x && point.x <= region.x + region.width && point.y >= region.y && point.y <= region.y + region.height);
 }
 
+function productCardActionPlacement(card, layout = productCardLayout()) {
+  const width = Math.max(0, card.width * zoom - (card.width * zoom < 68 ? 0 : 16));
+  return { x: card.x * zoom + (card.width * zoom - width) / 2, y: (card.y + layout.actionTop) * zoom + 4, width };
+}
+
+function productCardActionAvailable(productId) {
+  if (viewerInfoProductId !== productId || (!viewerInfoOpen && viewerInfoProgress <= .001)) return true;
+  const origin = typeof viewerInfoIconOrigin === "undefined" ? null : viewerInfoIconOrigin;
+  // Keep a focused opener visible until the reading tab receives focus.
+  return Boolean(origin?.productId === productId && origin.button === document.activeElement);
+}
+
+function syncProductCardActions() {
+  if (!productCardActionLayer) return;
+  productCardActionLayer.hidden = activeView !== "products" || productLayoutEditing;
+  const currentIds = new Set(renderedCards.map(card => card.productId));
+  // Read viewport geometry before changing row styles. Re-hiding a focused row
+  // and flushing layout between cards both caused avoidable interaction work.
+  const viewport = { left: canvasScroll.scrollLeft, top: canvasScroll.scrollTop, width: canvasScroll.clientWidth, height: canvasScroll.clientHeight };
+  const visibleCards = productCardActionLayer.hidden ? [] : renderedCards.filter(card => productCardActionAvailable(card.productId) &&
+    (card.x + card.width) * zoom >= viewport.left && card.x * zoom <= viewport.left + viewport.width &&
+    (card.y + card.height) * zoom >= viewport.top && card.y * zoom <= viewport.top + viewport.height);
+  const visibleIds = new Set(visibleCards.map(card => card.productId));
+  for (const [productId, row] of productCardActionRows) {
+    if (!currentIds.has(productId)) { row.remove(); productCardActionRows.delete(productId); }
+    else if (row.hidden !== !visibleIds.has(productId)) row.hidden = !visibleIds.has(productId);
+  }
+  if (productCardActionLayer.hidden) return;
+  const layout = productCardLayout();
+  for (const card of visibleCards) {
+    const product = board.products.find(item => item.id === card.productId);
+    if (!product) continue;
+    let row = productCardActionRows.get(product.id);
+    if (!row) {
+      row = document.createElement("div"); row.className = "product-card-action-row";
+      row.innerHTML = '<button type="button" data-card-detail-tab="overview"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3 3v12H5zM12 2.5v3h3M8 9h4M8 12h4M8 15h3"/></svg></span></button><button type="button" data-card-detail-tab="dates"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.5"/><path d="M6.5 2.5v4M13.5 2.5v4M3 8.5h14M6.5 11.5h.1M10 11.5h.1M13.5 11.5h.1M6.5 14.5h.1M10 14.5h.1"/></svg></span></button>';
+      row.dataset.cardProductId = product.id;
+      productCardActionLayer.append(row); productCardActionRows.set(product.id, row);
+    }
+    const placement = productCardActionPlacement(card, layout);
+    const transform = `translate3d(${placement.x}px, ${placement.y}px, 0)`;
+    const width = `${placement.width}px`;
+    if (row.style.transform !== transform) row.style.transform = transform;
+    if (row.style.width !== width) row.style.width = width;
+    row.classList.toggle("is-condensed", card.width * zoom < 68); if (row.hidden) row.hidden = false;
+    for (const button of row.querySelectorAll("button")) {
+      const actionLabel = button.dataset.cardDetailTab === "dates" ? "Dates" : "Specifications";
+      const label = `${actionLabel} for ${product.name}`;
+      if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+      if (button.title !== actionLabel) button.title = actionLabel;
+      const expanded = String(viewerInfoOpen && viewerInfoProductId === product.id);
+      if (button.getAttribute("aria-expanded") !== expanded) button.setAttribute("aria-expanded", expanded);
+    }
+  }
+  restoreViewerInfoIconFocus();
+}
+
+if (globalThis.PortfolioViewRuntime) {
+  productCardActionLayer = document.createElement("div"); productCardActionLayer.className = "product-card-actions";
+  canvasScroll.append(productCardActionLayer);
+  productCardActionLayer.addEventListener("click", event => {
+    const button = event.target.closest("[data-card-detail-tab]");
+    if (!button || productLayoutEditing || packageOperationInProgress) return;
+    const productId = button.closest("[data-card-product-id]")?.dataset.cardProductId;
+    if (productId && board.products.some(product => product.id === productId)) openViewerInfo(productId, { tab: button.dataset.cardDetailTab, originButton: button });
+  });
+  productCardHover = globalThis.PortfolioViewRuntime.cardHover(canvas, canvasScroll, {
+    getCards: () => renderedCards, getOwner: () => `${activeCategoryId}:${activeView}`,
+    getZoom: () => zoom, isSuspended: () => Boolean(activeView !== "products" || productLayoutEditing || dragState || panState || !board),
+  });
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   if (event.isPrimary === false || event.button !== 0 || dragState || panState) return;
   const point = canvasPoint(event);
@@ -5590,12 +5768,6 @@ canvas.addEventListener("pointermove", (event) => {
     if (variantOverflow) scheduleVariantPopoverOpen(variantOverflow, event.clientX, event.clientY);
     else scheduleVariantPopoverClose();
     const infoButton = productLayoutEditing ? null : hitInfoButton(point);
-    const nextInfoHoverId = infoButton?.productId || "";
-    if (nextInfoHoverId !== hoveredInfoButtonProductId) {
-      hoveredInfoButtonProductId = nextInfoHoverId;
-      renderBoard();
-      return;
-    }
     const card = hitCard(point);
     canvas.style.cursor = heroVariant || variantOverflow || infoButton
       ? "pointer"
@@ -5677,6 +5849,51 @@ function safeFilename(extension) {
 
 function clonePortfolioData() {
   return JSON.parse(JSON.stringify(portfolio));
+}
+
+function portfolioDataBackupText() {
+  return JSON.stringify(portfolio, null, 2);
+}
+
+async function copyPortfolioDataBackup() {
+  const button = $("#copyJson"), status = $("#dataCopyStatus"), fallback = $("#dataCopyFallback"), textField = $("#dataBackupText");
+  if (button.disabled) return false;
+  status.classList.remove("hidden");
+  if (workspaceOpening || packageOperationInProgress) {
+    status.textContent = "Finish loading the portfolio before copying its data backup.";
+    return false;
+  }
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  status.textContent = "Copying data backup…";
+  try {
+    const snapshot = portfolioDataBackupText();
+    textField.value = snapshot; fallback.classList.remove("hidden");
+    const copied = await copyTextToClipboard(snapshot, { timeoutMs: 2000, onLateNative: () => {
+      if (portfolioDataBackupText() !== snapshot) {
+        textField.value = portfolioDataBackupText();
+        status.textContent = "An earlier copy completed late. Use the latest backup text below, or copy it again before using it.";
+      }
+    } });
+    if (!copied) {
+      textField.value = portfolioDataBackupText();
+      status.textContent = "The browser could not copy the backup automatically. The latest backup text is shown below for manual copying, or make this browser window active and try again.";
+      return false;
+    }
+    if (portfolioDataBackupText() !== snapshot) {
+      textField.value = portfolioDataBackupText();
+      status.textContent = "The portfolio changed while copying. Use the latest backup text below, or click Copy data backup again.";
+      return false;
+    }
+    status.textContent = "Data backup copied. Paste it into a text file and save it as .data. Image files are not included.";
+    return true;
+  } catch (_) {
+    status.textContent = "The data backup could not be copied. Try again, or use Export data file.";
+    return false;
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
 }
 
 
@@ -5775,18 +5992,17 @@ function clearPackageImageCaches() {
   missingImageAssetIds.clear();
 }
 
-async function commitPackageDraft(draft, expectedCurrent) {
+async function commitPackageDraft(draft, expectedCurrent, stagedImages = [], { cleanupImages = true } = {}) {
   if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was loading. Try again after your changes are saved.");
   const previousPortfolio = portfolio;
-  const previousStored = localStorage.getItem(STORAGE_KEY);
-  const previousRecovery = localStorage.getItem(PACKAGE_RECOVERY_KEY);
-  const previousUnreadableWorkspaceStorage = unreadableWorkspaceStorage;
+  let previousRecovery = null;
+  try { previousRecovery = localStorage.getItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
   const serialized = JSON.stringify(draft);
-  if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+  // The manifest and incoming binary assets become durable together. Existing
+  // images remain untouched until the new record activates successfully.
+  await workspaceStorage.save(serialized, { images: stagedImages, isCurrent: () => JSON.stringify(portfolio) === expectedCurrent });
   try {
-    // Incoming images have new IDs. Preserve the original library until the
-    // replacement is saved and activated so a failed commit can roll back.
-    await persistPortfolioStorage(serialized, { allowRecovery: true });
+    if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was loading. Your newer changes have been kept.");
     portfolio = draft;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     clearPackageImageCaches();
@@ -5794,14 +6010,20 @@ async function commitPackageDraft(draft, expectedCurrent) {
   } catch (error) {
     portfolio = previousPortfolio;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-    try { await persistPortfolioStorage(previousStored, { allowRecovery: true }); } catch (_) {}
-    unreadableWorkspaceStorage = previousUnreadableWorkspaceStorage;
+    let restored = false;
+    try { await workspaceStorage.save(JSON.stringify(previousPortfolio)); restored = true; }
+    catch (_) {
+      error.message += " The previous saved copy could not be restored. The imported package and its images remain saved; export your open changes before closing or reloading.";
+    }
+    if (restored) { try { await imageStoreDeleteBatch(stagedImages.map(entry => entry.id)); } catch (_) {} }
     clearPackageImageCaches();
     try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
     throw error;
   }
   globalThis.PortfolioProductIssues?.clearAscmIssues();
   globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
+  globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+  workspaceSavePending = false;
   // A successful replacement no longer retains a previous workspace. Also
   // collect valid legacy snapshot images, protecting every current image ID.
   let obsoleteRecovery = null;
@@ -5816,7 +6038,7 @@ async function commitPackageDraft(draft, expectedCurrent) {
   try { localStorage.removeItem(PACKAGE_RECOVERY_KEY); } catch (_) {}
   const protectedIds = new Set(localPackageImageIds(draft));
   const obsoleteIds = [...new Set([...localPackageImageIds(previousPortfolio), ...localPackageImageIds(obsoleteRecovery)])].filter((assetId) => !protectedIds.has(assetId));
-  try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {}
+  if (cleanupImages) { try { await imageStoreDeleteBatch(obsoleteIds); } catch (_) {} }
   return {
     categoryCount: draft.categories.length,
     productCount: draft.categories.reduce((total, category) => total + category.board.products.length, 0),
@@ -5847,7 +6069,7 @@ async function buildProjectPackageBytes(packageInfo) {
     entries.push({ name: packagePath, data: new Uint8Array(await blob.arrayBuffer()) });
   }
   const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
-  if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+  if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The portfolio data exceeds the supported 64 MiB package data limit.");
   if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was being prepared. Try exporting again.");
   entries.unshift({ name: "portfolio.json", data: manifestBytes });
   return codec.createZip(entries);
@@ -5886,7 +6108,6 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
   const expectedCurrent = JSON.stringify(portfolio);
   const pendingStart = pendingLegacyImageBlobs.length;
   const stagedImages = [];
-  let staged = false;
   try {
     const input = new Uint8Array(await file.arrayBuffer());
     if (input.length > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
@@ -5896,7 +6117,7 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     const entries = codec.readZip(bytes);
     const manifestBytes = entries.get("portfolio.json");
     if (!manifestBytes) throw new Error("The project package is missing portfolio.json.");
-    if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The package data is too large to save in this browser.");
+    if (manifestBytes.length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("The portfolio data exceeds the supported 64 MiB package data limit.");
     let parsed;
     try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes)); }
     catch (_) { throw new Error("The package portfolio data is damaged."); }
@@ -5932,14 +6153,11 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
       }
     }
     draft.masterLocalAssetIds = Object.fromEntries(replacements);
-    await imageStoreWriteBatch(stagedImages);
-    staged = true;
-    const result = await commitPackageDraft(draft, expectedCurrent);
+    const result = await commitPackageDraft(draft, expectedCurrent, stagedImages);
     globalThis.PortfolioMasterUI?.markImported(draft.masterLocalBaseline || [], key);
     return { ...result, encrypted };
   } catch (error) {
     pendingLegacyImageBlobs.splice(pendingStart);
-    if (staged) { try { await imageStoreDeleteBatch(stagedImages.map((entry) => entry.id)); } catch (_) {} }
     throw error;
   } finally {
     packageOperationInProgress = false;
@@ -6110,7 +6328,7 @@ function recordCardElementsForPptx(cardCanvas, product, layout) {
           const textColor = color(target.fillStyle);
           elements.push({
             kind: "text", text: String(text), ...rectangle(transform, left, y - baselineOffset, boxWidth, fontSize * 1.3),
-            fontSize: fontSize * Math.abs(transform.a), fontFace: target.font.slice(target.font.indexOf("px") + 2).trim() || "Arial",
+            fontSize: fontSize * Math.abs(transform.a), fontFace: target.font.slice(target.font.indexOf("px") + 2).trim() || UI_FONT_FACE,
             color: textColor.color, opacity: textColor.opacity * target.globalAlpha,
             align, bold: /\b(?:bold|[6-9]00)\b/.test(target.font), fit: "shrink", baseline: point(transform, x, y).y,
           });
@@ -6137,7 +6355,7 @@ function recordCardElementsForPptx(cardCanvas, product, layout) {
 function productPagesForPptx(category, targetBoard = null, canvasWidth = 0) {
   const definition = categoryDefinition(category.id);
   const categoryBoard = targetBoard || ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
-  const layout = productCardLayout(categoryBoard, definition);
+  const layout = productCardLayout(categoryBoard, definition, { includeControls: false });
   return PPTXPagination.paginateProductLanes(categoryBoard.lanes, categoryBoard.products, {
     canvasWidth,
     cardWidth: CARD_WIDTH, cardGap: CARD_GAP, cardHeight: layout.cardHeight,
@@ -6326,8 +6544,6 @@ async function renderCategoryRoadmapImageForPptx(category, groups = null) {
             kind: "roadmap", id: product.id, name: product.name,
             label: roadmapProductBarLabel(product), ...rect,
             fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), concept,
-            lineColor: product.statusType === "embargo" ? UI_PALETTE.amaranth
-              : concept ? UI_PALETTE.midGrey : UI_PALETTE.gunmetal,
             fontSize: portfolio?.settings?.showRoadmapMsrp ? 11 : 12,
           });
         }
@@ -6355,19 +6571,20 @@ async function renderCategoryRoadmapImageForPptx(category, groups = null) {
   }
 }
 
-function addPptxPortfolioSlide(pptx, title, image) {
+function addPptxPortfolioSlide(pptx, title, image, canvas = null) {
   const slide = pptx.addSlide();
-  slide.background = { color: "171717" };
+  const pageScale = canvas?.width ? canvas.width / (40 / 3) : 1;
+  slide.background = { color: UI_PALETTE.inkBlack.replace(/^#/, "") };
   slide.addText(title, {
-    x: .38, y: .16, w: 11.9, h: .38,
-    fontFace: "Arial", fontSize: 20, bold: true,
-    color: "F0F2F0", margin: 0, breakLine: false,
+    x: .38 * pageScale, y: .16 * pageScale, w: 11.9 * pageScale, h: .38 * pageScale,
+    fontFace: PPTXEditable.FONT_FACE, fontSize: 20 * pageScale, bold: true,
+    color: UI_PALETTE.whiteSmoke.replace(/^#/, ""), margin: 0, breakLine: false,
   });
   slide.addShape(pptx.ShapeType.line, {
-    x: .38, y: .62, w: 12.55, h: 0,
-    line: { color: "2B2E2B", width: .4, transparency: 25 },
+    x: .38 * pageScale, y: .62 * pageScale, w: 12.55 * pageScale, h: 0,
+    line: { color: UI_PALETTE.charcoal600.replace(/^#/, ""), width: .4 * pageScale, transparency: 25 },
   });
-  const placement = containRect(image.width, image.height, .38, .74, 12.55, 6.33, "left");
+  const placement = PPTXEditable.containTop(image.width, image.height, .38 * pageScale, .74 * pageScale, 12.55 * pageScale, 6.33 * pageScale);
   slide.addImage({ data: image.data, ...placement, objectName: "Calendar and category background" });
   const scale = placement.w / image.width;
   const cardGroups = [];
@@ -6389,11 +6606,10 @@ function addPptxPortfolioSlide(pptx, title, image) {
     }
     slide.addText(product.label, {
       ...rect, objectName, shape: pptx.ShapeType.roundRect,
-      fontFace: "Arial", fontSize: product.fontSize * scale * 72, bold: true,
+      fontFace: PPTXEditable.FONT_FACE, fontSize: product.fontSize * scale * 72, bold: true,
       color: product.textColor.replace(/^#/, ""),
       fill: { color: product.fill.replace(/^#/, "") },
-      line: { color: product.lineColor.replace(/^#/, ""), width: scale * 72,
-        ...(product.concept ? { dashType: "dash" } : {}) },
+      line: { color: product.fill.replace(/^#/, ""), width: 0, transparency: 100 },
       align: "center", valign: "mid", margin: [0, 8 * scale * 72, 0, 8 * scale * 72],
       breakLine: false, wrap: false, fit: "shrink",
     });
@@ -6414,44 +6630,72 @@ function containRect(sourceWidth, sourceHeight, targetX, targetY, targetWidth, t
   };
 }
 
-function buildPptxExportPlan(scope, categories) {
-  const includeProducts = scope === "products" || scope === "both";
-  const includeRoadmap = scope === "roadmap" || scope === "both";
-  const slides = [];
+function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
+  const previousUiFontFace = UI_FONT_FACE;
+  UI_FONT_FACE = PPTXEditable.FONT_FACE;
+  try {
+    const includeProducts = scope === "products" || scope === "both";
+    const includeRoadmap = scope === "roadmap" || scope === "both";
+    const slides = [];
 
-  const preparedCategories = categories.map((category, categoryIndex) => {
-    const definition = categoryDefinition(category.id);
-    const targetBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
-    return { category, categoryIndex, definition, targetBoard,
-      productPages: includeProducts ? productPagesForPptx(category, targetBoard) : [] };
-  });
-  // Every selected category shares the same card scale. Reserve a wider
-  // canvas for the whole deck only when an unusually tall detail card needs it.
-  const productCanvasWidth = preparedCategories.reduce((width, item) => Math.max(width, item.productPages[0]?.width || 0), 0);
+    const preparedCategories = categories.map((category, categoryIndex) => {
+      const definition = categoryDefinition(category.id);
+      const targetBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
+      return { category, categoryIndex, definition, targetBoard,
+        productPages: includeProducts ? productPagesForPptx(category, targetBoard) : [] };
+    });
+    // Every selected category shares the same card scale. Reserve a wider
+    // canvas for the whole deck only when an unusually tall detail card needs it.
+    const productCanvasWidth = preparedCategories.reduce((width, item) => Math.max(width, item.productPages[0]?.width || 0), 0);
 
-  preparedCategories.forEach(({ category, categoryIndex, definition, targetBoard, productPages }) => {
+    preparedCategories.forEach(({ category, categoryIndex, definition, targetBoard, productPages }) => {
 
-    if (includeProducts) {
-      const pages = productPages[0].width === productCanvasWidth ? productPages
+      if (includeProducts) {
+        const pages = productPages[0].width === productCanvasWidth ? productPages
         : productPagesForPptx(category, targetBoard, productCanvasWidth);
-      pages.forEach((page, pageIndex) => {
-        slides.push({ category, categoryIndex, kind: "products", page, pageIndex, pageCount: pages.length });
-      });
+        pages.forEach((page, pageIndex) => {
+          slides.push({ category, categoryIndex, kind: "products", page, pageIndex, pageCount: pages.length });
+        });
+      }
+
+      if (includeRoadmap && !globalThis.PPTXExportPlanner) {
+        const groups = roadmapGroupsForProducts(targetBoard.products, targetBoard, definition);
+        const pages = paginateRoadmapGroupsForPptx(groups);
+        pages.forEach((pageGroups, pageIndex) => {
+          slides.push({ category, categoryIndex, kind: "roadmap", groups: pageGroups, pageIndex, pageCount: pages.length });
+        });
+      }
+    });
+
+    if (includeRoadmap && globalThis.PPTXExportPlanner) {
+      const sections = preparedCategories.map(({ category, definition, targetBoard }) => ({
+        id: category.id, name: category.name || category.id,
+        products: roadmapGroupsForProducts(targetBoard.products, targetBoard, definition).flatMap(group => group.products.map(product => {
+          const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
+          const status = standardizedStatus(product.statusType);
+          return { id: product.id, name: product.name, family: group.family, startMonth: roadmap?.startMonth || roadmap?.launchMonth || "", endMonth: roadmap?.endMonth || "",
+            fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), status: roadmap?.status || "",
+            statusLabel: status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
+        })),
+      }));
+      const options = roadmapOptions || { mode: "categories", startMonth: portfolio.settings.timeline.startMonth, endMonth: portfolio.settings.timeline.endMonth, overflow: "ask" };
+      const roadmapPlan = globalThis.PPTXExportPlanner.planRoadmap(sections, options);
+      slides.roadmapPlan = roadmapPlan;
+      slides.push(...roadmapPlan.slides.map(roadmapSlide => ({ kind: roadmapSlide.kind, roadmapSlide })));
     }
 
-    if (includeRoadmap) {
-      const groups = roadmapGroupsForProducts(targetBoard.products, targetBoard, definition);
-      const pages = paginateRoadmapGroupsForPptx(groups);
-      pages.forEach((pageGroups, pageIndex) => {
-        slides.push({ category, categoryIndex, kind: "roadmap", groups: pageGroups, pageIndex, pageCount: pages.length });
-      });
-    }
-  });
-
-  return slides;
+    return slides;
+  } finally {
+    UI_FONT_FACE = previousUiFontFace;
+  }
 }
 
 function pptxPlanSlideTitle(planItem) {
+  if (planItem.roadmapSlide) {
+    const slide = planItem.roadmapSlide;
+    return slide.kind === "roadmap-merged" ? "Combined roadmap"
+      : `${slide.categoryName || slide.categoryId} — Roadmap${slide.pageIndex ? " (continued)" : ""}`;
+  }
   const categoryName = planItem.category.name || planItem.category.id || `Category ${planItem.categoryIndex + 1}`;
   const viewName = planItem.kind === "products" ? "Product Portfolio" : "Roadmap";
   const pageLabel = planItem.pageIndex > 0 ? " (continued)" : "";
@@ -6483,10 +6727,21 @@ function renderPptxExportCategories() {
 }
 
 function setPptxCategorySelection(ids) {
+  resetPptxRoadmapLimit();
   const selected = new Set(ids);
   pptxExportForm.querySelectorAll('input[name="pptxExportCategory"]').forEach((input) => {
     input.checked = selected.has(input.value);
   });
+  syncPptxExportSummary();
+}
+
+function resetPptxRoadmapLimit() {
+  const limit = pptxExportForm?.querySelector("#pptxRoadmapLimit");
+  if (limit) limit.checked = false;
+}
+
+function handlePptxSelectionChange(event) {
+  if (event?.target?.id !== "pptxRoadmapLimit") resetPptxRoadmapLimit();
   syncPptxExportSummary();
 }
 
@@ -6497,21 +6752,27 @@ function syncPptxExportSummary() {
   const allSelected = categories.length > 0 && categories.length === available.length;
   pptxSelectedCategoryIds = allSelected ? null : categories.map((category) => category.id);
   const scope = pptxExportScope();
+  const plan = buildPptxExportPlan(scope, categories, globalThis.PPTXExportPlanner?.readOptions(pptxExportForm));
+  globalThis.PPTXExportPlanner?.syncDialog(pptxExportForm, plan.roadmapPlan || {}, { includeRoadmap: scope !== "products" });
   $("#pptxExportCategoryCount").textContent = String(categories.length);
-  $("#pptxExportSlideCount").textContent = String(pptxSlideCountForScope(scope, categories));
+  $("#pptxExportSlideCount").textContent = String(plan.length);
   $("#pptxSelectAllCategories").textContent = allSelected ? "Clear selection" : "Select all";
   $("#pptxExportSelectionHint").textContent = categories.length
     ? `${categories.length} of ${available.length} categories selected`
     : "Select at least one category to export.";
   $("#pptxExportSelectionHint").classList.toggle("is-empty", !categories.length);
-  confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length;
+  confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length || Boolean(plan.roadmapPlan?.requiresDecision);
 }
 
 function openPptxExportDialog() {
   stopProductCardDrag();
   closePopupMenus();
+  resetPptxRoadmapLimit();
   pptxReturnFocus = document.activeElement;
   renderPptxExportCategories();
+  const start = pptxExportForm.querySelector("#pptxRoadmapStart"), end = pptxExportForm.querySelector("#pptxRoadmapEnd");
+  if (start && !start.value) start.value = board.settings.roadmap.startMonth;
+  if (end && !end.value) end.value = board.settings.roadmap.endMonth;
   syncPptxExportSummary();
   pptxExportDialog.classList.remove("hidden");
   document.querySelector(".app-shell").inert = true;
@@ -6536,45 +6797,61 @@ function pptxExportFilename(scope) {
   return "product-portfolio-and-roadmaps.pptx";
 }
 
-async function exportPptx(scope = "both", selectedCategoryIds = null) {
+async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOptions = null) {
+  const [, exportFontReady] = await Promise.all([globalThis.PortfolioTheme.fontsReady(), PPTXEditable.fontsReady()]);
+  if (exportFontReady === false && globalThis.document?.fonts) throw new Error("Install the supplied HP Forma DJR Office fonts, then reopen this page to export. PowerPoint export needs this font to measure product names correctly.");
   stopProductCardDrag();
   closePopupMenus();
   if (typeof PptxGenJS !== "function") throw new Error("The PowerPoint export library did not load. Refresh the page and try again.");
   const categories = PPTXPagination.selectExportCategories(portfolio?.categories, selectedCategoryIds);
   if (!categories.length) throw new Error("Select at least one category to export.");
 
-  const pptx = new PptxGenJS();
-  pptx.layout = "LAYOUT_WIDE";
-  pptx.author = "Product Portfolio Canvas";
-  pptx.company = "Product Portfolio";
-  pptx.subject = scope === "products"
+  const previousUiFontFace = UI_FONT_FACE;
+  UI_FONT_FACE = PPTXEditable.FONT_FACE;
+  try {
+    const exportPlan = buildPptxExportPlan(scope, categories, roadmapOptions);
+    if (exportPlan.roadmapPlan?.requiresDecision) throw new Error(exportPlan.roadmapPlan.reason || "Choose a valid roadmap period before exporting.");
+
+    const pptx = new PptxGenJS();
+    pptx.layout = "LAYOUT_WIDE";
+    globalThis.PPTXExportPlanner?.configureDeckCanvas(pptx, exportPlan.roadmapPlan);
+    pptx.theme = { headFontFace: UI_FONT_FACE, bodyFontFace: UI_FONT_FACE, lang: "en-US" };
+    pptx.author = "Product Portfolio Canvas";
+    pptx.company = "Product Portfolio";
+    pptx.subject = scope === "products"
     ? "Product category portfolio boards"
     : scope === "roadmap"
-      ? "Product category roadmaps"
-      : "Product category portfolio boards and roadmaps";
-  pptx.title = scope === "products"
+    ? "Product category roadmaps"
+    : "Product category portfolio boards and roadmaps";
+    pptx.title = scope === "products"
     ? "Product Portfolio"
     : scope === "roadmap"
-      ? "Product Roadmaps"
-      : "Product Portfolio and Roadmaps";
-  pptx.lang = "en-US";
+    ? "Product Roadmaps"
+    : "Product Portfolio and Roadmaps";
+    pptx.lang = "en-US";
 
-  const exportPlan = buildPptxExportPlan(scope, categories);
-
-  for (let index = 0; index < exportPlan.length; index += 1) {
-    const planItem = exportPlan[index];
-    const image = planItem.kind === "products"
+    for (let index = 0; index < exportPlan.length; index += 1) {
+      const planItem = exportPlan[index];
+      if (planItem.roadmapSlide) {
+        globalThis.PPTXExportPlanner.addSlide(pptx, planItem.roadmapSlide, { fontFace: UI_FONT_FACE, theme: globalThis.PortfolioTheme, title: pptxPlanSlideTitle(planItem) });
+        continue;
+      }
+      const image = planItem.kind === "products"
       ? await renderCategoryImageForPptx(planItem.category, planItem.page)
       : await renderCategoryRoadmapImageForPptx(planItem.category, planItem.groups);
-    addPptxPortfolioSlide(
+      addPptxPortfolioSlide(
       pptx,
       pptxPlanSlideTitle(planItem),
       image,
-    );
-  }
+      exportPlan.roadmapPlan?.canvas,
+      );
+    }
 
-  await PPTXEditable.writeFile(pptx, { fileName: pptxExportFilename(scope) }, downloadBlob);
-  renderActiveView();
+    await PPTXEditable.writeFile(pptx, { fileName: pptxExportFilename(scope) }, downloadBlob);
+  } finally {
+    UI_FONT_FACE = previousUiFontFace;
+    renderActiveView();
+  }
 }
 
 async function exportPng() {
@@ -6800,41 +7077,161 @@ function normalizeImportedPortfolio(parsed) {
 function importJson(file) {
   const reader = new FileReader();
   reader.onload = async () => {
+    const pendingStart = pendingLegacyImageBlobs.length;
+    let importing = false;
     try {
+      if (packageOperationInProgress || workspaceOpening) throw new Error("Wait for the current workspace operation to finish before loading new data.");
       const parsed = parsePortfolioImportText(reader.result);
       if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading new data.");
+      packageOperationInProgress = true; importing = true; clearTimeout(saveTimer);
+      const expectedCurrent = JSON.stringify(portfolio);
       const draft = normalizeImportedPortfolio(parsed);
-      if (globalThis.PortfolioMasterModel) draft.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(draft).products;
-      const previousPortfolio = portfolio;
-      const previousStored = localStorage.getItem(STORAGE_KEY);
-      const previousRecoveryGate = unreadableWorkspaceStorage;
-      await persistPortfolioStorage(JSON.stringify(draft), { allowRecovery: true });
-      try {
-        portfolio = draft;
-        localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-        selectedId = null;
-        activateCategory(portfolio.activeCategoryId, { fitVertical: true });
-      } catch (error) {
-        portfolio = previousPortfolio;
-        localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-        try { await persistPortfolioStorage(previousStored, { allowRecovery: true }); } catch (_) {}
-        unreadableWorkspaceStorage = previousRecoveryGate;
-        try { activateCategory(portfolio.activeCategoryId, { fitVertical: true }); } catch (_) {}
-        throw error;
+      if (globalThis.PortfolioMasterModel) {
+        const comparison = globalThis.PortfolioMasterModel.snapshot(draft).products;
+        // A .data file is a complete working backup, including pending edits.
+        // Rebase only inputs that did not supply their comparison baseline.
+        if (!Object.hasOwn(draft, "masterLocalBaseline")) draft.masterLocalBaseline = comparison;
       }
-      globalThis.PortfolioProductIssues?.clearAscmIssues();
-      globalThis.PortfolioNotifications?.resolve("workspace-product-validation");
-      globalThis.PortfolioNotifications?.resolve("workspace-storage-recovery");
+      const images = pendingLegacyImageBlobs.splice(pendingStart);
+      await commitPackageDraft(draft, expectedCurrent, images, { cleanupImages: false });
       globalThis.PortfolioMasterUI?.disconnect();
       globalThis.PortfolioMasterUI?.markImported(portfolio.masterLocalBaseline || []);
-      flushPendingLegacyImages();
+      selectedId = null;
+      activateCategory(portfolio.activeCategoryId, { fitVertical: true });
     } catch (error) {
-      console.error("Portfolio import failed:", error);
+      pendingLegacyImageBlobs.splice(pendingStart);
       void PortfolioDialogs.alert(error.message || "Unable to import portfolio file.", { title: "Data import failed" });
+    } finally {
+      if (importing) { packageOperationInProgress = false; scheduleSave(); globalThis.PortfolioMasterUI?.updateStatus?.(); }
     }
   };
   reader.onerror = () => { void PortfolioDialogs.alert("Unable to read the selected portfolio file.", { title: "Data import failed" }); };
   reader.readAsText(file);
+}
+
+function planPortfolioNameUpdates(input, current) {
+  const fail = (message) => { throw new Error(message); };
+  const record = (value) => value && typeof value === "object" && !Array.isArray(value);
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const canonical = (value) => JSON.stringify(value, (_, entry) => record(entry)
+    ? Object.fromEntries(Object.keys(entry).sort().map((key) => [key, entry[key]])) : entry);
+  function validateIdentity(data) {
+    if (!record(data) || ![2, 3, 4].includes(data.version) || !Array.isArray(data.categories)) fail("Use a current complete data backup for name updates.");
+    const categoryIds = new Set(), productIds = new Set();
+    const add = (ids, value) => { if (typeof value !== "string" || !value.trim() || ids.has(value)) fail("The name update file contains missing or repeated identities."); ids.add(value); };
+    for (const category of data.categories) {
+      if (!record(category) || !record(category.board) || !Array.isArray(category.board.lanes) || !Array.isArray(category.board.products)) fail("Use a current complete data backup for name updates.");
+      add(categoryIds, category.id);
+      const laneIds = new Set();
+      for (const lane of category.board.lanes) add(laneIds, lane?.id);
+      for (const product of category.board.products) {
+        if (!record(product) || !laneIds.has(product.laneId)) fail("The name update file contains an invalid product identity.");
+        add(productIds, product.id);
+      }
+    }
+  }
+  validateIdentity(current); validateIdentity(input);
+  const before = clone(current), incoming = clone(input), changes = [];
+  if (before.categories.length !== incoming.categories.length) fail("Name updates cannot change categories or products.");
+  for (const [categoryIndex, category] of before.categories.entries()) {
+    const other = incoming.categories[categoryIndex];
+    if (category.id !== other.id || category.board.products.length !== other.board.products.length) fail("Name updates must keep category and product identities and order.");
+    for (const [productIndex, product] of category.board.products.entries()) {
+      const updated = other.board.products[productIndex];
+      if (product.id !== updated.id) fail("Name updates must keep product identities and order.");
+      if (product.name !== updated.name) {
+        if (typeof updated.name !== "string" || !updated.name.trim() || updated.name.length > 2048) fail("Each updated product name must be nonempty text of at most 2048 characters.");
+        changes.push({ categoryIndex, productIndex, productId: product.id, before: product.name, after: updated.name });
+      }
+      delete product.name; delete updated.name;
+    }
+  }
+  if (canonical(before) !== canonical(incoming)) fail("This file changes more than product names. Copy a fresh data backup and edit only the product names.");
+  if (!changes.length) fail("The file contains no product name changes.");
+  const model = globalThis.PortfolioMasterModel;
+  if (!model || !Array.isArray(current.masterLocalBaseline)) fail("A saved comparison baseline is required for name updates. Open the portfolio and copy a fresh backup.");
+  if (current.masterLocalMerges && (!Array.isArray(current.masterLocalMerges) || current.masterLocalMerges.length)) fail("Finish the pending merge before importing name updates.");
+  const baseline = new Map();
+  for (const entry of current.masterLocalBaseline) {
+    if (!record(entry) || typeof entry.productId !== "string" || !entry.productId || baseline.has(entry.productId)) fail("The comparison baseline contains invalid product identities.");
+    baseline.set(entry.productId, entry);
+  }
+  const products = model.snapshot(current).products;
+  if (products.length !== baseline.size) fail("Finish pending product additions or removals before importing name updates.");
+  for (const product of products) {
+    const previous = baseline.get(product.productId);
+    if (!previous || previous.categoryId !== product.categoryId || previous.laneId !== product.laneId
+      || model.diffOperations(previous.values, product.values).some((operation) => operation.path !== "name")) fail("Finish other pending product changes before importing name updates. Only name changes may be pending.");
+  }
+  const draft = clone(current);
+  for (const change of changes) draft.categories[change.categoryIndex].board.products[change.productIndex].name = change.after;
+  return { expectedCurrent: JSON.stringify(current), draft, changes };
+}
+
+async function applyPortfolioNameUpdates(readInput) {
+  if (workspaceOpening || packageOperationInProgress) throw new Error("Wait for the current portfolio operation to finish before importing name updates.");
+  const expectedCurrent = JSON.stringify(portfolio);
+  let plan, saved = false, applied = false, completed = false;
+  packageOperationInProgress = true;
+  clearTimeout(saveTimer); saveTimer = null;
+  workspaceSaveRevision += 1;
+  try {
+    const input = typeof readInput === "function" ? await readInput() : readInput;
+    if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The portfolio changed while reading the file. Copy a fresh backup and try again.");
+    plan = planPortfolioNameUpdates(input, JSON.parse(expectedCurrent));
+    const serialized = JSON.stringify(plan.draft);
+    await workspaceStorage.save(serialized, { isCurrent: () => JSON.stringify(portfolio) === expectedCurrent });
+    saved = true;
+    if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The portfolio changed while saving the names. Your newer changes have been kept; copy a fresh backup and try again.");
+    for (const change of plan.changes) portfolio.categories[change.categoryIndex].board.products[change.productIndex].name = change.after;
+    applied = true;
+    syncControls(); renderInspector(); renderActiveView();
+    if (JSON.stringify(portfolio) !== serialized) throw new Error("The portfolio changed while applying the names. Copy a fresh backup and try again.");
+    workspaceSavePending = false;
+    globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+    completed = true;
+    return plan.changes.length;
+  } catch (error) {
+    if (applied) for (const change of plan.changes) {
+      const product = portfolio.categories[change.categoryIndex]?.board.products[change.productIndex];
+      if (product?.id === change.productId && product.name === change.after) product.name = change.before;
+    }
+    if (saved) {
+      const restored = JSON.stringify(portfolio);
+      try { await workspaceStorage.save(restored, { isCurrent: () => JSON.stringify(portfolio) === restored }); }
+      catch (restoreError) {
+        workspaceSavePending = true;
+        showLocalSaveFailure(restoreError);
+        error.message += " The saved copy could not be restored. Retry local saving before closing this page.";
+      }
+    }
+    if (applied) { try { syncControls(); renderInspector(); renderActiveView(); } catch (_) {} }
+    throw error;
+  } finally {
+    packageOperationInProgress = false;
+    if (!completed && workspaceSavePending) scheduleSave();
+    globalThis.PortfolioMasterUI?.updateStatus?.();
+  }
+}
+
+async function importPortfolioNameUpdates(file) {
+  const button = $("#importNameUpdates"), status = $("#nameUpdateStatus");
+  if (button.disabled) return;
+  button.disabled = true; button.setAttribute("aria-busy", "true");
+  status.classList.remove("hidden"); status.textContent = "Checking product name updates…";
+  try {
+    const count = await applyPortfolioNameUpdates(() => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => { try { resolve(parsePortfolioImportText(reader.result)); } catch (error) { reject(error); } };
+      reader.onerror = () => reject(new Error("The name update file could not be read. Try again."));
+      reader.readAsText(file);
+    }));
+    status.textContent = `${count} ${count === 1 ? "product name" : "product names"} updated on this device. Review and save changes to share them.`;
+  } catch (error) {
+    status.textContent = error.message || "The name updates could not be applied. Copy a fresh backup and try again.";
+  } finally {
+    button.disabled = false; button.removeAttribute("aria-busy");
+  }
 }
 
 function ascmGroupBasePartNumbers(group) {
@@ -7157,14 +7554,9 @@ function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {})
   return { added, updated, unchanged, skipped };
 }
 
-let productScrollRenderFrame = null;
 canvasScroll.addEventListener("scroll", () => {
-  syncBoardNavigator(); syncLaneRail();
-  if (productScrollRenderFrame !== null || activeView !== "products") return;
-  productScrollRenderFrame = requestAnimationFrame(() => {
-    productScrollRenderFrame = null;
-    if (activeView === "products") renderBoard();
-  });
+  syncBoardNavigator(); syncLaneRail(); positionViewerInfo();
+  productCardHover?.sync(); queueBoardScrollPaint?.();
 }, { passive: true });
 canvasScroll.addEventListener("wheel", (event) => {
   const max = horizontalScrollMax();
@@ -7271,7 +7663,10 @@ $("#exportPackage").onclick = async () => {
 };
 $("#importJson").onclick = () => { closePopupMenus(); $("#importFile").click(); };
 $("#importFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) importJson(file); event.target.value = ""; };
-$("#exportJson").onclick = () => { closePopupMenus(); downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data"); };
+$("#importNameUpdates").onclick = () => $("#importNameUpdatesFile").click();
+$("#importNameUpdatesFile").onchange = (event) => { const file = event.target.files?.[0]; if (file) void importPortfolioNameUpdates(file); event.target.value = ""; };
+$("#exportJson").onclick = () => { closePopupMenus(); downloadBlob(new Blob([portfolioDataBackupText()], { type: "application/json" }), "product-portfolio-data.data"); };
+$("#copyJson").onclick = copyPortfolioDataBackup;
 $("#exportPng").onclick = async () => { closePopupMenus(); try { await exportPng(); } catch (error) { void PortfolioDialogs.alert(error.message || "Could not export PNG.", { title: "PNG export failed" }); } };
 $("#exportPptx").addEventListener("click", openPptxExportDialog);
 $("#pptxSelectAllCategories").onclick = () => {
@@ -7279,7 +7674,7 @@ $("#pptxSelectAllCategories").onclick = () => {
   setPptxCategorySelection(pptxExportCategories().length === available.length ? [] : available.map((category) => category.id));
 };
 $("#pptxSelectCurrentCategory").onclick = () => setPptxCategorySelection([activeCategoryId]);
-pptxExportForm.addEventListener("change", syncPptxExportSummary);
+pptxExportForm.addEventListener("change", handlePptxSelectionChange);
 pptxExportForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (pptxExportInProgress) return;
@@ -7292,7 +7687,7 @@ pptxExportForm.addEventListener("submit", async (event) => {
   exportControls.forEach((control) => { control.disabled = true; });
   confirmPptxExportButton.textContent = "Exporting…";
   try {
-    await exportPptx(scope, categories.map((category) => category.id));
+    await exportPptx(scope, categories.map((category) => category.id), globalThis.PPTXExportPlanner?.readOptions(pptxExportForm));
     pptxExportInProgress = false;
     closePptxExportDialog();
   } catch (error) {
@@ -7464,7 +7859,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (selectedId) clearSelection();
 });
-window.addEventListener("resize", () => { closeVariantPopover({ force: true }); renderActiveView(); });
+window.addEventListener("resize", () => { if (workspaceOpening) return; closeVariantPopover({ force: true }); renderActiveView(); });
 window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
 // Draft actions keep complete records and images until the user saves or discards.
@@ -7673,7 +8068,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   getPackageInfo: () => getCurrentPackageInfo(),
   getSelectedProductId: () => selectedId || "",
   getSelectedCategoryId: () => activeCategoryId || "",
-  hasPendingPackageOperation: () => packageOperationInProgress,
+  hasPendingPackageOperation: () => packageOperationInProgress || workspaceOpening,
   setPackageInfo: (info) => {
     portfolio.packageInfo = packageCodec().normalizePackageInfo(info);
     scheduleSave();
@@ -7690,15 +8085,21 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   applyPatches: (changes) => {
     if (packageOperationInProgress) throw new Error("Finish loading the package before saving shared changes.");
     const nextProducts = new Map(portfolio.categories.map((category) => [category.id, category.board.products.slice()]));
+    const dateEditsToClear = [];
+    const validPlacement = (categoryId, product) => {
+      const category = portfolio.categories.find((item) => item.id === categoryId);
+      if (!category?.board.lanes.some((lane) => lane.id === product.laneId)) throw new Error("This product's lane is no longer available. Keep your draft and refresh its details before saving.");
+      return product;
+    };
     for (const change of changes) {
       if (change.kind === "merge") {
         const all = [...nextProducts.values()].flat();
         const keeper = all.find((product) => product.id === change.productId), source = all.find((product) => product.id === change.sourceProductId);
         if (keeper && source) {
           const completed = globalThis.PortfolioProductMerge.resolve(globalThis.PortfolioProductMerge.plan(keeper, source), change.choices || {});
-          for (const products of nextProducts.values()) {
+          for (const [categoryId, products] of nextProducts) {
             const keeperIndex = products.findIndex((product) => product.id === change.productId);
-            if (keeperIndex >= 0) products[keeperIndex] = globalThis.PortfolioMasterModel.applyProductValues(completed, change.values);
+            if (keeperIndex >= 0) products[keeperIndex] = validPlacement(categoryId, globalThis.PortfolioMasterModel.applyProductValues(completed, change.values));
             const sourceIndex = products.findIndex((product) => product.id === change.sourceProductId);
             if (sourceIndex >= 0) products.splice(sourceIndex, 1);
           }
@@ -7713,7 +8114,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
         const order = products.filter((product) => product.laneId === change.laneId).reduce((maximum, product) => Math.max(maximum, Number(product.order) || 0), -1) + 1;
         const archived = portfolio.masterLocalRemovedProducts?.[change.productId];
         const product = change.fullProduct ? localizeSharedProduct(change.fullProduct) : archived || makeProduct(change.productId, change.values.name, change.values.price, change.laneId, order);
-        products.push(globalThis.PortfolioMasterModel.applyProductValues({ ...product, laneId: change.laneId }, change.values));
+        products.push(validPlacement(target.id, globalThis.PortfolioMasterModel.applyProductValues({ ...product, laneId: change.laneId }, change.values)));
         continue;
       }
       for (const category of portfolio.categories) {
@@ -7724,12 +8125,13 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
         if (change.kind === "delete") { products.splice(index, 1); break; }
         const values = change.values || change.patch;
         const original = change.fullProduct ? { ...localizeSharedProduct(change.fullProduct), order: current.order, laneId: current.laneId } : current;
-        products[index] = globalThis.PortfolioMasterModel.applyProductValues(original, values);
-        for (const field of Object.keys(globalThis.PLCImporter?.fieldLabels || {})) if ((current[field] || "") !== (products[index][field] || "")) delete portfolio.dateLocalEdits?.[current.id]?.[field];
+        products[index] = validPlacement(category.id, globalThis.PortfolioMasterModel.applyProductValues(original, values));
+        for (const field of Object.keys(globalThis.PLCImporter?.fieldLabels || {})) if ((current[field] || "") !== (products[index][field] || "")) dateEditsToClear.push([current.id, field]);
         break;
       }
     }
     for (const category of portfolio.categories) category.board.products = nextProducts.get(category.id);
+    for (const [productId, field] of dateEditsToClear) delete portfolio.dateLocalEdits?.[productId]?.[field];
     // Accepted shared changes already have the master's own date clocks.
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     if (selectedId && !board.products.some((product) => product.id === selectedId)) selectedId = board.products[0]?.id || null;
@@ -7740,27 +8142,206 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   },
 });
 
-portfolio = loadPortfolio();
-localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
-if (globalThis.PortfolioMasterModel && !portfolio.masterLocalBaseline) {
-  try { portfolio.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(portfolio).products; }
-  catch (error) {
-    workspaceValidationPending = true;
-    void showWorkspaceNotice(error.message || "Some product records need review before saving to master.", { id: "workspace-product-validation", title: "Product records need review", severity: "warning", actions: [{ label: "Review duplicates", onClick: () => globalThis.PortfolioProductIssues?.reviewDuplicateIssues() }] });
+function workspaceRecoveryCurrent(recovery) {
+  if (!workspaceOpening || workspaceRecovery !== recovery) return false;
+  if (!recovery.legacyKey) return true;
+  try { return localStorage.getItem(recovery.legacyKey) === recovery.rawText; }
+  catch (_) { return false; }
+}
+
+async function showWorkspaceRecovery() {
+  const controls = document.getElementById("workspaceRecoveryControls");
+  if (!controls) return;
+  workspaceRecoveryPlan = null;
+  document.getElementById("workspaceRecoveryPreview").hidden = true;
+  try {
+    const token = await workspaceStorage.readRecovery();
+    let legacyKey = null, rawText = token.rawText;
+    if (!token.record) {
+      for (const key of [STORAGE_KEY, PREVIOUS_STORAGE_KEY, LEGACY_STORAGE_KEY]) {
+        const value = localStorage.getItem(key);
+        if (value !== null) { legacyKey = key; rawText = value; break; }
+      }
+    }
+    workspaceRecovery = { token, legacyKey, rawText };
+    workspaceRecoveryExportText = rawText;
+    controls.hidden = false;
+    document.getElementById("workspaceRecoveryExport").disabled = rawText === null;
+    document.getElementById("workspaceRecoveryStatus").textContent = rawText === null
+      ? "No readable saved data is available to export. You can review a complete backup before restoring it."
+      : "The saved data is available to export exactly as read. Reviewing a backup does not replace it.";
+  } catch (error) {
+    workspaceRecovery = null;
+    controls.hidden = true;
+    document.getElementById("workspaceOpeningMessage").textContent += " Saved storage is unavailable; retry opening before restoring a backup.";
   }
 }
-// Fresh openings start at the first listed category; saved navigation still
-// remains available to imports and category changes within the current session.
-activateCategory(portfolio.categories[0]?.id, { render: false, fitVertical: true });
-syncControls();
-renderInspector();
-setView("products");
-flushPendingLegacyImages();
-async function persistPlcDraft(draft) {
-  const serialized = JSON.stringify(draft);
-  if (new TextEncoder().encode(serialized).length > MAX_PACKAGE_MANIFEST_BYTES) throw new Error("PLC evidence is too large to save in this browser.");
+
+function setWorkspaceRecoveryBusy(busy) {
+  workspaceRecoveryBusy = busy;
+  for (const id of ["workspaceOpeningRetry", "workspaceRecoveryFile", "workspaceRecoveryKey", "workspaceRecoveryReview", "workspaceRecoveryRestore"]) {
+    const control = document.getElementById(id);
+    if (control) control.disabled = busy;
+  }
+  document.getElementById("workspaceRecoveryControls")?.setAttribute("aria-busy", String(busy));
+}
+
+async function prepareWorkspaceRecovery(file, key = "") {
+  const recovery = workspaceRecovery;
+  if (!file || !recovery || !workspaceRecoveryCurrent(recovery)) throw new Error("Retry opening before reviewing this backup. The saved workspace has changed.");
+  const codec = packageCodec(), pendingStart = pendingLegacyImageBlobs.length;
+  let parsed, entries = null;
+  try {
+    if (/\.pkg$/i.test(file.name)) {
+      if (file.size > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
+      const input = new Uint8Array(await file.arrayBuffer());
+      const bytes = codec.isEncrypted(input) ? await codec.decrypt(input, codec.normalizeKey(key)) : input;
+      entries = codec.readZip(bytes);
+      const manifest = entries.get("portfolio.json");
+      if (!manifest) throw new Error("The project package is missing portfolio.json.");
+      parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifest));
+    } else parsed = parsePortfolioImportText(await file.text());
+    if (![2, 3, 4].includes(parsed?.version) || !Array.isArray(parsed.categories) || !parsed.categories.length
+      || !parsed.categories.every(category => category?.board && Array.isArray(category.board.lanes) && Array.isArray(category.board.products))) {
+      throw new Error("Choose a complete portfolio data backup or project package. A categories-only file cannot recover your saved work.");
+    }
+    validatePackageManifest(parsed);
+    const draft = normalizeImportedPortfolio(JSON.parse(JSON.stringify(parsed)));
+    const model = globalThis.PortfolioMasterModel, comparison = model?.snapshot(draft).products;
+    if (comparison && (entries || !Object.hasOwn(draft, "masterLocalBaseline"))) draft.masterLocalBaseline = comparison;
+    validatePackageImageReferences(draft);
+    const legacyImages = new Map(pendingLegacyImageBlobs.splice(pendingStart).map(entry => [entry.id, entry.blob]));
+    const images = [], replacements = new Map();
+    for (const asset of draft.imageAssets) {
+      if (asset.sourceType !== "local") continue;
+      if (entries || legacyImages.has(asset.id)) {
+        const packagePath = asset.packagePath || `images/${asset.id}.${extensionForImageAsset(asset)}`;
+        const data = entries?.get(packagePath);
+        if (!legacyImages.has(asset.id) && (!packagePath.startsWith("images/") || !data?.length)) throw new Error("The backup is missing a saved product image. Choose a complete project package.");
+        const blob = legacyImages.get(asset.id) || new Blob([data], { type: asset.mimeType || "application/octet-stream" });
+        const previousId = asset.id, nextId = `recovery-${id()}`;
+        replacements.set(previousId, nextId); asset.id = nextId; asset.size = blob.size; delete asset.packagePath;
+        images.push({ id: nextId, blob });
+      } else if (!(await imageStoreGet(asset.id))?.size) throw new Error("This data backup refers to image files that are unavailable on this device. Choose a complete project package with its images.");
+    }
+    for (const category of draft.categories) for (const product of category.board.products) {
+      if (replacements.has(product.imageAssetId)) { product.imageAssetId = replacements.get(product.imageAssetId); delete product.imageUrl; }
+      for (const group of product.variantGroups || []) for (const variant of group.items) if (replacements.has(variant.imageAssetId)) variant.imageAssetId = replacements.get(variant.imageAssetId);
+    }
+    if (entries) draft.masterLocalAssetIds = Object.fromEntries(replacements);
+    else if (replacements.size) draft.masterLocalAssetIds = Object.fromEntries(Object.entries(draft.masterLocalAssetIds || {}).map(([original, local]) => [original, replacements.get(local) || local]));
+    if (!workspaceRecoveryCurrent(recovery)) throw new Error("The saved workspace changed while reviewing the backup. Retry opening before restoring it.");
+    return { recovery, draft, images, serialized: JSON.stringify(draft), fileName: file.name,
+      productCount: draft.categories.reduce((count, category) => count + category.board.products.length, 0) };
+  } finally { pendingLegacyImageBlobs.splice(pendingStart); }
+}
+
+async function restoreWorkspaceRecovery(plan) {
+  if (!plan || plan !== workspaceRecoveryPlan || !workspaceRecoveryCurrent(plan.recovery)) throw new Error("Review the backup again before restoring it. The workspace has changed.");
+  const previousPortfolio = portfolio, previousBoard = board, previousCategory = activeCategoryId;
+  const previousBaseline = localDateBaseline;
+  let receipt, rollbackFailed = false;
+  packageOperationInProgress = true; clearTimeout(saveTimer);
+  try {
+    receipt = await workspaceStorage.recover(plan.serialized, { recovery: plan.recovery.token, images: plan.images, isCurrent: () => workspaceRecoveryCurrent(plan.recovery) });
+    await startWorkspace();
+    workspaceRecovery = null; workspaceRecoveryPlan = null;
+    globalThis.PortfolioNotifications?.resolve("workspace-open-failure");
+    return true;
+  } catch (error) {
+    portfolio = previousPortfolio; board = previousBoard; activeCategoryId = previousCategory; localDateBaseline = previousBaseline;
+    workspaceOpening = true;
+    if (receipt) {
+      try { await workspaceStorage.rollbackRecovery(receipt); }
+      catch (_) { rollbackFailed = true; error.message += " The backup remains saved because the previous record could not be restored. Retry opening to inspect the saved backup; export the original recovery data before closing. The original record also remains in this device's recovery archive."; }
+    }
+    const shell = document.querySelector(".app-shell");
+    if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); }
+    document.getElementById("workspaceOpeningStatus")?.classList.remove("hidden");
+    document.getElementById("workspaceOpeningRetry").hidden = false;
+    await showWorkspaceRecovery();
+    if (rollbackFailed) {
+      workspaceRecoveryExportText = plan.recovery.rawText;
+      document.getElementById("workspaceRecoveryExport").disabled = workspaceRecoveryExportText === null;
+    }
+    throw error;
+  } finally { packageOperationInProgress = false; }
+}
+
+async function initializeWorkspace() {
+  workspaceOpening = true;
+  workspaceRecovery = null; workspaceRecoveryPlan = null;
+  const recoveryControls = document.getElementById("workspaceRecoveryControls");
+  if (recoveryControls) recoveryControls.hidden = true;
+  const shell = document.querySelector(".app-shell");
+  if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); }
+  const openingStatus = document.getElementById("workspaceOpeningStatus");
+  const openingMessage = document.getElementById("workspaceOpeningMessage");
+  const openingRetry = document.getElementById("workspaceOpeningRetry");
+  if (openingStatus) openingStatus.classList.remove("hidden");
+  if (openingMessage) openingMessage.textContent = "Opening the saved portfolio…";
+  if (openingRetry) { openingRetry.hidden = true; openingRetry.onclick = () => { void startWorkspace(); }; }
+  const pendingStart = pendingLegacyImageBlobs.length;
+  try {
+    await Promise.all([globalThis.PortfolioTheme.fontsReady(), globalThis.PPTXEditable?.fontsReady?.()]);
+    UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
+    const saved = await workspaceStorage.read();
+    // An unreadable database must never become an empty replacement workspace.
+    let loaded;
+    if (saved === null) loaded = loadPortfolio();
+    else {
+      const parsed = JSON.parse(saved);
+      if (![4, 3].includes(parsed?.version) || !Array.isArray(parsed.categories) || !parsed.categories.length
+        || !parsed.categories.every(category => category?.board && Array.isArray(category.board.products) && Array.isArray(category.board.lanes))) {
+        throw new Error("The saved workspace format needs recovery. It has not been replaced. Restore a backup before replacing it.");
+      }
+      loaded = ensurePortfolioSchema(parsed);
+    }
+    if (globalThis.PortfolioMasterModel && !loaded.masterLocalBaseline) {
+      try { loaded.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(loaded).products; }
+      catch (error) {
+        workspaceValidationPending = true;
+        void showWorkspaceNotice(error.message || "Some product records need review before saving to master.", { id: "workspace-product-validation", title: "Product records need review", severity: "warning", actions: [{ label: "Review duplicates", onClick: () => globalThis.PortfolioProductIssues?.reviewDuplicateIssues() }] });
+      }
+    }
+    const serialized = JSON.stringify(loaded), images = pendingLegacyImageBlobs.slice(pendingStart);
+    if (saved !== serialized || images.length) await workspaceStorage.save(serialized, { images });
+    pendingLegacyImageBlobs.splice(pendingStart);
+    // Legacy localStorage records are retained. The committed DB record takes
+    // precedence on future opens, with all operational metadata intact.
+    portfolio = loaded;
+    localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
+    workspaceOpening = false;
+    activateCategory(portfolio.categories[0]?.id, { render: false, fitVertical: true });
+    syncControls(); renderInspector(); setView("products");
+    initializeWorkspaceFeatures();
+    globalThis.PortfolioNotifications?.resolve("workspace-open-failure");
+    if (shell) { shell.inert = false; shell.removeAttribute("aria-busy"); }
+    if (openingStatus) openingStatus.classList.add("hidden");
+    window.dispatchEvent(new CustomEvent("portfolio:workspace-ready"));
+    return portfolio;
+  } catch (error) {
+    pendingLegacyImageBlobs.splice(pendingStart);
+    workspaceOpening = true;
+    const message = error.name === "SyntaxError"
+      ? "The saved portfolio data is damaged. Your saved copy and images have not been replaced. Export the saved data, then review a complete backup to restore it."
+      : error.message || "The saved workspace could not open. Your saved data has not been replaced. Retry opening it.";
+    if (openingMessage) openingMessage.textContent = message;
+    if (openingRetry) openingRetry.hidden = false;
+    globalThis.PortfolioNotifications?.publish?.({ id: "workspace-open-failure", severity: "error", title: "The workspace could not open", message, dismissible: false, actions: [{ label: "Retry opening", onClick: startWorkspace }] });
+    await showWorkspaceRecovery();
+    throw error;
+  }
+}
+function startWorkspace() {
+  const ready = initializeWorkspace();
+  globalThis.PortfolioWorkspaceReady = ready;
+  void ready.catch(() => {});
+  return ready;
+}
+async function persistPlcDraft(draft, { isCurrent } = {}) {
   globalThis.PortfolioMasterModel?.snapshot(draft);
-  await persistPortfolioStorage(serialized);
+  await persistPortfolioStorage(JSON.stringify(draft), { isCurrent });
 }
 
 async function retryPlcSharing() {
@@ -7785,6 +8366,7 @@ async function retryPlcSharing() {
 async function commitPlcPlan(plan, choices) {
   if (packageOperationInProgress) throw new Error("Finish loading the package before applying PLC updates.");
   const before = portfolio;
+  const expectedCurrent = JSON.stringify(before);
   const result = globalThis.PLCImporter.applyPlan(before, plan, choices);
   const draft = ensurePortfolioSchema(result.portfolio);
   for (const change of result.variantChanges || []) {
@@ -7867,8 +8449,9 @@ async function commitPlcPlan(plan, choices) {
   if (pending.size) draft.plcSharePending = { version: 1, queuedAt: before.plcSharePending?.queuedAt || new Date().toISOString(), patches: [...pending.values()] };
   // Persist evidence, field clocks and exceptions together before activating it.
   // Storage failure leaves the current workspace and review untouched.
-  await persistPlcDraft(draft);
   clearTimeout(saveTimer);
+  await persistPlcDraft(draft, { isCurrent: () => portfolio === before && JSON.stringify(portfolio) === expectedCurrent });
+  if (portfolio !== before || JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the PLC review was being saved. Your newer changes have been kept. Review the workbook again before applying it.");
   portfolio = draft;
   localDateBaseline = globalThis.PLCImporter.snapshotDateValues(portfolio);
   activateCategory(activeCategoryId || portfolio.activeCategoryId, { fitVertical: false });
@@ -7879,6 +8462,7 @@ async function commitPlcPlan(plan, choices) {
   return result;
 }
 
+function initializeWorkspaceFeatures() {
 globalThis.PortfolioPlcUI?.init({
   adapter: {
     getPortfolio: () => portfolio,
@@ -7909,3 +8493,39 @@ globalThis.PortfolioProductIssues?.mount({
   },
   notifications: globalThis.PortfolioNotifications,
 });
+}
+
+window.addEventListener("beforeunload", event => {
+  if (!workspaceSavePending && !packageOperationInProgress) return;
+  event.preventDefault(); event.returnValue = "";
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && workspaceSavePending) void flushWorkspaceSave();
+});
+document.getElementById("workspaceRecoveryExport").onclick = () => {
+  if (workspaceRecoveryExportText !== null) downloadBlob(new Blob([workspaceRecoveryExportText], { type: "application/octet-stream" }), "product-portfolio-saved-recovery.data");
+};
+document.getElementById("workspaceRecoveryForm").onsubmit = async event => {
+  event.preventDefault(); if (workspaceRecoveryBusy) return;
+  const status = document.getElementById("workspaceRecoveryStatus");
+  workspaceRecoveryPlan = null; document.getElementById("workspaceRecoveryPreview").hidden = true;
+  setWorkspaceRecoveryBusy(true);
+  try {
+    status.textContent = "Checking the backup and its saved images…";
+    const file = document.getElementById("workspaceRecoveryFile").files?.[0];
+    workspaceRecoveryPlan = await prepareWorkspaceRecovery(file, document.getElementById("workspaceRecoveryKey").value);
+    document.getElementById("workspaceRecoverySummary").textContent = `${workspaceRecoveryPlan.fileName}: ${workspaceRecoveryPlan.draft.categories.length} categories, ${workspaceRecoveryPlan.productCount} product${workspaceRecoveryPlan.productCount === 1 ? "" : "s"}. Restoring replaces the unreadable saved workspace; existing images are retained.`;
+    document.getElementById("workspaceRecoveryPreview").hidden = false;
+    status.textContent = "Backup checked. Select Restore this backup to replace the saved workspace.";
+  } catch (error) { status.textContent = error.message || "The backup could not be checked. Your saved data has not been replaced."; }
+  finally { document.getElementById("workspaceRecoveryKey").value = ""; setWorkspaceRecoveryBusy(false); }
+};
+document.getElementById("workspaceRecoveryFile").onchange = () => { workspaceRecoveryPlan = null; document.getElementById("workspaceRecoveryPreview").hidden = true; };
+document.getElementById("workspaceRecoveryRestore").onclick = async () => {
+  if (workspaceRecoveryBusy) return;
+  setWorkspaceRecoveryBusy(true);
+  try { await restoreWorkspaceRecovery(workspaceRecoveryPlan); }
+  catch (error) { document.getElementById("workspaceRecoveryStatus").textContent = error.message || "The backup was not restored. Your previous saved data has been kept."; }
+  finally { setWorkspaceRecoveryBusy(false); }
+};
+startWorkspace();

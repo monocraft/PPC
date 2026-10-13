@@ -62,24 +62,30 @@
     dialog.id = "masterDialog";
     dialog.setAttribute("aria-labelledby", "masterDialogTitle"); dialog.setAttribute("aria-describedby", "masterDialogDescription");
     document.body.append(dialog);
-    let running = false, discarding = false, connectingGitHub = false, modalResolve = null, modalCancel = null, lastError = "";
+    let running = false, discarding = false, connectingGitHub = false, modalResolve = null, modalCancel = null, lastError = "", lastErrorWasSave = false, publicationDelayed = false;
 
     function updateStatus() {
       const state = session.getState(), count = state.pending.length;
+      if (!lastError) lastErrorWasSave = false;
+      const publication = state.snapshot?.publication;
+      if (publication?.status === "error") publicationDelayed = true;
+      // A new accepted edit may reset the publisher to pending, and a package
+      // reload may temporarily omit its snapshot. Neither proves recovery.
+      else if (publication?.status === "current") publicationDelayed = false;
       const duplicateAttention = /duplicate|repeated.*(?:product|sku)/i.test(lastError) || Boolean(root.PortfolioProductIssues?.getState()?.errors);
       button.textContent = discarding ? "Discarding…" : running ? connectingGitHub ? "Connecting…" : "Saving…" : count ? "Save changes" : "Pull latest data";
       button.disabled = running || discarding || Boolean(adapter.hasPendingPackageOperation?.());
       button.title = count ? `Review and save changes for ${count} ${count === 1 ? "product" : "products"}` : "Get the latest portfolio updates";
+      if (publicationDelayed) button.title += ". Saved changes are available to the team; the downloadable copy is waiting to update. See Messages for status.";
       button.classList.toggle("master-has-changes", count > 0);
       if (count) notices?.publish({ id: "master-pending", severity: "info", title: discarding ? "Discarding changes…" : running ? connectingGitHub ? "Connecting…" : "Saving changes…" : "Changes ready to save", message: running || discarding ? "Your changes are safe while this update finishes." : `${count} ${count === 1 ? "product has" : "products have"} unsaved changes. Review them when you’re ready.`, toast: false, dismissible: false, actions: running || discarding ? [] : [{ label: "Review changes", onClick: saveFlow }] });
       else notices?.resolve("master-pending");
       if (count && !configured) notices?.publish({ id: "master-saving-unavailable", severity: "warning", title: "Saving is not available yet", message: "You can keep editing. Your changes are safe; ask your portfolio owner to enable saving.", toast: false });
       else notices?.resolve("master-saving-unavailable");
-      if (lastError) notices?.publish({ id: "master-sync-error", severity: "error", title: "Update needs attention", message: lastError, toast: false, actions: [...(duplicateAttention ? [{ label: "Review products", onClick: () => root.PortfolioProductIssues?.reviewDuplicateIssues?.() }] : []), { label: count ? "Review and try again" : "Try again", onClick: () => count ? saveFlow() : session.getState().hasKey ? refreshQuietly({ force: true }) : root.PortfolioPackageUI?.open("pull") }] });
+      if (lastError) notices?.publish({ id: "master-sync-error", severity: "error", title: lastErrorWasSave ? "Changes still need saving" : "Update needs attention", message: lastError, toast: false, dismissible: !lastErrorWasSave, actions: [...(duplicateAttention ? [{ label: "Review products", onClick: () => root.PortfolioProductIssues?.reviewDuplicateIssues?.() }] : []), { label: count ? "Review and try again" : "Try again", onClick: () => count ? saveFlow() : session.getState().hasKey ? refreshQuietly({ force: true }) : root.PortfolioPackageUI?.open("pull") }] });
       else notices?.resolve("master-sync-error");
-      const publication = state.snapshot?.publication;
-      if (publication?.status === "error") notices?.publish({ id: "master-publication", severity: "warning", title: "Update needs attention", message: "Your saved changes are available to the team. A follow-up update will retry automatically; ask your portfolio owner to check if this warning continues.", toast: false });
-      else notices?.resolve("master-publication");
+      if (publication?.status === "error") notices?.publish({ id: "master-publication", severity: "warning", title: "Downloadable copy delayed", message: "Your saved changes are available to the team. The downloadable portfolio copy has not caught up yet. It will retry automatically; no need to save your changes again. If the delay continues, your portfolio owner can check the publishing job.", revision: "publication-retry", acknowledgeOnDismiss: true, toast: false, actions: [{ id: "check-status", label: "Check status", onClick: () => session.getState().hasKey ? refreshQuietly({ force: true }) : root.PortfolioPackageUI?.open("pull") }] });
+      else if (publication?.status === "current") notices?.resolve("master-publication");
       root.dispatchEvent(new CustomEvent("portfolio:master-status", { detail: { connected: state.connected, hasKey: state.hasKey } }));
     }
 
@@ -292,9 +298,9 @@
     async function saveFlow() {
       if (running || discarding || session.getState().busy) return;
       adapter.beforeSave?.();
-      lastError = "";
       const reviewed = await review();
       if (!reviewed) { updateStatus(); return; }
+      lastError = "";
       running = true; updateStatus();
       try {
         while (!session.getState().hasKey) {
@@ -339,7 +345,7 @@
         }
       } catch (error) {
         if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
-        close(null); lastError = friendlyError(error, true);
+        close(null); lastError = friendlyError(error, true); lastErrorWasSave = true;
         updateStatus(); notices?.show("master-sync-error");
       } finally { running = false; updateStatus(); }
     }
@@ -358,8 +364,14 @@
     }
 
     button.addEventListener("click", (event) => {
-      if (!session.track().length) return;
-      event.preventDefault(); event.stopImmediatePropagation(); saveFlow();
+      if (session.track().length) {
+        event.preventDefault(); event.stopImmediatePropagation(); saveFlow();
+      } else if (configured && session.getState().hasKey) {
+        // The accepted shared snapshot is newer than a delayed downloadable
+        // archive. Refresh it before any complete workspace replacement.
+        event.preventDefault(); event.stopImmediatePropagation();
+        void refreshQuietly({ force: true });
+      }
     }, true);
     root.addEventListener("portfolio:render", updateStatus);
     let refreshRunning = false, lastRefreshAt = 0, retryUntil = 0;
@@ -369,8 +381,8 @@
       if (githubMode && !force && Date.now() - lastRefreshAt < (session.getState().hasGitHubToken ? 120000 : 300000)) return;
       lastRefreshAt = Date.now();
       refreshRunning = true;
-      try { await session.refresh(); lastError = ""; retryUntil = 0; }
-      catch (error) { if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = friendlyError(error); }
+      try { await session.refresh(); if (!lastErrorWasSave || !session.getState().pending.length) lastError = ""; retryUntil = 0; }
+      catch (error) { if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); if (!lastErrorWasSave) lastError = friendlyError(error); }
       finally { refreshRunning = false; updateStatus(); }
     }
     const timer = root.setInterval(refreshQuietly, githubMode ? 60000 : 45000);
@@ -379,7 +391,7 @@
       reviewConflicts(conflicts) { if (running || discarding || session.getState().busy || !Array.isArray(conflicts) || !conflicts.length) return null; return resolveConflicts(conflicts); },
       markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
       disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; updateStatus(); },
-      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-publication", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); dialog.remove(); },
+      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); dialog.remove(); },
     });
     updateStatus();
     if (teamMode && configured && session.getState().hasKey) refreshQuietly();
@@ -405,5 +417,10 @@
     return active;
   }
   root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
-  if (root.PortfolioMasterAdapter) initialize({ adapter: root.PortfolioMasterAdapter });
+  if (root.PortfolioMasterAdapter) {
+    const openWhenReady = () => initialize({ adapter: root.PortfolioMasterAdapter });
+    root.addEventListener?.("portfolio:workspace-ready", openWhenReady);
+    if (root.PortfolioWorkspaceReady) void root.PortfolioWorkspaceReady.then(openWhenReady).catch(() => {});
+    else openWhenReady();
+  }
 })(globalThis);

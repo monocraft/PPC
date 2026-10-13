@@ -1,0 +1,122 @@
+/* Small, local view state and bounded rendering work. No portfolio data is stored here. */
+(function (root) {
+  "use strict";
+
+  function frameTask(callback, { request = requestAnimationFrame, cancel = cancelAnimationFrame } = {}) {
+    let frame = null;
+    const schedule = () => {
+      if (frame !== null) return;
+      frame = request(() => { frame = null; callback(); });
+    };
+    schedule.cancel = () => { if (frame !== null) cancel(frame); frame = null; };
+    return schedule;
+  }
+
+  function preferences({ key, storage, maxCategories = 100 }) {
+    let values = null;
+    const scale = (value, minimum) => Number.isFinite(value) && value >= minimum && value <= 2 ? Math.round(value * 10) / 10 : null;
+    const clean = (entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const productZoom = scale(entry.productZoom, .2), roadmapZoom = scale(entry.roadmapZoom, .1);
+      return productZoom !== null && roadmapZoom !== null ? { productZoom, roadmapZoom } : null;
+    };
+    function read() {
+      if (values) return values;
+      values = new Map();
+      try {
+        const raw = storage()?.getItem(key);
+        if (!raw || raw.length > 32768) return values;
+        const parsed = JSON.parse(raw);
+        if (parsed?.version !== 1 || !Array.isArray(parsed.categories)) return values;
+        for (const [id, entry] of parsed.categories.slice(0, maxCategories)) {
+          const next = clean(entry);
+          if (typeof id === "string" && id.length <= 200 && next) values.set(id, next);
+        }
+      } catch (_) { /* A blocked preference store cannot prevent opening the workspace. */ }
+      return values;
+    }
+    return Object.freeze({
+      get(id) { const entry = read().get(id); return entry ? { ...entry } : null; },
+      set(id, entry) {
+        const next = clean(entry);
+        if (typeof id !== "string" || !id || id.length > 200 || !next) return false;
+        const records = read(); records.delete(id); records.set(id, next);
+        while (records.size > maxCategories) records.delete(records.keys().next().value);
+        try { storage()?.setItem(key, JSON.stringify({ version: 1, categories: [...records] })); } catch (_) {}
+        return true;
+      },
+    });
+  }
+
+  const layouts = new WeakMap();
+  const panels = new WeakMap();
+  const panelCache = Object.freeze({
+    unchanged(container, signature) { return container.childElementCount > 0 && panels.get(container) === signature; },
+    remember(container, signature) { panels.set(container, signature); },
+    clear(container) { panels.delete(container); },
+  });
+  const layoutCache = Object.freeze({
+    get(board, key) { const entry = layouts.get(board); return entry?.key === key && entry.products === board.products && entry.lanes === board.lanes ? entry.value : null; },
+    set(board, key, value) { layouts.set(board, { key, products: board.products, lanes: board.lanes, value }); return value; },
+  });
+
+  function stickyHeader(canvas, scroll, height) {
+    const overlay = document.createElement("canvas");
+    overlay.className = "roadmap-header-overlay"; overlay.setAttribute("aria-hidden", "true");
+    scroll.parentElement.append(overlay);
+    return Object.freeze({ sync() {
+      const dpr = root.devicePixelRatio || 1, width = Math.max(1, scroll.clientWidth);
+      const pixelWidth = Math.round(width * dpr), pixelHeight = Math.round(height * dpr);
+      if (overlay.width !== pixelWidth) overlay.width = pixelWidth;
+      if (overlay.height !== pixelHeight) overlay.height = pixelHeight;
+      overlay.style.left = `${scroll.offsetLeft}px`; overlay.style.top = `${scroll.offsetTop}px`;
+      overlay.style.width = `${width}px`; overlay.style.height = `${height}px`;
+      const context = overlay.getContext("2d");
+      context.clearRect(0, 0, pixelWidth, pixelHeight);
+      const source = canvas._ppcViewportLayer || canvas;
+      const sourceLeft = canvas._ppcViewportLayer ? 0 : Math.round(scroll.scrollLeft * dpr);
+      const sourceTop = canvas._ppcViewportLayer ? 0 : Math.round(scroll.scrollTop * dpr);
+      context.drawImage(source, sourceLeft, sourceTop, pixelWidth, pixelHeight, 0, 0, pixelWidth, pixelHeight);
+    } });
+  }
+
+  function cardHover(canvas, scroll, { getCards, getOwner, getZoom, isSuspended }) {
+    const clip = document.createElement("div"), frame = document.createElement("div");
+    clip.className = "product-card-hover-clip"; frame.className = "product-card-hover-frame";
+    clip.setAttribute("aria-hidden", "true"); clip.append(frame); scroll.parentElement.append(clip);
+    let pointer = null, productId = "", owner = getOwner(), previousLeft = scroll.scrollLeft, previousTop = scroll.scrollTop, previousZoom = getZoom();
+    const release = frameTask(() => frame.classList.remove("is-immediate"));
+    function clear() { pointer = null; productId = ""; frame.style.opacity = "0"; canvas.title = ""; }
+    function sync() {
+      if (owner !== getOwner()) { owner = getOwner(); clear(); }
+      clip.style.left = `${scroll.offsetLeft}px`; clip.style.top = `${scroll.offsetTop}px`;
+      clip.style.width = `${scroll.clientWidth}px`; clip.style.height = `${scroll.clientHeight}px`;
+      if (!pointer || isSuspended()) { clear(); return; }
+      const viewport = scroll.getBoundingClientRect(), zoom = getZoom();
+      const x = pointer.x - viewport.left - scroll.clientLeft, y = pointer.y - viewport.top - scroll.clientTop;
+      const px = (x + scroll.scrollLeft) / zoom, py = (y + scroll.scrollTop) / zoom;
+      const card = x >= 0 && y >= 0 && x < scroll.clientWidth && y < scroll.clientHeight
+        ? getCards().find(item => px >= item.x && px < item.x + item.width && py >= item.y && py < item.y + item.height) : null;
+      if (!card) { productId = ""; frame.style.opacity = "0"; canvas.title = ""; return; }
+      const immediate = !productId || previousLeft !== scroll.scrollLeft || previousTop !== scroll.scrollTop || previousZoom !== zoom;
+      previousLeft = scroll.scrollLeft; previousTop = scroll.scrollTop; previousZoom = zoom;
+      if (immediate) { frame.classList.add("is-immediate"); release(); }
+      frame.style.transform = `translate3d(${card.x * zoom - scroll.scrollLeft}px, ${card.y * zoom - scroll.scrollTop}px, 0)`;
+      frame.style.width = `${card.width * zoom}px`; frame.style.height = `${card.height * zoom}px`;
+      if (immediate) void frame.offsetHeight;
+      frame.style.opacity = "1"; productId = card.productId; frame.dataset.productId = productId;
+      canvas.title = card.name || "";
+    }
+    const schedule = frameTask(sync);
+    scroll.addEventListener("pointermove", event => {
+      if (event.pointerType === "touch" || event.isPrimary === false) { clear(); return; }
+      pointer = { x: event.clientX, y: event.clientY }; schedule();
+    });
+    scroll.addEventListener("pointerleave", clear);
+    ["pointerdown", "pointercancel", "lostpointercapture"].forEach(name => scroll.addEventListener(name, clear));
+    root.addEventListener("blur", clear);
+    return Object.freeze({ sync, clear });
+  }
+
+  root.PortfolioViewRuntime = Object.freeze({ frameTask, preferences, layoutCache, panelCache, stickyHeader, cardHover });
+})(globalThis);

@@ -118,8 +118,8 @@ const unequalPages = paginateProductLanes(headsetLanes, unequalProducts);
 assert.deepEqual(unequalPages.map((page) => page.rows.map((row) => [row.lane.id, row.slot, row.products.length, row.continued])), [
   [["wired", 0, 13, false], ["wireless", 1, 13, false]],
   [["wired", 0, 1, true], ["wireless", 1, 13, true]],
-  [["wireless", 1, 1, true]],
-], "lane continuations turn together and retain their original vertical position after a shorter lane ends");
+  [["wireless", 0, 1, true]],
+], "lane continuations turn together and the remaining lane starts at the top after a shorter lane ends");
 assert.deepEqual(idsForLane(unequalPages, "wired"), unequalProducts.filter((product) => product.laneId === "wired").map((product) => product.id));
 assert.deepEqual(idsForLane(unequalPages, "wireless"), unequalProducts.filter((product) => product.laneId === "wireless").map((product) => product.id));
 assert.equal(new Set(flatten(unequalPages).map((product) => product.id)).size, unequalProducts.length, "parallel lane pagination exports every product exactly once");

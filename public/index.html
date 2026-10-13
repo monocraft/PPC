@@ -3,9 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#121212">
+  <meta name="theme-color" content="#1A1B1C">
   <meta name="description" content="A compact product portfolio workspace with synchronized product cards, shared roadmap timelines, and safe ASCM updates.">
   <title>Product Portfolio</title>
+  <link rel="preload" href="assets/fonts/Jost-Variable.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/workspace-notifications.css">
   <link rel="stylesheet" href="css/product-issues.css">
@@ -13,8 +15,28 @@
   <link rel="stylesheet" href="css/portfolio-search.css">
   <link rel="stylesheet" href="css/date-history.css">
   <link rel="stylesheet" href="css/plc-import.css">
+  <script src="js/reference-theme.js"></script>
 </head>
 <body>
+  <aside id="workspaceOpeningStatus" class="workspace-opening-status hidden" role="status" aria-live="polite">
+    <p id="workspaceOpeningMessage">Opening the saved portfolio…</p>
+    <button id="workspaceOpeningRetry" type="button" hidden>Retry opening</button>
+    <section id="workspaceRecoveryControls" class="workspace-recovery-controls" hidden aria-labelledby="workspaceRecoveryTitle">
+      <h2 id="workspaceRecoveryTitle">Recover your saved portfolio</h2>
+      <p>Export the saved data before restoring a backup. Your saved copy and images stay protected until you review and confirm a valid backup.</p>
+      <button id="workspaceRecoveryExport" type="button">Export saved data for recovery</button>
+      <form id="workspaceRecoveryForm">
+        <label>Portfolio backup<input id="workspaceRecoveryFile" type="file" accept=".data,.json,.pkg,application/json,application/octet-stream" required></label>
+        <label>Package access key, if encrypted<input id="workspaceRecoveryKey" type="password" autocomplete="off" spellcheck="false"></label>
+        <button id="workspaceRecoveryReview" type="submit">Review backup</button>
+      </form>
+      <div id="workspaceRecoveryPreview" hidden>
+        <p id="workspaceRecoverySummary"></p>
+        <button id="workspaceRecoveryRestore" type="button" class="primary-button">Restore this backup</button>
+      </div>
+      <p id="workspaceRecoveryStatus" role="status" aria-live="polite"></p>
+    </section>
+  </aside>
   <main class="app-shell">
     <div class="workspace-main">
       <header class="topbar">
@@ -74,7 +96,7 @@
             <div id="laneRailInner" class="lane-rail-inner"></div>
           </aside>
           <div id="canvasScroll" class="canvas-scroll">
-            <canvas id="boardCanvas" tabindex="0" aria-label="Product portfolio viewer. Select a card and use its Details button to open the read-only Overview with dates and all specifications. Use Close to dismiss details, double-click a card to open the roadmap, hover color SKUs to preview assigned hero images, hover or click a plus-variant chip to reveal hidden variants, or drag horizontally to navigate. Editing is available from Workspace settings."></canvas>
+            <canvas id="boardCanvas" tabindex="0" aria-label="Product portfolio viewer. Use the Specifications or Dates icons at a card's right edge to open that section with one click. When a card expands, use the detail area's tabs to navigate. Dates include date history; HP SKUs and More remain available in those tabs. Use Close to dismiss details, double-click a card to open the roadmap, hover color SKUs to preview assigned hero images, hover or click a plus-variant chip to reveal hidden variants, or drag horizontally to navigate. Editing is available from Workspace settings."></canvas>
             <aside id="viewerInfo" class="viewer-info" aria-hidden="true" aria-label="Product information"></aside>
             <div id="viewerInfoOutline" class="viewer-info-outline" aria-hidden="true"></div>
           </div>
@@ -182,11 +204,16 @@
                   <button id="importPlcReport" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import HyperX PLC report</strong><small>Drop Excel to update matched products, date timestamps, and aging days.</small></span></button>
                   <button id="importPackage" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import project package</strong><small>Replace products, settings, and the image library from a .pkg backup.</small></span></button>
                   <button id="importJson" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import data file</strong><small>Replace workspace data from .data or legacy .json; image files are not included.</small></span></button>
+                  <button id="importNameUpdates" class="data-action" type="button" aria-describedby="nameUpdateStatus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m-4 4 4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg><span class="data-action-copy"><strong>Import name updates</strong><small>Apply product names from a current data backup. Every other field must match.</small></span></button>
+                  <p id="nameUpdateStatus" class="settings-note hidden" role="status" aria-live="polite" aria-atomic="true"></p>
                 </section>
                 <section class="data-direction-panel data-export-panel" aria-labelledby="dataExportTitle">
                   <div class="data-direction-heading"><svg class="data-direction-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><div><h4 id="dataExportTitle">Export</h4><p>Save copies to your device.</p></div></div>
                   <button id="exportPackage" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Export portfolio</strong><small>Create one package for Products, Roadmap, settings, and images.</small></span></button>
                   <button id="exportJson" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Export data file</strong><small>Save lightweight .data with image references, without image files.</small></span></button>
+                  <button id="copyJson" class="data-action" type="button" aria-describedby="dataCopyStatus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg><span class="data-action-copy"><strong>Copy data backup</strong><small>Copy the same lightweight data when a file download is unavailable.</small></span></button>
+                  <p id="dataCopyStatus" class="settings-note hidden" role="status" aria-live="polite" aria-atomic="true"></p>
+                  <div id="dataCopyFallback" class="hidden"><label for="dataBackupText">Data backup text</label><textarea id="dataBackupText" rows="7" readonly spellcheck="false" aria-label="Data backup JSON"></textarea><p class="settings-note">Select and copy this text, then save it as a .data file. Image files are not included.</p></div>
                   <button id="exportPng" class="data-action" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-4-4 4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span class="data-action-copy"><strong>Export PNG</strong><small>Save this category’s active view as a PNG image.</small></span></button>
                 </section>
               </div>
@@ -199,6 +226,7 @@
     </section>
   </div>
   <input id="importFile" class="visually-hidden" type="file" accept=".data,.json,.js,application/json,text/javascript,text/plain" tabindex="-1" aria-label="Import data file" aria-hidden="true">
+  <input id="importNameUpdatesFile" class="visually-hidden" type="file" accept=".data,.json,application/json" tabindex="-1" aria-label="Import product name updates" aria-hidden="true">
   <input id="importPackageFile" class="visually-hidden" type="file" accept=".pkg,.zip,application/octet-stream,application/zip" tabindex="-1" aria-label="Import project package" aria-hidden="true">
   <input id="importAscmFile" class="visually-hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" tabindex="-1" aria-label="Import ASCM report" aria-hidden="true">
   <div id="packageDialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="packageTitle" aria-describedby="packageDescription">
@@ -263,7 +291,7 @@
         <button id="closePptxExport" class="icon-button" type="button" aria-label="Close PowerPoint export">×</button>
       </div>
 
-        <p class="settings-note">Export selected categories using the current theme and shared timeline range. Each product is separately editable in PowerPoint. Product cards move as groups and can be ungrouped to edit their contents. Product portfolios use the same card width across all selected categories, with up to 13 products across each row. Lanes appear together when they fit and continue in the same row position; tall cards use fewer lanes per slide. Roadmaps have up to 22 products per slide.</p>
+        <p class="settings-note">Choose the categories and roadmap period to share. Product cards stay aligned to the top at the same size across categories. Cards move as editable groups. Roadmap names and timelines remain editable.</p>
 
       <div class="pptx-export-options" role="radiogroup" aria-label="PowerPoint slide content">
         <label class="pptx-export-option">
@@ -271,7 +299,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">P</span>
             <strong>Product portfolio</strong>
-            <small>One product-card slide per category</small>
+            <small>Product cards, with additional pages when needed</small>
           </span>
         </label>
 
@@ -280,7 +308,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">R</span>
             <strong>Roadmap</strong>
-            <small>Up to 22 roadmap products per slide</small>
+            <small>Category pages or a combined timeline</small>
           </span>
         </label>
 
@@ -289,7 +317,7 @@
           <span class="pptx-export-option-copy">
             <span class="pptx-export-option-mark">P+R</span>
             <strong>Both</strong>
-            <small>Product portfolio followed by paginated roadmap</small>
+            <small>Product cards and roadmap slides</small>
           </span>
         </label>
       </div>
@@ -299,6 +327,25 @@
           <div id="pptxExportCategories" class="pptx-export-categories" role="group" aria-labelledby="pptxExportCategoriesTitle" aria-describedby="pptxExportCategoriesHelp pptxExportSelectionHint"></div>
           <p id="pptxExportSelectionHint" class="pptx-export-selection-hint" role="status" aria-live="polite">Choose at least one category.</p>
         </section>
+
+      <section id="pptxRoadmapOptions" class="pptx-roadmap-options" aria-labelledby="pptxRoadmapOptionsTitle">
+        <h3 id="pptxRoadmapOptionsTitle">Roadmap layout</h3>
+        <div class="pptx-roadmap-layout" role="radiogroup" aria-label="Roadmap layout">
+          <label><input type="radio" name="pptxRoadmapLayout" value="categories" checked><span><strong>Separate category slides</strong><small>Keep every product name readable on detailed pages.</small></span></label>
+          <label><input type="radio" name="pptxRoadmapLayout" value="merged"><span><strong>Merge into one slide</strong><small>One shared calendar with compact product rows on a 16:9 slide.</small></span></label>
+        </div>
+        <div class="pptx-roadmap-period">
+          <label for="pptxRoadmapStart">Start month<input id="pptxRoadmapStart" type="month" aria-describedby="pptxRoadmapCoverage"></label>
+          <label for="pptxRoadmapEnd">End month<input id="pptxRoadmapEnd" type="month" aria-describedby="pptxRoadmapCoverage"></label>
+        </div>
+        <p id="pptxRoadmapFit" role="status" aria-live="polite"></p>
+        <fieldset id="pptxRoadmapLimitOptions" class="pptx-roadmap-limit" hidden>
+          <legend>One timeline capacity</legend>
+          <p id="pptxRoadmapCutoff" role="status" aria-live="polite"></p>
+          <label><input id="pptxRoadmapLimit" type="checkbox"><span><strong id="pptxRoadmapLimitLabel">Export only the products that fit</strong><small>The cutoff above shows the last included product and the first excluded product. You can also reduce categories or the date range.</small></span></label>
+        </fieldset>
+        <p id="pptxRoadmapCoverage" class="pptx-roadmap-coverage"></p>
+      </section>
 
       <div class="pptx-export-summary">
           <div class="pptx-summary-item"><span>Selected categories</span><strong id="pptxExportCategoryCount">0</strong></div>
@@ -356,12 +403,16 @@
   <script src="js/plc-import-ui.js"></script>
   <script src="js/pptx-pagination.js"></script>
   <script src="js/pptx-editable.js"></script>
+  <script src="js/pptx-export-planner.js"></script>
   <script src="js/portfolio-model.js"></script>
+  <script src="js/launch-records.js"></script>
+  <script src="js/card-specs.js"></script>
   <script src="js/portfolio-search.js"></script>
   <script src="js/master-model.js"></script>
   <script src="js/product-merge.js"></script>
   <script src="js/roadmap-interaction.js"></script>
   <script src="js/roadmap-hover.js"></script>
+  <script src="js/view-runtime.js"></script>
   <script src="js/product-details.js"></script>
   <script src="js/date-history.js"></script>
   <script src="js/package-codec.js"></script>
@@ -371,6 +422,7 @@
   <script src="js/app-dialogs.js"></script>
   <script src="js/workspace-notifications.js"></script>
   <script src="js/product-issues.js"></script>
+  <script src="js/workspace-store.js"></script>
   <script src="js/app.js"></script>
   <script src="js/package-ui.js"></script>
   <script src="js/workspace-ui.js"></script>

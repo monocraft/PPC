@@ -3,8 +3,23 @@
 
   const deckSlides = new WeakMap();
   const EMUS_PER_INCH = 914400;
+  const FONT_FACE = "HP Forma DJR Office";
+  const FONT_FACES = new Set([FONT_FACE, `${FONT_FACE} Medium`]);
+  let fontReadiness;
+  function fontsReady() {
+    if (!globalObject.document?.fonts?.load) return Promise.resolve(false);
+    return fontReadiness ||= Promise.allSettled([400, 500, 700].map(weight => globalObject.document.fonts.load(`${weight} 16px "${FONT_FACE}"`)))
+      .then(() => typeof globalObject.document.fonts.check === "function" && globalObject.document.fonts.check(`400 16px "${FONT_FACE}"`)).catch(() => false);
+  }
   const escapeXml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]);
+
+  function containTop(sourceWidth, sourceHeight, x, y, width, height) {
+    if (![sourceWidth, sourceHeight, width, height].every((value) => Number.isFinite(value) && value > 0) ||
+        ![x, y].every(Number.isFinite)) throw new Error("PowerPoint content has invalid dimensions.");
+    const scale = Math.min(width / sourceWidth, height / sourceHeight);
+    return { x, y, w: sourceWidth * scale, h: sourceHeight * scale };
+  }
 
   function colorOptions(value, opacity = 1) {
     if (!value || value === "transparent") return { color: "FFFFFF", transparency: 100 };
@@ -34,7 +49,7 @@
         slide.addImage({ ...rect, data: element.data, altText: element.altText || product.name || "Product artwork" });
       } else if (element.kind === "text") {
         slide.addText(element.text, {
-          ...rect, fontFace: element.fontFace || "Arial", fontSize: Math.max(1, Math.min(4000, element.fontSize * scale * 72)),
+          ...rect, fontFace: FONT_FACES.has(element.fontFace) ? element.fontFace : FONT_FACE, fontSize: Math.max(1, Math.min(4000, element.fontSize * scale * 72)),
           color: colorOptions(element.color).color, bold: Boolean(element.bold), italic: Boolean(element.italic),
           align: element.align || "left", valign: "top", margin: 0,
           breakLine: false, wrap: false, fit: "shrink", paraSpaceAfter: 0,
@@ -118,6 +133,49 @@
       `<a:close/></a:path></a:pathLst></a:custGeom>`;
   }
 
+  async function reconcileContentTypes(archive, xml) {
+    const overrides = [...xml.matchAll(/<Override\b[^>]*\/>/g)].map((match) => ({
+      xml: match[0], partName: match[0].match(/\bPartName="([^"]+)"/)?.[1],
+      type: match[0].match(/\bContentType="([^"]+)"/)?.[1],
+    }));
+    const missing = overrides.filter((entry) => entry.partName && !archive.file(entry.partName.replace(/^\//, "")));
+    // PptxGenJS 4 declares a slide master for every slide but writes one shared
+    // master. Drop only those unused declarations, never a referenced part.
+    const referencedParts = new Set();
+    for (const filename of Object.keys(archive.files).filter((name) => name.endsWith(".rels"))) {
+      const relationships = await archive.file(filename).async("string");
+      const owner = filename === "_rels/.rels" ? "" : filename.replace(/(^|\/)_rels\//, "$1").replace(/\.rels$/, "");
+      const directory = owner.slice(0, owner.lastIndexOf("/") + 1);
+      for (const match of relationships.matchAll(/<Relationship\b[^>]*\/>/g)) {
+        if (/\bTargetMode="External"/.test(match[0])) continue;
+        const target = match[0].match(/\bTarget="([^"]+)"/)?.[1];
+        if (!target) continue;
+        const parts = [];
+        for (const segment of (target.startsWith("/") ? target.slice(1) : directory + target).split("/")) {
+          if (segment === "..") parts.pop();
+          else if (segment && segment !== ".") parts.push(segment);
+        }
+        referencedParts.add(parts.join("/"));
+      }
+    }
+    // A broken relationship can name a master that was never declared, even
+    // in a one-slide file with no missing content-type entries.
+    for (const part of referencedParts) {
+      if (/^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(part) && !archive.file(part)) {
+        throw new Error("PowerPoint could not find a referenced slide master.");
+      }
+    }
+    for (const entry of missing) {
+      const part = entry.partName.slice(1);
+      if (!/^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(part) ||
+          entry.type !== "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml") {
+        throw new Error("PowerPoint could not find a declared presentation part.");
+      }
+      xml = xml.replace(entry.xml, "");
+    }
+    return xml;
+  }
+
   async function serialize(pptx) {
     const data = await pptx.write({ outputType: "arraybuffer" });
     const slides = deckSlides.get(pptx) || [];
@@ -138,7 +196,7 @@
     // generator shares the slide-master theme, which Office rejects once the
     // notes-master list is in its valid position.
     let nextTheme = Math.max(0, ...Object.keys(archive.files).map((name) => Number(name.match(/^ppt\/theme\/theme(\d+)\.xml$/)?.[1] || 0))) + 1;
-    let contentTypes = await archive.file("[Content_Types].xml").async("string");
+    let contentTypes = await reconcileContentTypes(archive, await archive.file("[Content_Types].xml").async("string"));
     for (const filename of Object.keys(archive.files).filter((name) => /^ppt\/notesMasters\/_rels\/notesMaster\d+\.xml\.rels$/.test(name))) {
       let relationships = await archive.file(filename).async("string");
       const themeRelationship = [...relationships.matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => match[0])
@@ -166,6 +224,13 @@
     if (slides.some((groups, index) => groups.length && !archive.file(`ppt/slides/slide${index + 1}.xml`))) {
       throw new Error("PowerPoint could not find a product slide.");
     }
+    // Apply the portfolio's PowerPoint font policy to native text, masters,
+    // notes and theme defaults, including the generator's unused locale faces.
+    for (const filename of Object.keys(archive.files).filter(name => name.startsWith("ppt/") && name.endsWith(".xml"))) {
+      const original = await archive.file(filename).async("string");
+      const updated = original.replace(/<a:(?:latin|ea|cs|font|sym|buFont)\b[^>]*>/g, element => element.replace(/\btypeface="([^"]*)"/, (_, face) => `typeface="${FONT_FACES.has(face) ? face : FONT_FACE}"`));
+      if (updated !== original) archive.file(filename, updated);
+    }
     return archive.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
@@ -174,5 +239,5 @@
     download(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }), options.fileName);
   }
 
-  globalObject.PPTXEditable = Object.freeze({ addCard, registerSlide, groupSlideXml, serialize, writeFile });
+  globalObject.PPTXEditable = Object.freeze({ FONT_FACE, fontsReady, containTop, addCard, registerSlide, groupSlideXml, serialize, writeFile });
 }(globalThis));

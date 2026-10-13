@@ -3,14 +3,35 @@
   "use strict";
 
   const severities = new Set(["info", "success", "warning", "error"]);
-  const urgent = (item) => item.severity === "warning" || item.severity === "error";
+  const urgent = (item) => !item.acknowledged && (item.severity === "warning" || item.severity === "error");
   const text = (value, limit) => String(value ?? "").trim().slice(0, limit);
+  const ACKNOWLEDGMENT_KEY = "ppc-workspace-acknowledgments-v1";
+  // Only this saved-team follow-up status can persist a dismissal. Save errors
+  // and product warnings must never inherit a stored acknowledgment.
+  const durableIds = new Set(["master-publication"]);
+  const defaultAcknowledgmentStorage = () => { try { return root.localStorage || null; } catch { return null; } };
 
-  function createStore({ now = () => Date.now(), limit = 60 } = {}) {
+  function createStore({ now = () => Date.now(), limit = 60, acknowledgmentStorage = defaultAcknowledgmentStorage() } = {}) {
     const items = new Map(), dismissed = new Map(), listeners = new Set();
+    const acknowledged = new Map();
+    try {
+      const raw = acknowledgmentStorage?.getItem(ACKNOWLEDGMENT_KEY);
+      if (raw && raw.length <= 8192) {
+        const saved = JSON.parse(raw);
+        if (saved?.version === 1 && Array.isArray(saved.entries)) for (const entry of saved.entries) {
+          if (Array.isArray(entry) && durableIds.has(entry[0]) && typeof entry[1] === "string" && entry[1].length <= 4000) acknowledged.set(entry[0], entry[1]);
+        }
+      }
+    } catch {}
+    const persistAcknowledgments = () => {
+      try {
+        if (acknowledged.size) acknowledgmentStorage?.setItem(ACKNOWLEDGMENT_KEY, JSON.stringify({ version: 1, entries: [...acknowledged] }));
+        else acknowledgmentStorage?.removeItem(ACKNOWLEDGMENT_KEY);
+      } catch {}
+    };
     let sequence = 0;
     const emit = (event) => { for (const listener of listeners) listener(event); };
-    const fingerprint = (item) => JSON.stringify([item.severity, item.title, item.message, item.revision, item.dismissible, item.actions.map((action) => [action.id, action.label])]);
+    const fingerprint = (item) => JSON.stringify([item.severity, item.title, item.message, item.revision, item.dismissible, item.acknowledgeOnDismiss, item.actions.map((action) => [action.id, action.label])]);
     const snapshot = () => [...items.values()].sort((a, b) => Number(urgent(b)) - Number(urgent(a)) || b.sequence - a.sequence).map((item) => ({ ...item, actions: item.actions.map((action) => ({ ...action })) }));
     function expire() {
       let changed = false;
@@ -22,32 +43,41 @@
       const id = text(value.id, 160) || `message-${++sequence}`;
       const severity = severities.has(value.severity) ? value.severity : "info";
       const actions = (Array.isArray(value.actions) ? value.actions : []).filter((action) => typeof action?.onClick === "function" && text(action.label, 100)).slice(0, 4).map((action, index) => ({ id: text(action.id, 100) || `action-${index}`, label: text(action.label, 100), onClick: action.onClick }));
-      const item = { id, severity, title: text(value.title, 300) || ({ info: "Workspace update", success: "Completed", warning: "Needs your attention", error: "Could not complete" })[severity], message: text(value.message, 24000), revision: text(value.revision, 200), dismissible: value.dismissible !== false, actions, createdAt: now(), sequence: ++sequence, read: false, expiresAt: 0 };
+      const item = { id, severity, title: text(value.title, 300) || ({ info: "Workspace update", success: "Completed", warning: "Needs your attention", error: "Could not complete" })[severity], message: text(value.message, 24000), revision: text(value.revision, 200), dismissible: value.dismissible !== false, acknowledgeOnDismiss: value.acknowledgeOnDismiss === true && durableIds.has(id), acknowledged: false, actions, createdAt: now(), sequence: ++sequence, read: false, expiresAt: 0 };
       const previous = items.get(id), signature = fingerprint(item);
+      item.acknowledged = item.acknowledgeOnDismiss && acknowledged.get(id) === signature;
+      if (item.acknowledged) item.read = true;
       if (dismissed.get(id) === signature) return null;
       if (previous && fingerprint(previous) === signature) {
         // Callbacks can change with a newly rendered workspace without creating another message.
         previous.actions = actions;
         return { ...previous, actions: actions.map((action) => ({ ...action })) };
       }
-      item.expiresAt = !urgent(item) && item.dismissible ? now() + Math.max(1000, Number(value.ttl) || 15 * 60 * 1000) : 0;
+      item.expiresAt = !urgent(item) && item.dismissible && !item.acknowledgeOnDismiss ? now() + Math.max(1000, Number(value.ttl) || 15 * 60 * 1000) : 0;
       dismissed.delete(id); items.set(id, item);
       // Keep current warnings and errors; discard older informational history first.
       while (items.size > limit) {
-        const removable = [...items.values()].filter((entry) => !urgent(entry) && entry.dismissible).sort((a, b) => a.sequence - b.sequence)[0];
+        const removable = [...items.values()].filter((entry) => !urgent(entry) && entry.dismissible && !entry.acknowledgeOnDismiss).sort((a, b) => a.sequence - b.sequence)[0];
         if (!removable) break;
         items.delete(removable.id);
       }
-      emit({ type: "publish", item: { ...item }, toast: value.toast === true || (value.toast !== false && severity === "success") });
+      emit({ type: "publish", item: { ...item }, announce: !item.acknowledged, toast: !item.acknowledged && (value.toast === true || (value.toast !== false && severity === "success")) });
       return { ...item, actions: actions.map((action) => ({ ...action })) };
     }
-    function resolve(id) {
+    function resolve(id, { preserveAcknowledgment = false } = {}) {
       const key = String(id); dismissed.delete(key);
+      if (!preserveAcknowledgment && acknowledged.delete(key)) persistAcknowledgments();
       if (items.delete(key)) emit({ type: "resolve", id: key });
     }
     function dismiss(id) {
       const item = items.get(String(id));
       if (!item || !item.dismissible) return false;
+      if (item.acknowledgeOnDismiss) {
+        if (item.acknowledged) return true;
+        acknowledged.set(item.id, fingerprint(item)); persistAcknowledgments();
+        item.acknowledged = true; item.read = true;
+        emit({ type: "acknowledge", id: item.id }); return true;
+      }
       dismissed.set(item.id, fingerprint(item)); items.delete(item.id);
       while (dismissed.size > limit * 2) dismissed.delete(dismissed.keys().next().value);
       emit({ type: "dismiss", id: item.id }); return true;
@@ -138,14 +168,14 @@
       button.classList.toggle("has-attention", state.attentionCount > 0);
       button.setAttribute("aria-label", `Messages${state.count ? `, ${state.count} ${state.count === 1 ? "item" : "items"} to review` : ", no new messages"}`);
       button.title = state.attentionCount ? `${state.attentionCount} ${state.attentionCount === 1 ? "warning or error" : "warnings or errors"} to review` : "View workspace updates and warnings";
-      clear.disabled = !state.items.some((item) => !urgent(item) && item.dismissible);
+      clear.disabled = !state.items.some((item) => !urgent(item) && item.dismissible && !item.acknowledgeOnDismiss);
       if (!panel.open) return;
       const focused = document.activeElement, focusedKey = focused?.dataset?.messageControl;
       const rows = state.items.map((item) => {
-        const row = create("article", `workspace-message workspace-message-${item.severity}`); row.dataset.messageId = item.id;
-        const top = create("div", "workspace-message-top"), kind = create("span", "workspace-message-kind", ({ info: "Update", success: "Complete", warning: "Warning", error: "Error" })[item.severity]);
+        const row = create("article", `workspace-message workspace-message-${item.acknowledged ? "info" : item.severity}`); row.dataset.messageId = item.id;
+        const top = create("div", "workspace-message-top"), kind = create("span", "workspace-message-kind", item.acknowledged ? "Acknowledged update" : ({ info: "Update", success: "Complete", warning: "Warning", error: "Error" })[item.severity]);
         top.append(kind);
-        if (item.dismissible) {
+        if (item.dismissible && !item.acknowledged) {
           const dismiss = create("button", "workspace-message-dismiss", "×"); dismiss.type = "button"; dismiss.setAttribute("aria-label", `Dismiss ${item.title}`); dismiss.dataset.messageControl = `${item.id}:dismiss`;
           dismiss.addEventListener("click", () => { messageStore.dismiss(item.id); if (panel.open) close.focus({ preventScroll: true }); }); top.append(dismiss);
         }
@@ -181,13 +211,13 @@
       render();
       if (event.type === "publish") {
         const announcement = urgent(event.item) ? assertive : polite;
-        announcement.textContent = `${event.item.title}. ${event.item.message}`;
+        if (event.announce !== false) announcement.textContent = `${event.item.title}. ${event.item.message}`;
         if (event.toast) showToast(event.item);
-      } else if ((event.type === "resolve" || event.type === "dismiss") && event.id === toastId) removeToast();
+      } else if (["resolve", "dismiss", "acknowledge"].includes(event.type) && event.id === toastId) removeToast();
     });
     button.addEventListener("click", () => panel.open ? closePanel() : show());
     close.addEventListener("click", closePanel);
-    clear.addEventListener("click", () => { for (const item of messageStore.getState().items) if (!urgent(item) && item.dismissible) messageStore.dismiss(item.id); });
+    clear.addEventListener("click", () => { for (const item of messageStore.getState().items) if (!urgent(item) && item.dismissible && !item.acknowledgeOnDismiss) messageStore.dismiss(item.id); });
     panel.addEventListener("cancel", (event) => { event.preventDefault(); event.stopPropagation(); closePanel(); });
     panel.addEventListener("click", (event) => {
       event.stopPropagation();
