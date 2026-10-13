@@ -218,6 +218,9 @@ for (const sourceFile of ["app.js", "app-dialogs.js", "workspace-notifications.j
   else syntaxCheck(sourceFile);
 }
 
+if (!await isFile(publicPath("js/card-specs.js"))) fail("Missing required purchase-summary module.");
+else syntaxCheck(publicPath("js/card-specs.js"));
+
 const htmlSource = await readFile(projectPath("public/index.html"), "utf8");
 const scriptReferences = [...htmlSource.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)]
   .map((match) => localReference(match[1]))
