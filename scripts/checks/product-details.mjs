@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+await import("../../public/js/card-specs.js");
 
 await import("../../public/js/portfolio-model.js");
 const modelRules = globalThis.PortfolioModel;
@@ -730,6 +731,7 @@ function paneElement() {
 const viewerPane = paneElement();
 const viewerOutline = paneElement();
 const paneSandbox = {
+  activeCategoryId: "pc-gaming-audio", PortfolioCardSpecs: globalThis.PortfolioCardSpecs,
   PortfolioModel: modelRules,
   PortfolioDetails: { render: details.render, bind: (container, callbacks) => bindCalls.push({ container, callbacks }) },
   board: { products: [], settings: { showSkus: false, fullSingleLaneSpecs: false } },
@@ -756,7 +758,7 @@ Object.defineProperty(paneSandbox, "viewerInfoContentHeight", {
 });
 vm.createContext(paneSandbox);
 const paneFunctions = [
-  "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedSpecsHeight", "productCardLayout",
+  "cardSpecifications", "normalizedSpecLabel", "detailedValueLineCount", "isDetailedMatrixSpec", "isDetailedPairCandidate", "detailedSpecRows", "detailedSpecRowHeight", "detailedSpecsHeight", "productCardLayout",
   "infoProduct", "viewerInfoVisualWidth", "viewerInfoVisualHeight", "setViewerInfoSize", "viewerInfoReserveLogical", "viewerInfoGapIndex", "cardXForDisplayIndex", "productLaneGeometry", "getCanvasDimensions", "renderViewerInfo", "positionViewerInfo",
 ];
 const paneDefinitions = paneFunctions.map((name) => {
@@ -786,7 +788,7 @@ for (const scenario of paneScenarios) {
   paneSandbox.board.products.push(...Array.from({ length: 6 }, (_, index) => ({ id: `following-${index}`, laneId: "first", specs: scenario.specs })));
   const layout = paneSandbox.productCardLayout();
   assert.equal(layout.detailed, scenario.full, "pane scenarios must retain automatic supported-category and compact multi-lane parent geometry");
-  if (scenario.full) assert.ok(layout.detailed && layout.cardHeight > 552, "full-spec parent geometry must be exercised above the compact maximum");
+  if (scenario.full) assert.ok(layout.detailed && layout.cardHeight <= 552, "long complete Details content cannot inflate the front summary card");
   for (const drawZoom of [.2, .5, .65, 1, 1.5, 2]) {
     paneSandbox.zoom = drawZoom;
     paneSandbox.viewerInfoProgress = 0;
