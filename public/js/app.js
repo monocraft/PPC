@@ -5431,10 +5431,11 @@ function normalizeLaneOrders(laneId) {
 function moveProductToLane(productId, laneId) {
   updateBoard((current) => {
     const product = current.products.find((item) => item.id === productId);
-    if (!product) return;
+    if (!product || product.laneId === laneId || !current.lanes.some((lane) => lane.id === laneId)) return;
     const oldLane = product.laneId;
     product.laneId = laneId;
-    product.order = current.products.filter((item) => item.laneId === laneId && item.id !== productId).length;
+    product.order = current.products.filter((item) => item.laneId === laneId && item.id !== productId)
+      .reduce((maximum, item) => Number.isFinite(item.order) ? Math.max(maximum, item.order) : maximum, -1) + 1;
     delete product.manualPosition;
     normalizeLaneOrders(oldLane);
     normalizeLaneOrders(laneId);
@@ -6537,19 +6538,20 @@ async function renderCategoryRoadmapImageForPptx(category, groups = null) {
   }
 }
 
-function addPptxPortfolioSlide(pptx, title, image) {
+function addPptxPortfolioSlide(pptx, title, image, canvas = null) {
   const slide = pptx.addSlide();
+  const pageScale = canvas?.width ? canvas.width / (40 / 3) : 1;
   slide.background = { color: UI_PALETTE.inkBlack.replace(/^#/, "") };
   slide.addText(title, {
-    x: .38, y: .16, w: 11.9, h: .38,
-    fontFace: UI_FONT_FACE, fontSize: 20, bold: true,
+    x: .38 * pageScale, y: .16 * pageScale, w: 11.9 * pageScale, h: .38 * pageScale,
+    fontFace: PPTXEditable.FONT_FACE, fontSize: 20 * pageScale, bold: true,
     color: UI_PALETTE.whiteSmoke.replace(/^#/, ""), margin: 0, breakLine: false,
   });
   slide.addShape(pptx.ShapeType.line, {
-    x: .38, y: .62, w: 12.55, h: 0,
-    line: { color: UI_PALETTE.charcoal600.replace(/^#/, ""), width: .4, transparency: 25 },
+    x: .38 * pageScale, y: .62 * pageScale, w: 12.55 * pageScale, h: 0,
+    line: { color: UI_PALETTE.charcoal600.replace(/^#/, ""), width: .4 * pageScale, transparency: 25 },
   });
-  const placement = PPTXEditable.containTop(image.width, image.height, .38, .74, 12.55, 6.33);
+  const placement = PPTXEditable.containTop(image.width, image.height, .38 * pageScale, .74 * pageScale, 12.55 * pageScale, 6.33 * pageScale);
   slide.addImage({ data: image.data, ...placement, objectName: "Calendar and category background" });
   const scale = placement.w / image.width;
   const cardGroups = [];
@@ -6571,7 +6573,7 @@ function addPptxPortfolioSlide(pptx, title, image) {
     }
     slide.addText(product.label, {
       ...rect, objectName, shape: pptx.ShapeType.roundRect,
-      fontFace: UI_FONT_FACE, fontSize: product.fontSize * scale * 72, bold: true,
+      fontFace: PPTXEditable.FONT_FACE, fontSize: product.fontSize * scale * 72, bold: true,
       color: product.textColor.replace(/^#/, ""),
       fill: { color: product.fill.replace(/^#/, "") },
       line: { color: product.fill.replace(/^#/, ""), width: 0, transparency: 100 },
@@ -6596,63 +6598,69 @@ function containRect(sourceWidth, sourceHeight, targetX, targetY, targetWidth, t
 }
 
 function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
-  const includeProducts = scope === "products" || scope === "both";
-  const includeRoadmap = scope === "roadmap" || scope === "both";
-  const slides = [];
+  const previousUiFontFace = UI_FONT_FACE;
+  UI_FONT_FACE = PPTXEditable.FONT_FACE;
+  try {
+    const includeProducts = scope === "products" || scope === "both";
+    const includeRoadmap = scope === "roadmap" || scope === "both";
+    const slides = [];
 
-  const preparedCategories = categories.map((category, categoryIndex) => {
-    const definition = categoryDefinition(category.id);
-    const targetBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
-    return { category, categoryIndex, definition, targetBoard,
-      productPages: includeProducts ? productPagesForPptx(category, targetBoard) : [] };
-  });
-  // Every selected category shares the same card scale. Reserve a wider
-  // canvas for the whole deck only when an unusually tall detail card needs it.
-  const productCanvasWidth = preparedCategories.reduce((width, item) => Math.max(width, item.productPages[0]?.width || 0), 0);
+    const preparedCategories = categories.map((category, categoryIndex) => {
+      const definition = categoryDefinition(category.id);
+      const targetBoard = ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
+      return { category, categoryIndex, definition, targetBoard,
+        productPages: includeProducts ? productPagesForPptx(category, targetBoard) : [] };
+    });
+    // Every selected category shares the same card scale. Reserve a wider
+    // canvas for the whole deck only when an unusually tall detail card needs it.
+    const productCanvasWidth = preparedCategories.reduce((width, item) => Math.max(width, item.productPages[0]?.width || 0), 0);
 
-  preparedCategories.forEach(({ category, categoryIndex, definition, targetBoard, productPages }) => {
+    preparedCategories.forEach(({ category, categoryIndex, definition, targetBoard, productPages }) => {
 
-    if (includeProducts) {
-      const pages = productPages[0].width === productCanvasWidth ? productPages
+      if (includeProducts) {
+        const pages = productPages[0].width === productCanvasWidth ? productPages
         : productPagesForPptx(category, targetBoard, productCanvasWidth);
-      pages.forEach((page, pageIndex) => {
-        slides.push({ category, categoryIndex, kind: "products", page, pageIndex, pageCount: pages.length });
-      });
+        pages.forEach((page, pageIndex) => {
+          slides.push({ category, categoryIndex, kind: "products", page, pageIndex, pageCount: pages.length });
+        });
+      }
+
+      if (includeRoadmap && !globalThis.PPTXExportPlanner) {
+        const groups = roadmapGroupsForProducts(targetBoard.products, targetBoard, definition);
+        const pages = paginateRoadmapGroupsForPptx(groups);
+        pages.forEach((pageGroups, pageIndex) => {
+          slides.push({ category, categoryIndex, kind: "roadmap", groups: pageGroups, pageIndex, pageCount: pages.length });
+        });
+      }
+    });
+
+    if (includeRoadmap && globalThis.PPTXExportPlanner) {
+      const sections = preparedCategories.map(({ category, definition, targetBoard }) => ({
+        id: category.id, name: category.name || category.id,
+        products: roadmapGroupsForProducts(targetBoard.products, targetBoard, definition).flatMap(group => group.products.map(product => {
+          const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
+          const status = standardizedStatus(product.statusType);
+          return { id: product.id, name: product.name, family: group.family, startMonth: roadmap?.startMonth || roadmap?.launchMonth || "", endMonth: roadmap?.endMonth || "",
+            fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), status: roadmap?.status || "",
+            statusLabel: status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
+        })),
+      }));
+      const options = roadmapOptions || { mode: "categories", startMonth: portfolio.settings.timeline.startMonth, endMonth: portfolio.settings.timeline.endMonth, overflow: "ask" };
+      const roadmapPlan = globalThis.PPTXExportPlanner.planRoadmap(sections, options);
+      slides.roadmapPlan = roadmapPlan;
+      slides.push(...roadmapPlan.slides.map(roadmapSlide => ({ kind: roadmapSlide.kind, roadmapSlide })));
     }
 
-    if (includeRoadmap && !globalThis.PPTXExportPlanner) {
-      const groups = roadmapGroupsForProducts(targetBoard.products, targetBoard, definition);
-      const pages = paginateRoadmapGroupsForPptx(groups);
-      pages.forEach((pageGroups, pageIndex) => {
-        slides.push({ category, categoryIndex, kind: "roadmap", groups: pageGroups, pageIndex, pageCount: pages.length });
-      });
-    }
-  });
-
-  if (includeRoadmap && globalThis.PPTXExportPlanner) {
-    const sections = preparedCategories.map(({ category, definition, targetBoard }) => ({
-      id: category.id, name: category.name || category.id,
-      products: roadmapGroupsForProducts(targetBoard.products, targetBoard, definition).flatMap(group => group.products.map(product => {
-        const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
-        const status = standardizedStatus(product.statusType);
-        return { id: product.id, name: product.name, family: group.family, startMonth: roadmap?.startMonth || roadmap?.launchMonth || "", endMonth: roadmap?.endMonth || "",
-          fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), status: roadmap?.status || "",
-          statusLabel: status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
-      })),
-    }));
-    const options = roadmapOptions || { mode: "categories", startMonth: portfolio.settings.timeline.startMonth, endMonth: portfolio.settings.timeline.endMonth, overflow: "ask" };
-    const roadmapPlan = globalThis.PPTXExportPlanner.planRoadmap(sections, options);
-    slides.roadmapPlan = roadmapPlan;
-    slides.push(...roadmapPlan.slides.map(roadmapSlide => ({ kind: roadmapSlide.kind, roadmapSlide })));
+    return slides;
+  } finally {
+    UI_FONT_FACE = previousUiFontFace;
   }
-
-  return slides;
 }
 
 function pptxPlanSlideTitle(planItem) {
   if (planItem.roadmapSlide) {
     const slide = planItem.roadmapSlide;
-    return slide.kind === "roadmap-overview" ? "Roadmap overview" : slide.kind === "roadmap-merged" ? "Combined roadmap"
+    return slide.kind === "roadmap-merged" ? "Combined roadmap"
       : `${slide.categoryName || slide.categoryId} — Roadmap${slide.pageIndex ? " (continued)" : ""}`;
   }
   const categoryName = planItem.category.name || planItem.category.id || `Category ${planItem.categoryIndex + 1}`;
@@ -6686,10 +6694,21 @@ function renderPptxExportCategories() {
 }
 
 function setPptxCategorySelection(ids) {
+  resetPptxRoadmapLimit();
   const selected = new Set(ids);
   pptxExportForm.querySelectorAll('input[name="pptxExportCategory"]').forEach((input) => {
     input.checked = selected.has(input.value);
   });
+  syncPptxExportSummary();
+}
+
+function resetPptxRoadmapLimit() {
+  const limit = pptxExportForm?.querySelector("#pptxRoadmapLimit");
+  if (limit) limit.checked = false;
+}
+
+function handlePptxSelectionChange(event) {
+  if (event?.target?.id !== "pptxRoadmapLimit") resetPptxRoadmapLimit();
   syncPptxExportSummary();
 }
 
@@ -6715,6 +6734,7 @@ function syncPptxExportSummary() {
 function openPptxExportDialog() {
   stopProductCardDrag();
   closePopupMenus();
+  resetPptxRoadmapLimit();
   pptxReturnFocus = document.activeElement;
   renderPptxExportCategories();
   const start = pptxExportForm.querySelector("#pptxRoadmapStart"), end = pptxExportForm.querySelector("#pptxRoadmapEnd");
@@ -6745,52 +6765,60 @@ function pptxExportFilename(scope) {
 }
 
 async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOptions = null) {
-  await globalThis.PortfolioTheme.fontsReady();
-  UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
+  const [, exportFontReady] = await Promise.all([globalThis.PortfolioTheme.fontsReady(), PPTXEditable.fontsReady()]);
+  if (exportFontReady === false && globalThis.document?.fonts) throw new Error("Install the supplied HP Forma DJR Office fonts, then reopen this page to export. PowerPoint export needs this font to measure product names correctly.");
   stopProductCardDrag();
   closePopupMenus();
   if (typeof PptxGenJS !== "function") throw new Error("The PowerPoint export library did not load. Refresh the page and try again.");
   const categories = PPTXPagination.selectExportCategories(portfolio?.categories, selectedCategoryIds);
   if (!categories.length) throw new Error("Select at least one category to export.");
 
-  const pptx = new PptxGenJS();
-  pptx.layout = "LAYOUT_WIDE";
-  pptx.theme = { headFontFace: UI_FONT_FACE, bodyFontFace: UI_FONT_FACE, lang: "en-US" };
-  pptx.author = "Product Portfolio Canvas";
-  pptx.company = "Product Portfolio";
-  pptx.subject = scope === "products"
+  const previousUiFontFace = UI_FONT_FACE;
+  UI_FONT_FACE = PPTXEditable.FONT_FACE;
+  try {
+    const exportPlan = buildPptxExportPlan(scope, categories, roadmapOptions);
+    if (exportPlan.roadmapPlan?.requiresDecision) throw new Error(exportPlan.roadmapPlan.reason || "Choose a valid roadmap period before exporting.");
+
+    const pptx = new PptxGenJS();
+    pptx.layout = "LAYOUT_WIDE";
+    globalThis.PPTXExportPlanner?.configureDeckCanvas(pptx, exportPlan.roadmapPlan);
+    pptx.theme = { headFontFace: UI_FONT_FACE, bodyFontFace: UI_FONT_FACE, lang: "en-US" };
+    pptx.author = "Product Portfolio Canvas";
+    pptx.company = "Product Portfolio";
+    pptx.subject = scope === "products"
     ? "Product category portfolio boards"
     : scope === "roadmap"
-      ? "Product category roadmaps"
-      : "Product category portfolio boards and roadmaps";
-  pptx.title = scope === "products"
+    ? "Product category roadmaps"
+    : "Product category portfolio boards and roadmaps";
+    pptx.title = scope === "products"
     ? "Product Portfolio"
     : scope === "roadmap"
-      ? "Product Roadmaps"
-      : "Product Portfolio and Roadmaps";
-  pptx.lang = "en-US";
+    ? "Product Roadmaps"
+    : "Product Portfolio and Roadmaps";
+    pptx.lang = "en-US";
 
-  const exportPlan = buildPptxExportPlan(scope, categories, roadmapOptions);
-  if (exportPlan.roadmapPlan?.requiresDecision) throw new Error(exportPlan.roadmapPlan.reason || "Choose a readable roadmap layout before exporting.");
-
-  for (let index = 0; index < exportPlan.length; index += 1) {
-    const planItem = exportPlan[index];
-    if (planItem.roadmapSlide) {
-      globalThis.PPTXExportPlanner.addSlide(pptx, planItem.roadmapSlide, { fontFace: UI_FONT_FACE, theme: globalThis.PortfolioTheme, title: pptxPlanSlideTitle(planItem) });
-      continue;
-    }
-    const image = planItem.kind === "products"
+    for (let index = 0; index < exportPlan.length; index += 1) {
+      const planItem = exportPlan[index];
+      if (planItem.roadmapSlide) {
+        globalThis.PPTXExportPlanner.addSlide(pptx, planItem.roadmapSlide, { fontFace: UI_FONT_FACE, theme: globalThis.PortfolioTheme, title: pptxPlanSlideTitle(planItem) });
+        continue;
+      }
+      const image = planItem.kind === "products"
       ? await renderCategoryImageForPptx(planItem.category, planItem.page)
       : await renderCategoryRoadmapImageForPptx(planItem.category, planItem.groups);
-    addPptxPortfolioSlide(
+      addPptxPortfolioSlide(
       pptx,
       pptxPlanSlideTitle(planItem),
       image,
-    );
-  }
+      exportPlan.roadmapPlan?.canvas,
+      );
+    }
 
-  await PPTXEditable.writeFile(pptx, { fileName: pptxExportFilename(scope) }, downloadBlob);
-  renderActiveView();
+    await PPTXEditable.writeFile(pptx, { fileName: pptxExportFilename(scope) }, downloadBlob);
+  } finally {
+    UI_FONT_FACE = previousUiFontFace;
+    renderActiveView();
+  }
 }
 
 function exportPng() {
@@ -7589,7 +7617,7 @@ $("#pptxSelectAllCategories").onclick = () => {
   setPptxCategorySelection(pptxExportCategories().length === available.length ? [] : available.map((category) => category.id));
 };
 $("#pptxSelectCurrentCategory").onclick = () => setPptxCategorySelection([activeCategoryId]);
-pptxExportForm.addEventListener("change", syncPptxExportSummary);
+pptxExportForm.addEventListener("change", handlePptxSelectionChange);
 pptxExportForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (pptxExportInProgress) return;
@@ -7994,15 +8022,21 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
   applyPatches: (changes) => {
     if (packageOperationInProgress) throw new Error("Finish loading the package before saving shared changes.");
     const nextProducts = new Map(portfolio.categories.map((category) => [category.id, category.board.products.slice()]));
+    const dateEditsToClear = [];
+    const validPlacement = (categoryId, product) => {
+      const category = portfolio.categories.find((item) => item.id === categoryId);
+      if (!category?.board.lanes.some((lane) => lane.id === product.laneId)) throw new Error("This product's lane is no longer available. Keep your draft and refresh its details before saving.");
+      return product;
+    };
     for (const change of changes) {
       if (change.kind === "merge") {
         const all = [...nextProducts.values()].flat();
         const keeper = all.find((product) => product.id === change.productId), source = all.find((product) => product.id === change.sourceProductId);
         if (keeper && source) {
           const completed = globalThis.PortfolioProductMerge.resolve(globalThis.PortfolioProductMerge.plan(keeper, source), change.choices || {});
-          for (const products of nextProducts.values()) {
+          for (const [categoryId, products] of nextProducts) {
             const keeperIndex = products.findIndex((product) => product.id === change.productId);
-            if (keeperIndex >= 0) products[keeperIndex] = globalThis.PortfolioMasterModel.applyProductValues(completed, change.values);
+            if (keeperIndex >= 0) products[keeperIndex] = validPlacement(categoryId, globalThis.PortfolioMasterModel.applyProductValues(completed, change.values));
             const sourceIndex = products.findIndex((product) => product.id === change.sourceProductId);
             if (sourceIndex >= 0) products.splice(sourceIndex, 1);
           }
@@ -8017,7 +8051,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
         const order = products.filter((product) => product.laneId === change.laneId).reduce((maximum, product) => Math.max(maximum, Number(product.order) || 0), -1) + 1;
         const archived = portfolio.masterLocalRemovedProducts?.[change.productId];
         const product = change.fullProduct ? localizeSharedProduct(change.fullProduct) : archived || makeProduct(change.productId, change.values.name, change.values.price, change.laneId, order);
-        products.push(globalThis.PortfolioMasterModel.applyProductValues({ ...product, laneId: change.laneId }, change.values));
+        products.push(validPlacement(target.id, globalThis.PortfolioMasterModel.applyProductValues({ ...product, laneId: change.laneId }, change.values)));
         continue;
       }
       for (const category of portfolio.categories) {
@@ -8028,12 +8062,13 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
         if (change.kind === "delete") { products.splice(index, 1); break; }
         const values = change.values || change.patch;
         const original = change.fullProduct ? { ...localizeSharedProduct(change.fullProduct), order: current.order, laneId: current.laneId } : current;
-        products[index] = globalThis.PortfolioMasterModel.applyProductValues(original, values);
-        for (const field of Object.keys(globalThis.PLCImporter?.fieldLabels || {})) if ((current[field] || "") !== (products[index][field] || "")) delete portfolio.dateLocalEdits?.[current.id]?.[field];
+        products[index] = validPlacement(category.id, globalThis.PortfolioMasterModel.applyProductValues(original, values));
+        for (const field of Object.keys(globalThis.PLCImporter?.fieldLabels || {})) if ((current[field] || "") !== (products[index][field] || "")) dateEditsToClear.push([current.id, field]);
         break;
       }
     }
     for (const category of portfolio.categories) category.board.products = nextProducts.get(category.id);
+    for (const [productId, field] of dateEditsToClear) delete portfolio.dateLocalEdits?.[productId]?.[field];
     // Accepted shared changes already have the master's own date clocks.
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     if (selectedId && !board.products.some((product) => product.id === selectedId)) selectedId = board.products[0]?.id || null;
@@ -8056,7 +8091,7 @@ async function initializeWorkspace() {
   if (openingRetry) { openingRetry.hidden = true; openingRetry.onclick = () => { void startWorkspace(); }; }
   const pendingStart = pendingLegacyImageBlobs.length;
   try {
-    await globalThis.PortfolioTheme.fontsReady();
+    await Promise.all([globalThis.PortfolioTheme.fontsReady(), globalThis.PPTXEditable?.fontsReady?.()]);
     UI_FONT_FACE = globalThis.PortfolioTheme.fontFace;
     const saved = await workspaceStorage.read();
     // An unreadable database must never become an empty replacement workspace.

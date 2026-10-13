@@ -863,7 +863,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .pptx-summary-item { display: flex; align-items: center; gap: 7px; }
 .pptx-export-summary strong { color: var(--color-text); font-size: 12px; }
 .pptx-roadmap-options { display: grid; gap: 10px; min-width: 0; padding: 12px; background: var(--color-page); color: var(--color-text); font-size: 13px; line-height: 1.5; }
-.pptx-roadmap-options[hidden], .pptx-roadmap-overflow[hidden] { display: none; }
+.pptx-roadmap-options[hidden] { display: none; }
 .pptx-roadmap-options fieldset { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .pptx-roadmap-options legend, .pptx-roadmap-options h3 { margin: 0 0 5px; padding: 0; color: var(--color-text-secondary); font-size: 12px; font-weight: 500; line-height: 1.5; }
 .pptx-roadmap-options label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; cursor: pointer; }
@@ -871,12 +871,17 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .pptx-roadmap-options label > span { min-width: 0; overflow-wrap: anywhere; }
 .pptx-roadmap-options label small { display: block; margin-top: 2px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .pptx-roadmap-layout { display: grid; gap: 8px; }
+.pptx-roadmap-limit { margin: 0; padding: 10px 0; border: 0; }
+.pptx-roadmap-limit[hidden] { display: none; }
+.pptx-roadmap-limit legend { color: var(--color-text-secondary); font-size: 12px; }
+.pptx-roadmap-limit p { margin: 0 0 8px; font-size: 12px; line-height: 1.5; }
+.pptx-roadmap-limit label { display: flex; align-items: flex-start; gap: 8px; }
+.pptx-roadmap-limit label span { display: grid; gap: 4px; }
 .pptx-roadmap-period { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; min-width: 0; }
 .pptx-roadmap-period label { display: grid; gap: 4px; color: var(--color-text-secondary); font-size: 12px; cursor: default; }
 .pptx-roadmap-period input { width: 100%; min-width: 0; min-height: 32px; padding: 5px 8px; color: var(--color-text); font-size: 13px; line-height: 1.5; }
 #pptxRoadmapFit { margin: 0; padding: 7px 9px; background: var(--color-header); color: var(--color-text); font-size: 13px; line-height: 1.5; }
 #pptxRoadmapCoverage { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
-.pptx-roadmap-options .pptx-roadmap-overflow { padding-top: 4px; }
 .pptx-roadmap-options label:has(input:disabled) { color: var(--color-text-muted); cursor: default; }
 @media (max-width: 520px) { .pptx-roadmap-period { grid-template-columns: minmax(0, 1fr); } }
 

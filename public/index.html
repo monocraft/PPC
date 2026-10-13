@@ -317,17 +317,17 @@
         <h3 id="pptxRoadmapOptionsTitle">Roadmap layout</h3>
         <div class="pptx-roadmap-layout" role="radiogroup" aria-label="Roadmap layout">
           <label><input type="radio" name="pptxRoadmapLayout" value="categories" checked><span><strong>Separate category slides</strong><small>Keep every product name readable on detailed pages.</small></span></label>
-          <label><input type="radio" name="pptxRoadmapLayout" value="merged"><span><strong>Merge into one slide</strong><small>Combine the selected categories when every product fits.</small></span></label>
+          <label><input type="radio" name="pptxRoadmapLayout" value="merged"><span><strong>Merge into one slide</strong><small>One shared calendar with compact product rows on a 16:9 slide.</small></span></label>
         </div>
         <div class="pptx-roadmap-period">
           <label for="pptxRoadmapStart">Start month<input id="pptxRoadmapStart" type="month" aria-describedby="pptxRoadmapCoverage"></label>
           <label for="pptxRoadmapEnd">End month<input id="pptxRoadmapEnd" type="month" aria-describedby="pptxRoadmapCoverage"></label>
         </div>
         <p id="pptxRoadmapFit" role="status" aria-live="polite"></p>
-        <fieldset id="pptxRoadmapOverflow" class="pptx-roadmap-overflow" hidden>
-          <legend>This selection needs more room</legend>
-          <label><input type="radio" name="pptxRoadmapOverflow" value="overview-details"><span><strong>One slide overview + detailed pages</strong><small>Grouped category timelines first, followed by every product name and timeline.</small></span></label>
-          <label><input type="radio" name="pptxRoadmapOverflow" value="details"><span><strong>Detailed pages</strong><small>Keep full product timelines readable. You can also select fewer categories or a shorter period above.</small></span></label>
+        <fieldset id="pptxRoadmapLimitOptions" class="pptx-roadmap-limit" hidden>
+          <legend>One timeline capacity</legend>
+          <p id="pptxRoadmapCutoff" role="status" aria-live="polite"></p>
+          <label><input id="pptxRoadmapLimit" type="checkbox"><span><strong id="pptxRoadmapLimitLabel">Export only the products that fit</strong><small>The cutoff above shows the last included product and the first excluded product. You can also reduce categories or the date range.</small></span></label>
         </fieldset>
         <p id="pptxRoadmapCoverage" class="pptx-roadmap-coverage"></p>
       </section>
