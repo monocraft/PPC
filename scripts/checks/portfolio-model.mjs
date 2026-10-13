@@ -165,48 +165,98 @@ const appSource = await readFile(new URL("../../public/js/app.js", import.meta.u
 // Exercise the actual initialization path with a last-visited category saved on
 // the device. Opening the app chooses the first visible category, while normal
 // navigation and imported-workspace restoration retain their own selection.
-const bootStart = appSource.indexOf("\nportfolio = loadPortfolio();") + 1;
-const bootEnd = appSource.indexOf("\nfunction persistPlcDraft(", bootStart);
-assert.ok(bootStart > 0 && bootEnd > bootStart);
 const loadDefinition = appSource.match(/^function loadPortfolio\([^]*?^\}/m)?.[0];
 const importDefinition = appSource.match(/^function normalizeImportedPortfolio\([^]*?^\}/m)?.[0];
-assert.ok(loadDefinition && importDefinition);
+const initializeDefinition = appSource.match(/^async function initializeWorkspace\([^]*?^\}/m)?.[0];
+const startDefinition = appSource.match(/^function startWorkspace\([^]*?^\}/m)?.[0];
+assert.ok(loadDefinition && importDefinition && initializeDefinition && startDefinition);
 const startupPortfolio = (first = "audio", activeCategoryId = "mice", version = 4) => ({
   version, activeCategoryId, settings: { timeline: { startMonth: "2026-01", endMonth: "2030-12" } },
   categories: [first, ...["audio", "mice", "console"].filter(id => id !== first)].map(id => ({ id, name: id,
-    board: { products: [{ id: `${id}-product`, name: `${id} product`, ffsDate: "2028-04-01", roadmap: { startMonth: "2028-07", endMonth: "2030-12" } }] } })),
+    board: { lanes: [{ id: `${id}-lane` }], products: [{ id: `${id}-product`, name: `${id} product`, ffsDate: "2028-04-01", roadmap: { startMonth: "2028-07", endMonth: "2030-12" } }] } })),
 });
+function bootHarness({ saved = null, prior = null, legacy = null, database = null, failDatabase = false, denyLegacy = false, holdRead = false, defaultFirst = 'audio' } = {}) {
+  const activation = [], stored = new Map(), baselineReads = [], writes = [], notices = [], events = [], features = [];
+  if (saved != null) stored.set("current", typeof saved === "string" ? saved : JSON.stringify(saved));
+  if (prior != null) stored.set("previous", typeof prior === "string" ? prior : JSON.stringify(prior));
+  if (legacy != null) stored.set("legacy", typeof legacy === "string" ? legacy : JSON.stringify(legacy));
+  const shell = { inert: false, setAttribute() {}, removeAttribute() {} }, status = { classList: { add() {}, remove() {} } }, message = { textContent: "" }, retry = { hidden: true };
+  let durable = typeof database === "string" || database === null ? database : JSON.stringify(database), release;
+  const boot = {
+    portfolio: null, activeCategoryId: null, localDateBaseline: null, workspaceOpening: true,
+    pendingLegacyImageBlobs: [], workspaceValidationPending: false,
+    STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
+    localStorage: { getItem(key) { if (denyLegacy) throw new Error("Synthetic denied legacy storage"); return stored.get(key) ?? null; } },
+    workspaceStorage: {
+      async read() { if (failDatabase) throw new Error("Synthetic database read failure"); if (holdRead) return new Promise(resolve => { release = resolve; }); return durable; },
+      async save(raw, options) { writes.push({ raw, options }); durable = raw; },
+    },
+    document: { querySelector: () => shell, getElementById: id => ({ workspaceOpeningStatus: status, workspaceOpeningMessage: message, workspaceOpeningRetry: retry })[id] },
+    window: { dispatchEvent: event => events.push(event.type) }, CustomEvent: class { constructor(type) { this.type = type; } },
+    showWorkspaceNotice: (...args) => notices.push(args), PortfolioNotifications: { resolve() {} },
+    ensurePortfolioSchema: value => ({ ...value, version: 4 }),
+    createDefaultPortfolio: () => startupPortfolio(defaultFirst, defaultFirst),
+    categoryDefinition: id => ({ id }), ensureBoardSchema: value => structuredClone(value), migrateLegacyProductImages() {},
+    PLCImporter: { snapshotDateValues(value) { baselineReads.push(structuredClone(value.categories)); return { unchanged: true }; } },
+    activateCategory(categoryId, options) { const category = boot.portfolio.categories.find(item => item.id === categoryId) || boot.portfolio.categories[0]; boot.activeCategoryId = category.id; boot.portfolio.activeCategoryId = category.id; activation.push({ id: category.id, options: { ...options } }); },
+    syncControls() {}, renderInspector() {}, setView() {}, initializeWorkspaceFeatures() { features.push(true); },
+    packageCodec: () => ({ normalizePackageInfo: value => value || null }),
+  };
+  vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${initializeDefinition}\n${startDefinition}`, boot);
+  return { boot, activation, stored, baselineReads, writes, notices, events, features, shell, retry, release: value => release(value), get durable() { return durable; } };
+}
 for (const [label, saved, prior, expected] of [
   ["saved last category", startupPortfolio(), null, "audio"],
   ["reordered category list", startupPortfolio("console"), null, "console"],
   ["previous workspace version", null, startupPortfolio("console", "mice", 3), "console"],
   ["first browser opening", null, null, "audio"],
-  ["unreadable local storage", "broken json", null, "audio"],
 ]) {
-  const activation = [], stored = new Map(), baselineReads = [];
-  if (saved != null) stored.set("current", typeof saved === "string" ? saved : JSON.stringify(saved));
-  if (prior != null) stored.set("previous", JSON.stringify(prior));
-  const boot = {
-    portfolio: null, activeCategoryId: null, localDateBaseline: null,
-    STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
-    localStorage: { getItem: key => stored.get(key) || null },
-    ensurePortfolioSchema: value => ({ ...value, version: 4 }),
-    createDefaultPortfolio: () => startupPortfolio("audio", "audio"),
-    PLCImporter: { snapshotDateValues(value) { baselineReads.push(structuredClone(value.categories)); return { unchanged: true }; } },
-    activateCategory(categoryId, options) { const category = boot.portfolio.categories.find(item => item.id === categoryId) || boot.portfolio.categories[0]; boot.activeCategoryId = category.id; boot.portfolio.activeCategoryId = category.id; activation.push({ id: category.id, options: { ...options } }); },
-    syncControls() {}, renderInspector() {}, setView() {}, flushPendingLegacyImages() {},
-    packageCodec: () => ({ normalizePackageInfo: value => value || null }),
-  };
-  vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${appSource.slice(bootStart, bootEnd)}`, boot);
+  const { boot, activation, stored, baselineReads, writes, events } = bootHarness({ saved, prior });
+  await boot.startWorkspace();
   assert.equal(boot.activeCategoryId, expected, `${label}: app initialization starts at the first listed category.`);
   assert.equal(activation.length, 1); assert.equal(activation[0].options.render, false); assert.equal(activation[0].options.fitVertical, true);
   assert.deepEqual(structuredClone(boot.portfolio.categories), baselineReads[0], "Startup navigation preserves every product, date, and roadmap record.");
+  assert.equal(writes.length, 1, "migration/default data must commit before startup activation"); assert.deepEqual(events, ['portfolio:workspace-ready']);
   if (saved && typeof saved !== "string") assert.equal(JSON.parse(stored.get("current")).activeCategoryId, "mice", "Loading does not rewrite the remembered selection before startup activation.");
   boot.activateCategory("mice", { render: true }); assert.equal(boot.activeCategoryId, "mice", "Normal navigation can still change categories in the same session.");
   const imported = boot.normalizeImportedPortfolio(startupPortfolio("audio", "console"));
   assert.equal(imported.activeCategoryId, "console", "Import normalization keeps the imported workspace's saved category.");
   const preserved = boot.loadPortfolio();
   if (saved && typeof saved !== "string" || prior) assert.equal(preserved.activeCategoryId, "mice", "Schema loading remains independent of the fresh-opening category policy.");
+}
+for (const [label, options] of [
+  ['corrupt current legacy JSON', { saved: 'broken json' }],
+  ['wrong-shape current legacy JSON', { saved: '{}' }],
+  ['corrupt previous legacy JSON', { prior: 'broken json' }],
+  ['corrupt v1 legacy JSON', { legacy: 'broken json' }],
+  ['denied legacy storage read', { denyLegacy: true }],
+  ['failed database read', { failDatabase: true }],
+  ['corrupt durable JSON', { database: 'broken json', saved: startupPortfolio() }],
+  ['valid JSON wrong durable shape', { database: '{}' }],
+  ['null durable category array', { database: { version: 4, categories: null } }],
+  ['empty durable category array', { database: { version: 4, categories: [] } }],
+  ['wrong durable version', { database: { ...startupPortfolio(), version: 999 } }],
+]) {
+  const h = bootHarness(options), legacyBefore = Array.from(h.stored);
+  await assert.rejects(h.boot.startWorkspace(), undefined, label);
+  assert.equal(h.activation.length, 0, label + ': no rendered default activation'); assert.equal(h.writes.length, 0, label + ': no seed/replacement durable write'); assert.equal(h.features.length, 0, label + ': no initialized master/features');
+  assert.equal(h.boot.portfolio, null); assert.equal(h.boot.workspaceOpening, true); assert.deepEqual(Array.from(h.stored), legacyBefore); assert.equal(h.retry.hidden, false, 'failure exposes accessible retry');
+}
+{
+  const legacy = { version: 1, lanes: [{ id: 'original-lane' }], products: [{ id: 'original-product', name: 'Legacy product', laneId: 'original-lane', specs: [{ id: 'original-spec', label: 'Legacy', value: 'Retained' }], privateSource: 'Retained source' }] };
+  const h = bootHarness({ legacy, defaultFirst: 'pc-gaming-audio' }); await h.boot.startWorkspace();
+  assert.deepEqual(structuredClone(h.boot.portfolio.categories[0].board), legacy, 'the supported v1 board migration retains all original product/source rows'); assert.equal(h.writes.length, 1);
+}
+{
+  const database = startupPortfolio('console'), h = bootHarness({ saved: startupPortfolio('audio'), database, holdRead: true });
+  const loading = h.boot.startWorkspace(); assert.equal(h.activation.length, 0); assert.equal(h.writes.length, 0); assert.equal(h.shell.inert, true);
+  h.release(JSON.stringify(database)); await loading;
+  assert.equal(h.boot.activeCategoryId, 'console', 'the durable DB wins over an older legacy selection'); assert.equal(h.writes.length, 0); assert.equal(h.shell.inert, false);
+}
+{
+  const large = startupPortfolio(), h = bootHarness({ database: { ...large, masterLocalBaseline: [{ exact: 'retained' }], masterLocalMerges: [{ sourceProduct: { specs: [{ id: 'original', raw: 'retained' }] } }], masterLocalAssetIds: { old: 'local' }, unknownEvidence: 'x'.repeat(5 * 1024 * 1024) } });
+  const durableBefore = h.durable; await h.boot.startWorkspace(); assert.equal(h.writes.length, 0); assert.equal(h.durable, durableBefore);
+  assert.equal(h.boot.portfolio.masterLocalMerges[0].sourceProduct.specs[0].raw, 'retained'); assert.equal(h.boot.portfolio.masterLocalAssetIds.old, 'local'); assert.equal(h.boot.portfolio.unknownEvidence.length, 5 * 1024 * 1024);
 }
 const standardStatusCases = [
   ["new", "NEW PRODUCT", "#5fd6c1"],
