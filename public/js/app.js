@@ -1498,6 +1498,14 @@ function cardSpecifications(product, categoryId = activeCategoryId) {
   });
 }
 
+function productCardTitle(product, categoryId) {
+  const name = String(product?.name || "");
+  // These canonical mat titles repeat the product type before their size.
+  // Keep the stored name complete, and preserve size/retail suffixes up front.
+  return categoryId === "accessories" && /^HyperX Pulsefire Mat - Gaming Mouse Pad - Cloth \((?:M|L|XL|2XL)\)(?: WM)?$/.test(name)
+    ? name.replace(" - Gaming Mouse Pad", "") : name;
+}
+
 function normalizedSpecLabel(label) {
   return String(label || "").trim().toLowerCase();
 }
@@ -2000,9 +2008,10 @@ function wrapText(context, text, x, y, maxWidth, lineHeight, maxLines = 2, align
   for (const word of words) {
     const test = line ? `${line} ${word}` : word;
     if (context.measureText(test).width > maxWidth && line) {
+      // Fill the final permitted line before eliding any remaining words.
+      if (lines.length === maxLines - 1) break;
       lines.push(line);
       line = word;
-      if (lines.length === maxLines - 1) break;
     } else {
       line = test;
     }
@@ -2442,7 +2451,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   context.fillStyle = UI_PALETTE.whiteSmoke;
   context.font = "700 16px Arial";
   context.textAlign = "center";
-  wrapText(context, product.name, x + CARD_WIDTH / 2, titleTop + 15, CARD_WIDTH - 24, 18, 2, "center");
+  wrapText(context, productCardTitle(product, layout.categoryId), x + CARD_WIDTH / 2, titleTop + 15, CARD_WIDTH - 24, 18, 2, "center");
 
   if (board.settings.showPrices) {
     context.fillStyle = UI_PALETTE.greyOlive;
