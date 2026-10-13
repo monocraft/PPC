@@ -6,6 +6,13 @@
   const escapeXml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]);
 
+  function containTop(sourceWidth, sourceHeight, x, y, width, height) {
+    if (![sourceWidth, sourceHeight, width, height].every((value) => Number.isFinite(value) && value > 0) ||
+        ![x, y].every(Number.isFinite)) throw new Error("PowerPoint content has invalid dimensions.");
+    const scale = Math.min(width / sourceWidth, height / sourceHeight);
+    return { x, y, w: sourceWidth * scale, h: sourceHeight * scale };
+  }
+
   function colorOptions(value, opacity = 1) {
     if (!value || value === "transparent") return { color: "FFFFFF", transparency: 100 };
     let color = String(value).replace(/^#/, "");
@@ -217,5 +224,5 @@
     download(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }), options.fileName);
   }
 
-  globalObject.PPTXEditable = Object.freeze({ addCard, registerSlide, groupSlideXml, serialize, writeFile });
+  globalObject.PPTXEditable = Object.freeze({ containTop, addCard, registerSlide, groupSlideXml, serialize, writeFile });
 }(globalThis));

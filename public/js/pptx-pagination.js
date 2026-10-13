@@ -149,12 +149,13 @@
             .map((row, slot) => ({ ...row, slot })));
         }
       } else {
-        // Turn all lanes in a band together so each lane stays in its row.
+        // Turn lanes together in their original order, packing the remaining
+        // rows at the top when a shorter lane has finished its continuation.
         const pageCount = Math.max(...band.map((rows) => rows.length));
         for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
           const rows = [];
-          band.forEach((lane, slot) => {
-            if (lane[pageIndex]) rows.push({ ...lane[pageIndex], slot });
+          band.forEach((lane) => {
+            if (lane[pageIndex]) rows.push({ ...lane[pageIndex], slot: rows.length });
           });
           addPage(rows);
         }

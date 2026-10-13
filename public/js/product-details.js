@@ -22,6 +22,27 @@
     return state;
   }
 
+  function applyTabSelection(workspace, selector, panelSelector, attribute, panelAttribute, selectedValue) {
+    for (const button of workspace.querySelectorAll(selector)) {
+      const selected = button.dataset[attribute] === selectedValue;
+      button.setAttribute("aria-selected", String(selected));
+      button.classList.toggle("is-active", selected);
+      button.tabIndex = selected ? 0 : -1;
+    }
+    for (const panel of workspace.querySelectorAll(panelSelector)) panel.classList.toggle("hidden", panel.dataset[panelAttribute] !== selectedValue);
+  }
+
+  function openTab(model, { surface = "viewer", tab = "overview" } = {}) {
+    if (!model?.id || !tabs.some(([key]) => key === tab)) return false;
+    surface = surface === "viewer" ? "viewer" : "split";
+    stateFor(surface, model.id).tab = tab;
+    const entry = mountedWorkspaces.get(surface);
+    if (entry?.model.id === model.id && entry.workspace.isConnected) {
+      applyTabSelection(entry.workspace, "[data-detail-tab]", "[data-detail-panel]", "detailTab", "detailPanel", tab);
+    }
+    return true;
+  }
+
   function readableDate(value) {
     const text = String(value ?? "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
@@ -167,8 +188,8 @@
       source: `${trackerRecords.length ? `<div data-detail-launch-content="source">${launchContent(model, selectedLaunch, "source")}</div>${model.source?.records?.length ? `<details class="product-detail-source-disclosure product-detail-ascm-source"><summary>ASCM source records (${model.source.records.length})</summary>${ascmContent}</details>` : ""}` : ascmContent}`,
     };
     const panels = {
-      overview: `<div class="product-detail-all-specs"><h3 class="product-detail-section-title">Specifications</h3>${specs}</div>`,
-      dates: `<div class="product-detail-calendar"><h3 class="product-detail-section-title">Key dates</h3><div class="product-detail-dates">${(model.dates || []).map(field).join("")}</div><div class="product-detail-lifecycle-summary"><h3 class="product-detail-section-title">Lifecycle</h3><div class="product-detail-lifecycle">${(model.lifecycle || []).map((item) => `<span${kindAttribute("lifecycle", item.key, lifecycleKinds)}><small>${escape(item.label)}</small><strong>${escape(item.value)}</strong></span>`).join("")}</div></div></div>`,
+      overview: `<div class="product-detail-all-specs">${specs}</div>`,
+      dates: `<div class="product-detail-calendar"><div class="product-detail-dates">${(model.dates || []).map(field).join("")}</div><div class="product-detail-lifecycle-summary"><h3 class="product-detail-section-title">Lifecycle</h3><div class="product-detail-lifecycle">${(model.lifecycle || []).map((item) => `<span${kindAttribute("lifecycle", item.key, lifecycleKinds)}><small>${escape(item.label)}</small><strong>${escape(item.value)}</strong></span>`).join("")}</div></div></div>`,
       skus: `<div class="product-detail-list-heading"><h3 class="product-detail-section-title">HP part numbers<span class="product-detail-count">${model.skus?.length || 0}</span></h3><span>Copy a SKU to use it elsewhere</span></div><div class="product-detail-sku-content">${skuPages}${optionPages}${colorwaySchedules}</div>`,
       more: `<div class="product-detail-more-tabs" role="tablist" aria-label="Additional product information">${moreTabs.map(([key, label]) => `<button type="button" role="tab" id="${prefix}-${key}-tab" data-detail-more="${key}" aria-controls="${prefix}-${key}" aria-selected="${state.more === key}" tabindex="${state.more === key ? 0 : -1}">${label}</button>`).join("")}</div>${launchPicker}${moreTabs.map(([key]) => `<div id="${prefix}-${key}" role="tabpanel" aria-labelledby="${prefix}-${key}-tab" data-detail-more-panel="${key}" class="${state.more === key ? "" : "hidden"}">${morePanels[key]}</div>`).join("")}`,
     };
@@ -186,16 +207,7 @@
       const buttons = [...workspace.querySelectorAll(selector)];
       function select(button, focus = false) {
         state[key] = button.dataset[attribute];
-        for (const item of buttons) {
-          const selected = item === button;
-          item.setAttribute("aria-selected", String(selected));
-          item.classList.toggle("is-active", selected);
-          item.tabIndex = selected ? 0 : -1;
-        }
-        for (const panel of workspace.querySelectorAll(panelSelector)) {
-          const panelKey = key === "tab" ? panel.dataset.detailPanel : panel.dataset.detailMorePanel;
-          panel.classList.toggle("hidden", panelKey !== state[key]);
-        }
+        applyTabSelection(workspace, selector, panelSelector, attribute, key === "tab" ? "detailPanel" : "detailMorePanel", state[key]);
         if (focus) button.focus();
       }
       buttons.forEach((button, index) => {
@@ -271,5 +283,5 @@
     container.querySelector("[data-detail-close]")?.addEventListener("click", () => onClose?.());
   }
 
-  root.PortfolioDetails = Object.freeze({ render, bind, focusMatch });
+  root.PortfolioDetails = Object.freeze({ render, bind, focusMatch, openTab });
 })(globalThis);
