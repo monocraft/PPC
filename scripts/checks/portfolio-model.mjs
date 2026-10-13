@@ -337,6 +337,7 @@ Object.assign(presentationSandbox, {
   PortfolioDetails: { render: () => "Details", bind() {} }, productDateHistoryOptions: () => ({}), copyTextToClipboard() {},
 });
 vm.runInContext(
+  appSource.slice(appSource.indexOf("function productCardTitle("), appSource.indexOf("function normalizedSpecLabel(")) +
   appSource.slice(appSource.indexOf("function drawCard("), appSource.indexOf("function roadmapRange(")) +
   appSource.slice(appSource.indexOf("function renderSplitProduct("), appSource.indexOf("function updateLinkedViewButton(")),
   presentationSandbox,
@@ -418,6 +419,7 @@ const priceSandbox = {
 };
 vm.createContext(priceSandbox);
 vm.runInContext(
+  appSource.slice(appSource.indexOf("function productCardTitle("), appSource.indexOf("function normalizedSpecLabel(")) +
   appSource.slice(appSource.indexOf("function productPriceText("), appSource.indexOf("function parseHexColor(")) +
   appSource.slice(appSource.indexOf("function roadmapProductBarLabel("), appSource.indexOf("function drawRoadmapTo(")) +
   appSource.slice(appSource.indexOf("function drawCard("), appSource.indexOf("function roadmapRange(")) +
