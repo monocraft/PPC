@@ -4,15 +4,15 @@
 
   const colors = Object.freeze({
     page: "#1A1B1C", surface: "#242527", header: "#333538", input: "#4D5054",
-    label: "#BBBCC0", text: "#F2F4F8", placeholder: "#D5D7DC", border: "#333538", borderStrong: "#676A70", controlBorder: "#83858B",
+    label: "#BBBCC0", text: "#D5D7DC", placeholder: "#D5D7DC", border: "#333538", borderStrong: "#676A70", controlBorder: "#83858B",
     alert: "#FF2525", alertSurface: "#331D1D", alertText: "#FF8A8A",
   });
   const stageColors = Object.freeze({
-    launched: colors.input, "in-development": colors.borderStrong, "in-planning": colors.header,
+    launched: colors.input, "in-development": "#56595E", "in-planning": colors.header,
   });
   const accents = Object.freeze({
     newProduct: colors.label, embargo: colors.alert,
-    inDevelopment: colors.borderStrong, sunsetting: colors.input,
+    inDevelopment: stageColors["in-development"], sunsetting: colors.input,
   });
   const lifecycleTones = Object.freeze({ ...stageColors, embargo: colors.alert, "end-of-life": colors.surface });
   // Compatibility names refer only to presentation colors. Saved color choices

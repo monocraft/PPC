@@ -264,7 +264,7 @@ for (const [label, options] of [
 const standardStatusCases = [
   ["new", "NEW PRODUCT", "#BBBCC0"],
   ["embargo", "UPCOMING UNDER EMBARGO", "#FF2525"],
-  ["in-development", "IN-DEVELOPMENT", "#676A70"],
+  ["in-development", "IN-DEVELOPMENT", "#56595E"],
   ["sunsetting", "SUNSETTING", "#4D5054"],
 ];
 const standardStatusSource =
@@ -548,8 +548,8 @@ assert.equal(model.layoutProductLanes(geometryLanes, geometryLayout, { top: 80 }
 assert.deepEqual(model.layoutProductLanes([], geometryLayout), { rows: [], height: 0 });
 assert.equal(JSON.stringify({ lanes: geometryLanes, layout: geometryLayout }), geometryInputs, "geometry never changes saved lanes or card layout");
 
-// Inline details use horizontal room only. Dimensions, drawing, lane labels,
-// hit testing, and dragging keep every lane at its original position.
+// Inline details grow only their selected lane. Drawing, lane labels, hit
+// testing and dragging use the same reflowed rows; exports retain closed rows.
 const laneProducts = geometryLanes.map((lane) => ({ id: `p-${lane.id}`, laneId: lane.id, order: 0 }));
 laneProducts.push({ id: "p-following", laneId: "first", order: 1 });
 let visibleLaneProducts = laneProducts;
@@ -561,12 +561,12 @@ const laneSandbox = {
   activeCategoryId: "geometry", searchQuery: "", productCardMotion: null, productCardMotionFrame: null,
   viewerInfoProductId: "p-middle", viewerInfoProgress: 1,
   sortedLanes: () => geometryLanes, visibleProducts: () => visibleLaneProducts, productCardLayout: () => geometryLayout,
-  viewerInfoVisualWidth: () => 540,
+  viewerInfoVisualWidth: () => 500, viewerInfoVisualHeight: () => 600, viewerInfoStacked: () => false,
   PRODUCT_MIN_ZOOM: .2, LANE_TOP: 34, GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, SIDE_PADDING: 40,
   inspectorOpen: false, inspector: { offsetWidth: 0 }, canvasScroll: { clientWidth: 800, scrollTop: 0 },
   laneRailInner: { style: {}, innerHTML: "" }, UI_PALETTE: { charcoal800: "#171717" },
   roundRect: (...args) => { laneBackgrounds.push(args.slice(1, 5)); },
-  drawCard: (_context, item, x, y) => { drawnLaneCards.push({ id: item.id, x, y }); },
+  drawCard: (_context, item, x, y, selected, layout) => { drawnLaneCards.push({ id: item.id, x, y, selected, height: layout.cardHeight, extended: Boolean(layout.viewerExtended) }); },
   escapeHtml: (value) => String(value || ""), selectedId: null, renderedCards: [], dragState: null, panState: null, productLayoutEditing: true,
   canvas: { style: {}, hasPointerCapture: () => false },
   renderBoard() {},
@@ -595,7 +595,8 @@ for (const drawZoom of [.2, .65, 1, 1.5, 2]) {
   for (const lane of geometryLanes) {
     laneSandbox.viewerInfoProductId = `p-${lane.id}`;
     const dimensions = laneSandbox.getCanvasDimensions();
-    closeTo(dimensions.height, 34 + 1110 + 20, "opening details preserves the original canvas height");
+    const selectedIndex = geometryLanes.findIndex((item) => item.id === lane.id), extra = Math.max(0, 600 / drawZoom - geometryLayout.cardHeight);
+    closeTo(dimensions.height, 34 + 1110 + 20 + extra, "the temporary selected lane accommodates the complete attached reading area");
     drawnLaneCards.length = 0;
     laneBackgrounds.length = 0;
     laneSandbox.drawBoardTo(laneContext, dimensions);
@@ -603,9 +604,11 @@ for (const drawZoom of [.2, .65, 1, 1.5, 2]) {
     const railRows = [...laneSandbox.laneRailInner.innerHTML.matchAll(/style="top:([\d.]+)px;height:([\d.]+)px"/g)];
     assert.equal(railRows.length, geometryLanes.length);
     dimensions.laneRows.forEach((row, index) => {
-      closeTo(row.top, baseGeometry.rows[index].top, "opening details never moves a lane");
+      closeTo(row.top, baseGeometry.rows[index].top + (index > selectedIndex ? extra : 0), "only following lanes move smoothly below the expanded card");
       const item = drawnLaneCards.find((card) => card.id === `p-${row.lane.id}`);
       closeTo(item.y, row.top, "drawn card uses centralized lane position");
+      closeTo(item.height, geometryLayout.cardHeight + (index === selectedIndex ? extra : 0), "only the viewed source card stretches with its reading area");
+      assert.equal(item.extended, index === selectedIndex, "the joined source card delegates its outline to the combined surface");
       closeTo(laneBackgrounds[index][1], row.top - 4, "lane background follows row top");
       closeTo(laneBackgrounds[index][3], row.contentHeight + 8, "lane background retains the original card height");
       closeTo(Number(railRows[index][1]), (row.top - 4) * drawZoom, "lane rail follows the same scaled position");
@@ -618,7 +621,7 @@ laneSandbox.zoom = .65;
 laneSandbox.viewerInfoProductId = "p-first";
 const openDimensions = laneSandbox.getCanvasDimensions();
 laneSandbox.viewerInfoProgress = .01;
-assert.equal(laneSandbox.getCanvasDimensions().height, openDimensions.height, "opening animation never reserves vertical space");
+closeTo(laneSandbox.getCanvasDimensions().height, 34 + 1110 + 20 + (openDimensions.height - (34 + 1110 + 20)) * .01, "lane reflow follows the same opening progress instead of jumping");
 laneSandbox.viewerInfoProgress = 1;
 laneSandbox.dragState = {
   productId: "p-last", pointerId: 1, moved: true, board: laneSandbox.board,
@@ -649,10 +652,11 @@ drawnLaneCards.length = 0;
 laneSandbox.drawBoardTo(laneContext, laneSandbox.getCanvasDimensions());
 const liveFollowingX = drawnLaneCards.find((item) => item.id === "p-following").x;
 const exportDimensions = laneSandbox.getCanvasDimensions({ includeViewer: false });
-assert.equal(exportDimensions.height, 34 + 1110 + 20, "exports preserve the same vertical geometry as the live board");
+assert.equal(exportDimensions.height, 34 + 1110 + 20, "exports omit all temporary inline reading height");
 drawnLaneCards.length = 0;
 laneSandbox.drawBoardTo(laneContext, exportDimensions, false);
 assert.equal(drawnLaneCards.find((item) => item.id === "p-following").x, 18 + 256, "exports contain no temporary horizontal details gap");
+assert.ok(drawnLaneCards.every((item) => item.height === geometryLayout.cardHeight && !item.extended), "exported source cards retain the original geometry and do not acquire UI wings");
 assert.ok(liveFollowingX > 18 + 256, "the live board still makes horizontal room beside the viewed product");
 // View actions operate on independent product and timeline scales. Execute
 // their real bindings with small scroll/DOM adapters so moving a control

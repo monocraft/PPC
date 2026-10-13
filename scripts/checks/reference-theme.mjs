@@ -17,7 +17,7 @@ const theme = sandbox.PortfolioTheme;
 assert.ok(Object.isFrozen(theme) && Object.isFrozen(theme.colors));
 assert.deepEqual({ ...theme.colors }, {
   page: "#1A1B1C", surface: "#242527", header: "#333538", input: "#4D5054",
-  label: "#BBBCC0", text: "#F2F4F8", placeholder: "#D5D7DC", border: "#333538", borderStrong: "#676A70", controlBorder: "#83858B",
+  label: "#BBBCC0", text: "#D5D7DC", placeholder: "#D5D7DC", border: "#333538", borderStrong: "#676A70", controlBorder: "#83858B",
   alert: "#FF2525", alertSurface: "#331D1D", alertText: "#FF8A8A",
 }, "the user's reference tones are the semantic foundation");
 assert.equal(theme.fontFace, "Jost");
@@ -167,7 +167,7 @@ const nativeCardGroup = slide.match(/<p:grpSp>[\s\S]*?<\/p:grpSp>/)?.[0];
 const nativeCardLines = [...nativeCardGroup.matchAll(/<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/g)].map((match) => match[0]);
 assert.ok(nativeCardLines.every((line) => /^<a:ln>\s*<\/a:ln>$/.test(line) || /<a:noFill\s*\/?>|<a:alpha\b[^>]*\bval="0"/.test(line)), `the delivered editable card group has no visible decorative perimeter or row rules: ${nativeCardLines.join(" | ")}`);
 assert.ok(slide.includes('<a:latin typeface="Jost"'), "actual PPTX native text retains the shared font");
-assert.ok(slide.includes('<a:srgbClr val="1A1B1C"') && slide.includes('<a:srgbClr val="242527"') && slide.includes('<a:srgbClr val="F2F4F8"'));
+assert.ok(slide.includes('<a:srgbClr val="1A1B1C"') && slide.includes('<a:srgbClr val="242527"') && slide.includes('<a:srgbClr val="D5D7DC"'));
 assert.ok(slide.includes("<a:t>USB-C</a:t>") && slide.includes("<a:t>TEST123</a:t>") && slide.includes("<p:pic>"));
 const declarations = [...(await archive.file("[Content_Types].xml").async("string")).matchAll(/PartName="([^"]+)"/g)].map((match) => match[1].slice(1));
 assert.ok(declarations.every((part) => archive.file(part)), "the actual serializer emits no missing declared presentation parts");
