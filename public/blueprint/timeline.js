@@ -41,17 +41,17 @@
     legend.innerHTML = '<span><i class="hx-timeline-history-key"></i>History / actual</span><span><i class="hx-timeline-plan-key"></i>Workbook plan</span>';
     caption.append(revenue, legend);
     const scaleRow = make('div', 'hx-timeline-scale-row'), scaleLabel = make('span', 'hx-timeline-scale-label'), scaleControls = make('div', 'hx-timeline-scale-controls');
-    scaleControls.setAttribute('role', 'group'); scaleControls.setAttribute('aria-label', 'Category comparison scale');
+    scaleControls.setAttribute('role', 'group'); scaleControls.setAttribute('aria-label', 'Comparison scale');
     const scaleButtons = ['trend', 'values'].map(mode => {
       const button = make('button', 'hx-timeline-scale-button', mode === 'trend' ? 'Trend' : 'Values'); button.type = 'button'; button.dataset.scale = mode;
-      button.title = mode === 'trend' ? 'Compare category growth from a shared base year' : 'Compare reported revenue in USD'; scaleControls.append(button);
+      button.title = mode === 'trend' ? 'Compare selected growth from a shared base year' : 'Compare source revenue in USD'; scaleControls.append(button);
       listen(button, 'click', () => { if (mode === comparisonScale) return; stop(); config.comparisonScale = mode; config.onScaleChange?.(mode); update(); });
       return button;
     });
     scaleRow.append(scaleLabel, scaleControls); scaleRow.hidden = true;
     const scaleReason = make('p', 'hx-timeline-scale-reason'); scaleReason.hidden = true;
     const comparisonLegend = make('div', 'hx-timeline-comparisons');
-    comparisonLegend.setAttribute('role', 'list'); comparisonLegend.setAttribute('aria-label', 'Category revenue at the selected planning year'); comparisonLegend.hidden = true;
+    comparisonLegend.setAttribute('role', 'list'); comparisonLegend.setAttribute('aria-label', 'Selected revenue at the planning year'); comparisonLegend.hidden = true;
     const track = make('div', 'hx-timeline-track');
     const svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', `0 0 1000 ${TRACE_HEIGHT}`); svg.setAttribute('preserveAspectRatio', 'none'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('hx-timeline-trace');
@@ -107,14 +107,14 @@
       if (!periods.length) return;
       const label = `${yearName(period)} · ${kind.label} · ${comparisons.length ? `Selected total revenue ${exactMoney(values[selectedIndex])} · ${comparisonReadout(selectedIndex)}` : `Revenue ${exactMoney(values[selectedIndex])}`}`;
       year.textContent = yearName(period); status.textContent = kind.label; status.dataset.kind = kind.plan ? 'plan' : kind.short.toLowerCase();
-      revenue.textContent = comparisons.length ? `Selected total ${money(values[selectedIndex])} · ${comparisons.length} ${comparisons.length === 1 ? 'category' : 'categories'}` : `Revenue ${money(values[selectedIndex])}`;
+      revenue.textContent = comparisons.length ? `Selected total ${money(values[selectedIndex])} · ${comparisons.length} ${comparisons.length === 1 ? config.itemSingular || 'category' : config.itemPlural || 'categories'}` : `Revenue ${money(values[selectedIndex])}`;
       revenue.title = comparisons.length ? `Selected total revenue ${exactMoney(values[selectedIndex])}; ${comparisonReadout(selectedIndex)}` : exactMoney(values[selectedIndex]);
       const allKinds = comparisons.length ? comparisons.flatMap(trace => trace.kinds) : kinds;
       legend.innerHTML = `${allKinds.some(item => !item.plan && !item.unclassified) ? '<span><i class="hx-timeline-history-key"></i>History / actual</span>' : ''}${allKinds.some(item => item.plan) ? '<span><i class="hx-timeline-plan-key"></i>Workbook plan</span>' : ''}${allKinds.some(item => item.unclassified) ? '<span><i class="hx-timeline-unclassified-key"></i>Reported, basis unclassified</span>' : ''}`;
-      scaleRow.hidden = !comparisons.length;
+      scaleRow.hidden = comparisons.length < 2;
       scaleLabel.textContent = indexed ? `Trend index · ${yearName(comparisonModel.basePeriod)} = 100` : 'Revenue · USD';
       scaleButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.scale === comparisonScale)));
-      const reason = comparisons.length && comparisonScale === 'trend' && !indexed ? String(comparisonModel?.reason || 'Indexed comparison is unavailable for this selection. Showing revenue values.') : '';
+      const reason = comparisons.length > 1 && comparisonScale === 'trend' && !indexed ? String(comparisonModel?.reason || 'Indexed comparison is unavailable for this selection. Showing revenue values.') : '';
       scaleReason.textContent = reason; scaleReason.hidden = !reason;
       comparisonLegend.hidden = !comparisons.length; comparisonLegend.replaceChildren(); comparisonPoints.replaceChildren();
       comparisons.forEach(trace => {

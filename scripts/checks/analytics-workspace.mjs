@@ -214,7 +214,7 @@ workspace.importButton.emit("click");
 assert.equal(workspace.posts.at(-1).message.type, "ppc:blueprint:import");
 assert.ok(workspace.posts.every(post => post.origin === workspace.window.location.origin), "Commands always name the expected origin; wildcard delivery is forbidden.");
 assert.ok(workspace.posts.every(post => Object.keys(post.message).every(key => ["type", "view", "preferences"].includes(key))), "Parent commands contain only navigation preferences, with no source payload or pricing capability.");
-assert.ok(workspace.posts.every(post => Object.keys(post.message.preferences || {}).every(key => ['year','category','revenue','margin','spend','scale','groupId','projectId','skuId'].includes(key))));
+assert.ok(workspace.posts.every(post => Object.keys(post.message.preferences || {}).every(key => ['year','category','revenue','margin','spend','scale','groupId','projectId','skuId','compare'].includes(key))));
 
 const validMaliciousState = { type: "ppc:blueprint:state", state: { view: "investment", year: 2029, category: "Other", revenue: 30, margin: 10, spend: 30 }, sourceLabel: "Spoofed source" };
 const trustedState = { url: workspace.window.location.href, source: workspace.source.textContent, height: workspace.frame.style.height };
@@ -276,6 +276,20 @@ scopedLink.emit('popstate');
 assert.equal(scopedLink.posts.at(-1).message.preferences.projectId, '');
 assert.equal(scopedLink.posts.at(-1).message.preferences.skuId, '', 'A category-level history route clears stale child selections.');
 assert.equal(scopedLink.loads, 1);
+const selectedProducts = JSON.stringify(['product-12','product-14']);
+const comparisonLink = workspaceFixture('https://example.test/PPC/analytics.html?analysis=blueprint&year=2026&category=Headsets#blueprint/performance?compare=' + encodeURIComponent(selectedProducts));
+assert.equal(scopeParams(new URL(comparisonLink.frame.src)).get('compare'), selectedProducts);
+assert.equal(comparisonLink.window.location.searchParams.has('compare'), false, 'Product selections stay outside HTTP query parameters.');
+comparisonLink.message({type:'ppc:blueprint:state',state:{view:'performance',compare:JSON.stringify(['SKU/001','SKU#002','SKU/001'])}});
+assert.equal(scopeParams(comparisonLink.window.location).get('compare'), JSON.stringify(['SKU/001','SKU#002']), 'Product comparison identifiers retain punctuation and are deduplicated.');
+for (const invalid of ['not JSON', JSON.stringify({rows:['secret']}), JSON.stringify(['x\u0000y']), JSON.stringify(Array.from({length:51},(_,i)=>String(i))), JSON.stringify(['x'.repeat(241)])]) {
+  comparisonLink.message({type:'ppc:blueprint:state',state:{view:'performance',compare:invalid}});
+  assert.equal(scopeParams(comparisonLink.window.location).get('compare'), JSON.stringify(['SKU/001','SKU#002']), 'Malformed comparisons cannot replace valid selections.');
+}
+comparisonLink.frame.emit('load');
+comparisonLink.window.location = new URL('https://example.test/PPC/analytics.html?analysis=blueprint#blueprint/performance'); comparisonLink.emit('popstate');
+assert.equal(comparisonLink.posts.at(-1).message.preferences.compare, '[]', 'History clears a comparison when the route returns to an unselected scope.');
+assert.equal(scopeParams(comparisonLink.window.location).has('compare'), false);
 const capability = "a".repeat(64), pricingLink = workspaceFixture(`https://example.test/PPC/analytics.html#ppc-link=${capability}`);
 assert.equal(pricingLink.window.location.hash, `#ppc-link=${capability}`, "The existing pricing bridge consumes its own temporary capability.");
 pricingLink.tabs[1].emit("click");
