@@ -1170,7 +1170,10 @@
       if (update.kind === "merge") {
         const board = boardForPlacement(nextManifest, update.categoryId, update.laneId);
         nextProduct = clone(update.fullProduct);
-        if (entry) Object.assign(entry.product, nextProduct);
+        if (entry) {
+          Object.assign(entry.product, nextProduct);
+          if (!own(nextProduct, "plc")) delete entry.product.plc;
+        }
         else {
           nextProduct.order = board.products.filter((product) => product.laneId === update.laneId).reduce((maximum, product) => Number.isFinite(product.order) ? Math.max(maximum, product.order) : maximum, -1) + 1;
           board.products.push(nextProduct);
@@ -1211,6 +1214,9 @@
       } else {
         nextProduct = applyProductValues(entry.product, update.values);
         Object.assign(entry.product, nextProduct);
+        // Object.assign cannot carry the deliberate omission used to clear
+        // source evidence. Keep the stored record aligned with its receipt.
+        if (!own(nextProduct, "plc")) delete entry.product.plc;
         if (update.values.cardPlacement) Object.assign(metadata.products[update.productId], { categoryId: entry.categoryId, laneId: nextProduct.laneId });
       }
       const revisions = metadata.products[update.productId].revisions;

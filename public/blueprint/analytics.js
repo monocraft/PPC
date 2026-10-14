@@ -18,14 +18,19 @@
     const source = (sheet, address) => ({ sheet, cell: address, value: value(sheet, address), ...(cell(sheet,address)?.formula ? { formula: cell(sheet,address).formula, cached:true } : {}) });
     function rows(sheet, headerRow = 1, start = headerRow + 1, end) {
       const cells = lookup[sheet] || {}, result = [], heads = {};
-      let max = 0;
+      const populatedRows = new Set();
       for (const address of Object.keys(cells)) {
         const match = address.match(/^([A-Z]+)(\d+)$/);
         if (!match) continue;
-        const r = Number(match[2]); max = Math.max(max, r);
+        const r = Number(match[2]);
+        if (!Number.isSafeInteger(r) || r < 1 || r > 1048576) throw new Error('The workbook contains an invalid worksheet row.');
+        populatedRows.add(r);
         if (r === headerRow && value(sheet,address) !== null) heads[match[1]] = String(value(sheet,address));
       }
-      for (let r = start; r <= (end || max); r++) {
+      const sourceRows = [...populatedRows].filter(r => r >= start && (end === undefined || r <= end)).sort((a, b) => a - b);
+      if (sourceRows.length > 100000 || sourceRows.length * Object.keys(heads).length > 2000000) throw new Error('The workbook planning table exceeds the supported record limit.');
+      // Source sheets are sparse. A distant cell must not allocate empty rows.
+      for (const r of sourceRows) {
         const row = { _row:r, _sheet:sheet, _sources:{} };
         for (const [col, label] of Object.entries(heads)) { row[label] = value(sheet, col+r); row._sources[label] = source(sheet,col+r); }
         if (Object.keys(heads).some(col => value(sheet,col+r) !== null)) result.push(row);

@@ -4,7 +4,8 @@ import vm from 'node:vm';
 import '../../public/js/package-codec.js';
 import '../../public/js/master-model.js';
 const app=await readFile(new URL('../../public/js/app.js',import.meta.url),'utf8'),html=await readFile(new URL('../../public/index.html',import.meta.url),'utf8');
-const names=['workspaceRecoveryCurrent','showWorkspaceRecovery','prepareWorkspaceRecovery','restoreWorkspaceRecovery','validatePackageManifest','validatePackageImageReferences'];
+const names=['workspaceRecoveryCurrent','showWorkspaceRecovery','prepareWorkspaceRecovery','restoreWorkspaceRecovery','validatePackageManifest','validatePackageImageReferences','normalizeIsolatedPortfolioImport','remapImportedLocalImages',
+ 'dataUriToBlob','createImageAssetMetadata','ensureImageAssetRegistry','migrateLegacyProductImages','findPortfolioProductLocation','clonePortfolioData','restoreMergeDraft','undoProductMergeDraft','discardProductDrafts'];
 const functions=names.map(name=>{const match=app.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`,'m'));assert(match,name);return match[0];}).join('\n');
 const clone=value=>JSON.parse(JSON.stringify(value));
 const seed={version:4,activeCategoryId:'synthetic',categories:[{id:'synthetic',name:'Synthetic',board:{lanes:[{id:'lane',label:'Fixture'}],products:[{id:'synthetic-product',laneId:'lane',name:'Invented backup',order:0,specs:[],partSkus:[],variantGroups:[],roadmap:{startMonth:'2027-01',endMonth:'2029-01'}}],settings:{}}}],imageAssets:[]};
@@ -13,7 +14,7 @@ function harness({record=' { damaged saved data \n',legacy=null}={}){
  const ui=new Map(),shell={inert:true,setAttribute(){}};
  const element=id=>{if(!ui.has(id))ui.set(id,{hidden:false,disabled:false,textContent:'',classList:{remove(){}},setAttribute(){}});return ui.get(id);};
  const images=new Map(),writes=[],credentials={key:'synthetic-old-key',connection:'synthetic-old-connection'};
- const context={Blob,TextDecoder,TextEncoder,JSON,Map,Set,Object,Array,String,RegExp,Error,
+ const context={Blob,TextDecoder,TextEncoder,JSON,Map,Set,Object,Array,String,RegExp,Error,atob,
   workspaceOpening:true,workspaceRecovery:null,workspaceRecoveryPlan:null,workspaceRecoveryBusy:false,workspaceRecoveryExportText:null,
   portfolio:null,board:null,activeCategoryId:null,localDateBaseline:null,packageOperationInProgress:false,saveTimer:null,
   pendingLegacyImageBlobs:[],STORAGE_KEY:'fixture',PREVIOUS_STORAGE_KEY:'previous',LEGACY_STORAGE_KEY:'legacy',CATEGORY_DEFINITIONS:[{id:'synthetic'}],
@@ -52,6 +53,43 @@ function harness({record=' { damaged saved data \n',legacy=null}={}){
  const missingImage=clone(seed);missingImage.imageAssets=[{id:'missing',sourceType:'local'}];missingImage.categories[0].board.products[0].imageAssetId='missing';await assert.rejects(h.review(missingImage),/image files.*unavailable/);assert.equal(h.writes.length,0);
  await assert.rejects(h.review({version:1,categories:[]}),/complete portfolio/);
 }
+for(const laterSurvivorEdit of [false,true]){
+ const value=clone(seed),survivor=value.categories[0].board.products[0];
+ value.imageAssets=[{id:'shared-image',sourceType:'local',mimeType:'image/png'}];
+ survivor.imageAssetId='shared-image';survivor.imageUrl='data:image/png;base64,bmV3IHJlY292ZXJ5IHBpeGVscw==';
+ survivor.variantGroups=[{id:'colors',type:'color',items:[{id:'black',imageAssetId:'shared-image'}]}];
+ const keeper={...clone(survivor),categoryId:'synthetic',name:'Original keeper'};
+ const donor={...clone(survivor),categoryId:'synthetic',id:'donor',name:'Original donor'};
+ const removed={...clone(survivor),id:'removed',name:'Deleted before backup'};
+ const acceptedManifest=clone(value);acceptedManifest.categories[0].board.products.push(donor,removed);
+ const accepted=clone(globalThis.PortfolioMasterModel.snapshot(acceptedManifest).products);
+ const originalGuard=globalThis.PortfolioMasterModel.productVersion(survivor);
+ value.masterLocalBaseline=accepted;
+ value.masterLocalMerges=[{undoId:'recovered-undo',productId:survivor.id,sourceProductId:donor.id,keeperProduct:keeper,sourceProduct:donor,
+  base:clone(accepted[0]),sourceBase:clone(accepted[1]),references:[],mergedVersion:originalGuard}];
+ value.masterLocalRemovedProducts={donor:clone(donor),removed:clone(removed)};
+ if(laterSurvivorEdit)survivor.name='Edited after merge';
+ const h=harness();h.context.PortfolioMasterUI={getSession:()=>null};h.context.discardedDrafts=new Map();h.context.updateDraftViews=()=>{};
+ h.context.normalizeImportedPortfolio=input=>{const draft=clone(input);h.context.migrateLegacyProductImages(draft);return draft;};
+ const queued={id:'shared-image',blob:new Blob(['prior queued pixels'])};h.context.pendingLegacyImageBlobs.push(queued);
+ h.images.set('shared-image',new Blob(['prior saved pixels']));await h.show();
+ const plan=await h.review(value);assert.equal(h.writes.length,0);assert.equal(h.context.pendingLegacyImageBlobs[0],queued);assert.equal(h.context.pendingLegacyImageBlobs.length,1);
+ const nextId=plan.draft.categories[0].board.products[0].imageAssetId;assert.notEqual(nextId,'shared-image');
+ assert.equal(await plan.images[0].blob.text(),'new recovery pixels');
+ for(const record of [plan.draft.masterLocalMerges[0].keeperProduct,plan.draft.masterLocalMerges[0].sourceProduct,...Object.values(plan.draft.masterLocalRemovedProducts)]){
+  assert.equal(record.imageAssetId,nextId);assert.equal(record.variantGroups[0].items[0].imageAssetId,nextId);assert.equal(record.imageUrl,undefined);
+ }
+ assert.deepEqual(clone(plan.draft.masterLocalBaseline),value.masterLocalBaseline);
+ assert.deepEqual(clone(plan.draft.masterLocalMerges[0].base),value.masterLocalMerges[0].base);
+ assert.deepEqual(clone(plan.draft.masterLocalMerges[0].sourceBase),value.masterLocalMerges[0].sourceBase);
+ await h.restore(plan);assert.equal(await h.images.get('shared-image').text(),'prior saved pixels');
+ assert.equal(h.context.undoProductMergeDraft('recovered-undo'),!laterSurvivorEdit);
+ if(laterSurvivorEdit)assert.equal(h.context.portfolio.masterLocalMerges[0].mergedVersion,originalGuard);
+ else for(const product of h.context.portfolio.categories[0].board.products)assert.equal(await h.images.get(product.imageAssetId).text(),'new recovery pixels');
+ h.context.discardProductDrafts(['removed']);
+ const restored=h.context.portfolio.categories[0].board.products.find(product=>product.id==='removed');
+ assert.equal(restored.name,'Deleted before backup');assert.equal(restored.imageAssetId,nextId);assert.equal(await h.images.get(restored.imageAssetId).text(),'new recovery pixels');
+}
 const main=html.indexOf('<main class="app-shell">');for(const id of ['workspaceRecoveryExport','workspaceRecoveryFile','workspaceRecoveryKey','workspaceRecoveryReview','workspaceRecoveryRestore'])assert.ok(html.indexOf(`id="${id}"`)<main,`${id} remains accessible outside the inert workspace`);
 assert.match(app,/await workspaceStorage\.recover\(plan\.serialized/);assert.match(app,/await workspaceStorage\.rollbackRecovery\(receipt\)/);assert.match(app,/await showWorkspaceRecovery\(\);/);
-console.log('Workspace recovery checks passed: exact raw export outside inert shell, reviewed complete backups, no-write preview, explicit validated replacement, quota/activation/rollback faults, cross-tab and legacy stale refusal, missing-image/duplicate validation, retained credentials and protected prior records.');
+console.log('Workspace recovery checks passed: exact raw export outside inert shell, reviewed complete backups, no-write preview, explicit validated replacement, quota/activation/rollback faults, cross-tab and legacy stale refusal, missing-image/duplicate validation, isolated retry queues, preserved merge undo/deleted-record images and stale-edit guards, retained canonical baselines, credentials and protected prior records.');

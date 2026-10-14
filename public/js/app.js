@@ -7074,6 +7074,49 @@ function normalizeImportedPortfolio(parsed) {
   throw new Error("Unsupported portfolio file. Use Export data (.data), Export full project (.pkg), or a categories-only catalog-data.js baseline.");
 }
 
+function normalizeIsolatedPortfolioImport(parsed) {
+  // A previous image retry must not suppress an incoming inline image merely
+  // because both workspaces used the same image identity.
+  const previousPendingImages = pendingLegacyImageBlobs.splice(0);
+  try { return normalizeImportedPortfolio(parsed); }
+  finally {
+    const importedPendingImages = pendingLegacyImageBlobs.splice(0);
+    for (const entry of previousPendingImages) pendingLegacyImageBlobs.push(entry);
+    for (const entry of importedPendingImages) pendingLegacyImageBlobs.push(entry);
+  }
+}
+
+function remapImportedLocalImages(draft, replacements, { replaceAliases = false } = {}) {
+  if (!replacements.size) { if (replaceAliases) draft.masterLocalAssetIds = {}; return; }
+  const products = new Map(draft.categories.flatMap(category => category.board.products.map(product => [product.id, product])));
+  const merges = Array.isArray(draft.masterLocalMerges) ? draft.masterLocalMerges : [];
+  const undoableMerges = new Set(merges.filter(intent => products.has(intent.productId)
+    && typeof globalThis.PortfolioMasterModel?.productVersion === "function"
+    && globalThis.PortfolioMasterModel.productVersion(products.get(intent.productId)) === intent.mergedVersion));
+  const remapProductImages = product => {
+    if (!product || typeof product !== "object") return;
+    if (replacements.has(product.imageAssetId)) { product.imageAssetId = replacements.get(product.imageAssetId); delete product.imageUrl; }
+    for (const group of product.variantGroups || []) for (const variant of group.items || []) {
+      if (replacements.has(variant.imageAssetId)) variant.imageAssetId = replacements.get(variant.imageAssetId);
+    }
+  };
+  for (const asset of draft.imageAssets) if (replacements.has(asset.id)) asset.id = replacements.get(asset.id);
+  for (const product of products.values()) remapProductImages(product);
+  for (const product of Object.values(draft.masterLocalRemovedProducts || {})) remapProductImages(product);
+  for (const intent of merges) {
+    remapProductImages(intent.keeperProduct); remapProductImages(intent.sourceProduct);
+    if (undoableMerges.has(intent)) intent.mergedVersion = globalThis.PortfolioMasterModel.productVersion(products.get(intent.productId));
+  }
+  if (replaceAliases) draft.masterLocalAssetIds = Object.fromEntries(replacements);
+  else {
+    const aliases = Object.entries(draft.masterLocalAssetIds || {}), aliasedIds = new Set(aliases.map(([, local]) => local));
+    draft.masterLocalAssetIds = Object.fromEntries([
+      ...aliases.map(([original, local]) => [original, replacements.get(local) || local]),
+      ...[...replacements].filter(([original]) => !aliasedIds.has(original) && !Object.hasOwn(draft.masterLocalAssetIds || {}, original)),
+    ]);
+  }
+}
+
 function importJson(file) {
   const reader = new FileReader();
   reader.onload = async () => {
@@ -7082,17 +7125,33 @@ function importJson(file) {
     try {
       if (packageOperationInProgress || workspaceOpening) throw new Error("Wait for the current workspace operation to finish before loading new data.");
       const parsed = parsePortfolioImportText(reader.result);
+      // Validate workspace records before schema migration can supply defaults
+      // or filter categories. Categories-only catalog baselines remain supported.
+      if ([2, 3, 4].includes(parsed?.version)
+        || Array.isArray(parsed?.categories) && parsed.categories.some(category => category && Object.hasOwn(category, "board"))
+        || parsed?.version === 1 && (Object.hasOwn(parsed, "products") || Object.hasOwn(parsed, "lanes"))) validatePackageManifest(parsed);
       if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading new data.");
       packageOperationInProgress = true; importing = true; clearTimeout(saveTimer);
       const expectedCurrent = JSON.stringify(portfolio);
-      const draft = normalizeImportedPortfolio(parsed);
+      const draft = normalizeIsolatedPortfolioImport(parsed);
+      validatePackageManifest(draft);
+      validatePackageImageReferences(draft);
       if (globalThis.PortfolioMasterModel) {
         const comparison = globalThis.PortfolioMasterModel.snapshot(draft).products;
         // A .data file is a complete working backup, including pending edits.
         // Rebase only inputs that did not supply their comparison baseline.
         if (!Object.hasOwn(draft, "masterLocalBaseline")) draft.masterLocalBaseline = comparison;
       }
-      const images = pendingLegacyImageBlobs.splice(pendingStart);
+      // Inline images in older data backups can reuse identities from the
+      // current workspace. Stage fresh identities so activation rollback can
+      // never overwrite or delete that workspace's original pixels.
+      const replacements = new Map();
+      const images = pendingLegacyImageBlobs.splice(pendingStart).map(entry => {
+        const nextId = `data-${id()}`;
+        replacements.set(entry.id, nextId);
+        return { id: nextId, blob: entry.blob };
+      });
+      remapImportedLocalImages(draft, replacements);
       await commitPackageDraft(draft, expectedCurrent, images, { cleanupImages: false });
       globalThis.PortfolioMasterUI?.disconnect();
       globalThis.PortfolioMasterUI?.markImported(portfolio.masterLocalBaseline || []);
@@ -8206,7 +8265,7 @@ async function prepareWorkspaceRecovery(file, key = "") {
       throw new Error("Choose a complete portfolio data backup or project package. A categories-only file cannot recover your saved work.");
     }
     validatePackageManifest(parsed);
-    const draft = normalizeImportedPortfolio(JSON.parse(JSON.stringify(parsed)));
+    const draft = normalizeIsolatedPortfolioImport(JSON.parse(JSON.stringify(parsed)));
     const model = globalThis.PortfolioMasterModel, comparison = model?.snapshot(draft).products;
     if (comparison && (entries || !Object.hasOwn(draft, "masterLocalBaseline"))) draft.masterLocalBaseline = comparison;
     validatePackageImageReferences(draft);
@@ -8224,12 +8283,7 @@ async function prepareWorkspaceRecovery(file, key = "") {
         images.push({ id: nextId, blob });
       } else if (!(await imageStoreGet(asset.id))?.size) throw new Error("This data backup refers to image files that are unavailable on this device. Choose a complete project package with its images.");
     }
-    for (const category of draft.categories) for (const product of category.board.products) {
-      if (replacements.has(product.imageAssetId)) { product.imageAssetId = replacements.get(product.imageAssetId); delete product.imageUrl; }
-      for (const group of product.variantGroups || []) for (const variant of group.items) if (replacements.has(variant.imageAssetId)) variant.imageAssetId = replacements.get(variant.imageAssetId);
-    }
-    if (entries) draft.masterLocalAssetIds = Object.fromEntries(replacements);
-    else if (replacements.size) draft.masterLocalAssetIds = Object.fromEntries(Object.entries(draft.masterLocalAssetIds || {}).map(([original, local]) => [original, replacements.get(local) || local]));
+    remapImportedLocalImages(draft, replacements, { replaceAliases: Boolean(entries) });
     if (!workspaceRecoveryCurrent(recovery)) throw new Error("The saved workspace changed while reviewing the backup. Retry opening before restoring it.");
     return { recovery, draft, images, serialized: JSON.stringify(draft), fileName: file.name,
       productCount: draft.categories.reduce((count, category) => count + category.board.products.length, 0) };

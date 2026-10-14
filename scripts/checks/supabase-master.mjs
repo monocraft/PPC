@@ -323,6 +323,22 @@ assert.deepEqual(legacySnapshot.packageInfo, { version: 1, updatedAt: '2026-10-0
 assert.equal(legacyDatabase.inspect().manifest.packageInfo.comments, seed.packageInfo.comments, 'correcting the read-only footer needs neither a database rewrite nor an artificial business save');
 assert.equal(legacyDatabase.committed, 0);
 
+const sourceRemovalDatabase = inMemoryRpc();
+const sourceRemovalSeed = clone(seed);
+sourceRemovalSeed.categories[0].board.products[0].plc = { version: 1, sourceFile: 'Retired PLC.xlsx' };
+await sourceRemovalDatabase.call('bootstrap', { manifest: sourceRemovalSeed, sourceSha, fingerprint: 'd'.repeat(64) });
+const sourceRemovalGateway = createMasterGateway({ env, rpc: (operation, payload) => sourceRemovalDatabase.call(operation, payload) });
+const sourceRemovalBase = model.snapshot(sourceRemovalSeed).products[0];
+const sourceRemovalResponse = await sourceRemovalGateway(new Request('https://example.supabase.co/functions/v1/ppc-master/api/master/save', {
+  method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://monocraft.github.io' },
+  body: JSON.stringify({ key, sessionId: 'source-clear-session', requestId: 'source-clear-request', changes: [change(sourceRemovalBase, { plc: null })] }),
+}));
+assert.equal(sourceRemovalResponse.status, 200);
+const sourceRemovalResult = await sourceRemovalResponse.json();
+assert.equal(sourceRemovalResult.savedFields, 1);
+assert.equal(sourceRemovalResult.snapshot.products[0].values.plc, null, 'The gateway response reflects its accepted source-clear receipt.');
+assert.equal(Object.hasOwn(sourceRemovalDatabase.inspect().manifest.categories[0].board.products[0], 'plc'), false, 'The gateway commits the cleared source to the accepted manifest.');
+
 const sql = await readFile(resolve('supabase/migrations/202610080001_private_master.sql'), 'utf8');
 for (const operation of ['read', 'bootstrap', 'commit', 'rate', 'presence', 'ack', 'failure']) {
   assert(sql.includes(`revoke all on function public.ppc_master_${operation}(jsonb) from public, anon, authenticated`));
