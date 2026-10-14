@@ -36,3 +36,6 @@ coverage/
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# Private Blueprint source audits and local workbook snapshots
+/outputs/hx-blueprint-review-*/

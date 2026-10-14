@@ -54,6 +54,9 @@ jobs:
           mkdir -p _site/css _site/js _site/data
           cp public/index.html _site/
           cp public/analytics.html _site/
+          cp public/css/analytics-workspace.css _site/css/
+          cp public/js/analytics-workspace.js _site/js/
+          cp -R public/blueprint _site/
           cp public/analytics-auth.html _site/
           cp public/css/sellout-dashboard.css _site/css/
           cp public/css/sellout-months.css _site/css/

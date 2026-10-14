@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23242527'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-size='20' fill='%2320CBDD' font-family='Arial'%3EH%3C/text%3E%3C/svg%3E">
+  <title>Blueprint · PPC Analytics</title>
+  <script src="embedded-mode.js"></script>
+  <link rel="stylesheet" href="dashboard.css">
+  <link rel="stylesheet" href="timeline.css">
+  <link rel="stylesheet" href="category-strip.css">
+  <link rel="stylesheet" href="explorer-pane.css">
+  <link rel="stylesheet" href="embed.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="#overview" aria-label="HX Blueprint overview"><span class="brand-mark">HX<span></span></span><span class="brand-text">BLUEPRINT<small>Portfolio intelligence</small></span></a>
+      <div class="sidebar-kicker">WORKSPACE</div>
+      <nav id="navigation">
+        <button data-view="overview" class="nav-item active"><span class="nav-icon" data-icon="overview"></span>Overview</button>
+        <button data-view="performance" class="nav-item"><span class="nav-icon" data-icon="performance"></span>Performance</button>
+        <button data-view="products" class="nav-item"><span class="nav-icon" data-icon="products"></span>Products &amp; NPI</button>
+        <button data-view="investment" class="nav-item"><span class="nav-icon" data-icon="investment"></span>Investment</button>
+        <button data-view="scenarios" class="nav-item"><span class="nav-icon" data-icon="scenarios"></span>Scenarios</button>
+        <button data-view="source" class="nav-item"><span class="nav-icon" data-icon="source"></span>Source &amp; quality</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="local-badge"><span class="status-dot"></span>Local workspace</div>
+        <p>Your workbook is the source.<br>Your browser is the workspace.</p>
+        <button id="import-button" class="button button-quiet"><span data-icon="upload"></span>Import workbook</button>
+        <input id="import-file" type="file" accept=".xlsm,.xlsx" hidden>
+        <div class="sidebar-version">BLUEPRINT / EXPLORATION V1</div>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <button id="menu-button" class="icon-button mobile-menu" aria-label="Toggle navigation" aria-expanded="false"><span data-icon="menu"></span></button>
+        <div class="breadcrumb">HX GBU <span>/</span> <strong id="breadcrumb-view">Overview</strong></div>
+        <div class="topbar-actions"><span class="source-pill"><span class="status-dot"></span><span id="source-badge">No workbook loaded</span></span><button id="source-button" class="icon-button" aria-label="View source and data quality"><span data-icon="database"></span></button></div>
+      </header>
+      <main id="main" tabindex="-1">
+        <section class="page-heading">
+          <div><div class="eyebrow" id="page-eyebrow">BUSINESS AT A GLANCE</div><h1 id="page-title">Portfolio overview</h1><p id="page-description">A clear view of performance, opportunity, and what comes next.</p></div>
+        </section>
+        <section id="portfolio-explorer" class="portfolio-explorer" aria-label="Portfolio selection">
+          <header class="explorer-pane-header">
+            <div><span class="explorer-pane-kicker">PORTFOLIO EXPLORER</span><h2>Category and planning year</h2></div>
+            <div id="explorer-selection" class="explorer-pane-selection" aria-live="polite"></div>
+          </header>
+          <div id="category-explorer" aria-label="Choose a portfolio category"></div>
+          <div id="planning-timeline" class="planning-timeline" aria-label="Explore the planning years"></div>
+          <div id="context-strip" class="context-strip"></div>
+        </section>
+        <div id="view-content" aria-live="polite"></div>
+        <footer class="page-footer"><span id="footer-source">No source imported</span><span>Source values · Transparent assumptions · Local processing</span></footer>
+      </main>
+    </div>
+  </div>
+  <dialog id="detail-dialog" class="detail-dialog"><div class="dialog-heading"><div><div class="eyebrow" id="dialog-eyebrow">SOURCE DETAIL</div><h2 id="dialog-title">Details</h2></div><button id="close-dialog" class="icon-button" aria-label="Close detail"><span data-icon="close"></span></button></div><div id="dialog-content"></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="source.js"></script>
+  <script src="source-store.js"></script>
+  <script src="analytics.js"></script>
+  <script src="importer.js"></script>
+  <script src="timeline.js"></script>
+  <script src="category-strip.js"></script>
+  <script src="dashboard.js?v=unified-explorer-1"></script>
+</body>
+</html>

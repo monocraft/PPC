@@ -1,0 +1,28 @@
+/* The Analytics hub supplies navigation and the surrounding workspace. */
+html[data-embedded="true"],html[data-embedded="true"] body{min-height:0;overflow-x:hidden}
+html[data-embedded="true"] .app-shell{display:block;min-height:0}
+html[data-embedded="true"] .sidebar,html[data-embedded="true"] .topbar{display:none}
+html[data-embedded="true"] .workspace{margin-left:0;width:100%}
+html[data-embedded="true"] main{max-width:none;padding:22px 28px 12px}
+html[data-embedded="true"] .page-footer{padding-inline:0}
+html[data-embedded="true"] .page-heading h1{font-size:27px}
+html[data-embedded="true"] .detail-dialog.is-host-positioned{position:fixed;top:var(--host-dialog-top,20px);left:50%;transform:translateX(-50%);margin:0;width:min(720px,calc(100% - 32px));max-height:var(--host-dialog-height,600px)}
+.blueprint-empty{padding:62px 24px;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:24px}
+.blueprint-empty h2{font-size:23px;margin:12px 0}
+.blueprint-empty p{color:var(--muted);max-width:510px;margin:0 auto 22px;font-size:12px;line-height:1.8}
+.blueprint-empty .button{width:auto;min-width:150px}
+.blueprint-empty-symbol{font-size:38px;color:var(--teal);line-height:1}
+#portfolio-explorer[hidden]{display:none}
+@media(max-width:760px){html[data-embedded="true"] main{padding:20px 20px 12px}}
+@media(max-width:480px){html[data-embedded="true"] main{padding:15px 14px 12px}.blueprint-empty{padding:40px 18px}}
+.comparison-scope-note{font-size:11px;color:var(--muted);margin:0 0 18px;line-height:1.7}
+.comparison-scope-note strong{font-weight:500;color:var(--secondary)}
+.comparison-legend{display:flex;flex-wrap:wrap;gap:9px 22px;margin:0 0 12px;padding-inline:8px}
+.comparison-legend-item{display:grid;grid-template-columns:7px auto auto;align-items:center;gap:8px;color:var(--secondary);font-size:11px}
+.comparison-legend-item i{height:7px;width:7px;border-radius:50%}
+.comparison-legend-item strong{font-size:12px;font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+.comparison-legend-item small{grid-column:2/-1;color:var(--muted);font-size:9px;margin-top:-5px}
+.comparison-chart-basis{font-size:9px;color:var(--muted);line-height:1.6;margin:2px 8px 5px}
+.category-comparison svg{width:100%;height:auto;max-width:1000px;max-height:none;display:block;margin-inline:auto}
+.chart-wrap:has(.category-comparison){display:block}
+@media(max-width:480px){.comparison-legend{gap:8px 16px}.comparison-legend-item{font-size:10px;gap:6px}.comparison-legend-item strong{font-size:11px}}
