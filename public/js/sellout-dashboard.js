@@ -63,13 +63,26 @@
     try { await storage("readwrite", { snapshot: state.snapshot, prices: state.prices, shortlist: state.shortlist, ppcProjection: state.ppcProjection, pricingSource: state.pricingSource }); return true; }
     catch (_) { message("This browser could not save analytics locally. The current view works; save an analytics snapshot to keep your changes.", true); return false; }
   }
+  function retailerIcon(store) {
+    const brand = store.toLowerCase().replace(/[^a-z0-9]/g, ""), icons = {
+      amazon: '<path d="M3 14c5 4 12 5 18-1M18 12l4 .5-1 4"/>',
+      bestbuy: '<path d="M3 5h13l6 7-6 7H3Z"/><circle cx="7" cy="12" r="1.3"/>',
+      target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
+      walmart: '<path d="M12 2v5M12 17v5M3.3 7l4.3 2.5M16.4 14.5l4.3 2.5M3.3 17l4.3-2.5M16.4 9.5 20.7 7" stroke-width="2.5"/>',
+    };
+    if (Object.hasOwn(icons, brand)) return `<svg class="so-retailer-icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icons[brand]}</svg>`;
+    const words = store.match(/[\p{L}\p{N}]+/gu) || [], initials = words.length > 1 ? Array.from(words[0])[0] + Array.from(words.at(-1))[0] : Array.from(words[0] || store).slice(0, 2).join("");
+    return `<span class="so-retailer-monogram" aria-hidden="true">${esc(initials.toUpperCase())}</span>`;
+  }
+  function renderStoreOptions(stores) {
+    const container = $("storeOptions"), buttons = [...container.querySelectorAll("button[data-store]")];
+    if (buttons.length !== stores.length || buttons.some((button, index) => button.dataset.store !== stores[index])) container.innerHTML = stores.map(store => `<button class="so-retailer-toggle" type="button" data-store="${esc(store)}" aria-label="${esc(store)}" aria-pressed="false">${retailerIcon(store)}<span>${esc(store)}</span></button>`).join("");
+    container.querySelectorAll("button[data-store]").forEach(button => button.setAttribute("aria-pressed", String(!state.storesNone && (!state.stores.length || state.stores.includes(button.dataset.store)))));
+  }
   function controls() {
+    if (!state.snapshot) return;
     const o = M.options(state.snapshot);
-    $("storeOptions").innerHTML = o.stores.map(s => `<label><input type="checkbox" data-store="${esc(s)}" ${!state.storesNone && (!state.stores.length || state.stores.includes(s)) ? "checked" : ""}><span>${esc(s)}</span></label>`).join("");
-    $("storeLabel").textContent = state.storesNone ? "No retailers" : state.stores.length ? state.stores.length === 1 ? state.stores[0] : `${state.stores.length} selected` : "All retailers";
-    $("productLabel").textContent = state.productsNone ? "No SKUs" : state.products.length ? state.products.length === 1 ? state.products[0] : `${state.products.length} selected` : "All SKUs";
-    $("storeAll").checked = !state.storesNone && !state.stores.length;
-    $("storeAll").indeterminate = !state.storesNone && state.stores.length > 0;
+    renderStoreOptions(o.stores);
     renderProductOptions();
     const oldCategory = $("categoryFilter").value;
     $("categoryFilter").innerHTML = '<option value="">All categories</option>' + o.categories.map(c => `<option>${esc(c)}</option>`).join("");
@@ -81,10 +94,21 @@
   }
   function renderProductOptions() {
     if (!state.snapshot) return;
-    const q = $("productSearch").value.trim().toLowerCase();
-    $("productAll").checked = !state.productsNone && !state.products.length;
-    $("productAll").indeterminate = !state.productsNone && state.products.length > 0;
-    $("productOptions").innerHTML = M.options(state.snapshot).products.filter(p => `${p.sku} ${p.product} ${(p.aliases || []).join(" ")}`.toLowerCase().includes(q)).map(p => `<label><input type="checkbox" data-product="${esc(p.sku)}" ${!state.productsNone && (!state.products.length || state.products.includes(p.sku)) ? "checked" : ""}><span>${esc(niceName(p.product))}<small>${esc(p.sku)} · ${esc(p.category)}</small></span></label>`).join("");
+    const q = $("productSearch").value.trim().toLowerCase(), products = M.options(state.snapshot).products;
+    const count = state.productsNone ? 0 : state.products.length ? products.filter(product => state.products.includes(product.sku)).length : products.length;
+    $("productLabel").textContent = count === 0 ? "None" : count === products.length ? "All" : `${count} selected`;
+    $("productSelectionCount").textContent = `${count} selected`;
+    const visible = products.filter(product => `${product.sku} ${product.product} ${(product.aliases || []).join(" ")}`.toLowerCase().includes(q));
+    const container = $("productOptions"), inputs = [...container.querySelectorAll("input[data-product]")];
+    if (inputs.length !== visible.length || inputs.some((input, index) => input.dataset.product !== visible[index].sku)) container.innerHTML = visible.map(product => `<label><input type="checkbox" data-product="${esc(product.sku)}"><span>${esc(niceName(product.product))}<small>${esc(product.sku)} · ${esc(product.category)}</small></span></label>`).join("");
+    container.querySelectorAll("input[data-product]").forEach(input => { input.checked = !state.productsNone && (!state.products.length || state.products.includes(input.dataset.product)); });
+  }
+  function positionProductMenu() {
+    const picker = $("productPicker"); if (!picker.open) return;
+    const menu = picker.querySelector(".so-picker-menu"), viewport = document.documentElement.clientWidth || root.innerWidth;
+    menu.style.maxWidth = `${Math.max(0, viewport - 36)}px`;
+    const box = picker.getBoundingClientRect(), width = menu.getBoundingClientRect().width;
+    menu.style.left = `${Math.max(18, Math.min(box.left, viewport - width - 18)) - box.left}px`; menu.style.right = "auto";
   }
   function filters() {
     let products = state.productsNone ? ["__no_products_selected__"] : [...state.products];
@@ -847,11 +871,12 @@
   $("sheetChoice").onchange = () => { state.pending = { snapshot: state.sheets[Number($("sheetChoice").value)] }; importSummary(); };
   $("openSource").onclick = $("editPrices").onclick = $("sourceFooterButton").onclick = $("reportInfo").onclick = $("coverageNotice").onclick = openSource;
   $("productSearch").oninput = renderProductOptions;
-  $("storeOptions").onchange = e => { const store = e.target.dataset.store; if (!store) return; setFilterSelection("stores", store, e.target.checked); controls(); update(true); };
+  $("productPicker").ontoggle = positionProductMenu;
+  root.addEventListener("resize", positionProductMenu);
+  $("storeOptions").onclick = e => { const button = e.target.closest?.("button[data-store]"); if (!button || !$("storeOptions").contains(button) || !state.snapshot) return; const store = button.dataset.store, selected = !state.storesNone && (!state.stores.length || state.stores.includes(store)); stopTimeline(); setFilterSelection("stores", store, !selected); controls(); update(true); };
   $("productOptions").onchange = e => { const sku = e.target.dataset.product; if (!sku) return; setFilterSelection("products", sku, e.target.checked); productSelectionChanged(); controls(); update(true); };
-  $("storeAll").onchange = e => { stopTimeline(); setAllFilters("stores", e.target.checked); controls(); update(true); };
-  $("productAll").onchange = e => { setAllFilters("products", e.target.checked); productSelectionChanged(); controls(); update(true); };
-  app.querySelectorAll("[data-clear]").forEach(b => b.onclick = () => { stopTimeline(); setAllFilters(b.dataset.clear); if (b.dataset.clear === "products") productSelectionChanged(); controls(); update(true); });
+  $("productAll").onclick = () => { setAllFilters("products", true); productSelectionChanged(); controls(); update(true); };
+  $("productClear").onclick = () => { setAllFilters("products", false); productSelectionChanged(); controls(); update(true); };
   for (const id of ["categoryFilter", "bandFilter", "coverage", "periodPreset"]) $(id).onchange = () => { stopTimeline(); update(true); };
   for (const id of ["startDate", "endDate"]) $(id).onchange = () => { stopTimeline(); $("periodPreset").value = "custom"; update(); };
   $("comparison").onchange = () => { stopTimeline(); update(); };
