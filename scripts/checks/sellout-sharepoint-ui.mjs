@@ -69,8 +69,12 @@ const initialActive = captureActive();
 const assertUnchanged = () => { assert.equal(state.snapshot, active); assert.equal(captureActive(), initialActive, "Reading/reviewing imports cannot mutate the active workspace before Apply."); assert.equal(persistence.length, 0); };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const link = "https://northwind.sharepoint.com/:x:/g/EXAMPLEopaqueToken_123-ABC?e=fixture&CID=fixture-id";
+const selectAction = action => {
+  $("importButton").value = action; $("importButton").event("change");
+  assert.equal($("importButton").value, "", "A completed action restores the Load data prompt for repeated use.");
+};
 const beginLink = () => {
-  $("importLinkButton").click(); $("sharepointLink").value = link;
+  selectAction("sharepoint"); $("sharepointLink").value = link;
   const submit = $("sharepointLinkForm").event("submit"); assert.equal(submit.defaultPrevented, true);
   assert.equal($("sharepointOpen").href, link); assert.equal($("sharepointLinkReady").hidden, false);
 };
@@ -123,7 +127,9 @@ $("workbookFile").select(textFile("plain.json", JSON.stringify(fixture("Plain JS
 assert.equal(state.pending.snapshot.sourceUrl, undefined, "A failed linked JSON selection cannot contaminate a later ordinary JSON import."); assertUnchanged();
 handoff(); $("sharepointWorkbookFile").select({ name: "bad.xlsx", size: 100, workbook: async () => { throw new Error("Fixture workbook decode failure"); } }); await flush();
 assert.match(messages.at(-1).text, /Fixture workbook decode failure/); assert.equal(locals().selectedSharepointLink, null);
-$("importFileButton").click(); $("workbookFile").select(csvFile()); await flush();
+const fileClicks = $("workbookFile").clicks;
+selectAction("file"); assert.equal($("workbookFile").clicks, fileClicks + 1);
+$("workbookFile").select(csvFile()); await flush();
 assert.equal(state.pending.snapshot.sourceUrl || null, null); assert.equal(state.pending.snapshot.rows[0].values[0], 0); assertUnchanged();
 $("workbookFile").select(workbook("ordinary.xlsx", [fixture("Ordinary workbook")])); await flush();
 assert.equal(state.pending.snapshot.sourceUrl, undefined); assertUnchanged();
