@@ -684,24 +684,35 @@
     if (!s || !v.ok) { $("importError").textContent = v?.errors.join(" ") || "No valid workbook selected."; $("applyImport").disabled = true; return; }
     $("importError").textContent = ""; $("applyImport").disabled = false;
     const a = M.analyze(s, { comparison: "none", coverage: "available" });
-    $("importReview").innerHTML = `<div class="so-source-info"><strong>${esc(s.title)}</strong><p>${esc(s.sheet || "Table")} · ${s.rows.length} rows · ${a.products.length} SKUs · ${a.stores.length} retailers</p><p>${day(s.periods[0].date, true)} – ${day(s.periods.at(-1).date, true)}</p><p>${fmt(a.totals.current)} net reported units · ${fmt(a.totals.missingCells)} missing cells</p>${s.warnings?.length ? `<ul>${s.warnings.map(w => `<li>${esc(typeof w === "string" ? w : w.message)}</li>`).join("")}</ul>` : ""}</div>`;
+    $("importReview").innerHTML = `<div class="so-source-info"><strong>${esc(s.title)}</strong><p>${esc(s.sheet || "Table")} · ${s.rows.length} rows · ${a.products.length} SKUs · ${a.stores.length} retailers</p><p>${day(s.periods[0].date, true)} – ${day(s.periods.at(-1).date, true)}</p><p>${fmt(a.totals.current)} net reported units · ${fmt(a.totals.missingCells)} missing cells</p>${s.sourceUrl ? '<p>Your provided source link will be saved with this local report.</p>' : ""}${s.warnings?.length ? `<ul>${s.warnings.map(w => `<li>${esc(typeof w === "string" ? w : w.message)}</li>`).join("")}</ul>` : ""}</div>`;
   }
-  async function readImport(file) {
+  let importRun = 0;
+  async function readImport(file, { sourceUrl = null } = {}) {
     if (!file) return;
+    const run = ++importRun;
     message(`Reading ${file.name}…`);
     try {
       const ext = file.name.split(".").at(-1).toLowerCase();
+      const sourceLink = sourceUrl === null ? null : root.PPCSelloutSharePoint.inspectLink(sourceUrl);
+      if (sourceLink && !["xlsx", "csv"].includes(ext)) throw new Error("Choose the downloaded XLSX or CSV workbook. Use Choose file for other backups.");
       const sizeLimit = ext === "pkg" ? root.PortfolioPackage.MAX_PACKAGE_BYTES : 40 * 1024 * 1024;
       if (file.size > sizeLimit) throw new Error(`Choose a file of at most ${sizeLimit / 1024 / 1024} MiB.`);
       if (ext === "pkg") { privateFile = file; openPrivate("import"); message(""); return; }
-      if (ext === "xlsx") { state.sheets = await workbookMatrices(file); state.pending = { snapshot: state.sheets[0] }; }
-      else if (ext === "json") { const data = JSON.parse(await file.text()); state.pending = root.PPCSelloutPrivate.sanitizeWorkspace(data.snapshot ? data : { snapshot: data }); state.sheets = [state.pending.snapshot]; }
-      else if (ext === "csv") { state.pending = { snapshot: M.normalizeWorkbookRows(M.parseCsv(await file.text()), { title: file.name, sheet: "CSV" }) }; state.sheets = [state.pending.snapshot]; }
+      let sheets, pending;
+      if (ext === "xlsx") { sheets = await workbookMatrices(file); pending = { snapshot: sheets[0] }; }
+      else if (ext === "json") { const data = JSON.parse(await file.text()); pending = root.PPCSelloutPrivate.sanitizeWorkspace(data.snapshot ? data : { snapshot: data }); sheets = [pending.snapshot]; }
+      else if (ext === "csv") { pending = { snapshot: M.normalizeWorkbookRows(M.parseCsv(await file.text()), { title: file.name, sheet: "CSV" }) }; sheets = [pending.snapshot]; }
       else throw new Error("Choose an XLSX, CSV, JSON or encrypted analytics package.");
+      if (run !== importRun) return;
+      if (sourceLink) {
+        sheets = sheets.map(snapshot => ({ ...snapshot, sourceUrl: sourceLink.url }));
+        pending = { ...pending, snapshot: sheets[0] };
+      }
+      state.sheets = sheets; state.pending = pending;
       $("sheetChoiceLabel").hidden = state.sheets.length < 2; $("sheetChoice").innerHTML = state.sheets.map((s, i) => `<option value="${i}">${esc(s.sheet)}</option>`).join("");
       importSummary(); $("importDialog").showModal(); message("");
-    } catch (error) { message(error.message, true); }
-    $("workbookFile").value = "";
+    } catch (error) { if (run === importRun) message(error.message, true); }
+    finally { if (run === importRun) $("workbookFile").value = ""; }
   }
   async function applySnapshot(snapshot, prices = {}, shortlist = [], ppcProjection = state.ppcProjection, pricingSource = state.pricingSource) {
     const v = M.validateSnapshot(snapshot); if (!v.ok) throw new Error(v.errors.join(" "));
@@ -763,7 +774,38 @@
     const prices = Object.entries(state.prices); if (prices.length) lines.push("", "## USD MSRP sources", "", "| SKU | MSRP USD | Source / note |", "|---|---:|---|", ...prices.map(([sku, p]) => `| ${safe(sku)} | ${p.msrp.toFixed(2)} | ${safe(p.source)} |`));
     download(planningOnly ? "ppc-planning-brief.md" : "market-performance-brief.md", lines.join("\n"), "text/markdown;charset=utf-8");
   }
-  $("importButton").onclick = $("emptyImport").onclick = () => $("workbookFile").click(); $("workbookFile").onchange = e => readImport(e.target.files[0]);
+  const chooseFile = () => { $("importPicker").open = false; $("workbookFile").click(); };
+  $("importFileButton").onclick = $("emptyImport").onclick = chooseFile;
+  $("workbookFile").onchange = e => readImport(e.target.files[0]);
+  let sharepointLink = null, selectedSharepointLink = null;
+  function clearSharepointLink() {
+    sharepointLink = null; $("sharepointLinkReady").hidden = true; $("sharepointError").textContent = "";
+    $("sharepointOpen").removeAttribute("href"); $("sharepointHost").textContent = "";
+  }
+  function openSharepointLink() {
+    $("importPicker").open = false; selectedSharepointLink = null; clearSharepointLink(); $("sharepointLink").value = ""; $("sharepointDialog").showModal();
+  }
+  $("importLinkButton").onclick = $("emptyLinkImport").onclick = openSharepointLink;
+  $("sharepointLink").oninput = clearSharepointLink;
+  $("sharepointLinkForm").onsubmit = event => {
+    event.preventDefault(); clearSharepointLink();
+    try {
+      sharepointLink = root.PPCSelloutSharePoint.inspectLink($("sharepointLink").value);
+      $("sharepointOpen").href = sharepointLink.url; $("sharepointHost").textContent = sharepointLink.host;
+      $("sharepointLinkReady").hidden = false;
+    } catch (error) { $("sharepointError").textContent = error.message; }
+  };
+  $("sharepointChooseFile").onclick = () => {
+    if (!sharepointLink) return;
+    selectedSharepointLink = sharepointLink.url; $("sharepointDialog").close(); $("sharepointWorkbookFile").click();
+  };
+  $("sharepointDialog").addEventListener("close", () => { clearSharepointLink(); $("sharepointLink").value = ""; });
+  $("sharepointWorkbookFile").onchange = event => {
+    const sourceUrl = selectedSharepointLink; selectedSharepointLink = null;
+    if (sourceUrl) void readImport(event.target.files[0], { sourceUrl });
+    event.target.value = "";
+  };
+  $("sharepointWorkbookFile").addEventListener("cancel", () => { selectedSharepointLink = null; });
   $("applyImport").onclick = async () => { try { await applySnapshot(state.pending.snapshot, state.pending.prices || state.prices, state.pending.shortlist || [], state.pending.ppcProjection || state.ppcProjection, state.pending.pricingSource || state.pricingSource); $("importDialog").close(); state.pending = null; } catch (e) { $("importError").textContent = e.message; } };
   $("sheetChoice").onchange = () => { state.pending = { snapshot: state.sheets[Number($("sheetChoice").value)] }; importSummary(); };
   $("openSource").onclick = $("editPrices").onclick = $("sourceFooterButton").onclick = $("reportInfo").onclick = $("coverageNotice").onclick = openSource;
@@ -815,8 +857,8 @@
     } catch (error) { if (run === privateRun) $("privateStatus").textContent = error.message; }
     finally { if (run === privateRun) { $("privateKey").value = ""; $("privateAction").disabled = false; } }
   };
-  document.addEventListener("click", e => { app.querySelectorAll(".so-picker[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; }); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { $("chartTooltip").hidden = true; app.querySelectorAll(".so-picker[open]").forEach(d => d.open = false); } });
+  document.addEventListener("click", e => { app.querySelectorAll(".so-picker[open],.so-import-picker[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; }); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { $("chartTooltip").hidden = true; app.querySelectorAll(".so-picker[open],.so-import-picker[open]").forEach(d => d.open = false); } });
   let dragDepth = 0;
   root.addEventListener("dragenter", e => { if ([...e.dataTransfer?.types || []].includes("Files")) { e.preventDefault(); dragDepth++; $("dropOverlay").hidden = false; } }); root.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropOverlay").hidden = true; } }); root.addEventListener("dragover", e => { if ([...e.dataTransfer?.types || []].includes("Files")) e.preventDefault(); }); root.addEventListener("drop", e => { if (e.dataTransfer?.files.length) { e.preventDefault(); dragDepth = 0; $("dropOverlay").hidden = true; readImport(e.dataTransfer.files[0]); } });
   app.querySelectorAll(".so-sidebar nav a").forEach(a => a.onclick = event => { event.preventDefault(); showView(a.hash.slice(1)); });

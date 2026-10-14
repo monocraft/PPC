@@ -23,8 +23,9 @@
       <a href="#records"><span aria-hidden="true">≡</span> Data</a>
     </nav>
     <div class="so-sidebar-note"><span class="so-dot"></span> Local workspace<p>Workbook data stays in this browser. Import a new report to refresh.</p><button id="openSource" type="button">Data & pricing</button></div>
-  </div><h1 class="so-visually-hidden">Retail analytics</h1><div class="so-actions"><span id="sourceBadge" class="so-source-badge">No workbook loaded</span><button id="importButton" type="button">Import</button><button id="exportButton" hidden type="button" class="so-primary" disabled>Export brief <span aria-hidden="true">↗</span></button></div></header>
+  </div><h1 class="so-visually-hidden">Retail analytics</h1><div class="so-actions"><span id="sourceBadge" class="so-source-badge">No workbook loaded</span><details id="importPicker" class="so-import-picker"><summary id="importButton">Load data <span aria-hidden="true">⌄</span></summary><div class="so-import-options"><button id="importFileButton" type="button">Choose file</button><button id="importLinkButton" type="button">Paste SharePoint link</button></div></details><button id="exportButton" hidden type="button" class="so-primary" disabled>Export brief <span aria-hidden="true">↗</span></button></div></header>
     <input id="workbookFile" type="file" accept=".xlsx,.csv,.json,.pkg" hidden>
+    <input id="sharepointWorkbookFile" type="file" accept=".xlsx,.csv" hidden>
     <section id="overview" class="so-heading" hidden><div><p class="so-eyebrow">PPC ANALYTICS</p><h1>Retail <em>pulse.</em></h1><p id="headingContext" class="so-subtitle">All retailers</p></div><div class="so-heading-summary"><strong id="windowLabel">Choose a report</strong><small id="windowDetail">Weekly units</small></div></section>
     <section class="so-filterbar" aria-label="Dashboard filters">
       <details id="storePicker" class="so-picker"><summary>Retailers <strong id="storeLabel">All retailers</strong></summary><div class="so-picker-menu"><label class="so-picker-all"><input id="storeAll" type="checkbox" checked><span>All retailers</span></label><div id="storeOptions"></div><button type="button" data-clear="stores">All retailers</button></div></details>
@@ -40,7 +41,7 @@
       <span id="filterSummary" class="so-filter-summary" aria-live="polite"></span><input id="periodPreset" type="hidden" value="13">
     </section>
     <p id="status" class="so-status" role="status" aria-live="polite"></p>
-    <div id="emptyState" class="so-empty"><div class="so-empty-symbol">↗</div><h2>Start with your sell-out workbook</h2><p>Import an XLSX, CSV or saved analytics snapshot to connect every chart, comparison and planning insight.</p><button id="emptyImport" type="button" class="so-primary">Choose a workbook</button></div>
+    <div id="emptyState" class="so-empty"><div class="so-empty-symbol">↗</div><h2>Start with your sell-out workbook</h2><p>Import an XLSX, CSV or saved analytics snapshot to connect every chart, comparison and planning insight.</p><div class="so-empty-actions"><button id="emptyImport" type="button" class="so-primary">Choose a workbook</button><button id="emptyLinkImport" type="button">Paste SharePoint link</button></div></div>
     <div id="dashboardContent" hidden>
       <div class="so-report-strip"><button id="coverageNotice" type="button" class="so-coverage-chip"></button><button id="reportInfo" type="button" aria-label="Reporting details">ⓘ</button><span id="ppcPriceCoverage"></span></div>
       <div data-analytics-view="overview" class="so-view is-current">
@@ -66,6 +67,15 @@
   </main>
   <div id="chartTooltip" class="so-tooltip" role="tooltip" hidden></div>
   <dialog id="sourceDialog" class="so-dialog"><form method="dialog" class="so-dialog-head"><div><p class="so-eyebrow">SOURCE & DEFINITIONS</p><h2>Workbook & price map</h2></div><button aria-label="Close source and price map" type="submit">×</button></form><div class="so-dialog-body"><div id="sourceDetails"></div><h3>USD MSRP / list price</h3><p id="ppcPriceDetails">Link PPC to use saved USD MSRP by SKU. Manual prices are overrides.</p><div class="so-actions"><button id="ppcBackupButton" type="button">Select PPC backup</button><button id="priceCsvButton" type="button">Import price CSV</button><button id="priceTemplate" type="button">Download price template</button><label>Find a SKU<input id="priceSearch" type="search" placeholder="Product or SKU"></label></div><input id="priceCsvFile" type="file" accept=".csv" hidden><div class="so-price-table"><table><thead><tr><th>Product / SKU</th><th>MSRP (USD)</th><th>Source / note</th></tr></thead><tbody id="priceBody"></tbody></table></div><p id="priceStatus" role="status" aria-live="polite"></p><button id="savePrices" type="button" class="so-primary">Apply prices</button></div></dialog>
+  <dialog id="sharepointDialog" class="so-dialog so-link-dialog">
+    <form method="dialog" class="so-dialog-head"><h2>Load from SharePoint</h2><button type="submit" aria-label="Close SharePoint import">×</button></form>
+    <div class="so-dialog-body">
+      <form id="sharepointLinkForm" class="so-link-form" novalidate><label>Workbook link<input id="sharepointLink" type="url" placeholder="https://…sharepoint.com/…" autocomplete="off" spellcheck="false" autofocus required></label><button type="submit">Continue</button></form>
+      <p id="sharepointError" class="so-link-error" role="alert"></p>
+      <div class="so-link-connection"><strong>Connection setup required</strong><p>HP sign-in isn't connected to PPC yet. Open and download the workbook, then choose the file below.</p></div>
+      <div id="sharepointLinkReady" class="so-link-ready" hidden><span id="sharepointHost"></span><div class="so-actions"><a id="sharepointOpen" class="so-link-open" target="_blank" rel="noopener noreferrer">Open workbook <span aria-hidden="true">↗</span></a><button id="sharepointChooseFile" type="button" class="so-primary">Choose downloaded file</button></div><p>The source link is saved locally with the report after you apply it.</p></div>
+    </div>
+  </dialog>
   <dialog id="importDialog" class="so-dialog so-import-dialog"><form method="dialog" class="so-dialog-head"><h2>Review workbook</h2><button type="submit" aria-label="Close import review">×</button></form><div class="so-dialog-body"><div id="importReview"></div><label id="sheetChoiceLabel" hidden>Worksheet<select id="sheetChoice"></select></label><p>Applying this report replaces only this analytics workspace. Your portfolio and roadmap keep their own saved data.</p><p id="importError" role="alert"></p><button id="applyImport" type="button" class="so-primary">Apply workbook</button></div></dialog>
   <div id="dropOverlay" class="so-drop-overlay" hidden>Drop a sell-out workbook to review it</div>
   <dialog id="privateDialog" class="so-dialog so-import-dialog"><form method="dialog" class="so-dialog-head"><h2 id="privateTitle">Encrypted analytics</h2><button type="submit" aria-label="Close encryption dialog">×</button></form><div class="so-dialog-body"><p id="privatePurpose">Use your existing PPC package key. Keep the key within the authorized team.</p><label>PPC package key<input id="privateKey" type="password" autocomplete="off" spellcheck="false"></label><p id="privateStatus" role="status" aria-live="polite"></p><button id="privateAction" type="button" class="so-primary">Save encrypted package</button></div></dialog>
@@ -75,6 +85,7 @@
 <script src="js/sellout-model.js"></script>
 <script src="js/sellout-ppc.js"></script>
 <script src="js/sellout-private.js"></script>
+<script src="js/sellout-sharepoint.js"></script>
 <script src="js/sellout-mix.js"></script><script src="js/sellout-flow.js"></script>
 <script src="js/sellout-motion.js"></script><script src="js/sellout-spring.js"></script>
 <script src="js/sellout-dashboard.js"></script>
