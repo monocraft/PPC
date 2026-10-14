@@ -2,16 +2,17 @@
 .so-calendar-canvas{position:relative;width:100%;min-width:0}
 .so-timeline-months{position:relative;width:100%;height:62px;overflow:visible;touch-action:pan-x}
 .so-month-year-group,.so-month-year-items{display:contents}
-.so-month-year-label{position:absolute;top:3px;transform:translateX(-50%);color:var(--color-text-secondary);font-size:12px;line-height:1.25;font-weight:500;white-space:nowrap;pointer-events:none}
-.so-month-year-label.is-edge{transform:translateX(-100%)}
+.so-month-year-label{position:absolute;left:0;bottom:calc(100% + 14px);transform:none;color:var(--color-text-secondary);font-size:12px;line-height:1.25;font-weight:500;white-space:nowrap;pointer-events:none}
 .so-month-year-divider{position:absolute;top:2px;bottom:5px;width:1px;background:color-mix(in srgb,var(--color-border-strong) 45%,transparent);pointer-events:none}
 .so-timeline-months .so-month{position:absolute;top:23px;height:31px;min-height:0;min-width:0;padding:0;border-radius:5px;background:transparent;border:0;color:var(--color-text-secondary);font-size:11px;line-height:1.2;transition:background .18s,color .18s;touch-action:pan-x}
 .so-month-label{position:absolute;left:var(--month-label,50%);top:50%;transform:translate(-50%,-50%);pointer-events:none;white-space:nowrap}
-.so-month.is-narrow .so-month-label{visibility:hidden}
+.so-month-name{pointer-events:auto}
+.so-month.is-narrow:not(.is-year-anchor) .so-month-name{visibility:hidden}
 .so-timeline-months .so-month:hover:not(:disabled){background:var(--color-header);border:0;color:var(--color-text)}
 .so-timeline-months .so-month[aria-pressed="true"]{background:var(--color-header);border:0;color:var(--color-text)}
 .so-timeline-months .so-month:focus-visible{outline:2px solid var(--color-text);outline-offset:1px}
-.so-timeline-months .so-month:disabled{opacity:.3;cursor:default}
+.so-timeline-months .so-month:disabled{opacity:1;cursor:default}
+.so-timeline-months .so-month:disabled .so-month-name{opacity:.3}
 @media(max-width:980px){.so-calendar-canvas{min-width:1000px}}
 @media(max-width:700px){.so-timeline-months{height:67px}.so-timeline-months .so-month{height:37px}.so-month-year-label{font-size:11px}}
 @media(prefers-reduced-motion:reduce){.so-timeline-months .so-month{transition:none}}

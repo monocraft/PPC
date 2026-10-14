@@ -543,8 +543,7 @@
       if (!years.has(year)) years.set(year, []);
       years.get(year).push(month);
     }
-    const labelPositions = new Map();
-    const monthButton = month => {
+    const monthButton = (month, yearAnchor = false) => {
       const indices = month.indices.filter(index => index <= limit);
       const reportingWeeks = hasCutoff ? indices.filter(index => Number.isFinite(reports.get(periods[index].date))).length : 0;
       const start = indices[0] ?? month.indices[0], end = indices.at(-1) ?? month.indices.at(-1);
@@ -556,14 +555,13 @@
       const left = n === 1 ? 0 : Math.max(0, axis(month.indices[0] - .5)), right = n === 1 ? 100 : Math.min(100, axis(month.indices.at(-1) + .5));
       const center = axis((start + end) / 2), labelOffset = (center - left) / (right - left || 1) * 100;
       const narrow = (right - left) / 100 * width < 26;
-      labelPositions.set(month.key, { center, narrow });
-      return `<button class="so-month${narrow ? " is-narrow" : ""}" type="button" data-month="${month.key}" data-start="${start}" data-end="${end}" style="left:${left}%;width:${right - left}%;--month-label:${labelOffset}%" aria-label="${esc(description)}" aria-pressed="${selected}" title="${esc(description)}" ${reportingWeeks ? "" : "disabled"}><span class="so-month-label">${label}</span></button>`;
+      const yearLabel = yearAnchor ? `<span class="so-month-year-label" data-year="${month.key.slice(0, 4)}" data-month-anchor="${month.key}" aria-hidden="true">${month.key.slice(0, 4)}</span>` : "";
+      return `<button class="so-month${narrow ? " is-narrow" : ""}${yearAnchor ? " is-year-anchor" : ""}" type="button" data-month="${month.key}" data-start="${start}" data-end="${end}" style="left:${left}%;width:${right - left}%;--month-label:${labelOffset}%" aria-label="${esc(description)}" aria-pressed="${selected}" title="${esc(description)}" ${reportingWeeks ? "" : "disabled"}><span class="so-month-label">${yearLabel}<span class="so-month-name">${label}</span></span></button>`;
     };
     rail.innerHTML = [...years].map(([year, entries], index) => {
       const first = entries[0].indices[0], last = entries.at(-1).indices.at(-1), position = n === 1 ? 0 : axis(first);
-      const buttons = entries.map(monthButton).join(""), visible = entries.find(month => !labelPositions.get(month.key).narrow), anchor = visible || entries[0];
-      const labelPosition = labelPositions.get(anchor.key).center;
-      return `<div class="so-month-year-group" data-year="${year}" data-start="${first}" data-end="${last}" role="group" aria-label="${year} reporting months">${index ? `<span class="so-month-year-divider" style="left:${position}%" aria-hidden="true"></span>` : ""}<span class="so-month-year-label${!visible && labelPosition > 95 ? " is-edge" : ""}" style="left:${labelPosition}%" data-month-anchor="${anchor.key}" aria-hidden="true">${year}</span><div class="so-month-year-items">${buttons}</div></div>`;
+      const buttons = entries.map((month, monthIndex) => monthButton(month, monthIndex === 0)).join("");
+      return `<div class="so-month-year-group" data-year="${year}" data-start="${first}" data-end="${last}" role="group" aria-label="${year} reporting months">${index ? `<span class="so-month-year-divider" style="left:${position}%" aria-hidden="true"></span>` : ""}<div class="so-month-year-items">${buttons}</div></div>`;
     }).join("");
     rail.querySelectorAll("[data-month]").forEach(button => button.onclick = () => {
       if (button.disabled) return;
