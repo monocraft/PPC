@@ -687,8 +687,9 @@
     $("importReview").innerHTML = `<div class="so-source-info"><strong>${esc(s.title)}</strong><p>${esc(s.sheet || "Table")} · ${s.rows.length} rows · ${a.products.length} SKUs · ${a.stores.length} retailers</p><p>${day(s.periods[0].date, true)} – ${day(s.periods.at(-1).date, true)}</p><p>${fmt(a.totals.current)} net reported units · ${fmt(a.totals.missingCells)} missing cells</p>${s.sourceUrl ? '<p>Your provided source link will be saved with this local report.</p>' : ""}${s.warnings?.length ? `<ul>${s.warnings.map(w => `<li>${esc(typeof w === "string" ? w : w.message)}</li>`).join("")}</ul>` : ""}</div>`;
   }
   let importRun = 0;
-  async function readImport(file, { sourceUrl = null } = {}) {
+  async function readImport(file, { sourceUrl = null, autoApply = false, isCurrent = () => true } = {}) {
     if (!file) return;
+    if (!autoApply) { cancelSharepointLoad(); if ($("sharepointDialog").open) $("sharepointDialog").close(); }
     const run = ++importRun;
     message(`Reading ${file.name}…`);
     try {
@@ -703,15 +704,20 @@
       else if (ext === "json") { const data = JSON.parse(await file.text()); pending = root.PPCSelloutPrivate.sanitizeWorkspace(data.snapshot ? data : { snapshot: data }); sheets = [pending.snapshot]; }
       else if (ext === "csv") { pending = { snapshot: M.normalizeWorkbookRows(M.parseCsv(await file.text()), { title: file.name, sheet: "CSV" }) }; sheets = [pending.snapshot]; }
       else throw new Error("Choose an XLSX, CSV, JSON or encrypted analytics package.");
-      if (run !== importRun) return;
+      if (run !== importRun || !isCurrent()) return;
       if (sourceLink) {
         sheets = sheets.map(snapshot => ({ ...snapshot, sourceUrl: sourceLink.url }));
         pending = { ...pending, snapshot: sheets[0] };
       }
+      if (autoApply && sheets.length === 1) {
+        const saved = await applySnapshot(pending.snapshot, state.prices, [], state.ppcProjection, state.pricingSource);
+        if (saved && run === importRun && isCurrent()) message(""); return { status: "applied" };
+      }
       state.sheets = sheets; state.pending = pending;
       $("sheetChoiceLabel").hidden = state.sheets.length < 2; $("sheetChoice").innerHTML = state.sheets.map((s, i) => `<option value="${i}">${esc(s.sheet)}</option>`).join("");
-      importSummary(); $("importDialog").showModal(); message("");
-    } catch (error) { if (run === importRun) message(error.message, true); }
+      importSummary(); if (!autoApply) $("importDialog").showModal(); message("");
+      return { status: "review" };
+    } catch (error) { if (run === importRun && isCurrent()) { if (autoApply) throw new Error("The workbook could not be read as a sell-out report. Your current report is still available."); message(error.message, true); } }
     finally { if (run === importRun) $("workbookFile").value = ""; }
   }
   async function applySnapshot(snapshot, prices = {}, shortlist = [], ppcProjection = state.ppcProjection, pricingSource = state.pricingSource) {
@@ -719,8 +725,9 @@
     if (ppcProjection && !root.PPCSelloutPricing.validateProjection(ppcProjection).ok) throw new Error("Invalid PPC pricing projection.");
     state.snapshot = snapshot; state.prices = sanitizePrices(prices); state.shortlist = Array.isArray(shortlist) ? shortlist.filter(s => s && typeof s.key === "string" && typeof s.title === "string" && typeof s.text === "string").slice(0, 100) : [];
     state.ppcProjection = ppcProjection; state.pricingSource = pricingSource; resolvePpc();
-    stopTimeline(); root.PPCSelloutMotion.reset(); state.markerDate = null; state.hoverDate = null; state.stores = []; state.products = []; state.storesNone = false; state.productsNone = false; state.hiddenSeries.clear(); $("trendMode").value = "stores"; $("categoryFilter").value = ""; $("bandFilter").value = ""; $("periodPreset").value = "13"; controls(); update(true); await persist();
+    stopTimeline(); root.PPCSelloutMotion.reset(); state.markerDate = null; state.hoverDate = null; state.stores = []; state.products = []; state.storesNone = false; state.productsNone = false; state.hiddenSeries.clear(); $("trendMode").value = "stores"; $("categoryFilter").value = ""; $("bandFilter").value = ""; $("periodPreset").value = "13"; controls(); update(true); const saved = await persist();
     if (ppcBridge) void refreshPpc();
+    return saved;
   }
   function sanitizePrices(prices) {
     const result = {};
@@ -774,16 +781,32 @@
     const prices = Object.entries(state.prices); if (prices.length) lines.push("", "## USD MSRP sources", "", "| SKU | MSRP USD | Source / note |", "|---|---:|---|", ...prices.map(([sku, p]) => `| ${safe(sku)} | ${p.msrp.toFixed(2)} | ${safe(p.source)} |`));
     download(planningOnly ? "ppc-planning-brief.md" : "market-performance-brief.md", lines.join("\n"), "text/markdown;charset=utf-8");
   }
-  const chooseFile = () => $("workbookFile").click();
+  const chooseFile = () => { cancelSharepointLoad(); $("workbookFile").click(); };
   $("emptyImport").onclick = chooseFile;
   $("workbookFile").onchange = e => readImport(e.target.files[0]);
-  let sharepointLink = null, selectedSharepointLink = null;
-  function clearSharepointLink() {
-    sharepointLink = null; $("sharepointLinkReady").hidden = true; $("sharepointError").textContent = "";
-    $("sharepointOpen").removeAttribute("href"); $("sharepointHost").textContent = "";
+  const sharepointClient = root.PPCSelloutSharePointClient.create({ config: root.PPCSelloutSharePointConfig, msal: root.msal, fetch: root.fetch?.bind(root), location: root.location });
+  let sharepointRun = 0, sharepointAbort = null, sharepointInitializing = false, sharepointInitError = false;
+  function renderSharepointLoad() {
+    const busy = !!sharepointAbort;
+    $("sharepointLoad").disabled = busy || !sharepointClient.ready || !sharepointClient.initialized || sharepointInitError;
+    $("sharepointLoad").textContent = busy ? "Loading…" : sharepointInitializing ? "Connecting…" : "Sign in & load";
+    $("sharepointLink").readOnly = busy;
+    $("sharepointSetup").hidden = sharepointClient.ready;
+    $("sharepointHint").hidden = !sharepointClient.ready || busy;
+    $("sharepointProgress").hidden = !busy;
   }
+  function cancelSharepointLoad() {
+    sharepointRun++; sharepointAbort?.abort(); sharepointAbort = null; renderSharepointLoad();
+  }
+  if (sharepointClient.ready) {
+    sharepointInitializing = true;
+    void sharepointClient.initialize().catch(() => {
+      sharepointInitError = true; $("sharepointError").textContent = "Microsoft sign-in could not start. Reload PPC and try again.";
+    }).finally(() => { sharepointInitializing = false; renderSharepointLoad(); });
+  }
+  renderSharepointLoad();
   function openSharepointLink() {
-    selectedSharepointLink = null; clearSharepointLink(); $("sharepointLink").value = ""; $("sharepointDialog").showModal();
+    importRun++; cancelSharepointLoad(); $("sharepointError").textContent = sharepointInitError ? "Microsoft sign-in could not start. Reload PPC and try again." : ""; $("sharepointLink").value = ""; $("sharepointDialog").showModal();
   }
   $("emptyLinkImport").onclick = openSharepointLink;
   $("importButton").onchange = event => {
@@ -791,26 +814,39 @@
     if (action === "file") chooseFile();
     else if (action === "sharepoint") openSharepointLink();
   };
-  $("sharepointLink").oninput = clearSharepointLink;
-  $("sharepointLinkForm").onsubmit = event => {
-    event.preventDefault(); clearSharepointLink();
+  $("sharepointLink").oninput = () => { $("sharepointError").textContent = ""; };
+  $("sharepointLinkForm").onsubmit = async event => {
+    event.preventDefault();
+    if (sharepointAbort) return;
+    $("sharepointError").textContent = "";
+    if (!sharepointClient.ready) { $("sharepointError").textContent = "Microsoft connection setup is required before PPC can load a link."; return; }
+    if (!sharepointClient.initialized || sharepointInitError) { $("sharepointError").textContent = "Microsoft sign-in is not ready. Reload PPC and try again."; return; }
+    importRun++;
+    const run = ++sharepointRun, abort = new AbortController(); sharepointAbort = abort;
+    const isCurrent = () => run === sharepointRun && !abort.signal.aborted;
+    const timeout = setTimeout(() => { if (isCurrent()) abort.abort(); }, 120000);
+    renderSharepointLoad(); $("sharepointProgressText").textContent = "Sign in to Microsoft…";
     try {
-      sharepointLink = root.PPCSelloutSharePoint.inspectLink($("sharepointLink").value);
-      $("sharepointOpen").href = sharepointLink.url; $("sharepointHost").textContent = sharepointLink.host;
-      $("sharepointLinkReady").hidden = false;
-    } catch (error) { $("sharepointError").textContent = error.message; }
+      const link = root.PPCSelloutSharePoint.inspectLink($("sharepointLink").value);
+      const file = await sharepointClient.load(link.url, { signal: abort.signal, onProgress: progress => {
+        if (!isCurrent()) return;
+        $("sharepointProgressText").textContent = progress.phase === "sign-in" ? "Sign in to Microsoft…" : progress.phase === "metadata" ? "Finding your workbook…" : progress.phase === "download" ? "Downloading a temporary copy…" : "Preparing your charts…";
+      } });
+      if (!isCurrent()) return;
+      $("sharepointProgressText").textContent = "Preparing your charts…";
+      const result = await readImport(file, { sourceUrl: link.url, autoApply: true, isCurrent });
+      if (!isCurrent() || !result) return;
+      $("sharepointDialog").close();
+      if (result.status === "review") $("importDialog").showModal();
+    } catch (error) {
+      if (run === sharepointRun) $("sharepointError").textContent = abort.signal.aborted ? "Loading timed out. Try again when you are ready to sign in." : error.message;
+    } finally {
+      clearTimeout(timeout);
+      if (run === sharepointRun) { sharepointAbort = null; renderSharepointLoad(); }
+    }
   };
-  $("sharepointChooseFile").onclick = () => {
-    if (!sharepointLink) return;
-    selectedSharepointLink = sharepointLink.url; $("sharepointDialog").close(); $("sharepointWorkbookFile").click();
-  };
-  $("sharepointDialog").addEventListener("close", () => { clearSharepointLink(); $("sharepointLink").value = ""; });
-  $("sharepointWorkbookFile").onchange = event => {
-    const sourceUrl = selectedSharepointLink; selectedSharepointLink = null;
-    if (sourceUrl) void readImport(event.target.files[0], { sourceUrl });
-    event.target.value = "";
-  };
-  $("sharepointWorkbookFile").addEventListener("cancel", () => { selectedSharepointLink = null; });
+  $("sharepointLocalFile").onclick = () => { $("sharepointDialog").close(); chooseFile(); };
+  $("sharepointDialog").addEventListener("close", () => { cancelSharepointLoad(); $("sharepointLink").value = ""; $("sharepointError").textContent = ""; });
   $("applyImport").onclick = async () => { try { await applySnapshot(state.pending.snapshot, state.pending.prices || state.prices, state.pending.shortlist || [], state.pending.ppcProjection || state.ppcProjection, state.pending.pricingSource || state.pricingSource); $("importDialog").close(); state.pending = null; } catch (e) { $("importError").textContent = e.message; } };
   $("sheetChoice").onchange = () => { state.pending = { snapshot: state.sheets[Number($("sheetChoice").value)] }; importSummary(); };
   $("openSource").onclick = $("editPrices").onclick = $("sourceFooterButton").onclick = $("reportInfo").onclick = $("coverageNotice").onclick = openSource;

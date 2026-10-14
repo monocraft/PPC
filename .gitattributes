@@ -1,1 +1,2 @@
 public/data/master_ppc.pkg -text
+public/vendor/msal/*.min.js -text

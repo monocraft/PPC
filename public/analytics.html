@@ -25,7 +25,6 @@
     <div class="so-sidebar-note"><span class="so-dot"></span> Local workspace<p>Workbook data stays in this browser. Import a new report to refresh.</p><button id="openSource" type="button">Data & pricing</button></div>
   </div><h1 class="so-visually-hidden">Retail analytics</h1><div class="so-actions"><span id="sourceBadge" class="so-source-badge">No workbook loaded</span><select id="importButton" class="so-import-select" aria-label="Load data"><option value="" selected disabled hidden>Load data</option><option value="file">Choose file</option><option value="sharepoint">Paste SharePoint link</option></select><button id="exportButton" hidden type="button" class="so-primary" disabled>Export brief <span aria-hidden="true">↗</span></button></div></header>
     <input id="workbookFile" type="file" accept=".xlsx,.csv,.json,.pkg" hidden>
-    <input id="sharepointWorkbookFile" type="file" accept=".xlsx,.csv" hidden>
     <section id="overview" class="so-heading" hidden><div><p class="so-eyebrow">PPC ANALYTICS</p><h1>Retail <em>pulse.</em></h1><p id="headingContext" class="so-subtitle">All retailers</p></div><div class="so-heading-summary"><strong id="windowLabel">Choose a report</strong><small id="windowDetail">Weekly units</small></div></section>
     <section class="so-filterbar" aria-label="Dashboard filters">
       <details id="storePicker" class="so-picker"><summary>Retailers <strong id="storeLabel">All retailers</strong></summary><div class="so-picker-menu"><label class="so-picker-all"><input id="storeAll" type="checkbox" checked><span>All retailers</span></label><div id="storeOptions"></div><button type="button" data-clear="stores">All retailers</button></div></details>
@@ -70,10 +69,11 @@
   <dialog id="sharepointDialog" class="so-dialog so-link-dialog">
     <form method="dialog" class="so-dialog-head"><h2>Load from SharePoint</h2><button type="submit" aria-label="Close SharePoint import">×</button></form>
     <div class="so-dialog-body">
-      <form id="sharepointLinkForm" class="so-link-form" novalidate><label>Workbook link<input id="sharepointLink" type="url" placeholder="https://…sharepoint.com/…" autocomplete="off" spellcheck="false" autofocus required></label><button type="submit">Continue</button></form>
+      <form id="sharepointLinkForm" class="so-link-form" novalidate><label>Workbook link<input id="sharepointLink" type="url" placeholder="https://…sharepoint.com/…" autocomplete="off" spellcheck="false" autofocus required></label><button id="sharepointLoad" type="submit" class="so-primary" disabled>Sign in &amp; load</button></form>
       <p id="sharepointError" class="so-link-error" role="alert"></p>
-      <div class="so-link-connection"><strong>Connection setup required</strong><p>HP sign-in isn't connected to PPC yet. Open and download the workbook, then choose the file below.</p></div>
-      <div id="sharepointLinkReady" class="so-link-ready" hidden><span id="sharepointHost"></span><div class="so-actions"><a id="sharepointOpen" class="so-link-open" target="_blank" rel="noopener noreferrer">Open workbook <span aria-hidden="true">↗</span></a><button id="sharepointChooseFile" type="button" class="so-primary">Choose downloaded file</button></div><p>The source link is saved locally with the report after you apply it.</p></div>
+      <div id="sharepointSetup" class="so-link-connection" hidden><strong>Microsoft connection needed</strong><p>PPC needs an HP-approved Microsoft connection to load links. Once connected, sign in here and your charts will open automatically.</p><button id="sharepointLocalFile" type="button">Choose file instead</button></div>
+      <p id="sharepointHint" class="so-link-hint">Sign in with your work account. PPC reads a temporary copy and opens your charts here.</p>
+      <div id="sharepointProgress" class="so-link-progress" hidden role="status" aria-live="polite"><span class="so-link-spinner" aria-hidden="true"></span><span id="sharepointProgressText"></span></div>
     </div>
   </dialog>
   <dialog id="importDialog" class="so-dialog so-import-dialog"><form method="dialog" class="so-dialog-head"><h2>Review workbook</h2><button type="submit" aria-label="Close import review">×</button></form><div class="so-dialog-body"><div id="importReview"></div><label id="sheetChoiceLabel" hidden>Worksheet<select id="sheetChoice"></select></label><p>Applying this report replaces only this analytics workspace. Your portfolio and roadmap keep their own saved data.</p><p id="importError" role="alert"></p><button id="applyImport" type="button" class="so-primary">Apply workbook</button></div></dialog>
@@ -86,6 +86,9 @@
 <script src="js/sellout-ppc.js"></script>
 <script src="js/sellout-private.js"></script>
 <script src="js/sellout-sharepoint.js"></script>
+<script src="vendor/msal/msal-browser-5.25.1.min.js"></script>
+<script src="js/sellout-sharepoint-config.js"></script>
+<script src="js/sellout-sharepoint-client.js"></script>
 <script src="js/sellout-mix.js"></script><script src="js/sellout-flow.js"></script>
 <script src="js/sellout-motion.js"></script><script src="js/sellout-spring.js"></script>
 <script src="js/sellout-dashboard.js"></script>

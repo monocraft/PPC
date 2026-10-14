@@ -3,12 +3,13 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import vm from "node:vm";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { renderVersionedIndex } from "../configure-site-version.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const publicRoot = path.join(root, "public");
-const moduleFiles = ["analytics.html", "css/sellout-dashboard.css", "css/sellout-months.css", "js/sellout-model.js", "js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js", "js/sellout-ppc.js", "js/sellout-private.js", "js/sellout-sharepoint.js", "js/sellout-dashboard.js"];
+const moduleFiles = ["analytics.html", "css/sellout-dashboard.css", "css/sellout-months.css", "js/sellout-model.js", "js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js", "js/sellout-ppc.js", "js/sellout-private.js", "js/sellout-sharepoint.js", "js/sellout-sharepoint-config.js", "js/sellout-sharepoint-client.js", "js/sellout-dashboard.js"];
 const privateFormats = /\.(?:xlsx?|xlsm|csv|tsv|jsonl?|data)$/i;
 
 function attributes(tag) {
@@ -65,7 +66,11 @@ function stagedSources(workflow) {
 }
 
 function validatePrivateBoundary(source, name) {
-  assert.ok(!/\b(?:fetch|XMLHttpRequest|WebSocket)\s*\(|\bsendBeacon\s*\(/.test(source), `${name} must read user-selected files without sending private rows over the network.`);
+  if (name !== "js/sellout-sharepoint-client.js") assert.ok(!/\b(?:fetch|XMLHttpRequest|WebSocket)\s*\(|\bsendBeacon\s*\(/.test(source), `${name} must read user-selected files without sending private rows over the network.`);
+  else {
+    assert.ok(!/XMLHttpRequest|WebSocket|sendBeacon|\bPOST\b|\bPUT\b|\bPATCH\b|\bDELETE\b|redeemSharingLink|localStorage|sessionStorage/.test(source), "SharePoint transport must not upload data, redeem access or persist tokens.");
+    assert.ok(source.includes("https://graph.microsoft.com/v1.0/shares/") && source.includes('"memoryStorage"'), "SharePoint transport must use the fixed Graph endpoint and memory token cache.");
+  }
   assert.ok(!/product-portfolio-canvas-v\d|product-portfolio-image-assets-v\d/.test(source), `${name} must not read or change the portfolio's saved workspace.`);
   assert.ok(!/["']?(?:records|rows|observations)["']?\s*:\s*\[\s*\{\s*["']?(?:store|product|sku|date)["']?\s*:/i.test(source), `${name} must not contain embedded workbook rows.`);
 }
@@ -92,7 +97,7 @@ assert.ok(closure.has("js/package-codec.js"), "Protected analytics must use the 
 const scriptOrder = [...html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)].map(match => resolveAsset(match[1], "analytics.html"));
 for (const before of ["js/package-codec.js", "js/sellout-model.js", "js/sellout-ppc.js"]) assert.ok(scriptOrder.indexOf(before) < scriptOrder.indexOf("js/sellout-private.js"), `${before} must load before private analytics.`);
 assert.ok(scriptOrder.indexOf("js/sellout-private.js") < scriptOrder.indexOf("js/sellout-dashboard.js"), "Private analytics tools must load before the dashboard.");
-for (const helper of ["js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js", "js/sellout-sharepoint.js"]) assert.ok(scriptOrder.indexOf(helper) < scriptOrder.indexOf("js/sellout-dashboard.js"), `${helper} must load before the dashboard.`);
+for (const helper of ["js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js", "js/sellout-sharepoint.js", "js/sellout-sharepoint-config.js", "js/sellout-sharepoint-client.js"]) assert.ok(scriptOrder.indexOf(helper) < scriptOrder.indexOf("js/sellout-dashboard.js"), `${helper} must load before the dashboard.`);
 assert.ok(![...closure].some(file => /\/(?:app|master-[\w-]+|workspace-store|package-client)\.js$/.test(file)), "Analytics must open independently from portfolio editing and master storage.");
 for (const file of closure) {
   if (file.endsWith(".css")) {
@@ -104,6 +109,13 @@ for (const file of [...moduleFiles, ...closure]) assert.ok((await stat(path.join
 
 const workflow = await readFile(path.join(root, ".github/workflows/deploy.yml"), "utf8");
 const staged = stagedSources(workflow);
+const authHtml = await readFile(path.join(publicRoot, "analytics-auth.html"), "utf8");
+const authAssets = pageAssets(authHtml, "analytics-auth.html");
+assert.ok(authAssets.has("vendor/msal/msal-redirect-bridge-5.25.1.min.js"));
+assert.ok(authAssets.has("js/sellout-auth-return.js"));
+assert.ok(!authAssets.has("js/sellout-dashboard.js"), "Microsoft callback must not start the analytics workspace.");
+for (const file of ["analytics-auth.html", ...authAssets]) assert.ok([...staged].some(entry => `public/${file}` === entry || `public/${file}`.startsWith(`${entry}/`)), `Deployment omits authentication callback: ${file}`);
+for (const [file, hash] of Object.entries({ "msal-browser-5.25.1.min.js": "56a548eae945c2479adf61d969140999e9f602ff627694cc0692346890556f52", "msal-redirect-bridge-5.25.1.min.js": "bd15092349b2e93ef363cdf60eaf881c62d0ad5557f98853e61231a8dc0f8269" })) assert.equal(createHash("sha256").update(await readFile(path.join(publicRoot, "vendor/msal", file))).digest("hex"), hash, "Vendored Microsoft authentication bundles must match the verified registry release.");
 for (const file of [...moduleFiles, ...closure]) {
   const source = `public/${file}`;
   assert.ok([...staged].some(entry => source === entry || source.startsWith(`${entry}/`)), `Deployment omits dashboard asset: ${source}`);
