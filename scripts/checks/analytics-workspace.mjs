@@ -213,7 +213,8 @@ assert.equal(workspace.window.location.searchParams.get("revenue"), "-1.5", "Mod
 workspace.importButton.emit("click");
 assert.equal(workspace.posts.at(-1).message.type, "ppc:blueprint:import");
 assert.ok(workspace.posts.every(post => post.origin === workspace.window.location.origin), "Commands always name the expected origin; wildcard delivery is forbidden.");
-assert.ok(workspace.posts.every(post => Object.keys(post.message).every(key => ["type", "view"].includes(key))), "Parent commands contain no source payload or pricing capability.");
+assert.ok(workspace.posts.every(post => Object.keys(post.message).every(key => ["type", "view", "preferences"].includes(key))), "Parent commands contain only navigation preferences, with no source payload or pricing capability.");
+assert.ok(workspace.posts.every(post => Object.keys(post.message.preferences || {}).every(key => ['year','category','revenue','margin','spend','scale','groupId','projectId','skuId'].includes(key))));
 
 const validMaliciousState = { type: "ppc:blueprint:state", state: { view: "investment", year: 2029, category: "Other", revenue: 30, margin: 10, spend: 30 }, sourceLabel: "Spoofed source" };
 const trustedState = { url: workspace.window.location.href, source: workspace.source.textContent, height: workspace.frame.style.height };
@@ -249,6 +250,32 @@ assert.equal(deepSource.searchParams.get("spend"), "12");
 deepLink.window.location = new URL("https://example.test/PPC/analytics.html?analysis=retail"); deepLink.emit("popstate");
 assert.equal(deepLink.window.PPCAnalyticsWorkspace.currentModule, "retail", "Browser history activates the intended module without rebuilding its frame.");
 assert.equal(deepLink.loads, 1);
+const scopedLink = workspaceFixture('https://example.test/PPC/analytics.html?analysis=blueprint&year=2026&category=Headsets&groupId=product-12&projectId=PROJECT%20A&skuId=SKU%2F001#blueprint/performance');
+const scopedSource = new URL(scopedLink.frame.src);
+const scopeParams = url => new URLSearchParams(url.hash.split('?')[1] || '');
+assert.equal(scopeParams(scopedSource).get('groupId'), 'product-12');
+assert.equal(scopeParams(scopedSource).get('projectId'), 'PROJECT A');
+assert.equal(scopeParams(scopedSource).get('skuId'), 'SKU/001', 'Exact part-number punctuation survives the shared fragment.');
+for (const url of [scopedSource, scopedLink.window.location]) {
+  assert.ok(!['groupId','projectId','skuId'].some(key => url.searchParams.has(key)), 'Private project and SKU identifiers are excluded from HTTP query parameters.');
+}
+scopedLink.message({type:'ppc:blueprint:state',state:{view:'performance',groupId:'product-12',projectId:'PROJECT B',skuId:''}});
+assert.equal(scopeParams(scopedLink.window.location).get('projectId'), 'PROJECT B');
+assert.equal(scopeParams(scopedLink.window.location).has('skuId'), false, 'Going up a level removes the old child from shared links.');
+scopedLink.message({type:'ppc:blueprint:state',state:{view:'performance',groupId:'x'.repeat(241),projectId:'PROJECT\u0000C',skuId:{secret:'not a filter'}}});
+assert.equal(scopeParams(scopedLink.window.location).get('groupId'), 'product-12');
+assert.equal(scopeParams(scopedLink.window.location).get('projectId'), 'PROJECT B', 'Malformed scope identifiers cannot replace valid selections.');
+scopedLink.message({type:'ppc:blueprint:state',state:{view:'performance',groupId:'',projectId:'',skuId:''}});
+assert.ok(!['groupId','projectId','skuId'].some(key=>scopeParams(scopedLink.window.location).has(key)), 'Returning to categories clears the entire child path.');
+scopedLink.frame.emit('load');
+scopedLink.window.location = new URL('https://example.test/PPC/analytics.html?analysis=blueprint&year=2025&category=Headsets#blueprint/performance?groupId=product-20&projectId=PROJECT%20Z&skuId=SKU-9');
+scopedLink.emit('popstate');
+assert.equal(scopedLink.posts.at(-1).message.preferences.skuId, 'SKU-9', 'History changes reach the retained frame rather than loading a second source.');
+scopedLink.window.location = new URL('https://example.test/PPC/analytics.html?analysis=blueprint&category=Headsets#blueprint/performance');
+scopedLink.emit('popstate');
+assert.equal(scopedLink.posts.at(-1).message.preferences.projectId, '');
+assert.equal(scopedLink.posts.at(-1).message.preferences.skuId, '', 'A category-level history route clears stale child selections.');
+assert.equal(scopedLink.loads, 1);
 const capability = "a".repeat(64), pricingLink = workspaceFixture(`https://example.test/PPC/analytics.html#ppc-link=${capability}`);
 assert.equal(pricingLink.window.location.hash, `#ppc-link=${capability}`, "The existing pricing bridge consumes its own temporary capability.");
 pricingLink.tabs[1].emit("click");

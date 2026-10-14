@@ -10,7 +10,9 @@
   const viewButtons = [...document.querySelectorAll('[data-blueprint-view]')];
   if (!tabs.length || !retail || !blueprint || !frame) return;
   const views = new Set(['overview','performance','products','investment','scenarios','source']);
-  const preferences = ['year','category','revenue','margin','spend','scale'];
+  const scopeKeys = ['groupId','projectId','skuId'];
+  const preferences = ['year','category','revenue','margin','spend','scale',...scopeKeys];
+  const validScopeId = value => typeof value === 'string' && value.length <= 240 && !/[\u0000-\u001f\u007f]/.test(value);
   const bounds = { revenue: [-30,30], margin: [-10,10], spend: [-30,30] };
   const blueprintState = { view: 'overview' };
   const assetVersion = new URL(document.currentScript?.src || root.location.href).searchParams.get('v');
@@ -18,12 +20,16 @@
 
   function readRoute() {
     const url = new URL(root.location.href);
-    const view = /^#blueprint\/([a-z]+)$/.exec(url.hash)?.[1];
+    for (const key of scopeKeys) blueprintState[key] = '';
+    const [route, scopeQuery = ''] = url.hash.split('?');
+    const scopeParams = new URLSearchParams(scopeQuery);
+    const view = /^#blueprint\/([a-z]+)$/.exec(route)?.[1];
     if (views.has(view)) blueprintState.view = view;
     for (const key of preferences) {
-      const value = url.searchParams.get(key);
+      const value = scopeKeys.includes(key) ? scopeParams.get(key) ?? url.searchParams.get(key) : url.searchParams.get(key);
       if (value === null) continue;
       if (key === 'category' && value.length <= 80) blueprintState[key] = value;
+      else if (scopeKeys.includes(key) && validScopeId(value)) blueprintState[key] = value;
       else if (key === 'scale' && ['trend','values'].includes(value)) blueprintState.scale = value;
       else if (key === 'year' && /^\d{4}$/.test(value)) blueprintState[key] = value;
       else if (bounds[key] && Number.isFinite(Number(value))) blueprintState[key] = String(Math.max(bounds[key][0], Math.min(bounds[key][1], Number(value))));
@@ -36,13 +42,20 @@
     const url = new URL(root.location.href);
     url.searchParams.set('analysis', currentModule);
     for (const key of preferences) {
-      if (blueprintState[key] !== undefined) url.searchParams.set(key, blueprintState[key]);
+      if (scopeKeys.includes(key)) url.searchParams.delete(key);
+      else if (blueprintState[key] !== undefined) url.searchParams.set(key, blueprintState[key]);
     }
-    url.hash = currentModule === 'blueprint' ? `blueprint/${blueprintState.view}` : '';
+    const scopedRoute = new URLSearchParams(scopeKeys.filter(key => blueprintState[key]).map(key => [key, blueprintState[key]])).toString();
+    url.hash = currentModule === 'blueprint' ? `blueprint/${blueprintState.view}${scopedRoute ? '?' + scopedRoute : ''}` : '';
     if (url.href !== root.location.href) root.history[push ? 'pushState' : 'replaceState'](null, '', url);
   }
   function post(message) {
     if (frameLoaded) frame.contentWindow.postMessage(message, root.location.origin);
+  }
+  function navigationMessage(view) {
+    return { type: 'ppc:blueprint:navigate', view, preferences: Object.fromEntries(preferences
+      .filter(key => blueprintState[key] !== undefined)
+      .map(key => [key, blueprintState[key]])) };
   }
   function positionBlueprintDialog() {
     if (!blueprintDialogOpen || currentModule !== 'blueprint') return;
@@ -59,8 +72,9 @@
     if (frame.getAttribute('src')) return;
     const url = new URL(frame.dataset.src, root.location.href);
     if (assetVersion) url.searchParams.set('v', assetVersion);
-    for (const key of preferences) if (blueprintState[key] !== undefined) url.searchParams.set(key, blueprintState[key]);
-    url.hash = blueprintState.view;
+    for (const key of preferences) if (!scopeKeys.includes(key) && blueprintState[key] !== undefined) url.searchParams.set(key, blueprintState[key]);
+    const scopedRoute = new URLSearchParams(scopeKeys.filter(key => blueprintState[key]).map(key => [key, blueprintState[key]])).toString();
+    url.hash = blueprintState.view + (scopedRoute ? '?' + scopedRoute : '');
     frame.src = url.href;
   }
   function switchModule(module, push = true) {
@@ -76,7 +90,7 @@
     root.PPCSelloutDashboard?.setActive?.(module === 'retail');
     if (module === 'blueprint') {
       ensureBlueprint();
-      post({ type: 'ppc:blueprint:navigate', view: blueprintState.view });
+      post(navigationMessage(blueprintState.view));
     } else post({ type: 'ppc:blueprint:suspend' });
     syncViews();
     writeRoute(push);
@@ -85,7 +99,7 @@
     if (!views.has(view)) return;
     blueprintState.view = view;
     if (currentModule !== 'blueprint') switchModule('blueprint', false);
-    post({ type: 'ppc:blueprint:navigate', view });
+    post(navigationMessage(view));
     syncViews();
     writeRoute(push);
   }
@@ -106,6 +120,9 @@
     blueprintState.view = state.view;
     if (Number.isInteger(Number(state.year)) && Number(state.year) >= 2000 && Number(state.year) <= 2200) blueprintState.year = String(state.year);
     if (typeof state.category === 'string' && state.category.length > 0 && state.category.length <= 80) blueprintState.category = state.category;
+    for (const key of scopeKeys) {
+      if (validScopeId(state[key])) blueprintState[key] = state[key];
+    }
     for (const key of Object.keys(bounds)) {
       const value = state[key];
       if (typeof value === 'number' && Number.isFinite(value) && value >= bounds[key][0] && value <= bounds[key][1]) blueprintState[key] = String(value);
@@ -130,7 +147,7 @@
   document.getElementById('blueprintImport').addEventListener('click', () => post({ type: 'ppc:blueprint:import' }));
   frame.addEventListener('load', () => {
     frameLoaded = true; frame.hidden = false; loading.hidden = true;
-    post({ type: 'ppc:blueprint:navigate', view: blueprintState.view });
+    post(navigationMessage(blueprintState.view));
     if (currentModule !== 'blueprint') post({ type: 'ppc:blueprint:suspend' });
   });
   root.addEventListener('message', receiveBlueprintMessage);
