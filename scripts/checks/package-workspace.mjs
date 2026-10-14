@@ -57,10 +57,11 @@ function packageBytes(manifest, { omitImages = false } = {}) {
 const functionNames = [
   "imageStorePut", "imageStoreGet", "imageStoreDelete", "imageStoreClear", "imageStoreWriteBatch", "imageStoreDeleteBatch",
   "dataUriToBlob", "extensionForImageAsset", "createImageAssetMetadata", "ensureImageAssetRegistry", "migrateLegacyProductImages",
-  "loadLocalImageAsset", "normalizeAscmSnapshot", "createDefaultPortfolio", "ensurePortfolioSchema", "normalizeImportedPortfolio",
+  "loadLocalImageAsset", "normalizeAscmSnapshot", "createDefaultPortfolio", "ensurePortfolioSchema", "emptyBoardFromCatalogCategory", "portfolioFromCatalogImport", "normalizeImportedPortfolio",
   "persistPortfolioStorage", "reportWorkspaceSaveFailure", "scheduleSave", "showLocalSaveFailure", "flushWorkspaceSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
   "localPackageImageIds", "clearPackageImageCaches", "commitPackageDraft",
-  "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage", "parsePortfolioImportText", "importJson",
+  "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage", "parsePortfolioImportText", "normalizeIsolatedPortfolioImport", "remapImportedLocalImages", "importJson",
+  "findPortfolioProductLocation", "restoreMergeDraft", "undoProductMergeDraft",
 ];
 const actualFunctions = functionNames.map((name) => {
   const match = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, "m"));
@@ -420,6 +421,121 @@ plaintextFailure.sandbox.importJson({ raw: JSON.stringify(newManifest) }); await
 assert.equal(plaintextFailure.sandbox.portfolio.categories[0].board.products[0].name, "Original"); assert.equal(JSON.parse(plaintextFailure.stored.get(storageKey)).categories[0].board.products[0].name, "Original");
 assert.equal(plaintextFailure.calls.activations.length, 0); assert.equal(plaintextFailure.calls.disconnects, 0); assert.equal(plaintextFailure.calls.marked.length, 0); assert.ok(plaintextFailure.calls.alerts.length, "durable plain-import failure is surfaced");
 
+const collidingLegacyBackup = portfolioFixture("Embedded replacement", ["shared-image"]);
+collidingLegacyBackup.categories[0].board.products[0].imageUrl = "data:image/png;base64,bmV3IGVtYmVkZGVkIHBpeGVscw==";
+for (const failActivation of [true, false]) {
+  const subject = plaintextHarness(), before = subject.stored.get(storageKey);
+  subject.faults.activation = failActivation;
+  subject.sandbox.importJson({ raw: JSON.stringify(collidingLegacyBackup) }); await subject.calls.readerLoads.at(-1);
+  assert.equal(await subject.images.get("shared-image")?.text(), "original:shared-image", "embedded data-file images cannot overwrite or delete the previous workspace's pixels");
+  if (failActivation) {
+    assert.equal(subject.stored.get(storageKey), before, "failed activation restores the previous complete manifest");
+    assert.equal(subject.sandbox.portfolio.categories[0].board.products[0].name, "Original");
+    assert.deepEqual([...subject.images.keys()], ["shared-image"], "failed activation cleans up only newly staged identities");
+  } else {
+    const importedProduct = subject.sandbox.portfolio.categories[0].board.products[0];
+    assert.notEqual(importedProduct.imageAssetId, "shared-image");
+    assert.equal(await subject.images.get(importedProduct.imageAssetId).text(), "new embedded pixels");
+    assert.equal(importedProduct.imageUrl, undefined, "the staged binary image supersedes its legacy inline copy");
+    assert.equal(subject.sandbox.portfolio.imageAssets[0].id, importedProduct.imageAssetId);
+    assert.equal(importedProduct.variantGroups[0].items[0].imageAssetId, importedProduct.imageAssetId, "variant references follow the isolated image identity");
+  }
+}
+
+for (const failActivation of [true, false]) {
+  const subject = plaintextHarness();
+  const queuedOriginal = { id: "shared-image", blob: imageBlob("queued original pixels") };
+  const queuedUnrelated = { id: "unrelated-pending", blob: imageBlob("unrelated retry pixels") };
+  subject.sandbox.pendingLegacyImageBlobs.push(queuedOriginal, queuedUnrelated);
+  subject.faults.activation = failActivation;
+  subject.sandbox.importJson({ raw: JSON.stringify(collidingLegacyBackup) }); await subject.calls.readerLoads.at(-1);
+  assert.equal(subject.sandbox.pendingLegacyImageBlobs.length, 2, "data import preserves previous image retry entries");
+  assert.equal(subject.sandbox.pendingLegacyImageBlobs[0], queuedOriginal);
+  assert.equal(subject.sandbox.pendingLegacyImageBlobs[1], queuedUnrelated);
+  assert.equal(await subject.images.get("shared-image").text(), "original:shared-image");
+  if (!failActivation) {
+    const product = subject.sandbox.portfolio.categories[0].board.products[0];
+    assert.notEqual(product.imageAssetId, "shared-image", "previous retry entries cannot suppress staging incoming pixels with the same identity");
+    assert.equal(await subject.images.get(product.imageAssetId).text(), "new embedded pixels");
+    assert.equal(product.imageUrl, undefined);
+  }
+}
+
+for (const corrupt of [
+  value => { value.categories[0].id = "unsupported-category"; },
+  value => { value.categories.push(clone(value.categories[0])); },
+  value => { value.categories[0].board = null; },
+  value => { for (const category of value.categories) delete category.board; },
+  value => { value.categories[0].board.products.push(clone(value.categories[0].board.products[0])); },
+  value => { value.categories[0].board.products[0].imageAssetId = "missing-image-record"; },
+]) {
+  const subject = plaintextHarness(), before = subject.stored.get(storageKey), invalid = clone(newManifest);
+  corrupt(invalid);
+  subject.sandbox.importJson({ raw: JSON.stringify(invalid) }); await subject.calls.readerLoads.at(-1);
+  assert.equal(subject.stored.get(storageKey), before, "invalid data-file preflight preserves the previous saved workspace");
+  assert.equal(subject.sandbox.portfolio.categories[0].board.products[0].name, "Original");
+  assert.equal(subject.calls.workspaceWrites, 0, "invalid data files never enter the replacement transaction");
+  assert.equal(subject.calls.disconnects, 0); assert.equal(subject.calls.marked.length, 0);
+  assert.ok(subject.calls.alerts.length, "invalid data-file replacement is explained to the user");
+  assert.equal(await subject.images.get("shared-image").text(), "original:shared-image");
+}
+
+const aliasedLegacyBackup = clone(collidingLegacyBackup);
+aliasedLegacyBackup.masterLocalAssetIds = { "shared-origin": "shared-image", "unrelated-origin": "untouched-image" };
+aliasedLegacyBackup.masterLocalBaseline = clone(globalThis.PortfolioMasterModel.snapshot(collidingLegacyBackup).products);
+const aliasedLegacyImport = plaintextHarness();
+aliasedLegacyImport.sandbox.importJson({ raw: JSON.stringify(aliasedLegacyBackup) }); await aliasedLegacyImport.calls.readerLoads.at(-1);
+const aliasedImageId = aliasedLegacyImport.sandbox.portfolio.categories[0].board.products[0].imageAssetId;
+assert.equal(aliasedLegacyImport.sandbox.portfolio.masterLocalAssetIds["shared-origin"], aliasedImageId, "restaged inline pixels preserve shared-to-local image aliases");
+assert.equal(aliasedLegacyImport.sandbox.portfolio.masterLocalAssetIds["unrelated-origin"], "untouched-image");
+assert.deepEqual(clone(aliasedLegacyImport.sandbox.portfolio.masterLocalBaseline), aliasedLegacyBackup.masterLocalBaseline, "restaging does not rewrite the saved comparison baseline");
+
+const catalogBaselineImport = plaintextHarness();
+catalogBaselineImport.sandbox.importJson({ raw: `window.PORTFOLIO_CATALOG = ${JSON.stringify({ version: 1, categories: definitions })};` }); await catalogBaselineImport.calls.readerLoads.at(-1);
+assert.equal(catalogBaselineImport.calls.alerts.length, 0, "the documented categories-only catalog-data.js baseline remains importable");
+assert.equal(catalogBaselineImport.sandbox.portfolio.categories.length, definitions.length);
+assert.ok(catalogBaselineImport.sandbox.portfolio.categories.every(category => category.board.products.length === 0));
+
+for (const laterSurvivorEdit of [false, true]) {
+  const mergeBackup = clone(collidingLegacyBackup), survivor = mergeBackup.categories[0].board.products[0];
+  const keeper = { ...clone(survivor), categoryId: mergeBackup.categories[0].id, name: "Original keeper" };
+  const donor = { ...clone(survivor), categoryId: mergeBackup.categories[0].id, id: "removed-source", name: "Original donor" };
+  const accepted = clone(globalThis.PortfolioMasterModel.snapshot(mergeBackup).products);
+  const originalGuard = globalThis.PortfolioMasterModel.productVersion(survivor);
+  mergeBackup.masterLocalBaseline = accepted;
+  mergeBackup.masterLocalMerges = [{ undoId: "imported-undo", productId: survivor.id, sourceProductId: donor.id,
+    keeperProduct: keeper, sourceProduct: donor, base: clone(accepted[0]), sourceBase: { ...clone(accepted[0]), productId: donor.id },
+    references: [], mergedVersion: originalGuard }];
+  mergeBackup.masterLocalRemovedProducts = { [donor.id]: clone(donor), "independent-delete": { ...clone(donor), id: "independent-delete" } };
+  if (laterSurvivorEdit) survivor.name = "Edited after merging";
+  const subject = plaintextHarness(); subject.sandbox.PortfolioMasterModel = globalThis.PortfolioMasterModel;
+  subject.sandbox.updateDraftViews = () => {};
+  subject.sandbox.importJson({ raw: JSON.stringify(mergeBackup) }); await subject.calls.readerLoads.at(-1);
+  assert.equal(subject.calls.alerts.length, 0);
+  const restored = subject.sandbox.portfolio, imageId = restored.categories[0].board.products[0].imageAssetId;
+  const intent = restored.masterLocalMerges[0];
+  for (const record of [intent.keeperProduct, intent.sourceProduct, ...Object.values(restored.masterLocalRemovedProducts)]) {
+    assert.equal(record.imageAssetId, imageId, "saved undo/deletion records follow the fresh local image identity");
+    assert.equal(record.variantGroups[0].items[0].imageAssetId, imageId);
+    assert.equal(record.imageUrl, undefined, "saved undo records cannot restage an obsolete inline copy");
+  }
+  assert.deepEqual(clone(restored.masterLocalBaseline), mergeBackup.masterLocalBaseline);
+  assert.deepEqual(clone(intent.base), mergeBackup.masterLocalMerges[0].base);
+  assert.deepEqual(clone(intent.sourceBase), mergeBackup.masterLocalMerges[0].sourceBase);
+  if (laterSurvivorEdit) {
+    assert.equal(intent.mergedVersion, originalGuard, "restaging cannot clear a genuine later-edit undo guard");
+    assert.equal(subject.sandbox.undoProductMergeDraft("imported-undo"), false);
+    assert.equal(restored.categories[0].board.products[0].name, "Edited after merging");
+  } else {
+    assert.notEqual(intent.mergedVersion, originalGuard, "an unchanged survivor's undo guard follows the isolated pixels");
+    assert.equal(intent.mergedVersion, globalThis.PortfolioMasterModel.productVersion(restored.categories[0].board.products[0]));
+    assert.equal(subject.sandbox.undoProductMergeDraft("imported-undo"), true, "the actual merge undo remains usable after data import");
+    const undone = subject.sandbox.portfolio.categories[0].board.products;
+    assert.equal(undone.length, 2); assert.deepEqual(clone(undone.map(product => product.name)), ["Original keeper", "Original donor"]);
+    for (const product of undone) assert.equal(await subject.images.get(product.imageAssetId).text(), "new embedded pixels");
+  }
+}
+
 const pendingBackup = portfolioFixture("Pending manual name");
 pendingBackup.masterLocalBaseline = clone(globalThis.PortfolioMasterModel.snapshot(portfolioFixture("Accepted old name")).products);
 pendingBackup.masterLocalMerges = [{ productId: "product-1", sourceProductId: "removed-source", choices: { name: "keeper" }, sourceProduct: { id: "removed-source", specs: [{ id: "source-spec", label: "Source", value: "Retained original" }], privateSource: "Retained donor metadata" } }];
@@ -554,4 +670,4 @@ if (process.argv[2]) {
   console.log(`Local package fixture passed: ${actualResult.categoryCount} categories, ${actualResult.productCount} products.`);
 }
 
-console.log("Package workspace checks passed: automatically stamped update metadata, comments round trips and persistence, strict metadata preflight, complete export, encrypted and legacy import, isolated image staging, rollback, legacy snapshot cleanup, and bounded image cleanup.");
+console.log("Package workspace checks passed: automatically stamped update metadata, comments round trips and persistence, strict metadata/data-file preflight, complete export, encrypted and legacy import, isolated image staging/retry queues, rollback, retained merge undo/deleted-record images and stale-edit guards, canonical baselines, legacy snapshot cleanup, and bounded image cleanup.");

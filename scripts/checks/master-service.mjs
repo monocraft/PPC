@@ -109,6 +109,15 @@ try {
   assert.equal(rejected.response.status, 403);
   assert.equal(rejected.response.headers.get('access-control-allow-origin'), null);
 
+  const sourcedSave = await save(base, original, { plc: { version: 1, sourceFile: 'Retired PLC.xlsx' } });
+  assert.equal(sourcedSave.response.status, 200);
+  const clearedSource = await save(base, sourcedSave.data.snapshot, { plc: null });
+  assert.equal(clearedSource.response.status, 200);
+  assert.equal(clearedSource.data.savedFields, 1);
+  assert.equal(product(clearedSource.data.snapshot).values.plc, null, 'The accepted service response agrees with the source-clear receipt.');
+  assert.equal(Object.hasOwn((await inspect()).categories[0].board.products[0], 'plc'), false, 'Source removal survives encrypted package persistence.');
+  assert.equal(product(await latest(base)).values.plc, null, 'A later service read cannot restore retired source evidence.');
+
   const launchSave = await save(base, original, { generalAvailabilityDate: '2026-07-15' });
   assert.equal(launchSave.response.status, 200);
   assert.equal(launchSave.data.snapshot.packageInfo.comments, 'Fixture update');

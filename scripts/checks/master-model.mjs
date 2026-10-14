@@ -62,6 +62,23 @@ assert.equal(savedProduct(allMilestones).roadmap.notes, product.roadmap.notes);
 assert.equal(savedProduct(allMilestones).laneId, product.laneId);
 assert.deepEqual(allMilestones.manifest.imageAssets, manifest.imageAssets);
 
+const sourcedManifest = copy(manifest);
+sourcedManifest.categories[0].board.products[0].plc = { version: 1, sourceFile: "Superseded PLC.xlsx", fields: { ffsDate: { value: product.ffsDate } } };
+const sourcedBase = model.snapshot(sourcedManifest).products[0];
+const independentSourceEdit = save(sourcedManifest, { codename: "Independent editor" }, sourcedBase.values, sourcedBase.revisions);
+const clearedSource = save(independentSourceEdit.manifest, { plc: null }, sourcedBase.values, sourcedBase.revisions);
+assert.equal(clearedSource.conflicts.length, 0);
+assert.equal(clearedSource.savedFields, 1);
+assert.equal(Object.hasOwn(savedProduct(clearedSource), "plc"), false, "An accepted source clear removes the stored evidence rather than only recording its removal in history.");
+assert.equal(model.snapshot(clearedSource.manifest).products[0].values.plc, null);
+assert.equal(savedProduct(clearedSource).codename, "Independent editor", "Clearing old source evidence preserves concurrent independent facts.");
+assert.deepEqual(clearedSource.history.map((record) => ({ path: record.path, after: record.after })), [{ path: "plc", after: null }]);
+assert.equal(savedProduct(clearedSource).imageAssetId, product.imageAssetId);
+assert.equal(savedProduct(clearedSource).manualMetadata, product.manualMetadata);
+assert(sourcedManifest.categories[0].board.products[0].plc, "Source removal leaves the input manifest unchanged.");
+const replacedSource = save(sourcedManifest, { plc: { version: 1, sourceFile: "Latest PLC.xlsx" } }, sourcedBase.values, sourcedBase.revisions);
+assert.equal(save(replacedSource.manifest, { plc: null }, sourcedBase.values, sourcedBase.revisions).conflicts[0].path, "plc", "Clearing evidence still requires review when another editor replaced that evidence.");
+
 const masterSpec = save(manifest, { specs: base.specs.map((row) => row.id === "connection" ? { ...row, value: "USB-C" } : row) });
 const localSpec = base.specs.map((row) => row.id === "driver" ? { ...row, value: "55 mm" } : row);
 const combinedSpecs = save(masterSpec.manifest, { specs: localSpec });

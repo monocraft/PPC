@@ -60,6 +60,16 @@ assert.equal(imported.manifest.categories[0].board.products[0].ascm.records.leng
 assert.throws(() => model.mergeChanges(empty, [{ ...newRequest, sourceProduct: { ...source, imageAssetId: 'not-uploaded' } }]), /has not been uploaded/);
 assert.throws(() => model.mergeChanges(initial, [{ ...request, choices: { constructor: 'source' } }]), /decisions/);
 
+const sourcedMerge = copy(initial);
+sourcedMerge.categories[0].board.products.find((product) => product.id === 'keep').plc = { version: 1, sourceFile: 'Retired PLC.xlsx' };
+const clearMergeRequest = operation(sourcedMerge, { mine: { ...request.mine, plc: null } });
+const clearedMerge = model.mergeChanges(sourcedMerge, [clearMergeRequest], { requestId: 'clear-merged-source' });
+assert.equal(clearedMerge.conflicts.length, 0);
+const clearedKeeper = clearedMerge.manifest.categories[0].board.products.find((product) => product.id === 'keep');
+assert.equal(Object.hasOwn(clearedKeeper, 'plc'), false, 'An explicitly cleared source is removed from the accepted survivor of a product merge.');
+assert.equal(model.snapshot(clearedMerge.manifest).products.find((product) => product.productId === 'keep').values.plc, null);
+assert.equal(clearedKeeper.ascm.records.length, 2, 'Clearing PLC metadata retains other merged source records.');
+
 // Accepted products can also contain an import that has not been saved yet.
 // Keep the fenced accepted originals, while retaining every reviewed local fact.
 const reviewedKeeper = copy(keeper), reviewedSource = copy(source);

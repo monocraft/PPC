@@ -797,7 +797,7 @@
     catch (error) { message(error.message, true); } finally { event.target.value = ""; }
   };
   function download(filename, content, mime) { const blob = new Blob([content], { type: mime }), url = URL.createObjectURL(blob), a = document.createElement("a"); a.href = url; a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-  const csvCell = v => { let s = String(v ?? ""); if (/^[=+@\t\r]|^-\D/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+  const csvCell = v => { let s = String(v ?? ""); if (typeof v !== "number" && (/^[\s\uFEFF]*[=+@-]/.test(s) || /^[\t\r\n]/.test(s))) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
   function csv(headers, rows) { return [headers, ...rows].map(r => r.map(csvCell).join(",")).join("\r\n"); }
   function brief(planningOnly = false) {
     const s = state.snapshot, market = $("marketStore").value, a = market ? M.analyze(s, { ...filters(), stores: [market], start: state.analysis.selection.start || filters().start, end: state.analysis.selection.end || filters().end, coverage: "available" }) : state.analysis, rows = a.storeProducts, positive = [...rows].filter(r => r.current > 0).sort((a, b) => b.current - a.current).slice(0, 8), declines = [...rows].filter(r => r.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 5);
