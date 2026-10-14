@@ -21,6 +21,7 @@
   const state = { snapshot: null, prices: {}, ppcPrices: {}, ppcProjection: null, pricingSource: null, stores: [], products: [], storesNone: false, productsNone: false, shortlist: [], drafts: {}, sort: "current", descending: true, page: 0, analysis: null, pending: null, sheets: [], hiddenSeries: new Set(), candidates: [], view: "overview", brushing: false, markerDate: null, hoverDate: null };
   const barAnimations = new Map();
   let timelineFull = null, playTimer = null, brushUpdateTimer = null, playing = false, playbackScale = null;
+  let active = !app.hidden, cancelTimelineBrush = null;
   let dbPromise;
   const reduced = () => root.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let chartSpring = null, chartSpringReduced = null;
@@ -171,7 +172,7 @@
     const paint = progress => { const ease = 1 - Math.pow(1 - progress, 3); entries.forEach(entry => { const values = entry.target.map((value, j) => entry.from[j] + (value - entry.from[j]) * ease); attributes.forEach((attribute, j) => entry.mark.setAttribute(attribute, values[j])); cache.values.set(entry.key, values); }); };
     if (reduced() || !previous || !entries.length) { paint(1); return; }
     paint(0); const start = performance.now(), duration = playing ? 275 : 420;
-    const step = now => { cache.frame = null; if (!marks[0]?.isConnected) return; const progress = Math.min(1, (now - start) / duration); paint(progress); if (progress < 1) cache.frame = requestAnimationFrame(step); };
+    const step = now => { cache.frame = null; if (!active || !marks[0]?.isConnected) return; const progress = Math.min(1, (now - start) / duration); paint(progress); if (progress < 1) cache.frame = requestAnimationFrame(step); };
     cache.frame = requestAnimationFrame(step);
   }
   function linePath(values, x, y) {
@@ -225,6 +226,7 @@
   }
   const trendMotionKeys = new Set();
   function renderTrend() {
+    if (!active || !state.analysis) return;
     const a = state.analysis, mode = $("trendMode").value;
     app.querySelectorAll("[data-trend]").forEach(button => button.setAttribute("aria-pressed", button.dataset.trend === mode));
     if (!a.series.length) { root.PPCSelloutMotion.reset(); trendMotionKeys.clear(); noChart("trendChart", "No reported weeks in this selection."); $("trendLegend").innerHTML = ""; return; }
@@ -486,7 +488,7 @@
     root.PPCSelloutDashboard.analysis = a;
   }
   function renderCharts() {
-    if (!state.analysis) return;
+    if (!active || !state.analysis) return;
     if (state.view === "overview") {
       renderTrend(); renderBars("storeChart", state.analysis.stores, state.analysis.totals.comparisonComplete, false); renderBars("productChart", state.analysis.products, false, true); renderGrowth(); renderMomentum();
       renderMix(); matrices(); renderQuarters(); renderHeat();
@@ -497,6 +499,7 @@
     stopTimeline(); state.view = view;
     app.querySelectorAll("[data-analytics-view]").forEach(el => { el.hidden = el.dataset.analyticsView !== view; el.classList.toggle("is-current", !el.hidden); });
     app.querySelectorAll(".so-sidebar nav a").forEach(a => { const current = a.hash === "#" + view; a.classList.toggle("is-active", current); if (current) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
+    if (!active || !state.analysis) return;
     renderCharts(); if (view === "overview") { insights(); renderTimeline(); } if (view === "planning") planning(); if (view === "records") table();
     document.documentElement.scrollTo({ top: 0, behavior: reduced() ? "instant" : "smooth" });
   }
@@ -512,7 +515,7 @@
     return { start, end, limit };
   }
   function renderTimeline() {
-    if (state.view !== "overview" || !state.snapshot || state.brushing) return;
+    if (!active || state.view !== "overview" || !state.snapshot || state.brushing) return;
     const bounds = timelineBounds(), periods = state.snapshot.periods, n = periods.length;
     const full = timelineFull, f = svgFrame("timelineChart", 84, "Full weekly reporting history"), values = periods.map(p => full.series.find(point => point.date === p.date)?.current ?? null);
     const max = Math.max(1, ...values.filter(Number.isFinite)), min = Math.min(0, ...values.filter(Number.isFinite)), x = i => n === 1 ? f.w / 2 : i / (n - 1) * f.w, y = value => 60 - (value - min) / (max - min || 1) * 53;
@@ -612,9 +615,10 @@
   function stopTimeline({ refit = true } = {}) {
     const wasPlaying = playing; clearTimeout(playTimer); playTimer = null; playing = false; playbackScale = null;
     $("timelinePlay").textContent = "Play"; $("timelinePlay").setAttribute("aria-pressed", "false");
-    if (refit && wasPlaying && state.analysis && state.view === "overview") renderTrend();
+    if (active && refit && wasPlaying && state.analysis && state.view === "overview") renderTrend();
   }
   function playTimeline() {
+    if (!active) return;
     if (playing) return stopTimeline();
     if (!state.timeline || state.timeline.end - state.timeline.start >= state.timeline.limit) return;
     playbackScale = fullTrendScale(); playing = true;
@@ -626,7 +630,7 @@
     playTimer = setTimeout(tick, interval);
   }
   $("timelineTrack").addEventListener("pointerdown", event => {
-    if (!state.snapshot || event.button !== 0 || event.isPrimary === false || state.brushing) return;
+    if (!active || !state.snapshot || event.button !== 0 || event.isPrimary === false || state.brushing) return;
     stopTimeline(); const track = $("timelineTrack"), r = track.getBoundingClientRect(), n = state.snapshot.periods.length;
     const index = x => Math.max(0, Math.min(state.timeline.limit, Math.round((x - r.left) / r.width * (n - 1))));
     const origin = index(event.clientX), mode = event.target.closest("[data-brush]")?.dataset.brush || "new", original = { ...state.timeline };
@@ -641,7 +645,8 @@
       const tug = Math.max(-18, Math.min(18, residual * plotWidth / Math.max(1, (state.analysis?.periods.length || 2) - 1)));
       springController().pull({ x: tug, stretch: mode === "pan" ? 0 : Math.max(-.018, Math.min(.018, tug / plotWidth)) });
     };
-    const finish = e => { if (e.pointerId !== event.pointerId) return; if (e.type !== "pointercancel") move(e); clearTimeout(brushUpdateTimer); state.brushing = false; playbackScale = null; track.classList.remove("is-dragging"); track.removeEventListener("pointermove", move); track.removeEventListener("pointerup", finish); track.removeEventListener("pointercancel", finish); if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId); update(); chartSpring?.release(); };
+    const finish = e => { if (e.pointerId !== event.pointerId) return; if (e.type !== "pointercancel") move(e); cancelTimelineBrush(); update(); chartSpring?.release(); };
+    cancelTimelineBrush = () => { clearTimeout(brushUpdateTimer); state.brushing = false; playbackScale = null; track.classList.remove("is-dragging"); track.removeEventListener("pointermove", move); track.removeEventListener("pointerup", finish); track.removeEventListener("pointercancel", finish); if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId); cancelTimelineBrush = null; };
     track.addEventListener("pointermove", move); track.addEventListener("pointerup", finish); track.addEventListener("pointercancel", finish);
     if (mode === "new") move(event);
   });
@@ -778,14 +783,14 @@
   }
   let ppcRefreshPending = false;
   async function refreshPpc() {
-    if (!ppcBridge || ppcRefreshPending) return;
+    if (!active || !ppcBridge || ppcRefreshPending) return;
     ppcRefreshPending = true;
     try { await ppcBridge.request(state.snapshot ? M.options(state.snapshot).products.map(p => p.sku) : undefined); }
     catch (_) { ppcBridge?.disconnect(); ppcBridge = null; }
     finally { ppcRefreshPending = false; }
   }
   $("ppcBackupButton").onclick = () => $("ppcPricingFile").click();
-  root.addEventListener("focus", () => { void refreshPpc(); });
+  root.addEventListener("focus", () => { if (active) void refreshPpc(); });
   $("ppcPricingFile").onchange = async event => {
     const file = event.target.files[0]; if (!file) return;
     try { if (file.size > 20 * 1024 * 1024) throw new Error("Choose a PPC backup or pricing projection under 20 MiB."); const source = JSON.parse(await file.text()), projection = source.schemaVersion === 1 && source.currency === "USD" ? source : root.PPCSelloutPricing.projectPortfolio(source, { skus: state.snapshot ? M.options(state.snapshot).products.map(p => p.sku) : undefined }); projection.authority = "ppc-backup"; await acceptPpc(projection, { title: file.name, authority: "ppc-backup", updatedAt: new Date().toISOString() }); message(""); }
@@ -920,12 +925,28 @@
   document.addEventListener("click", e => { app.querySelectorAll(".so-picker[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; }); });
   document.addEventListener("keydown", e => { if (e.key === "Escape") { $("chartTooltip").hidden = true; app.querySelectorAll(".so-picker[open]").forEach(d => d.open = false); } });
   let dragDepth = 0;
-  root.addEventListener("dragenter", e => { if ([...e.dataTransfer?.types || []].includes("Files")) { e.preventDefault(); dragDepth++; $("dropOverlay").hidden = false; } }); root.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropOverlay").hidden = true; } }); root.addEventListener("dragover", e => { if ([...e.dataTransfer?.types || []].includes("Files")) e.preventDefault(); }); root.addEventListener("drop", e => { if (e.dataTransfer?.files.length) { e.preventDefault(); dragDepth = 0; $("dropOverlay").hidden = true; readImport(e.dataTransfer.files[0]); } });
+  root.addEventListener("dragenter", e => { if (active && [...e.dataTransfer?.types || []].includes("Files")) { e.preventDefault(); dragDepth++; $("dropOverlay").hidden = false; } }); root.addEventListener("dragleave", () => { if (active && --dragDepth <= 0) { dragDepth = 0; $("dropOverlay").hidden = true; } }); root.addEventListener("dragover", e => { if (active && [...e.dataTransfer?.types || []].includes("Files")) e.preventDefault(); }); root.addEventListener("drop", e => { if (active && e.dataTransfer?.files.length) { e.preventDefault(); dragDepth = 0; $("dropOverlay").hidden = true; readImport(e.dataTransfer.files[0]); } });
   app.querySelectorAll(".so-sidebar nav a").forEach(a => a.onclick = event => { event.preventDefault(); showView(a.hash.slice(1)); });
-  document.addEventListener("visibilitychange", () => { if (document.hidden) stopTimeline(); });
-  let resizeTimer; new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.analysis && !state.brushing) { renderCharts(); renderTimeline(); } }, 100); }).observe($("trendChart"));
+  document.addEventListener("visibilitychange", () => { if (document.hidden) stopTimeline({ refit: false }); });
+  let resizeTimer; new ResizeObserver(() => { clearTimeout(resizeTimer); if (!active) return; resizeTimer = setTimeout(() => { if (active && state.analysis && !state.brushing) { renderCharts(); renderTimeline(); } }, 100); }).observe($("trendChart"));
+  function setActive(value) {
+    const next = Boolean(value), changed = next !== active;
+    active = next; app.hidden = !active;
+    if (!active) {
+      const interruptedBrush = state.brushing;
+      stopTimeline({ refit: false }); cancelTimelineBrush?.(); clearTimeout(brushUpdateTimer); clearTimeout(resizeTimer);
+      root.PPCSelloutMotion.reset(); chartSpring?.destroy(); chartSpring = null;
+      for (const animation of barAnimations.values()) { if (animation.frame) cancelAnimationFrame(animation.frame); animation.frame = null; }
+      dragDepth = 0; $("dropOverlay").hidden = true; $("chartTooltip").hidden = true;
+      if (interruptedBrush) update();
+      return;
+    }
+    if (!changed) return;
+    if (state.analysis) { renderCharts(); if (state.view === "overview") { insights(); renderTimeline(); } if (state.view === "planning") planning(); if (state.view === "records") table(); }
+    void refreshPpc();
+  }
   const workspace = () => ({ snapshot: state.snapshot, prices: structuredClone(state.prices), shortlist: structuredClone(state.shortlist), ppcProjection: state.ppcProjection, pricingSource: state.pricingSource });
-  root.PPCSelloutDashboard = { analysis: null, ready: null, applySnapshot, readImport, getSnapshot: workspace };
+  root.PPCSelloutDashboard = { analysis: null, ready: null, applySnapshot, readImport, getSnapshot: workspace, setActive, showView };
   root.PPCSelloutDashboard.ready = (async () => {
     const loadWorkspace = value => applySnapshot(value.snapshot || value, value.prices, value.shortlist, value.ppcProjection || null, value.pricingSource || null);
     try { const embedded = root.PPC_RETAIL_LOCAL_SNAPSHOT, saved = await storage("readonly"); if (saved?.snapshot && M.validateSnapshot(saved.snapshot).ok) await loadWorkspace(saved); else if (embedded) await loadWorkspace(embedded); }

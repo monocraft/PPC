@@ -16,7 +16,7 @@ A browser-based workspace for organizing product portfolios and planning product
 - Import and export project packages.
 - Drop biweekly HyperX PLC workbooks into PPC to collect evidence and update reliable milestones automatically. Track independent timestamps and aging for all six dates, resolve saved exceptions when needed, and automatically share importer changes when connected with editing access. See [PLC import module](docs/PLC-IMPORT-MODULE.md).
 - Create PowerPoint presentations from portfolios and roadmaps.
-- Explore retail sell-out in a separate Analytics module with weekly SKU and retailer comparisons, category contribution, USD MSRP positioning and searchable detail rows. See [Retail Analytics module](docs/RETAIL-ANALYTICS-MODULE.md).
+- Open one Analytics workspace for retail performance and portfolio planning, with local Blueprint workbook imports, category comparison, investment, NPI and growth scenarios. See [Analytics workspace](docs/ANALYTICS-WORKSPACE.md) and [Retail Analytics module](docs/RETAIL-ANALYTICS-MODULE.md).
 
 ## Getting started
 

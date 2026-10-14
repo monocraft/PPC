@@ -67,7 +67,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   if (process.argv.length > 2) throw new Error("Site versioning only updates prepared site HTML pages.");
   const version = process.env.PPC_SITE_VERSION || process.env.GITHUB_SHA || "";
   const preparedRoot = path.join(projectRoot, "_site");
-  const pages = ["index.html", "analytics.html", "analytics-auth.html"];
+  const pages = ["index.html", "analytics.html", "analytics-auth.html", "blueprint/index.html"];
   const prepared = [];
   for (const page of pages) {
     const output = path.join(preparedRoot, page);

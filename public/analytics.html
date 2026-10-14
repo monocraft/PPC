@@ -4,15 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#1A1B1C">
-  <meta name="description" content="Retail sell-out analytics, Products, category opportunities and market planning briefs.">
-  <title>Retail Analytics · Product Portfolio</title>
+  <meta name="description" content="One workspace for retail performance, portfolio planning, investment and growth analysis.">
+  <title>Analytics · Product Portfolio</title>
   <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/sellout-dashboard.css">
   <link rel="stylesheet" href="css/sellout-months.css">
+  <link rel="stylesheet" href="css/analytics-workspace.css">
   <script src="js/reference-theme.js"></script>
 </head>
 <body>
-<div id="selloutApp" class="so-app">
+<header class="analysis-header">
+  <div class="analysis-heading"><a href="index.html" target="_blank" rel="noopener" class="analysis-brand" aria-label="Open Product Portfolio in a new tab"><span aria-hidden="true">P</span><span>Product Portfolio</span></a><span class="analysis-slash" aria-hidden="true">/</span><h1>Analytics</h1></div>
+  <div class="analysis-modules" role="tablist" aria-label="Analysis workspace">
+    <button id="analysis-retail-tab" type="button" role="tab" data-analysis-module="retail" aria-selected="true" aria-controls="selloutApp">Retail <span>Sell-out &amp; demand</span></button>
+    <button id="analysis-blueprint-tab" type="button" role="tab" data-analysis-module="blueprint" aria-selected="false" aria-controls="blueprintPane" tabindex="-1">Portfolio plan <span>Investment &amp; growth</span></button>
+  </div>
+  <span class="analysis-local"><i aria-hidden="true"></i> Local workspace</span>
+</header>
+<div id="selloutApp" class="so-app analysis-panel" role="tabpanel" aria-labelledby="analysis-retail-tab">
 
   <main class="so-main">
     <header class="so-topbar"><div class="so-sidebar">
@@ -80,6 +89,21 @@
   <div id="dropOverlay" class="so-drop-overlay" hidden>Drop a sell-out workbook to review it</div>
   <dialog id="privateDialog" class="so-dialog so-import-dialog"><form method="dialog" class="so-dialog-head"><h2 id="privateTitle">Encrypted analytics</h2><button type="submit" aria-label="Close encryption dialog">×</button></form><div class="so-dialog-body"><p id="privatePurpose">Use your existing PPC package key. Keep the key within the authorized team.</p><label>PPC package key<input id="privateKey" type="password" autocomplete="off" spellcheck="false"></label><p id="privateStatus" role="status" aria-live="polite"></p><button id="privateAction" type="button" class="so-primary">Save encrypted package</button></div></dialog>
 </div>
+<section id="blueprintPane" class="analysis-panel blueprint-pane" role="tabpanel" aria-labelledby="analysis-blueprint-tab" hidden>
+  <div class="analysis-contextbar">
+    <nav id="blueprintViews" aria-label="Portfolio analysis views">
+      <button type="button" data-blueprint-view="overview" aria-current="page">Overview</button>
+      <button type="button" data-blueprint-view="performance">Performance</button>
+      <button type="button" data-blueprint-view="products">Products &amp; NPI</button>
+      <button type="button" data-blueprint-view="investment">Investment</button>
+      <button type="button" data-blueprint-view="scenarios">Scenarios</button>
+      <button type="button" data-blueprint-view="source">Source &amp; quality</button>
+    </nav>
+    <div class="analysis-source-actions"><span id="blueprintSource" class="analysis-source-label">No workbook loaded</span><button id="blueprintImport" type="button">Import workbook</button></div>
+  </div>
+  <p id="blueprintLoading" class="analysis-loading" role="status">Opening portfolio analysis…</p>
+  <iframe id="blueprintFrame" title="Portfolio planning and growth analysis" data-src="blueprint/index.html?embedded=1" class="analysis-frame" hidden></iframe>
+</section>
 <script src="js/ascm-import.js"></script>
 <script src="js/package-codec.js"></script>
 <script src="js/sellout-model.js"></script>
@@ -92,5 +116,6 @@
 <script src="js/sellout-mix.js"></script><script src="js/sellout-flow.js"></script>
 <script src="js/sellout-motion.js"></script><script src="js/sellout-spring.js"></script>
 <script src="js/sellout-dashboard.js"></script>
+<script src="js/analytics-workspace.js"></script>
 </body>
 </html>
