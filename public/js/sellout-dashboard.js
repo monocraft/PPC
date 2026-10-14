@@ -774,8 +774,8 @@
     const prices = Object.entries(state.prices); if (prices.length) lines.push("", "## USD MSRP sources", "", "| SKU | MSRP USD | Source / note |", "|---|---:|---|", ...prices.map(([sku, p]) => `| ${safe(sku)} | ${p.msrp.toFixed(2)} | ${safe(p.source)} |`));
     download(planningOnly ? "ppc-planning-brief.md" : "market-performance-brief.md", lines.join("\n"), "text/markdown;charset=utf-8");
   }
-  const chooseFile = () => { $("importPicker").open = false; $("workbookFile").click(); };
-  $("importFileButton").onclick = $("emptyImport").onclick = chooseFile;
+  const chooseFile = () => $("workbookFile").click();
+  $("emptyImport").onclick = chooseFile;
   $("workbookFile").onchange = e => readImport(e.target.files[0]);
   let sharepointLink = null, selectedSharepointLink = null;
   function clearSharepointLink() {
@@ -783,9 +783,14 @@
     $("sharepointOpen").removeAttribute("href"); $("sharepointHost").textContent = "";
   }
   function openSharepointLink() {
-    $("importPicker").open = false; selectedSharepointLink = null; clearSharepointLink(); $("sharepointLink").value = ""; $("sharepointDialog").showModal();
+    selectedSharepointLink = null; clearSharepointLink(); $("sharepointLink").value = ""; $("sharepointDialog").showModal();
   }
-  $("importLinkButton").onclick = $("emptyLinkImport").onclick = openSharepointLink;
+  $("emptyLinkImport").onclick = openSharepointLink;
+  $("importButton").onchange = event => {
+    const action = event.target.value; event.target.value = "";
+    if (action === "file") chooseFile();
+    else if (action === "sharepoint") openSharepointLink();
+  };
   $("sharepointLink").oninput = clearSharepointLink;
   $("sharepointLinkForm").onsubmit = event => {
     event.preventDefault(); clearSharepointLink();
@@ -857,8 +862,8 @@
     } catch (error) { if (run === privateRun) $("privateStatus").textContent = error.message; }
     finally { if (run === privateRun) { $("privateKey").value = ""; $("privateAction").disabled = false; } }
   };
-  document.addEventListener("click", e => { app.querySelectorAll(".so-picker[open],.so-import-picker[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; }); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { $("chartTooltip").hidden = true; app.querySelectorAll(".so-picker[open],.so-import-picker[open]").forEach(d => d.open = false); } });
+  document.addEventListener("click", e => { app.querySelectorAll(".so-picker[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; }); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { $("chartTooltip").hidden = true; app.querySelectorAll(".so-picker[open]").forEach(d => d.open = false); } });
   let dragDepth = 0;
   root.addEventListener("dragenter", e => { if ([...e.dataTransfer?.types || []].includes("Files")) { e.preventDefault(); dragDepth++; $("dropOverlay").hidden = false; } }); root.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropOverlay").hidden = true; } }); root.addEventListener("dragover", e => { if ([...e.dataTransfer?.types || []].includes("Files")) e.preventDefault(); }); root.addEventListener("drop", e => { if (e.dataTransfer?.files.length) { e.preventDefault(); dragDepth = 0; $("dropOverlay").hidden = true; readImport(e.dataTransfer.files[0]); } });
   app.querySelectorAll(".so-sidebar nav a").forEach(a => a.onclick = event => { event.preventDefault(); showView(a.hash.slice(1)); });
