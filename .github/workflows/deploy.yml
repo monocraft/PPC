@@ -55,6 +55,7 @@ jobs:
           cp public/css/sellout-months.css _site/css/
           cp public/js/sellout-dashboard.js public/js/sellout-model.js _site/js/
           cp public/js/sellout-ppc.js public/js/sellout-private.js _site/js/
+          cp public/js/sellout-sharepoint.js _site/js/
           cp public/js/sellout-mix.js _site/js/
           cp public/js/sellout-flow.js _site/js/
           cp public/js/sellout-motion.js _site/js/
@@ -112,6 +113,7 @@ jobs:
           test -f _site/js/sellout-model.js
           test -f _site/js/sellout-ppc.js
           test -f _site/js/sellout-private.js
+          test -f _site/js/sellout-sharepoint.js
           test -f _site/js/sellout-mix.js
           test -f _site/js/sellout-flow.js
           test -f _site/js/sellout-motion.js

@@ -8,7 +8,7 @@ import { renderVersionedIndex } from "../configure-site-version.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const publicRoot = path.join(root, "public");
-const moduleFiles = ["analytics.html", "css/sellout-dashboard.css", "css/sellout-months.css", "js/sellout-model.js", "js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js", "js/sellout-ppc.js", "js/sellout-private.js", "js/sellout-dashboard.js"];
+const moduleFiles = ["analytics.html", "css/sellout-dashboard.css", "css/sellout-months.css", "js/sellout-model.js", "js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js", "js/sellout-ppc.js", "js/sellout-private.js", "js/sellout-sharepoint.js", "js/sellout-dashboard.js"];
 const privateFormats = /\.(?:xlsx?|xlsm|csv|tsv|jsonl?|data)$/i;
 
 function attributes(tag) {
@@ -92,7 +92,7 @@ assert.ok(closure.has("js/package-codec.js"), "Protected analytics must use the 
 const scriptOrder = [...html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)].map(match => resolveAsset(match[1], "analytics.html"));
 for (const before of ["js/package-codec.js", "js/sellout-model.js", "js/sellout-ppc.js"]) assert.ok(scriptOrder.indexOf(before) < scriptOrder.indexOf("js/sellout-private.js"), `${before} must load before private analytics.`);
 assert.ok(scriptOrder.indexOf("js/sellout-private.js") < scriptOrder.indexOf("js/sellout-dashboard.js"), "Private analytics tools must load before the dashboard.");
-for (const helper of ["js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js"]) assert.ok(scriptOrder.indexOf(helper) < scriptOrder.indexOf("js/sellout-dashboard.js"), `${helper} must load before the dashboard.`);
+for (const helper of ["js/sellout-mix.js", "js/sellout-flow.js", "js/sellout-motion.js", "js/sellout-spring.js", "js/sellout-sharepoint.js"]) assert.ok(scriptOrder.indexOf(helper) < scriptOrder.indexOf("js/sellout-dashboard.js"), `${helper} must load before the dashboard.`);
 assert.ok(![...closure].some(file => /\/(?:app|master-[\w-]+|workspace-store|package-client)\.js$/.test(file)), "Analytics must open independently from portfolio editing and master storage.");
 for (const file of closure) {
   if (file.endsWith(".css")) {
