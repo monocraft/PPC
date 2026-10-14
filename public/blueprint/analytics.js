@@ -240,13 +240,54 @@
       return {...trace,series:trace.series.map(point=>({...point,value:finite(point.rawValue)?point.rawValue/baseline*100:null}))};
     })};
   }
+  function compareDrillSeries(metric,options={}) {
+    const requested=options.compareIds;
+    if(requested===undefined||requested===null||(Array.isArray(requested)&&!requested.length))return null;
+    const reject=reason=>({active:false,invalid:true,traces:[],selectionSummary:null,selectionSeries:[],selectionMetricSeries:{},selectedChildren:[],indexed:false,basePeriod:null,mode:'values',unit:metric==='units'?'number':['grossMargin','rawMargin','marketShare'].includes(metric)?'percent':'currency',reason,notice:reason,coverage:{invalidSelection:true}});
+    if(!Array.isArray(requested)||requested.length>50||requested.some(id=>typeof id!=='string'||!id.length||id.length>240||/[\u0000-\u001f\u007f]/.test(id)))return reject('Choose up to 50 valid sibling products, projects or SKUs to compare.');
+    const ids=[...new Set(requested)],parent=drilldown(options),expected={category:'group',group:'project',project:'sku'}[parent.scope.level];
+    if(!expected||parent.coverage.invalidScope)return reject('Choose comparison items from a valid parent group or project.');
+    const children=[];
+    for(const id of ids){const matches=parent.children.filter(child=>child.id===id);if(matches.length!==1||matches[0].level!==expected)return reject('A comparison item is unavailable or ambiguous in the current scope. Choose the visible sibling items again.');children.push(matches[0]);}
+    if(ids.length>1&&ids.includes('source-unmapped'))return reject('Unmapped tracker records cannot be combined with product-group finance because their source populations may overlap.');
+    const models=children.map(child=>drilldown({...options,categories:undefined,category:child.category,groupId:child.groupId,projectId:child.projectId,skuId:child.skuId}));
+    if(models.some(model=>model.coverage.invalidScope))return reject('The selected source identities could not be matched safely.');
+    const ratios=['grossMargin','rawMargin','marketShare','publishedMargin','attainment'],percentage=ratios.includes(metric),metricKey=metric==='rawMargin'?'grossMargin':metric;
+    const periods=[...new Set(models.flatMap(model=>Object.values(model.metricSeries).flatMap(points=>points.map(point=>point.period))))].sort((a,b)=>Number(a)-Number(b));
+    const at=(model,key,year)=>model.metricSeries[key]?.find(point=>String(point.period)===String(year));
+    const aggregate=(key,year)=>{
+      const margin=key==='grossMargin'||key==='rawMargin';
+      const points=models.map(model=>at(model,margin?'grossProfit':key,year)),revenues=margin?models.map(model=>at(model,'revenue',year)):[];
+      const present=points.map((point,i)=>finite(point?.value)&&(!margin||finite(revenues[i]?.value)));
+      const complete=present.every(Boolean),numerator=complete?sum(points.map(point=>point.value)):null,denominator=margin&&complete?sum(revenues.map(point=>point.value)):null;
+      const source=points.flatMap((point,i)=>[...(point?.source||[]),...(margin?revenues[i]?.source||[]:[])]);
+      const kinds=[...new Set(points.map(point=>point?.kind).filter(Boolean))];
+      return {period:year,value:margin?ratio(numerator,denominator):numerator,kind:key==='budget'?'source-investment':kinds.includes('unclassified')?'unclassified':kinds.length===1?kinds[0]:kind(year),source,basis:margin?'Selected sibling gross-profit dollars / selected sibling revenue':key==='budget'?'Selected sibling source PD investment by fiscal year; not verified actual cash spend':'Combined selected sibling source values; every selected item must have a numeric observation',coverage:{selectedCount:ids.length,availableCount:present.filter(Boolean).length,missingCount:present.filter(value=>!value).length,missingIds:ids.filter((id,i)=>!present[i]),complete}};
+    };
+    const selectionMetricSeries=Object.fromEntries(['revenue','grossProfit','grossMargin','rawMargin','units','budget'].map(key=>[key,periods.map(year=>aggregate(key,year))]));
+    const period=periodOf(options),summaryPoints=Object.fromEntries(Object.keys(selectionMetricSeries).map(key=>[key,aggregate(key,period)]));
+    const coverage={invalidSelection:false,selectedCount:ids.length,selectedIds:[...ids],parentLevel:parent.scope.level,level:expected,needsReimport:models.some(model=>model.coverage.needsReimport),sourceGrainVersion:Math.min(...models.map(model=>model.coverage.sourceGrainVersion)),missingByMetric:Object.fromEntries(Object.entries(summaryPoints).map(([key,point])=>[key,point.coverage.missingCount])),completeByMetric:Object.fromEntries(Object.entries(summaryPoints).map(([key,point])=>[key,point.coverage.complete])),missingIdsByMetric:Object.fromEntries(Object.entries(summaryPoints).map(([key,point])=>[key,point.coverage.missingIds]))};
+    const categories=[...new Set(models.map(model=>model.scope.category).flat())],previous=aggregate('revenue',period-1).value;
+    const selectionSummary={period,category:categories.length===1?categories[0]:categories,kind:summaryPoints.revenue.kind,basis:'Combined selected sibling source values; incomplete selected observations remain unavailable',marginBasis:'Selected sibling gross-profit dollars / selected sibling revenue',coverage,source:Object.fromEntries(Object.entries(summaryPoints).map(([key,point])=>[key,point.source])),...Object.fromEntries(Object.entries(summaryPoints).map(([key,point])=>[key,point.value])),publishedMargin:null,revenueTarget:null,target:null,tam:null,npi:null,gap:null,attainment:null,productCount:expected==='group'?ids.length:0,projectCount:expected==='project'?ids.length:new Set(models.map(model=>model.scope.projectId).filter(Boolean)).size,skuCount:expected==='sku'?ids.length:0,yoy:{revenue:finite(summaryPoints.revenue.value)&&finite(previous)&&previous!==0?summaryPoints.revenue.value/previous-1:null}};
+    const traces=models.map((model,i)=>({id:ids[i],label:expected==='group'?children[i].name:children[i].id,category:children[i].category,scope:{...model.scope},series:(model.metricSeries[metricKey]||periods.map(period=>({period,value:null,kind:'unclassified',source:[],basis:'No scoped source is available for this metric.'}))).map(point=>({...point,rawValue:point.value})),...(metric==='revenue'?{estimateSeries:model.estimateSeries.map(point=>({...point,rawValue:point.value}))}:{})}));
+    const values={active:true,invalid:false,traces,selectedChildren:children.map(child=>({...child})),selectionSummary,selectionMetricSeries,selectionSeries:selectionMetricSeries[metric]||periods.map(year=>aggregate(metric,year)),coverage,indexed:false,basePeriod:null,mode:'values',unit:percentage?'percent':metric==='units'?'number':'currency',notice:`Comparing ${ids.length} selected ${expected==='group'?'product groups':expected==='project'?'projects':'SKUs'}. Combined figures require a numeric source observation for every selected item.${expected==='sku'?' Project investment and estimates are not allocated to these SKUs.':''}`};
+    if(percentage||traces.length<2||options.mode==='values')return values;
+    const basePeriod=periods.find(year=>traces.every(trace=>{const point=trace.series.find(point=>String(point.period)===String(year));return finite(point?.rawValue)&&point.rawValue>0;}));
+    if(basePeriod===undefined)return {...values,reason:'Trend comparison needs a shared year with a positive source value in every selected item. Showing source values instead.'};
+    return {...values,indexed:true,basePeriod,mode:'trend',unit:'index',traces:traces.map(trace=>{
+      const base=trace.series.find(point=>String(point.period)===String(basePeriod));
+      return {...trace,baseline:{period:basePeriod,value:base.rawValue,source:base.source},series:trace.series.map(point=>({...point,value:finite(point.rawValue)?point.rawValue/base.rawValue*100:null})),...(trace.estimateSeries?{estimateSeries:trace.estimateSeries.map(point=>({...point,value:finite(point.rawValue)?point.rawValue/base.rawValue*100:null}))}:{})};
+    })};
+  }
   function productRows(options={}) {
     const period=periodOf(options),d=data();
     return selected(d.products,categoryOf(options)).map(p=>{const revenue=p.revenueByYear[period],grossProfit=p.gmByYear[period];const cases=(d.npiValues||[]).filter(v=>v.name===p.name&&canonical(v.category)===canonical(p.category));const value=cases.length===1?cases[0]:null;return {...p,revenue,units:p.unitsByYear[period],grossProfit,grossMargin:ratio(grossProfit,revenue),gm:ratio(grossProfit,revenue),revenueGrowth:finite(revenue)&&finite(p.revenueByYear[period-1])&&p.revenueByYear[period-1]!==0?revenue/p.revenueByYear[period-1]-1:null,roi:value?.roi??null,signal:value?.signal??null,roiBand:value?.roiBand??null,npiValue:value,npiCases:cases,roiMatchStatus:cases.length>1?'Multiple project cases':cases.length===1?'Unique project case':'No matching case',source:p.sourceByYear?.[period]?.revenue||p.source};}).sort((a,b)=>(b.revenue||0)-(a.revenue||0));
   }
   function scenario(options={}) {
     const driver=key=>{const x=options[key]??0;const n=Number(x);if(!Number.isFinite(n))throw new Error('Enter a valid numeric scenario assumption.');return n;};
-    const baseline=summarize(options),growth=driver('revenueGrowth')/100,marginChange=driver('marginChange')/100,budgetChange=driver('budgetChange')/100;
+    const comparison=compareDrillSeries('revenue',options);
+    if(comparison?.invalid)throw new Error(comparison.reason);
+    const baseline=comparison?.selectionSummary||summarize(options),growth=driver('revenueGrowth')/100,marginChange=driver('marginChange')/100,budgetChange=driver('budgetChange')/100;
     const revenue=finite(baseline.revenue)?baseline.revenue*(1+growth):null;
     const grossMargin=finite(baseline.grossMargin)?baseline.grossMargin+marginChange:null;
     const grossProfit=finite(revenue)&&finite(grossMargin)?revenue*grossMargin:null,budget=finite(baseline.budget)?baseline.budget*(1+budgetChange):null;
@@ -262,5 +303,5 @@
     const cancelled=options.action==='cancel';
     return data().periods.filter(y=>y>=2026).map(period=>{const baseline=product.revenueByYear[period],previous=product.revenueByYear[period-1];const value=finite(baseline)?cancelled?0:baseline*(1-fraction)+(period>2026&&finite(previous)?previous*fraction:0):null;return {period,baseline,value,delta:finite(value)&&finite(baseline)?value-baseline:null,kind:'scenario',method:'Approximate annual shift with uniform monthly allocation; no workbook fiscal timing or cost rescheduling parity'};});
   }
-  root.HX_ANALYTICS={normalizeWorkbook,summarize,series,compareSeries,drilldown,productRows,scenario,forecast,projectScenario,canonical,sum,ratio};
+  root.HX_ANALYTICS={normalizeWorkbook,summarize,series,compareSeries,compareDrillSeries,drilldown,productRows,scenario,forecast,projectScenario,canonical,sum,ratio};
 })(typeof window!=='undefined'?window:globalThis);
