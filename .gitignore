@@ -4,6 +4,7 @@ pwsh.log
 
 # Local review screenshots and artifacts
 /artifacts/
+/outputs/sellout-dashboard/
 
 # Private project packages and local portfolio data
 project-data/private/

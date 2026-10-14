@@ -50,6 +50,15 @@ jobs:
         run: |
           mkdir -p _site/css _site/js _site/data
           cp public/index.html _site/
+          cp public/analytics.html _site/
+          cp public/css/sellout-dashboard.css _site/css/
+          cp public/css/sellout-months.css _site/css/
+          cp public/js/sellout-dashboard.js public/js/sellout-model.js _site/js/
+          cp public/js/sellout-ppc.js public/js/sellout-private.js _site/js/
+          cp public/js/sellout-mix.js _site/js/
+          cp public/js/sellout-flow.js _site/js/
+          cp public/js/sellout-motion.js _site/js/
+          cp public/js/sellout-spring.js _site/js/
           cp public/css/styles.css public/css/workspace-notifications.css public/css/product-issues.css public/css/product-merge.css public/css/portfolio-search.css _site/css/
           cp public/js/workspace-notifications.js public/js/product-issues.js public/js/product-merge.js public/js/product-merge-ui.js _site/js/
           cp public/js/portfolio-search.js public/js/portfolio-search-ui.js _site/js/
@@ -96,6 +105,17 @@ jobs:
           test -f _site/js/roadmap-hover.js
           test -f _site/js/view-runtime.js
           test -f _site/js/pptx-export-planner.js
+          test -f _site/analytics.html
+          test -f _site/css/sellout-dashboard.css
+          test -f _site/css/sellout-months.css
+          test -f _site/js/sellout-dashboard.js
+          test -f _site/js/sellout-model.js
+          test -f _site/js/sellout-ppc.js
+          test -f _site/js/sellout-private.js
+          test -f _site/js/sellout-mix.js
+          test -f _site/js/sellout-flow.js
+          test -f _site/js/sellout-motion.js
+          test -f _site/js/sellout-spring.js
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
