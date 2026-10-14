@@ -44,7 +44,7 @@
     });
     const context = rows('Combined_Products');
     for (const p of products) {
-      const matches = context.filter(c => String(c.GroupName||'').trim().toLowerCase() === String(p.name||'').trim().toLowerCase());
+      const matches = context.filter(c => canonical(c.Category)===canonical(p.category)&&identity(c.GroupName)===identity(p.name));
       const statuses = [...new Set(matches.map(m => m.Status).filter(Boolean))];
       p.status = statuses.length === 1 ? statuses[0] : statuses.length > 1 ? 'Mixed product states' : 'Unspecified';
       p.context = matches.map(m => ({ id:m.Budget_Key, name:m.ProductName, codeName:m.CodeName, ffs:m.FFS, endMarketing:m.EM, endSupport:m.ES, status:m.Status, innovation:m.InnovationType, launchYear:m['Launch Year'], source:source('Combined_Products','A'+m._row) }));
@@ -57,6 +57,9 @@
       published.push(record);
     }
     const investments = rows('Budget_UnPivot').filter(r => r.Budget_Key).map(r => ({ id:'spend-'+r._row, productId:r.Budget_Key, name:r.GroupName, codeName:r.CodeName, category:canonical(r.Category), subcategory:r.Subcategory, period:r.FY, quarter:r.FQ, amount:r['Spend$'], type:r.SpendType, group:r.SpendGroup, source:[r._sources['Spend$'],r._sources.SpendQ] }));
+    const projects=context.filter(r=>r.Budget_Key).map(r=>({id:String(r.Budget_Key),name:r.GroupName,category:canonical(r.Category),codeName:r.CodeName,launchYear:r['Launch Year'],status:r.Status,productName:r.ProductName,source:[r._sources.Budget_Key,r._sources.GroupName,r._sources.Category]}));
+    const npiSkuRecords=rows('NPI_Tracker_All').filter(r=>r.Budget_Key_Base&&r['Part Number']).map(r=>({id:'npi-source-'+r._row,projectId:String(r.Budget_Key_Base),skuId:String(r['Part Number']),name:r['Product Name']||String(r['Part Number']),groupName:r['Group Name'],category:canonical(r.Category),codeName:r.CodeName,launchYear:r.LaunchYear,period:r.FY,quarter:Number(String(r.FQ||'').match(/Q([1-4])/i)?.[1])||null,revenue:r.NetRev,grossProfit:r['GM$'],units:r.Units,cost:r.TotalCOS,basis:'Unclassified source tracker record',source:[r._sources.NetRev],sourceByMetric:{revenue:[r._sources.NetRev],grossProfit:[r._sources['GM$']],units:[r._sources.Units],cost:[r._sources.TotalCOS]}}));
+    const prelaunchCases=rows('RND_PreLaunch_All').filter(r=>r.Budget_key).map(r=>({id:String(r.Budget_key),projectId:String(r.Budget_key),name:r.GroupName,category:canonical(r.SubCategory),launchYear:r.LaunchYear,revenue:r.Rev_12M,grossProfit:r['GM$_12M'],units:r.Units_12M,launchYearRevenue:r['LaunchYear Rev'],launchYearGrossProfit:r['LaunchYear GM$'],launchYearUnits:r['LaunchYear Units'],basis:'Current 12-month source plan; no locked estimate vintage',source:[r._sources.Budget_key,r._sources.Rev_12M,r._sources['GM$_12M'],r._sources.Units_12M],sourceByMetric:{revenue:[r._sources['LaunchYear Rev']],grossProfit:[r._sources['LaunchYear GM$']],units:[r._sources['LaunchYear Units']]}}));
     const npiMap = new Map();
     for (const r of rows('NPI_Tracker_All')) {
       if (!r.Budget_Key_Base) continue;
@@ -91,7 +94,7 @@
     if(cutoff){const year=Number(cutoff[1])<100?2000+Number(cutoff[1]):Number(cutoff[1]),q=Number(cutoff[2]); if(npi.some(r=>Number(r.period)*4+Number(r.quarter)>year*4+q))issues.push({severity:'warning',title:'Quarter records extend beyond the displayed actuals cutoff',detail:'The source contains later NPI quarters than '+cutoff[0]+'. Those records remain unclassified; they are not automatically treated as actuals.',sheet:'NPI_Trend',cell:'S19'});}
     if(raw.definedNames?.some(n=>/BT_GROUP_(REV|GM)_12M/.test(n.name)&&/m-3|m - 3/.test(n.definition)))issues.push({severity:'critical',title:'Rolling quarter calculation needs rollover review',detail:'The named 12-month functions subtract three from a fiscal year ×10 plus quarter label, which omits preceding-year quarters at rollover.',sheet:'NPI_Value',cell:'G36'});
     const sheets=sheetList.map(s=>({name:s.name,state:s.state||'visible',dimension:s.dimension,cells:Object.keys(lookup[s.name]||{}).length,formulas:s.formulaCount??Object.values(lookup[s.name]||{}).filter(c=>c.formula||c.formulaAttributes).length,errorCount:Object.values(lookup[s.name]||{}).filter(c=>c.type==='e').length,purpose:s.purpose||root.HX_SHEET_PURPOSES?.[s.name]||''}));
-    return {source:{...raw.source,name:raw.source?.name||raw.source?.fileName||'HX Blueprint',currency:'USD',unit:'USD unless indicated',basis:'Saved workbook planning snapshot; formula caches are not recalculated'},periods,categories:[...new Set(products.map(p=>p.category))].sort(),products,published,investments,npi,tam,npiValues,decisions,sheets,quality:{issues,postPorDiagnostic},metrics:{}, fiscalCalendar:'FY Q1 Nov–Jan; Q2 Feb–Apr; Q3 May–Jul; Q4 Aug–Oct',actualsCutoff:value('NPI_Trend','S19'),recordCounts:{products:products.length,combinedProducts:context.length,spendEntries:investments.length,npiQuarterGroups:npi.length,npiSourceRows:rows('NPI_Tracker_All').length}};
+    return {schemaVersion:2,sourceGrainVersion:2,source:{...raw.source,name:raw.source?.name||raw.source?.fileName||'HX Blueprint',currency:'USD',unit:'USD unless indicated',basis:'Saved workbook planning snapshot; formula caches are not recalculated'},periods,categories:[...new Set(products.map(p=>p.category))].sort(),products,projects,npiSkuRecords,prelaunchCases,published,investments,npi,tam,npiValues,decisions,sheets,quality:{issues,postPorDiagnostic},metrics:{}, fiscalCalendar:'FY Q1 Nov–Jan; Q2 Feb–Apr; Q3 May–Jul; Q4 Aug–Oct',actualsCutoff:value('NPI_Trend','S19'),recordCounts:{products:products.length,combinedProducts:context.length,spendEntries:investments.length,npiQuarterGroups:npi.length,npiSourceRows:rows('NPI_Tracker_All').length}};
   }
   const data=()=>root.HX_DATA;
   function categoryScope(category) {
@@ -104,7 +107,99 @@
     return scope.all?'All':scope.categories.length===1?scope.categories[0]:scope.categories;
   };
   const periodOf=(options={})=>Number(options.period||2026);
+  const identity=value=>String(value??'').replace(/\u00a0/g,' ').trim().toLowerCase();
+  function drilldown(options={}) {
+    const d=data()||{},period=periodOf(options),category=categoryOf(options),products=d.products||[];
+    const needsReimport=d.sourceGrainVersion!==2||!Array.isArray(d.projects)||!Array.isArray(d.npiSkuRecords);
+    const groupKey=record=>canonical(record.category)+'|'+identity(record.name||record.groupName);
+    const groupIndex=new Map(),projectIndex=new Map();
+    for(const p of products){const key=groupKey(p);if(!groupIndex.has(key))groupIndex.set(key,[]);groupIndex.get(key).push(p);}
+    for(const p of d.projects||[]){const key=identity(p.id);if(!key)continue;if(!projectIndex.has(key))projectIndex.set(key,[]);projectIndex.get(key).push(p);}
+    const recordIndex=new Map();
+    for(const r of d.npiSkuRecords||[]){const key=identity(r.projectId);if(!key)continue;if(!recordIndex.has(key))recordIndex.set(key,[]);recordIndex.get(key).push(r);}
+    const nodes=[...new Set([...projectIndex.keys(),...recordIndex.keys()])].map(key=>{
+      const definitions=projectIndex.get(key)||[],records=recordIndex.get(key)||[],first=definitions[0];
+      const signatures=new Set(definitions.map(p=>[groupKey(p),identity(p.codeName),String(p.launchYear??'')].join('|')));
+      const groups=first?groupIndex.get(groupKey(first))||[]:[];
+      const recordConflict=first&&records.some(r=>canonical(r.category)!==canonical(first.category)||identity(r.groupName)!==identity(first.name));
+      const ambiguous=signatures.size>1||groups.length>1||Boolean(recordConflict),mapped=definitions.length>0&&!ambiguous&&groups.length===1;
+      return {key,id:first?.id||records[0]?.projectId,name:first?.name||records[0]?.groupName||records[0]?.projectId,category:canonical(first?.category||records[0]?.category),groupId:mapped?groups[0].id:'source-unmapped',mapped,ambiguous,records,definitions};
+    });
+    const inScope=node=>selected([node],category).length>0;
+    const requestedProject=options.projectId?nodes.find(node=>node.key===identity(options.projectId)):null;
+    let groupId=options.groupId||requestedProject?.groupId||null,projectId=requestedProject?.id||options.projectId||null,skuId=options.skuId===undefined||options.skuId===null?null:String(options.skuId);
+    const group=products.find(p=>p.id===groupId),unmapped=groupId==='source-unmapped';
+    const invalidScope=Boolean((options.projectId&&!requestedProject)||(skuId&&!projectId)||(skuId&&requestedProject&&!needsReimport&&!requestedProject.records.some(r=>r.skuId===skuId))||(groupId&&!unmapped&&!group)||(requestedProject&&(!inScope(requestedProject)||(options.groupId&&requestedProject.groupId!==options.groupId)))||(group&&!selected([group],category).length));
+    const level=skuId?'sku':projectId?'project':groupId?'group':'category';
+    const scopedNodes=invalidScope?[]:projectId?[requestedProject]:groupId?nodes.filter(node=>node.groupId===groupId&&inScope(node)):nodes.filter(inScope);
+    const scopedProducts=invalidScope?[]:group? [group]:level==='category'?selected(products,category):[];
+    const records=scopedNodes.flatMap(node=>node?.records||[]).filter(r=>!skuId||r.skuId===skuId);
+    if(skuId&&!records.length&&!needsReimport)groupId=groupId||'source-unmapped';
+    const safeKeys=new Set(scopedNodes.filter(node=>node?.mapped).map(node=>node.key));
+    const spending=skuId?[]:(d.investments||[]).filter(r=>safeKeys.has(identity(r.productId)));
+    const validPeriod=r=>Number.isInteger(Number(r.period))&&Number(r.period)>=1900&&Number(r.period)<=2200;
+    const annualRecords=records.filter(validPeriod),basis=level==='category'?'Saved portfolio/category annual source':group&&!unmapped&&!projectId?'Annual product-group source; project/SKU tracker coverage is a separate population':'Annual sum of unclassified source tracker records; no verified actual/plan flag';
+    const sourceFor=(metric,year)=>{
+      if(invalidScope)return [];
+      if(level==='category')return summarize({period:year,category}).source?.[metric]||[];
+      if(metric==='budget')return spending.filter(r=>Number(r.period)===Number(year)).flatMap(r=>r.source||[]);
+      if(metric==='grossMargin')return [...sourceFor('grossProfit',year),...sourceFor('revenue',year)];
+      return group&&!unmapped&&!projectId?scopedProducts.flatMap(p=>p.sourceByYear?.[year]?.[metric]||[]):annualRecords.filter(r=>Number(r.period)===Number(year)).flatMap(r=>r.sourceByMetric?.[metric]||r.source||[]);
+    };
+    const valueFor=(metric,year)=>{
+      if(invalidScope)return null;
+      if(level==='category')return summarize({period:year,category})[metric]??null;
+      if(metric==='grossMargin')return ratio(valueFor('grossProfit',year),valueFor('revenue',year));
+      if(metric==='budget')return skuId?null:sum(spending.filter(r=>Number(r.period)===Number(year)).map(r=>r.amount));
+      if(group&&!unmapped&&!projectId){const field={revenue:'revenueByYear',grossProfit:'gmByYear',units:'unitsByYear'}[metric];return sum(scopedProducts.map(p=>p[field]?.[year]));}
+      return sum(annualRecords.filter(r=>Number(r.period)===Number(year)).map(r=>r[metric]));
+    };
+    const planRecords=projectId&&!skuId&&requestedProject?.mapped?(d.prelaunchCases||[]).filter(r=>identity(r.projectId||r.id)===identity(projectId)&&canonical(r.category)===requestedProject.category&&identity(r.name)===identity(requestedProject.name)):[];
+    const plan=planRecords.length===1?planRecords[0]:null;
+    const periods=[...new Set([...(d.periods||[]),...annualRecords.map(r=>Number(r.period)),...spending.filter(validPeriod).map(r=>Number(r.period)),...(plan&&Number.isInteger(Number(plan.launchYear))&&Number(plan.launchYear)>=1900&&Number(plan.launchYear)<=2200?[Number(plan.launchYear)]:[])])].sort((a,b)=>Number(a)-Number(b));
+    const pointKind=year=>level==='category'||(group&&!unmapped&&!projectId)?kind(year):'unclassified';
+    const metricSeries=Object.fromEntries(['revenue','grossProfit','grossMargin','units','budget'].map(metric=>[metric,periods.map(year=>({period:year,value:valueFor(metric,year),kind:metric==='budget'?'source-investment':pointKind(year),source:sourceFor(metric,year),basis:metric==='budget'?'Source PD investment by fiscal year; archive/manual/estimated schedule, not verified actual cash spend':basis}))]));
+    const estimateBasis='Current launch-year source plan; no locked estimate vintage';
+    const estimateSeries=periods.map(year=>({period:year,value:plan&&Number(plan.launchYear)===Number(year)?plan.launchYearRevenue??null:null,kind:'projection',source:plan&&Number(plan.launchYear)===Number(year)?plan.sourceByMetric?.revenue||plan.source||[]:[],basis:estimateBasis}));
+    metricSeries.revenueEstimate=estimateSeries;
+    const numericRecords=annualRecords.filter(r=>['revenue','grossProfit','units','cost'].some(key=>finite(r[key])));
+    const reported={revenue:sum(annualRecords.map(r=>r.revenue)),grossProfit:sum(annualRecords.map(r=>r.grossProfit)),units:sum(annualRecords.map(r=>r.units)),throughPeriod:annualRecords.length?Math.max(...annualRecords.map(r=>Number(r.period))):null,basis:'Available unclassified tracker records; cumulative source coverage'};
+    const sourceInvestment=skuId?null:sum(spending.map(r=>r.amount));
+    const plan12M=plan?{revenue:plan.revenue??null,grossProfit:plan.grossProfit??null,units:plan.units??null,grossMargin:ratio(plan.grossProfit,plan.revenue),basis:plan.basis||'Current 12-month source plan; no locked estimate vintage',source:plan.source||[]}:null;
+    const cachedCases=projectId&&!skuId&&requestedProject?.mapped?(d.npiValues||[]).filter(r=>identity(r.id)===identity(projectId)):[];
+    const sourceCase=cachedCases.length===1?cachedCases[0]:null;
+    const coverage={needsReimport,sourceGrainVersion:d.sourceGrainVersion||1,sourceRows:records.length,reportedRowCount:numericRecords.length,missingPeriodRows:records.length-annualRecords.length,skuCount:new Set(records.map(r=>r.skuId)).size,matchedProjectCount:scopedNodes.filter(n=>n?.mapped).length,unmappedProjectCount:scopedNodes.filter(n=>!n?.mapped).length,ambiguousProjectCount:scopedNodes.filter(n=>n?.ambiguous).length,estimateAvailable:Boolean(plan12M),comparableEstimate:false,investmentAllocatedToSku:false,invalidScope};
+    const reason=skuId?'The source has no SKU-level investment or estimate allocation.':plan12M&&numericRecords.length?'The current plan has no locked estimate vintage or verified matching actual horizon.':plan12M?'No numeric reported tracker results are available for this planned project.':'No matching project estimate is supplied for these reported records.';
+    const economics={sourceInvestment,periodInvestment:valueFor('budget',period),investmentBasis:'Source PD investment across source years; archive/manual/estimated schedule, not verified actual cash spend',investmentSource:spending.flatMap(r=>r.source||[]),reportedRevenue:reported.revenue,reportedGrossProfit:reported.grossProfit,sourceReturnMultiple:finite(sourceCase?.roi)?sourceCase.roi:null,returnBasis:'Saved source annualized 12-month gross profit / source PD investment; source Actuals status is unverified',sourceReturnSource:sourceCase?.source||[],sourceCase,plan12M,reported,availability:{reported:numericRecords.length>0,estimate:Boolean(plan12M),comparable:false,reason},parentProjectInvestment:skuId&&requestedProject?.mapped?sum((d.investments||[]).filter(r=>identity(r.productId)===requestedProject.key).map(r=>r.amount)):null};
+    const parentPlans=skuId&&requestedProject?.mapped?(d.prelaunchCases||[]).filter(r=>identity(r.projectId||r.id)===identity(projectId)&&canonical(r.category)===requestedProject.category&&identity(r.name)===identity(requestedProject.name)):[];
+    economics.parentProjectPlan12M=parentPlans.length===1?{revenue:parentPlans[0].revenue??null,grossProfit:parentPlans[0].grossProfit??null,units:parentPlans[0].units??null,basis:'Parent project current 12-month source plan; not allocated to this SKU',source:parentPlans[0].source||[]}:null;
+    const summary={period,category,kind:pointKind(period),basis,source:Object.fromEntries(['revenue','grossProfit','grossMargin','units','budget'].map(metric=>[metric,sourceFor(metric,period)])),coverage};
+    for(const metric of ['revenue','grossProfit','grossMargin','units','budget'])summary[metric]=valueFor(metric,period);
+    Object.assign(summary,{rawMargin:ratio(summary.grossProfit,summary.revenue),publishedMargin:null,marginBasis:level==='category'?summarize({period,category}).marginBasis:'Scoped gross-profit dollars / scoped revenue',revenueTarget:null,target:null,tam:null,npi:sum(annualRecords.filter(r=>Number(r.period)===period).map(r=>r.revenue)),productCount:scopedProducts.length,npiCount:new Set(annualRecords.map(r=>r.projectId)).size});
+    if(level==='category')Object.assign(summary,summarize({period,category}),{basis,coverage});
+    const title=skuId?records[0]?.name||skuId:projectId?requestedProject?.name||String(projectId):unmapped?'Unmapped source projects':group?.name||group?.groupName||(Array.isArray(category)?category.join(' + '):category==='All'?'All categories':category);
+    const scope={level,title,groupId,projectId,skuId,category};
+    const breadcrumbs=[{label:Array.isArray(category)?category.join(' + '):category==='All'?'All categories':category,category,groupId:null,projectId:null,skuId:null}];
+    if(groupId)breadcrumbs.push({label:unmapped?'Unmapped source projects':group?.name||group?.groupName||'Product group',category,groupId,projectId:null,skuId:null});
+    if(projectId)breadcrumbs.push({label:requestedProject?.name||String(projectId),category,groupId,projectId,skuId:null});
+    if(skuId)breadcrumbs.push({label:skuId,category,groupId,projectId,skuId});
+    const metricValues=rows=>({revenue:sum(rows.map(r=>r.revenue)),grossProfit:sum(rows.map(r=>r.grossProfit)),units:sum(rows.map(r=>r.units))});
+    let children=[];
+    if(!invalidScope&&level==='category'){
+      children=scopedProducts.map(p=>({id:p.id,level:'group',name:p.name||p.groupName,category:canonical(p.category),groupId:p.id,projectId:null,skuId:null,revenue:p.revenueByYear?.[period]??null,grossProfit:p.gmByYear?.[period]??null,units:p.unitsByYear?.[period]??null,basis:'Annual product-group source'}));
+      const orphanRows=scopedNodes.filter(n=>!n.mapped).flatMap(n=>n.records).filter(r=>validPeriod(r)&&Number(r.period)===period);
+      if(scopedNodes.some(n=>!n.mapped))children.push({id:'source-unmapped',level:'group',name:'Unmapped source projects',category,groupId:'source-unmapped',projectId:null,skuId:null,...metricValues(orphanRows),basis:'Unmapped tracker records; excluded from attributed project investment'});
+    }else if(!invalidScope&&level==='group')children=scopedNodes.map(node=>({id:node.id,level:'project',name:node.name,category:node.category,groupId:node.groupId,projectId:node.id,skuId:null,...metricValues(node.records.filter(r=>validPeriod(r)&&Number(r.period)===period)),basis:'Unclassified tracker results; project source coverage'}));
+    else if(!invalidScope&&level==='project'){
+      const skus=[...new Set(records.map(r=>r.skuId))];
+      children=skus.map(id=>({id,level:'sku',name:records.find(r=>r.skuId===id)?.name||id,category:requestedProject?.category,groupId,projectId,skuId:id,...metricValues(records.filter(r=>r.skuId===id&&validPeriod(r)&&Number(r.period)===period)),basis:'Exact project-scoped SKU; source investment is not allocated'}));
+    }
+    children=children.map(child=>({...child,hasFinancials:['revenue','grossProfit','units'].some(metric=>finite(child[metric]))}));
+    const notice=invalidScope?'This source selection could not be matched safely.':needsReimport?'Reimport the workbook to retain exact project/SKU source rows. Existing saved annual values are preserved.':level==='category'?'Product-group annual finance and NPI project/SKU tracker records have different source coverage.':level==='group'?'Drilling into projects changes to available NPI tracker coverage; it does not allocate the group total.':skuId?'Exact SKU source results only. Project investment and estimates are not allocated to SKUs.':reason;
+    return {schemaVersion:2,sourceGrainVersion:needsReimport?1:2,scope,breadcrumbs,children,summary,series:metricSeries.revenue,metricSeries,estimateSeries,estimateBasis,coverage,economics,notice};
+  }
   function summarize(options={}) {
+    if(options.groupId||options.projectId||options.skuId)return drilldown(options).summary;
     const d=data(),period=periodOf(options),category=categoryOf(options),products=selected(d.products,category),multiple=Array.isArray(category);
     const revenue=sum(products.map(p=>p.revenueByYear[period])),grossProfit=sum(products.map(p=>p.gmByYear[period])),units=sum(products.map(p=>p.unitsByYear[period]));
     const published=multiple?null:d.published?.find(r=>Number(r.period)===period&&canonical(r.category)===category);
@@ -125,6 +220,7 @@
     return result;
   }
   function series(metric,options={}) {
+    if(options.groupId||options.projectId||options.skuId)return drilldown(options).metricSeries[metric]||[];
     return data().periods.map(period=>{const a=summarize({...options,period});return {period,value:a[metric]??null,kind:kind(period),source:a.source[metric]||[],target:metric==='revenue'?a.revenueTarget:null};});
   }
   function compareSeries(metric,options={}) {
@@ -166,5 +262,5 @@
     const cancelled=options.action==='cancel';
     return data().periods.filter(y=>y>=2026).map(period=>{const baseline=product.revenueByYear[period],previous=product.revenueByYear[period-1];const value=finite(baseline)?cancelled?0:baseline*(1-fraction)+(period>2026&&finite(previous)?previous*fraction:0):null;return {period,baseline,value,delta:finite(value)&&finite(baseline)?value-baseline:null,kind:'scenario',method:'Approximate annual shift with uniform monthly allocation; no workbook fiscal timing or cost rescheduling parity'};});
   }
-  root.HX_ANALYTICS={normalizeWorkbook,summarize,series,compareSeries,productRows,scenario,forecast,projectScenario,canonical,sum,ratio};
+  root.HX_ANALYTICS={normalizeWorkbook,summarize,series,compareSeries,drilldown,productRows,scenario,forecast,projectScenario,canonical,sum,ratio};
 })(typeof window!=='undefined'?window:globalThis);

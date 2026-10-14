@@ -64,11 +64,13 @@
     root.append(header, caption, scaleRow, scaleReason, comparisonLegend, track, years, hint, live); container.append(root);
     function kindFor(period, index, record) {
       const definition = Array.isArray(config.labels) ? config.labels[index] : config.labels?.[period];
-      const declared = typeof definition === 'object' ? definition?.status ?? definition?.kind ?? definition?.label : definition;
-      const label = String(declared ?? record?.kind ?? record?.type ?? '');
-      if (/proj|plan|forecast|fcst/i.test(label)) return { short: 'Plan', label: declared || 'Workbook projection', plan: true };
-      if (/actual/i.test(label)) return { short: 'Actual', label: declared || 'Source-labelled actual', plan: false };
-      if (/history|historic/i.test(label)) return { short: 'History', label: declared || 'Source history', plan: false };
+      const configuredKind = typeof definition === 'object' ? definition?.status ?? definition?.kind : null;
+      const label = String(configuredKind ?? record?.kind ?? record?.type ?? (typeof definition === 'object' ? definition?.label : definition) ?? '');
+      const displayLabel = typeof definition === 'object' ? definition?.label : null;
+      if (/unclassified|unknown|reported/i.test(label)) return { short: 'Unclassified', label: displayLabel || record?.basis || 'Tracker reported · actual/plan unclassified', plan: false, unclassified: true };
+      if (/proj|plan|forecast|fcst/i.test(label)) return { short: 'Plan', label: displayLabel || record?.basis || 'Workbook projection', plan: true };
+      if (/actual/i.test(label)) return { short: 'Actual', label: displayLabel || record?.basis || 'Source-labelled actual', plan: false };
+      if (/history|historic/i.test(label)) return { short: 'History', label: displayLabel || record?.basis || 'Source history', plan: false };
       const n = Number(String(period).replace(/[^\d]/g, '')), year = n < 100 ? n + 2000 : n;
       return year === 2025 ? { short: 'Actual', label: 'Source-labelled actual', plan: false } : year > 2025 ? { short: 'Plan', label: 'Workbook projection', plan: true } : { short: 'History', label: 'Source history', plan: false };
     }
@@ -88,11 +90,11 @@
         const colorize = node => { if (trace.category !== undefined) { node.dataset.category = trace.category; node.style.setProperty('--hx-series-color', trace.color); } };
         for (let i = 1; i < periods.length; i++) {
           if (trace.values[i] === null || trace.values[i - 1] === null) continue;
-          colorize(add('path', { d: `M${position(i - 1) * 10} ${y(trace.values[i - 1])}L${position(i) * 10} ${y(trace.values[i])}`, class: `hx-timeline-segment${trace.kinds[i].plan ? ' is-plan' : ''}${comparisons.length ? ' is-comparison' : ''}`, 'vector-effect': 'non-scaling-stroke' }));
+          colorize(add('path', { d: `M${position(i - 1) * 10} ${y(trace.values[i - 1])}L${position(i) * 10} ${y(trace.values[i])}`, class: `hx-timeline-segment${trace.kinds[i].plan ? ' is-plan' : ''}${trace.kinds[i].unclassified || trace.kinds[i - 1].unclassified ? ' is-unclassified' : ''}${comparisons.length ? ' is-comparison' : ''}`, 'vector-effect': 'non-scaling-stroke' }));
         }
         trace.values.forEach((value, i) => {
           if (value === null) return;
-          colorize(add('circle', { cx: position(i) * 10, cy: y(value), r: comparisons.length ? 2.8 : 2.2, class: `hx-timeline-node${trace.kinds[i].plan ? ' is-plan' : ''}${comparisons.length ? ' is-comparison' : ''}`, 'vector-effect': 'non-scaling-stroke' }));
+          colorize(add('circle', { cx: position(i) * 10, cy: y(value), r: comparisons.length ? 2.8 : 2.2, class: `hx-timeline-node${trace.kinds[i].plan ? ' is-plan' : ''}${trace.kinds[i].unclassified ? ' is-unclassified' : ''}${comparisons.length ? ' is-comparison' : ''}`, 'vector-effect': 'non-scaling-stroke' }));
         });
       });
       track.classList.toggle('is-empty', !valid.length);
@@ -107,6 +109,8 @@
       year.textContent = yearName(period); status.textContent = kind.label; status.dataset.kind = kind.plan ? 'plan' : kind.short.toLowerCase();
       revenue.textContent = comparisons.length ? `Selected total ${money(values[selectedIndex])} · ${comparisons.length} ${comparisons.length === 1 ? 'category' : 'categories'}` : `Revenue ${money(values[selectedIndex])}`;
       revenue.title = comparisons.length ? `Selected total revenue ${exactMoney(values[selectedIndex])}; ${comparisonReadout(selectedIndex)}` : exactMoney(values[selectedIndex]);
+      const allKinds = comparisons.length ? comparisons.flatMap(trace => trace.kinds) : kinds;
+      legend.innerHTML = `${allKinds.some(item => !item.plan && !item.unclassified) ? '<span><i class="hx-timeline-history-key"></i>History / actual</span>' : ''}${allKinds.some(item => item.plan) ? '<span><i class="hx-timeline-plan-key"></i>Workbook plan</span>' : ''}${allKinds.some(item => item.unclassified) ? '<span><i class="hx-timeline-unclassified-key"></i>Reported, basis unclassified</span>' : ''}`;
       scaleRow.hidden = !comparisons.length;
       scaleLabel.textContent = indexed ? `Trend index · ${yearName(comparisonModel.basePeriod)} = 100` : 'Revenue · USD';
       scaleButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.scale === comparisonScale)));
@@ -115,7 +119,7 @@
       comparisonLegend.hidden = !comparisons.length; comparisonLegend.replaceChildren(); comparisonPoints.replaceChildren();
       comparisons.forEach(trace => {
         const item = make('div', 'hx-timeline-comparison'), key = make('i', 'hx-timeline-comparison-key'), name = make('span', 'hx-timeline-comparison-name', trace.label), value = make('strong', 'hx-timeline-comparison-value', money(trace.rawValues[selectedIndex])), basis = make('span', 'hx-timeline-comparison-basis', `${trace.kinds[selectedIndex].short}${indexed && trace.values[selectedIndex] !== null ? ` · Index ${trace.values[selectedIndex].toFixed(1)}` : ''}`);
-        item.setAttribute('role', 'listitem'); item.dataset.category = trace.category; item.dataset.kind = trace.kinds[selectedIndex].plan ? 'plan' : 'actual'; item.style.setProperty('--hx-series-color', trace.color);
+        item.setAttribute('role', 'listitem'); item.dataset.category = trace.category; item.dataset.kind = trace.kinds[selectedIndex].unclassified ? 'unclassified' : trace.kinds[selectedIndex].plan ? 'plan' : 'actual'; item.style.setProperty('--hx-series-color', trace.color);
         item.title = `${trace.label} · ${yearName(period)} · ${exactMoney(trace.rawValues[selectedIndex])} · ${trace.kinds[selectedIndex].label}${indexed && trace.values[selectedIndex] !== null ? ` · Index ${trace.values[selectedIndex].toFixed(1)}` : ''}`;
         item.setAttribute('aria-label', item.title); key.setAttribute('aria-hidden', 'true'); item.append(key, name, value, basis); comparisonLegend.append(item);
         if (trace.values[selectedIndex] !== null) {

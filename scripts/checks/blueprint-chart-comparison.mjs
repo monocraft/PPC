@@ -133,11 +133,11 @@ assert.ok([...margin.matchAll(/<text class="chart-axis"[^>]*>([^<]*)<\/text>/g)]
 
 const micePoint = valuePoint(trend, 'Mice', 2026);
 api.metricDetail(micePoint['data-chart-metric'], micePoint['data-period'], micePoint['data-chart-category']);
-assert.match(dialogs.at(-1).content, /Category scope<\/label><strong>Mice<\/strong>/);
+assert.match(dialogs.at(-1).content, /Selected scope<\/label><strong>Mice<\/strong>/);
 assert.match(dialogs.at(-1).content, /Source value · precise<\/label><strong>\$40<\/strong>/);
 assert.match(dialogs.at(-1).content, /Mice-2026-revenue/);
 assert.doesNotMatch(dialogs.at(-1).content, /Headsets-2026-/, 'A category source point opens evidence for that category only');
-assert.match(dashboardSource, /metricDetail\(point\.dataset\.chartMetric,\s*point\.dataset\.period,\s*point\.dataset\.chartCategory\)/, 'The actual delegated click routes chart category into source details');
+assert.match(dashboardSource, /metricDetail\(point\.dataset\.chartMetric,\s*point\.dataset\.period,\s*point\.dataset\.chartCategory,\s*\{\s*groupId:\s*scopeId\(point\.dataset\.chartGroup\)[^}]*projectId:\s*scopeId\(point\.dataset\.chartProject\)[^}]*skuId:\s*scopeId\(point\.dataset\.chartSku\)/, 'The actual delegated click routes category and validated group/project/SKU identifiers into source details');
 assert.equal(JSON.stringify(data), unchanged, 'Rendering either scale and inspecting points does not mutate source records');
 
 const signed = create();
