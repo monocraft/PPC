@@ -809,11 +809,7 @@
     importRun++; cancelSharepointLoad(); $("sharepointError").textContent = sharepointInitError ? "Microsoft sign-in could not start. Reload PPC and try again." : ""; $("sharepointLink").value = ""; $("sharepointDialog").showModal();
   }
   $("emptyLinkImport").onclick = openSharepointLink;
-  $("importButton").onchange = event => {
-    const action = event.target.value; event.target.value = "";
-    if (action === "file") chooseFile();
-    else if (action === "sharepoint") openSharepointLink();
-  };
+  $("importButton").onclick = chooseFile;
   $("sharepointLink").oninput = () => { $("sharepointError").textContent = ""; };
   $("sharepointLinkForm").onsubmit = async event => {
     event.preventDefault();

@@ -23,7 +23,7 @@
       <a href="#records"><span aria-hidden="true">≡</span> Data</a>
     </nav>
     <div class="so-sidebar-note"><span class="so-dot"></span> Local workspace<p>Workbook data stays in this browser. Import a new report to refresh.</p><button id="openSource" type="button">Data & pricing</button></div>
-  </div><h1 class="so-visually-hidden">Retail analytics</h1><div class="so-actions"><span id="sourceBadge" class="so-source-badge">No workbook loaded</span><select id="importButton" class="so-import-select" aria-label="Load data"><option value="" selected disabled hidden>Load data</option><option value="file">Choose file</option><option value="sharepoint">Paste SharePoint link</option></select><button id="exportButton" hidden type="button" class="so-primary" disabled>Export brief <span aria-hidden="true">↗</span></button></div></header>
+  </div><h1 class="so-visually-hidden">Retail analytics</h1><div class="so-actions"><span id="sourceBadge" class="so-source-badge">No workbook loaded</span><button id="importButton" type="button" class="so-primary">Load workbook</button><button id="exportButton" hidden type="button" class="so-primary" disabled>Export brief <span aria-hidden="true">↗</span></button></div></header>
     <input id="workbookFile" type="file" accept=".xlsx,.csv,.json,.pkg" hidden>
     <section id="overview" class="so-heading" hidden><div><p class="so-eyebrow">PPC ANALYTICS</p><h1>Retail <em>pulse.</em></h1><p id="headingContext" class="so-subtitle">All retailers</p></div><div class="so-heading-summary"><strong id="windowLabel">Choose a report</strong><small id="windowDetail">Weekly units</small></div></section>
     <section class="so-filterbar" aria-label="Dashboard filters">
@@ -40,7 +40,7 @@
       <span id="filterSummary" class="so-filter-summary" aria-live="polite"></span><input id="periodPreset" type="hidden" value="13">
     </section>
     <p id="status" class="so-status" role="status" aria-live="polite"></p>
-    <div id="emptyState" class="so-empty"><div class="so-empty-symbol">↗</div><h2>Start with your sell-out workbook</h2><p>Import an XLSX, CSV or saved analytics snapshot to connect every chart, comparison and planning insight.</p><div class="so-empty-actions"><button id="emptyImport" type="button" class="so-primary">Choose a workbook</button><button id="emptyLinkImport" type="button">Paste SharePoint link</button></div></div>
+    <div id="emptyState" class="so-empty"><div class="so-empty-symbol">↗</div><h2>Start with your sell-out workbook</h2><p>Load an XLSX, CSV or saved analytics snapshot to explore your report.</p><div class="so-empty-actions"><button id="emptyImport" type="button" class="so-primary">Load workbook</button><button id="emptyLinkImport" type="button" hidden>Paste SharePoint link</button></div></div>
     <div id="dashboardContent" hidden>
       <div class="so-report-strip"><button id="coverageNotice" type="button" class="so-coverage-chip"></button><button id="reportInfo" type="button" aria-label="Reporting details">ⓘ</button><span id="ppcPriceCoverage"></span></div>
       <div data-analytics-view="overview" class="so-view is-current">
