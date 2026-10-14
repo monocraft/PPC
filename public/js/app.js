@@ -8529,3 +8529,9 @@ document.getElementById("workspaceRecoveryRestore").onclick = async () => {
   finally { setWorkspaceRecoveryBusy(false); }
 };
 startWorkspace();
+// A user Analytics click shares requested SKU/USD price fields only.
+void Promise.resolve(globalThis.PortfolioWorkspaceReady).then(() => {
+  if (!globalThis.PPCSelloutPricing || !globalThis.BroadcastChannel || location.origin === "null") return;
+  globalThis.PPCSelloutPricing.attachPublisher({ getPortfolio: () => portfolio,
+    links: document.querySelectorAll('a[href="analytics.html"]') });
+}).catch(() => {});

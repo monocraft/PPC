@@ -219,6 +219,10 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .package-error { color: var(--color-danger-text); }
 .package-status:empty, .package-error:empty { display: none; }
 .settings-trigger { display: flex; align-items: center; gap: 6px; background: transparent; }
+.toolbar-actions > a.settings-trigger, .workspace-empty > div > a.settings-trigger { min-height: 30px; padding: 6px 10px; border: 1px solid transparent; border-radius: var(--corner-control); color: var(--color-text-secondary); font: inherit; text-decoration: none; white-space: nowrap; transition: background .12s ease, color .12s ease; }
+.toolbar-actions > a.settings-trigger:hover, .workspace-empty > div > a.settings-trigger:hover { background: var(--color-header); color: var(--color-text); }
+@media (max-width: 1180px) { .toolbar-actions > a.settings-trigger { padding-inline: 8px; font-size: 11px; } }
+@media (max-width: 700px) { .toolbar-actions > a.settings-trigger { padding: 5px 7px; font-size: 10px; } }
 .settings-trigger > span { color: var(--color-text-secondary); font-size: 15px; }
 .workspace-controls { position: relative; z-index: 12; display: flex; align-items: center; gap: 16px; min-width: 0; min-height: 48px; padding: 7px 16px; border-bottom: 1px solid transparent; background: var(--color-page); }
 .controlbar { display: flex; flex: 1 1 auto; align-items: center; flex-wrap: nowrap; gap: 8px; min-width: 0; padding: 0; }

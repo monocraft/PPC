@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1A1B1C">
+  <meta name="description" content="Retail sell-out analytics, Products, category opportunities and market planning briefs.">
+  <title>Retail Analytics · Product Portfolio</title>
+  <link rel="stylesheet" href="css/fonts.css">
+  <link rel="stylesheet" href="css/sellout-dashboard.css">
+  <link rel="stylesheet" href="css/sellout-months.css">
+  <script src="js/reference-theme.js"></script>
+</head>
+<body>
+<div id="selloutApp" class="so-app">
+
+  <main class="so-main">
+    <header class="so-topbar"><div class="so-sidebar">
+    <a class="so-brand" href="index.html" target="_blank" rel="noopener"><span class="so-brand-mark">P</span><span>Product Portfolio<small>RETAIL INTELLIGENCE</small></span></a>
+    <nav aria-label="Analytics sections">
+      <a href="#overview" class="is-active"><span aria-hidden="true">◈</span> Overview</a>
+      <a href="#planning" hidden><span aria-hidden="true">◇</span> Plan</a>
+      <a href="#records"><span aria-hidden="true">≡</span> Data</a>
+    </nav>
+    <div class="so-sidebar-note"><span class="so-dot"></span> Local workspace<p>Workbook data stays in this browser. Import a new report to refresh.</p><button id="openSource" type="button">Data & pricing</button></div>
+  </div><h1 class="so-visually-hidden">Retail analytics</h1><div class="so-actions"><span id="sourceBadge" class="so-source-badge">No workbook loaded</span><button id="importButton" type="button">Import</button><button id="exportButton" hidden type="button" class="so-primary" disabled>Export brief <span aria-hidden="true">↗</span></button></div></header>
+    <input id="workbookFile" type="file" accept=".xlsx,.csv,.json,.pkg" hidden>
+    <section id="overview" class="so-heading" hidden><div><p class="so-eyebrow">PPC ANALYTICS</p><h1>Retail <em>pulse.</em></h1><p id="headingContext" class="so-subtitle">All retailers</p></div><div class="so-heading-summary"><strong id="windowLabel">Choose a report</strong><small id="windowDetail">Weekly units</small></div></section>
+    <section class="so-filterbar" aria-label="Dashboard filters">
+      <details id="storePicker" class="so-picker"><summary>Retailers <strong id="storeLabel">All retailers</strong></summary><div class="so-picker-menu"><label class="so-picker-all"><input id="storeAll" type="checkbox" checked><span>All retailers</span></label><div id="storeOptions"></div><button type="button" data-clear="stores">All retailers</button></div></details>
+      <details id="productPicker" class="so-picker"><summary>Products <strong id="productLabel">All SKUs</strong></summary><div class="so-picker-menu so-wide-menu"><input id="productSearch" type="search" placeholder="Product or SKU" aria-label="Search product filter"><label class="so-picker-all"><input id="productAll" type="checkbox" checked><span>All SKUs</span></label><div id="productOptions" class="so-options-scroll"></div><button type="button" data-clear="products">All SKUs</button></div></details>
+      <details id="moreFilters" class="so-more-filters"><summary>More filters <span id="advancedCount"></span></summary><div class="so-more-menu">
+        <label>Category<select id="categoryFilter"><option value="">All categories</option></select></label>
+        <label>USD MSRP<select id="bandFilter"><option value="">All bands</option><option>Under $50</option><option>$50–99</option><option>$100–149</option><option>$150–199</option><option>$200+</option><option>Unmapped</option></select></label>
+        <label>Compare<select id="comparison"><option value="year">Year ago</option><option value="previous">Previous period</option><option value="none">Off</option></select></label>
+        <label>Coverage<select id="coverage"><option value="common">Shared cutoff</option><option value="available">Available reports</option></select></label>
+        <label>From<input id="startDate" type="date"></label><label>Through<input id="endDate" type="date"></label>
+      </div></details>
+      <button id="resetFilters" type="button" class="so-reset">Reset</button><input id="ppcPricingFile" type="file" accept=".json,.data" hidden>
+      <span id="filterSummary" class="so-filter-summary" aria-live="polite"></span><input id="periodPreset" type="hidden" value="13">
+    </section>
+    <p id="status" class="so-status" role="status" aria-live="polite"></p>
+    <div id="emptyState" class="so-empty"><div class="so-empty-symbol">↗</div><h2>Start with your sell-out workbook</h2><p>Import an XLSX, CSV or saved analytics snapshot to connect every chart, comparison and planning insight.</p><button id="emptyImport" type="button" class="so-primary">Choose a workbook</button></div>
+    <div id="dashboardContent" hidden>
+      <div class="so-report-strip"><button id="coverageNotice" type="button" class="so-coverage-chip"></button><button id="reportInfo" type="button" aria-label="Reporting details">ⓘ</button><span id="ppcPriceCoverage"></span></div>
+      <div data-analytics-view="overview" class="so-view is-current">
+      <section id="kpis" class="so-kpis" aria-label="Performance summary"></section>
+      <section class="so-grid so-hero-grid">
+        <article class="so-panel so-trend-panel"><header><div><h2>Weekly sell-out</h2></div><input id="trendMode" type="hidden" value="stores"><div class="so-view-buttons" role="group" aria-label="Chart view"><button type="button" data-trend="stores" aria-pressed="true">Retailers</button><button type="button" data-trend="total" aria-pressed="false">Total</button><button type="button" data-trend="products" aria-pressed="false" title="Top five SKUs, or every selected SKU">SKUs</button></div></header><div id="trendLegend" class="so-legend"></div><div id="trendChart" class="so-chart so-tall-chart"></div><div class="so-time-controls"><div class="so-preset-buttons" aria-label="Date presets"><button type="button" data-period="4">4W</button><button type="button" data-period="13" aria-pressed="true">13W</button><button type="button" data-period="26">26W</button><button type="button" data-period="fy26">FY26</button><button type="button" data-period="all">All</button></div><div class="so-time-step"><button id="timelineBack" type="button" aria-label="Move window back one week">‹</button><button id="timelinePlay" type="button" aria-label="Play through reporting weeks">Play</button><button id="timelineNext" type="button" aria-label="Move window forward one week">›</button></div></div><div id="timelineScroll" class="so-calendar-scroll"><div class="so-calendar-canvas"><div id="timelineTrack" class="so-timeline-track" aria-label="Reporting history with adjustable date range"><div id="timelineChart"></div><div id="timelineWindow" class="so-timeline-window" data-brush="pan" aria-label="Drag selected date range"></div><button id="timelineStart" class="so-time-handle" type="button" role="slider" aria-label="Start of selected range" data-brush="start" aria-valuemin="0" aria-valuemax="103" aria-valuenow="0"></button><button id="timelineEnd" class="so-time-handle" type="button" role="slider" aria-label="End of selected range" data-brush="end" aria-valuemin="0" aria-valuemax="103" aria-valuenow="103"></button></div><div id="timelineMonths" class="so-timeline-months" role="group" aria-label="Select a reporting month"></div></div></div><div class="so-time-caption"><span id="timelineDates"></span><span>Drag to explore</span></div><div id="trendFoot" class="so-chart-foot" hidden></div></article>
+      </section><section id="insights" class="so-insights" aria-label="Analysis overview"></section>
+      <section id="performance" class="so-section-heading"><h2>Products & retailers</h2></section>
+      <section class="so-grid so-two-columns"><article class="so-panel"><header><div><h3>Retailer impact</h3></div></header><div id="storeChart" class="so-chart"></div></article><article class="so-panel"><header><div><h3>Leading SKUs</h3></div></header><div id="productChart" class="so-chart"></div></article><article class="so-panel"><header><div><h3>Growth contributors</h3></div></header><div id="growthChart" class="so-chart"></div></article><article class="so-panel"><header><div><h3>Volume & momentum</h3></div></header><div id="momentumChart" class="so-chart"></div></article></section>
+      <section id="opportunities" hidden></section>
+      <section class="so-comparison-grid"><article class="so-panel so-category-panel"><header><h2>Category contribution</h2></header><div class="so-mix-explorer"><div id="mixChart" class="so-chart so-donut-chart"></div><div id="mixLegend" class="so-mix-legend"></div></div></article>
+<article class="so-panel so-flow-panel"><header><div><h3>Retailer × category</h3><p class="so-comparison-context" aria-hidden="true"></p></div></header><div id="categoryMatrix" class="so-chart so-flow-chart"></div></article><article class="so-panel so-fiscal-panel"><header><div><h3>Fiscal quarters</h3><p class="so-comparison-context" aria-hidden="true"></p></div></header><div id="quarterChart" class="so-chart"></div><div id="quarterFoot" class="so-chart-foot"></div></article><article class="so-panel so-price-panel"><header><div><h3>Price bands</h3><p id="priceCoverage" class="so-comparison-context">Add prices in Data & pricing</p></div><button id="editPrices" type="button">Map prices</button></header><div id="priceMatrix" class="so-matrix"></div></article><article class="so-panel so-reporting-panel"><header><div><h3>Reporting</h3><p class="so-comparison-context">Weekly net units</p></div></header><div id="heatChart" class="so-chart so-matrix so-reporting-matrix"></div><div class="so-chart-foot">Shading = net units · — = missing · 0 = reported zero</div></article></section>
+      </div><div data-analytics-view="planning" class="so-view" hidden>
+      <section id="planning" class="so-section-heading"><h2>Plan</h2></section>
+      <div class="so-planning-toolbar"><label>Market focus<select id="marketStore"><option value="">All selected retailers</option></select></label><span id="shortlistCount">0 opportunities shortlisted</span><button id="exportPlanning" type="button">Export PPC planning brief</button><button id="backupButton" type="button">Save analytics snapshot</button></div>
+      <div id="planningCards" class="so-planning-grid"></div>
+      <details id="shortlistReview" class="so-shortlist"><summary>Review PPC planning shortlist <span id="shortlistReviewCount">0 saved</span></summary><p class="so-shortlist-intro">Assign an owner, proposed roadmap month and validation notes before your PPC planning review.</p><div id="shortlistEditor"></div></details>
+      </div><div data-analytics-view="records" class="so-view" hidden>
+      <section id="records" class="so-section-heading"><h2>Data</h2></section>
+      <article class="so-panel"><header class="so-data-toolbar"><label class="so-table-search">Search<input id="tableSearch" type="search" placeholder="Find a SKU, product or retailer" aria-label="Search data explorer"></label><label>Performance signal<select id="signalFilter"><option value="">All signals</option><option>Paired gain</option><option>Paired decline</option><option>Stable paired units</option><option>Zero net units</option><option>Negative net units</option><option>Missing reports</option><option>No comparable baseline</option></select></label><div class="so-actions"><span id="tableCount"></span><button id="exportCsv" type="button">Export filtered CSV</button></div></header><div class="so-table-scroll"><table id="detailTable"><thead><tr><th><button data-sort="product" type="button">Product / SKU</button></th><th><button data-sort="store" type="button">Retailer</button></th><th>Category</th><th>USD MSRP</th><th><button data-sort="current" type="button">Net units ↓</button></th><th>Matched baseline</th><th><button data-sort="growth" type="button">Matched change</button></th><th>Reported weeks</th><th>Performance signal</th><th>Explore</th></tr></thead><tbody id="tableBody"></tbody></table></div><div class="so-pagination"><button id="prevPage" type="button">Previous</button><span id="pageLabel"></span><button id="nextPage" type="button">Next</button></div></article>
+      </div><footer class="so-footer"><span id="sourceFooter"></span><button id="exportPrivate" type="button">Encrypted package</button><button id="sourceFooterButton" type="button">Source & definitions</button></footer>
+    </div>
+  </main>
+  <div id="chartTooltip" class="so-tooltip" role="tooltip" hidden></div>
+  <dialog id="sourceDialog" class="so-dialog"><form method="dialog" class="so-dialog-head"><div><p class="so-eyebrow">SOURCE & DEFINITIONS</p><h2>Workbook & price map</h2></div><button aria-label="Close source and price map" type="submit">×</button></form><div class="so-dialog-body"><div id="sourceDetails"></div><h3>USD MSRP / list price</h3><p id="ppcPriceDetails">Link PPC to use saved USD MSRP by SKU. Manual prices are overrides.</p><div class="so-actions"><button id="ppcBackupButton" type="button">Select PPC backup</button><button id="priceCsvButton" type="button">Import price CSV</button><button id="priceTemplate" type="button">Download price template</button><label>Find a SKU<input id="priceSearch" type="search" placeholder="Product or SKU"></label></div><input id="priceCsvFile" type="file" accept=".csv" hidden><div class="so-price-table"><table><thead><tr><th>Product / SKU</th><th>MSRP (USD)</th><th>Source / note</th></tr></thead><tbody id="priceBody"></tbody></table></div><p id="priceStatus" role="status" aria-live="polite"></p><button id="savePrices" type="button" class="so-primary">Apply prices</button></div></dialog>
+  <dialog id="importDialog" class="so-dialog so-import-dialog"><form method="dialog" class="so-dialog-head"><h2>Review workbook</h2><button type="submit" aria-label="Close import review">×</button></form><div class="so-dialog-body"><div id="importReview"></div><label id="sheetChoiceLabel" hidden>Worksheet<select id="sheetChoice"></select></label><p>Applying this report replaces only this analytics workspace. Your portfolio and roadmap keep their own saved data.</p><p id="importError" role="alert"></p><button id="applyImport" type="button" class="so-primary">Apply workbook</button></div></dialog>
+  <div id="dropOverlay" class="so-drop-overlay" hidden>Drop a sell-out workbook to review it</div>
+  <dialog id="privateDialog" class="so-dialog so-import-dialog"><form method="dialog" class="so-dialog-head"><h2 id="privateTitle">Encrypted analytics</h2><button type="submit" aria-label="Close encryption dialog">×</button></form><div class="so-dialog-body"><p id="privatePurpose">Use your existing PPC package key. Keep the key within the authorized team.</p><label>PPC package key<input id="privateKey" type="password" autocomplete="off" spellcheck="false"></label><p id="privateStatus" role="status" aria-live="polite"></p><button id="privateAction" type="button" class="so-primary">Save encrypted package</button></div></dialog>
+</div>
+<script src="js/ascm-import.js"></script>
+<script src="js/package-codec.js"></script>
+<script src="js/sellout-model.js"></script>
+<script src="js/sellout-ppc.js"></script>
+<script src="js/sellout-private.js"></script>
+<script src="js/sellout-mix.js"></script><script src="js/sellout-flow.js"></script>
+<script src="js/sellout-motion.js"></script><script src="js/sellout-spring.js"></script>
+<script src="js/sellout-dashboard.js"></script>
+</body>
+</html>

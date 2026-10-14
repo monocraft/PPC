@@ -26,6 +26,24 @@
     steelTealLight: colors.label, midGrey: colors.label, foggyDark: colors.header,
     foggy: colors.label, starDust: colors.text, selection: colors.text,
   });
+  // Secondary chart tones sampled from the owner's supplied palette image.
+  // Keep these separate from semantic UI, lifecycle and merchandise colors.
+  const chartPalette = Object.freeze({
+    purple: Object.freeze({ 20: "#D5C9FA", 40: "#AA8DF9", 80: "#6338E0", 100: "#433276" }),
+    indigo: Object.freeze({ 20: "#C4CEF9", 40: "#879DF1", 80: "#4362D4", 100: "#313E9C" }),
+    blue: Object.freeze({ 20: "#A3E0FC", 40: "#63C0F9", 80: "#3C8AEC", 100: "#2B5AAC" }),
+    teal: Object.freeze({ 20: "#B9F4F2", 40: "#82EBF1", 80: "#0391A9", 100: "#005D6F" }),
+    green: Object.freeze({ 20: "#B9F8DD", 40: "#85F0B8", 80: "#5BC794", 100: "#508D7B" }),
+    yellow: Object.freeze({ 20: "#FFEAB5", 40: "#FFD569", 80: "#FFB420", 100: "#CE8C4F" }),
+  });
+  // The larger reference cards provide brighter series colors for dark charts.
+  // Order is fixed: purple, indigo, blue, teal, green, yellow.
+  const chartSeries = Object.freeze(["#895EF6", "#6984ED", "#4DA1F7", "#20CBDD", "#7AE3A9", "#FFC63B"]);
+  const chartCssVariables = Object.freeze(Object.fromEntries([
+    ...Object.entries(chartPalette).flatMap(([name, tones]) => Object.entries(tones)
+      .map(([tone, value]) => [`--chart-${name}-${tone}`, value])),
+    ...chartSeries.map((value, index) => [`--chart-series-${index + 1}`, value]),
+  ]));
   const cssVariables = Object.freeze({
     "--color-page": colors.page, "--color-shell": colors.surface, "--color-surface": colors.surface,
     "--color-surface-raised": colors.header, "--color-header": colors.header, "--color-input": colors.input,
@@ -41,6 +59,7 @@
     "--color-stage-launched": stageColors.launched, "--color-stage-development": stageColors["in-development"],
     "--color-stage-planning": stageColors["in-planning"], "--color-status-sunsetting": accents.sunsetting,
     "--font-ui": '"Jost", Arial, sans-serif',
+    ...chartCssVariables,
   });
 
   function apply(documentObject = root.document) {
@@ -80,6 +99,6 @@
   }
 
   root.PortfolioTheme = Object.freeze({ colors, stageColors, accents, lifecycleTones, uiPalette,
-    cssVariables, get fontFace() { return fontFace; }, get cssFontFamily() { return fontFace === "Arial" ? "Arial, sans-serif" : cssVariables["--font-ui"]; }, alpha, apply, fontsReady });
+    chartPalette, chartSeries, cssVariables, get fontFace() { return fontFace; }, get cssFontFamily() { return fontFace === "Arial" ? "Arial, sans-serif" : cssVariables["--font-ui"]; }, alpha, apply, fontsReady });
   apply();
 })(globalThis);

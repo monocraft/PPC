@@ -64,10 +64,22 @@ export function renderVersionedIndex(html, version) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
-  if (process.argv.length > 2) throw new Error("Site versioning only updates the prepared _site/index.html.");
+  if (process.argv.length > 2) throw new Error("Site versioning only updates prepared site HTML pages.");
   const version = process.env.PPC_SITE_VERSION || process.env.GITHUB_SHA || "";
-  const output = path.join(projectRoot, "_site", "index.html");
-  const html = await readFile(output, "utf8");
-  await writeFile(output, renderVersionedIndex(html, version), "utf8");
+  const preparedRoot = path.join(projectRoot, "_site");
+  const pages = ["index.html", "analytics.html"];
+  const prepared = [];
+  for (const page of pages) {
+    const output = path.join(preparedRoot, page);
+    let html;
+    try { html = await readFile(output, "utf8"); }
+    catch (error) {
+      // Keep the existing index-only preparation useful for older bundles.
+      if (page === "analytics.html" && error.code === "ENOENT") continue;
+      throw error;
+    }
+    prepared.push({ output, html: renderVersionedIndex(html, version) });
+  }
+  for (const page of prepared) await writeFile(page.output, page.html, "utf8");
   console.log("Prepared site scripts and styles use the deployment version.");
 }

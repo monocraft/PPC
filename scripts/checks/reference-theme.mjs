@@ -23,6 +23,65 @@ assert.deepEqual({ ...theme.colors }, {
 assert.equal(theme.fontFace, "Jost");
 assert.equal(theme.cssFontFamily, '"Jost", Arial, sans-serif');
 assert.deepEqual(Object.fromEntries(applied), { ...theme.cssVariables });
+
+const expectedChartPalette = {
+  purple: { 20: "#D5C9FA", 40: "#AA8DF9", 80: "#6338E0", 100: "#433276" },
+  indigo: { 20: "#C4CEF9", 40: "#879DF1", 80: "#4362D4", 100: "#313E9C" },
+  blue: { 20: "#A3E0FC", 40: "#63C0F9", 80: "#3C8AEC", 100: "#2B5AAC" },
+  teal: { 20: "#B9F4F2", 40: "#82EBF1", 80: "#0391A9", 100: "#005D6F" },
+  green: { 20: "#B9F8DD", 40: "#85F0B8", 80: "#5BC794", 100: "#508D7B" },
+  yellow: { 20: "#FFEAB5", 40: "#FFD569", 80: "#FFB420", 100: "#CE8C4F" },
+};
+const expectedChartSeries = ["#895EF6", "#6984ED", "#4DA1F7", "#20CBDD", "#7AE3A9", "#FFC63B"];
+assert.deepEqual(JSON.parse(JSON.stringify(theme.chartPalette)), expectedChartPalette, "the secondary chart tones preserve the supplied image samples");
+assert.deepEqual([...theme.chartSeries], expectedChartSeries, "the six bright reference cards retain stable series order");
+assert.ok(Object.isFrozen(theme.chartPalette) && Object.isFrozen(theme.chartSeries));
+for (const [name, tones] of Object.entries(expectedChartPalette)) {
+  assert.ok(Object.isFrozen(theme.chartPalette[name]), `${name} tones cannot be rewritten by a chart`);
+  for (const [tone, value] of Object.entries(tones)) {
+    assert.equal(theme.cssVariables[`--chart-${name}-${tone}`], value);
+    assert.equal(applied.get(`--chart-${name}-${tone}`), value, "the runtime applies each secondary tone token");
+  }
+}
+expectedChartSeries.forEach((value, index) => {
+  assert.equal(theme.cssVariables[`--chart-series-${index + 1}`], value);
+  assert.equal(applied.get(`--chart-series-${index + 1}`), value, "the runtime applies each ordered chart series token");
+});
+for (const mutation of [
+  'PortfolioTheme.chartPalette.purple[80] = "#000000";',
+  'PortfolioTheme.chartPalette.blue = {};',
+  'PortfolioTheme.chartSeries[0] = "#000000";',
+  'PortfolioTheme.chartSeries.push("#000000");',
+]) assert.throws(() => vm.runInContext(`"use strict"; ${mutation}`, sandbox), (error) => error.name === "TypeError", "chart consumers cannot change the shared palette");
+const preservedCssVariables = {
+  "--color-page": "#1A1B1C", "--color-shell": "#242527", "--color-surface": "#242527",
+  "--color-surface-raised": "#333538", "--color-header": "#333538", "--color-input": "#4D5054",
+  "--color-surface-hover": "#333538", "--color-border": "#333538", "--color-border-strong": "#676A70",
+  "--color-control-border": "#83858B", "--color-placeholder": "#D5D7DC",
+  "--color-text": "#D5D7DC", "--color-text-secondary": "#BBBCC0", "--color-text-muted": "#BBBCC0",
+  "--color-accent": "#D5D7DC", "--color-on-accent": "#1A1B1C", "--color-emphasis": "#BBBCC0",
+  "--color-emphasis-deep": "#676A70", "--color-selection": "#D5D7DC",
+  "--color-new-product": "#BBBCC0", "--color-embargo": "#FF2525",
+  "--color-danger": "#FF2525", "--color-danger-surface": "#331D1D",
+  "--color-danger-border": "#FF2525", "--color-danger-text": "#FF8A8A",
+  "--color-planning": "#BBBCC0", "--workspace-surface": "#1A1B1C",
+  "--color-stage-launched": "#4D5054", "--color-stage-development": "#56595E",
+  "--color-stage-planning": "#333538", "--color-status-sunsetting": "#4D5054",
+  "--font-ui": '"Jost", Arial, sans-serif',
+};
+assert.deepEqual(Object.fromEntries(Object.entries(theme.cssVariables).filter(([name]) => !name.startsWith("--chart-"))), preservedCssVariables, "adding chart tokens preserves every existing UI and presentation token");
+assert.deepEqual({ ...theme.uiPalette }, {
+  trueBlack: "#1A1B1C", inkBlack: "#1A1B1C", carbon: "#242527", jetBlack: "#333538",
+  gunmetal: "#4D5054", greyOlive: "#BBBCC0", silver: "#BBBCC0", whiteSmoke: "#D5D7DC",
+  amaranth: "#FF2525", charcoal900: "#1A1B1C", charcoal800: "#1A1B1C",
+  charcoal700: "#333538", charcoal600: "#333538", charcoal500: "#4D5054",
+  indigoDark: "#242527", indigo: "#333538", steelTeal: "#676A70",
+  steelTealLight: "#BBBCC0", midGrey: "#BBBCC0", foggyDark: "#333538",
+  foggy: "#BBBCC0", starDust: "#D5D7DC", selection: "#D5D7DC",
+}, "the secondary chart palette never redefines legacy UI palette names");
+assert.deepEqual({ ...theme.stageColors }, { launched: "#4D5054", "in-development": "#56595E", "in-planning": "#333538" });
+assert.deepEqual({ ...theme.accents }, { newProduct: "#BBBCC0", embargo: "#FF2525", inDevelopment: "#56595E", sunsetting: "#4D5054" });
+assert.deepEqual({ ...theme.lifecycleTones }, { launched: "#4D5054", "in-development": "#56595E", "in-planning": "#333538", embargo: "#FF2525", "end-of-life": "#242527" });
 theme.apply();
 assert.equal(JSON.stringify(sampleWorkspace), snapshot, "theme application must not change saved products, specs, images, history or pending changes");
 
@@ -42,6 +101,7 @@ for (const surface of [theme.colors.page, theme.colors.surface, theme.colors.hea
   assert.ok(contrast(theme.colors.label, surface) >= 4.5, "necessary small labels retain readable contrast");
   assert.ok(contrast(theme.colors.text, surface) >= 4.5, "values retain readable contrast");
 }
+for (const series of theme.chartSeries) assert.ok(contrast(series, theme.colors.page) >= 3 && contrast(series, theme.colors.surface) >= 3, "the main reference colors remain distinguishable on dark chart surfaces");
 assert.ok(contrast(theme.colors.text, theme.colors.input) >= 4.5);
 assert.ok(contrast(theme.colors.alertText, theme.colors.alertSurface) >= 4.5);
 assert.ok(contrast(theme.colors.text, theme.colors.input) >= 3, "focus outline remains visible against inputs");
