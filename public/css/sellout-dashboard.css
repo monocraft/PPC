@@ -83,3 +83,35 @@
 .so-marker-readout{flex:0 1 auto;min-width:0;margin-left:26px}.so-marker-caption{justify-content:start}.so-week-retailers{grid-template-columns:repeat(4,max-content);gap:38px}.so-week-value{min-width:82px}@media(max-width:1200px){.so-marker-readout{margin-left:12px}.so-week-retailers{gap:26px}}@media(max-width:1000px){.so-marker-readout{margin-left:0}.so-week-retailers{gap:24px}}@media(max-width:700px){.so-marker-readout{flex:1 1 100%;width:100%;margin:0}.so-week-retailers{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.so-week-value{min-width:0}}@media(max-width:360px){.so-week-retailers{gap:7px}}
 
 .so-link-hint{font-size:13px;line-height:1.6;color:var(--so-muted)}.so-link-connection button{margin-top:14px}.so-link-progress{display:flex;align-items:center;gap:12px;min-height:44px;font-size:14px}.so-link-spinner{width:18px;height:18px;border:2px solid var(--so-line);border-top-color:var(--so-text);border-radius:50%;animation:so-link-spin .9s linear infinite}.so-link-form input:read-only{opacity:.7}.so-auth-page{display:grid;place-items:center;min-height:100vh;padding:24px}.so-auth-page main{max-width:460px}.so-auth-page h1{font-size:32px;letter-spacing:-.7px;margin-bottom:16px}.so-auth-page p{color:var(--so-muted);line-height:1.6}@keyframes so-link-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.so-link-spinner{animation:none}}
+
+/* Quiet filter controls share the same neutral PPC theme as the header. */
+.so-topbar .so-actions #importButton{color:var(--so-text);background:var(--so-panel)}
+.so-topbar .so-actions #importButton:hover{background:var(--so-raised)}
+.so-retailer-filter{flex:0 1 auto;min-width:0;display:grid;gap:4px}
+.so-filter-label{font-size:11px;line-height:16px;color:var(--so-muted)}
+.so-retailer-toggles{display:flex;flex-wrap:wrap;gap:6px}
+.so-retailer-toggles button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:7px 11px;border:0;border-radius:8px;background:transparent;color:var(--so-muted);font-size:12px;line-height:20px;transition:background .2s,color .2s,opacity .2s}
+.so-retailer-toggles button[aria-pressed=true]{background:var(--so-raised);color:var(--so-text)}
+.so-retailer-toggles button[aria-pressed=false]{opacity:.72}
+.so-retailer-toggles button:hover{background:var(--so-panel);color:var(--so-text);opacity:1}
+.so-retailer-toggles button:active{transform:none}
+.so-retailer-icon{width:18px;height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.so-retailer-monogram{display:grid;place-items:center;width:18px;height:18px;font-size:10px;font-weight:500}
+#productPicker{flex:0 1 235px;min-width:180px}
+#productPicker summary strong{color:var(--so-text);min-height:36px;border:0;background:var(--so-panel);padding:8px 28px 8px 11px;line-height:20px}
+#productPicker summary:hover strong{background:var(--so-raised)}
+#productPicker .so-picker-menu{width:min(360px,calc(100vw - 56px));padding:14px;border:0;border-radius:12px;box-shadow:0 16px 42px #0007;background:var(--so-panel)}
+#productPicker .so-picker-menu label{font-size:12px}
+#productPicker .so-picker-menu>label{display:grid;gap:6px;min-height:0;color:var(--so-muted)}
+#productSearch{margin:0;border:0;background:var(--so-bg);min-height:36px;width:100%}
+.so-picker-actions{display:flex;align-items:center;gap:10px;padding:9px 0 7px}
+.so-picker-actions button{width:auto;border:0;background:transparent;color:var(--so-text);margin:0;padding:5px 7px;font-size:11px}
+.so-picker-actions button:hover{background:var(--so-raised)}
+#productSelectionCount{margin-left:auto;font-size:11px;color:var(--so-muted)}
+#productOptions{max-height:min(360px,50vh);padding-right:2px}
+#productOptions label{min-height:44px;padding:5px 7px;border-radius:7px;color:var(--so-text)}
+#productOptions label:hover{background:var(--so-raised)}
+#productOptions input{width:15px;height:15px;accent-color:var(--so-text);flex-shrink:0}
+#productOptions small{font-size:10px;opacity:.8}
+@media(max-width:700px){.so-retailer-filter{flex:1 1 100%}.so-retailer-toggles{gap:5px}.so-retailer-toggles button{flex:1 1 auto;gap:5px;padding:7px 8px;font-size:11px}.so-retailer-icon{width:16px;height:16px}#productPicker{flex:1 1 190px;min-width:0}#productPicker .so-picker-menu{left:0;right:auto}}
+@media(prefers-reduced-motion:reduce){.so-retailer-toggles button{transition:none}}

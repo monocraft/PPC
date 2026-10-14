@@ -2,6 +2,8 @@
 
 The separate **Analytics** module opens from the portfolio toolbar or empty-state actions. Its two visible views are **Overview**, which brings together the summary and all product, retailer, category and price-positioning charts, and **Data**, which provides searchable detail rows and filtered CSV export. The compact top navigation gives the reporting controls, large quantities and borderless charts the full canvas width.
 
+Retailers use compact buttons with monochrome identifying icons and a clear pressed state. Each button toggles that retailer independently; turning off the last retailer keeps an explicit empty selection. The buttons come from the loaded report and retain keyboard focus as their state changes. There is no retailer dropdown or duplicate All control. The SKU picker has a labeled search, one **Select all** action and one **Clear** action above its checkbox list. Select all includes the complete SKU set even when the search narrows the visible options. Search alone preserves the current selection, and Clear keeps an empty selection until SKUs are selected again.
+
 Planning cards, the shortlist editor and brief exporters remain implemented for a later planning workflow. Their **Plan** navigation and **Export brief** action are hidden in the current presentation.
 
 ## Data and refresh

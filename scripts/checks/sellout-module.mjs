@@ -181,8 +181,8 @@ const safeWorkspace = globalThis.PPCSelloutPrivate.sanitizeWorkspace(JSON.parse(
 assert.equal(safeWorkspace.snapshot.rows[0].values[0], 0, "The native exported schema must remain valid without converting zero units.");
 assert.equal(safeWorkspace.prices.FIX01AA.msrp, 0, "The native exported schema must preserve a zero USD MSRP.");
 
-// Exercise the actual picker functions and native checkbox callbacks against
-// a small source fixture. Empty arrays mean All; explicit None must stay empty.
+// Exercise actual source-driven retailer buttons and SKU checkbox/action
+// callbacks. Empty arrays mean All; explicit None must remain empty.
 const filterFixture = {
   snapshot: { schemaVersion: 1, periods: ["2026-01-04", "2026-01-11", "2026-01-18"].map(date => ({ date, quarter: "FY26Q1" })), rows: [
     { store: "Retailer A", sku: "SKU-A", product: "Alpha", category: "Audio", lifetime: 60, values: [10, 20, 30] },
@@ -192,73 +192,145 @@ const filterFixture = {
   ] }, stores: [], products: [], storesNone: false, productsNone: false, hiddenSeries: new Set(),
 };
 const filterSourceBefore = JSON.stringify(filterFixture.snapshot);
-const filterElements = new Map(["storeOptions", "productOptions", "storeLabel", "productLabel", "storeAll", "productAll", "productSearch", "categoryFilter", "marketStore", "bandFilter", "startDate", "endDate", "comparison", "coverage", "trendMode"].map(id => [id, { value: "", innerHTML: "", textContent: "", checked: false, indeterminate: false }]));
+const filterDecode = value => String(value).replace(/&(amp|lt|gt|quot|#39);/g, entity => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" })[entity]);
+let filterActiveElement = null;
+class FilterElement {
+  constructor(id) { this.id = id; this.value = ""; this.markup = ""; this.textContent = ""; this.checked = false; this.indeterminate = false; this.dataset = {}; this.children = []; this.replacements = 0; }
+  set innerHTML(value) {
+    if (this.children.includes(filterActiveElement)) filterActiveElement = null;
+    this.markup = value; this.replacements++;
+    this.children = [...value.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].map(match => {
+      const attrs = attributes(`<button ${match[1]}>`), classes = new Set((attrs.get("class") || "").split(/\s+/).filter(Boolean));
+      const button = {
+        tagName: "BUTTON", attrs, content: match[2], dataset: { store: filterDecode(attrs.get("data-store") || "") },
+        getAttribute: name => attrs.get(name) ?? null, setAttribute: (name, value) => attrs.set(name, String(value)),
+        classList: { toggle(name, active) { if (active ?? !classes.has(name)) classes.add(name); else classes.delete(name); }, add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) },
+        focus() { filterActiveElement = button; }, closest: selector => selector.includes("data-store") ? button : null,
+      };
+      return button;
+    });
+    this.children.push(...[...value.matchAll(/<input\b[^>]*>/g)].map(match => {
+      const attrs = attributes(match[0]);
+      const input = { tagName: "INPUT", attrs, type: attrs.get("type"), checked: /\bchecked(?:\s|>|=)/.test(match[0]), dataset: { product: filterDecode(attrs.get("data-product") || "") },
+        getAttribute: name => attrs.get(name) ?? null, setAttribute: (name, value) => attrs.set(name, String(value)), focus() { filterActiveElement = input; },
+      };
+      return input;
+    }));
+  }
+  get innerHTML() { return this.markup; }
+  querySelectorAll(selector) { return this.children.filter(child => selector.startsWith("button") ? child.tagName === "BUTTON" : selector.startsWith("input") ? child.tagName === "INPUT" : true); }
+  contains(element) { return this.children.includes(element); }
+}
+const filterElements = new Map(["storeOptions", "productOptions", "productLabel", "productAll", "productClear", "productSelectionCount", "productSearch", "categoryFilter", "marketStore", "bandFilter", "startDate", "endDate", "comparison", "coverage", "trendMode"].map(id => [id, new FilterElement(id)]));
 filterElements.get("startDate").value = "2026-01-04"; filterElements.get("endDate").value = "2026-01-18";
 filterElements.get("comparison").value = "none"; filterElements.get("coverage").value = "common";
 const filterSandbox = { state: filterFixture, M: globalThis.PPCSelloutModel, Set,
   $: id => filterElements.get(id), esc: value => String(value), niceName: value => value,
-  bandOf: () => "$50–99", stopTimeline() {}, update() {},
+  document: { get activeElement() { return filterActiveElement; } }, bandOf: () => "$50–99", stopTimeline() {}, update() {},
 };
 vm.createContext(filterSandbox);
 const pickerDefinition = name => {
   const definition = uiSource.match(new RegExp(`^  function ${name}\\([^]*?^  \\}`, "m"))?.[0];
   assert.ok(definition, `Missing actual picker function ${name}`); return definition;
 };
-vm.runInContext(["controls", "renderProductOptions", "filters", "setFilterSelection", "setAllFilters"].map(pickerDefinition).join("\n"), filterSandbox);
+vm.runInContext(["retailerIcon", "renderStoreOptions", "controls", "renderProductOptions", "filters", "setFilterSelection", "setAllFilters"].map(pickerDefinition).join("\n"), filterSandbox);
 vm.runInContext(uiSource.match(/^  function productSelectionChanged[^\n]+/m)[0], filterSandbox);
-for (const id of ["storeOptions", "productOptions", "storeAll", "productAll"]) {
-  const callback = uiSource.match(new RegExp(`^  \\$\\("${id}"\\)\\.onchange = [^\\n]+`, "m"))?.[0];
-  assert.ok(callback, `Missing actual native checkbox callback ${id}`); vm.runInContext(callback, filterSandbox);
+for (const [id, event] of [["storeOptions", "onclick"], ["productOptions", "onchange"], ["productAll", "onclick"], ["productClear", "onclick"]]) {
+  const lines = uiSource.split(/\r?\n/), start = lines.findIndex(line => line.startsWith(`  $("${id}").${event} = `));
+  assert.ok(start >= 0, `Missing actual native filter callback ${id}.${event}`);
+  let end = start; if (!lines[start].endsWith("};")) { end = lines.findIndex((line, index) => index > start && line === "  };"); assert.ok(end > start); }
+  vm.runInContext(lines.slice(start, end + 1).join("\n"), filterSandbox);
 }
 const pickedAnalysis = () => globalThis.PPCSelloutModel.analyze(filterFixture.snapshot, filterSandbox.filters());
-const checkedOptionCount = id => [...filterElements.get(id).innerHTML.matchAll(/<input\b[^>]*\bchecked\b[^>]*>/g)].length;
+const checkedOptionCount = id => filterElements.get(id).querySelectorAll("input").filter(input => input.checked).length;
+const retailerButtons = () => filterElements.get("storeOptions").children;
+const retailerButton = store => retailerButtons().find(button => button.dataset.store === store);
+const pressedRetailers = () => retailerButtons().filter(button => button.getAttribute("aria-pressed") === "true").map(button => button.dataset.store);
+const toggleRetailer = store => {
+  const button = retailerButton(store); assert.ok(button, "Retailer button must come from the loaded source.");
+  button.focus(); filterElements.get("storeOptions").onclick({ target: { closest: selector => selector.includes("data-store") ? button : null } });
+  assert.equal(retailerButton(store), button, "Selection updates retain the retailer button node.");
+  assert.equal(filterActiveElement, button, "Selection updates retain native keyboard focus.");
+};
 filterSandbox.controls();
-assert.equal(checkedOptionCount("storeOptions"), 2, "implicit All shows all retailer checkboxes checked");
+assert.deepEqual(pressedRetailers(), ["Retailer A", "Retailer B"], "Implicit All presses every source retailer button.");
 assert.equal(checkedOptionCount("productOptions"), 2, "implicit All shows all SKU checkboxes checked");
-assert.ok(filterElements.get("storeAll").checked && filterElements.get("productAll").checked);
-filterElements.get("storeOptions").onchange({ target: { dataset: { store: "Retailer A" }, checked: false } });
-assert.deepEqual([...filterFixture.stores], ["Retailer B"], "unchecking one retailer from All materializes the remaining selection");
-assert.ok(filterElements.get("storeAll").indeterminate && !filterElements.get("storeAll").checked);
+assert.equal(filterElements.get("productSelectionCount").textContent, "2 selected");
+assert.equal(pickedAnalysis().totals.current, 81);
+for (const button of retailerButtons()) assert.equal(button.getAttribute("type"), "button", "Retailer filters use native buttons.");
+const stableRetailerNodes = [...retailerButtons()], initialReplacements = filterElements.get("storeOptions").replacements;
+stableRetailerNodes[0].focus(); filterSandbox.controls(); filterSandbox.controls();
+assert.deepEqual(retailerButtons(), stableRetailerNodes); assert.equal(filterActiveElement, stableRetailerNodes[0]);
+assert.equal(filterElements.get("storeOptions").replacements, initialReplacements, "Repeated controls updates do not rebuild unchanged retailer options.");
+toggleRetailer("Retailer A");
+assert.deepEqual([...filterFixture.stores], ["Retailer B"], "Toggling one retailer off from All materializes the remaining selection.");
+assert.deepEqual(pressedRetailers(), ["Retailer B"]); assert.equal(pickedAnalysis().totals.current, 15);
 assert.equal(pickedAnalysis().stores.length, 1);
-filterElements.get("storeOptions").onchange({ target: { dataset: { store: "Retailer B" }, checked: false } });
+toggleRetailer("Retailer B");
 assert.equal(filterFixture.storesNone, true);
-assert.equal(filterElements.get("storeLabel").textContent, "No retailers");
-assert.equal(pickedAnalysis().rows.length, 0, "unchecking the last retailer must never restore all source rows");
-filterElements.get("storeAll").onchange({ target: { checked: true } });
-assert.equal(filterFixture.storesNone, false); assert.equal(checkedOptionCount("storeOptions"), 2);
-filterElements.get("storeAll").onchange({ target: { checked: false } });
-assert.equal(pickedAnalysis().rows.length, 0, "unchecking the native All control selects no retailers");
-filterElements.get("storeAll").onchange({ target: { checked: true } });
+assert.deepEqual(pressedRetailers(), []); assert.equal(pickedAnalysis().totals.current, null, "None has no observations and must not invent a reported zero.");
+assert.equal(pickedAnalysis().rows.length, 0, "Toggling off the last retailer must never restore all source rows.");
+toggleRetailer("Retailer A");
+assert.equal(filterFixture.storesNone, false); assert.deepEqual(pressedRetailers(), ["Retailer A"]); assert.equal(pickedAnalysis().totals.current, 66);
+toggleRetailer("Retailer B");
+assert.equal(filterFixture.stores.length, 0, "Selecting the final retailer canonicalizes All.");
+assert.deepEqual(pressedRetailers(), ["Retailer A", "Retailer B"]); assert.equal(pickedAnalysis().totals.current, 81);
+const ignoredStoreSelection = JSON.stringify({ stores: filterFixture.stores, none: filterFixture.storesNone });
+filterElements.get("storeOptions").onclick({ target: { closest: () => null } });
+filterElements.get("storeOptions").onclick({ target: { closest: () => ({ dataset: { store: "Retailer A" } }) } });
+assert.equal(JSON.stringify({ stores: filterFixture.stores, none: filterFixture.storesNone }), ignoredStoreSelection, "Delegation ignores background clicks and retailer buttons outside its own container.");
 
-filterElements.get("productOptions").onchange({ target: { dataset: { product: "SKU-A" }, checked: false } });
+const focusedSkuInput = filterElements.get("productOptions").querySelectorAll("input").find(input => input.dataset.product === "SKU-A");
+focusedSkuInput.focus(); focusedSkuInput.checked = false; filterElements.get("productOptions").onchange({ target: focusedSkuInput });
+assert.equal(filterElements.get("productOptions").querySelectorAll("input").find(input => input.dataset.product === "SKU-A"), focusedSkuInput);
+assert.equal(filterActiveElement, focusedSkuInput, "SKU checkbox updates retain native focus when the visible SKU list is unchanged.");
 assert.deepEqual([...filterFixture.products], ["SKU-B"]);
+assert.equal(checkedOptionCount("productOptions"), 1); assert.equal(filterElements.get("productSelectionCount").textContent, "1 selected");
 assert.equal(filterElements.get("trendMode").value, "products");
-assert.ok(filterElements.get("productAll").indeterminate);
+assert.equal(pickedAnalysis().totals.current, 6);
 filterElements.get("productOptions").onchange({ target: { dataset: { product: "SKU-B" }, checked: false } });
-assert.equal(filterElements.get("productLabel").textContent, "No SKUs");
+assert.equal(filterElements.get("productLabel").textContent, "None");
 assert.equal(filterFixture.productsNone, true); assert.equal(pickedAnalysis().rows.length, 0);
+assert.equal(checkedOptionCount("productOptions"), 0); assert.equal(filterElements.get("productSelectionCount").textContent, "0 selected");
 filterElements.get("bandFilter").value = "$50–99";
 assert.equal(pickedAnalysis().rows.length, 0, "a price-band filter cannot turn None back into All SKUs");
 filterElements.get("productOptions").onchange({ target: { dataset: { product: "SKU-A" }, checked: true } });
 filterElements.get("productOptions").onchange({ target: { dataset: { product: "SKU-B" }, checked: true } });
 assert.equal(filterFixture.productsNone, false); assert.equal(filterFixture.products.length, 0, "selecting the final SKU canonicalizes the All state");
-assert.equal(filterElements.get("trendMode").value, "stores"); assert.ok(filterElements.get("productAll").checked);
-filterElements.get("productAll").onchange({ target: { checked: false } });
+assert.equal(filterElements.get("trendMode").value, "stores"); assert.equal(pickedAnalysis().totals.current, 81);
+filterElements.get("productClear").onclick(); filterElements.get("productClear").onclick();
+assert.equal(filterFixture.productsNone, true, "Clear remains None when used repeatedly.");
+assert.equal(checkedOptionCount("productOptions"), 0);
 assert.equal(pickedAnalysis().rows.length, 0);
-filterElements.get("productAll").onchange({ target: { checked: true } });
-assert.equal(pickedAnalysis().rows.length, 4);
+filterElements.get("productAll").onclick(); filterElements.get("productAll").onclick();
+assert.equal(filterFixture.productsNone, false, "Select all remains All when used repeatedly.");
+assert.equal(checkedOptionCount("productOptions"), 2);
+assert.equal(pickedAnalysis().rows.length, 4); assert.equal(pickedAnalysis().totals.current, 81);
 filterElements.get("productSearch").value = "Alpha"; filterSandbox.renderProductOptions();
 assert.equal(checkedOptionCount("productOptions"), 1, "search narrows displayed options without changing global All");
-assert.ok(filterElements.get("productAll").checked);
 filterElements.get("productOptions").onchange({ target: { dataset: { product: "SKU-A" }, checked: false } });
 assert.deepEqual([...filterFixture.products], ["SKU-B"], "unchecking a searched SKU retains selected SKUs outside the visible search results");
-filterSandbox.setAllFilters("products"); filterSandbox.controls();
+assert.equal(pickedAnalysis().totals.current, 6);
+filterElements.get("productClear").onclick();
+assert.equal(filterFixture.productsNone, true); assert.equal(pickedAnalysis().totals.current, null, "Clear removes hidden searched-out SKUs too without inventing observations.");
+assert.equal(checkedOptionCount("productOptions"), 0); assert.equal(filterElements.get("productSelectionCount").textContent, "0 selected");
+filterElements.get("productAll").onclick();
 assert.equal(filterFixture.productsNone, false); assert.equal(filterFixture.products.length, 0);
+assert.equal(pickedAnalysis().totals.current, 81, "Select all includes source SKUs outside the search results.");
+assert.equal(filterElements.get("productSelectionCount").textContent, "2 selected");
+assert.equal(checkedOptionCount("productOptions"), 1, "Global actions preserve the visible search query.");
 assert.equal(JSON.stringify(filterFixture.snapshot), filterSourceBefore, "picker changes never rewrite imported source facts");
-for (const id of ["storeAll", "productAll"]) {
-  const input = [...html.matchAll(/<input\b[^>]*>/gi)].map(match => attributes(match[0])).find(attrs => attrs.get("id") === id);
-  assert.equal(input?.get("type"), "checkbox", "All uses a native checkbox master control");
+const originalFilterSnapshot = filterFixture.snapshot;
+filterFixture.snapshot = { ...originalFilterSnapshot, rows: [...originalFilterSnapshot.rows, { store: "New source retailer", sku: "SKU-A", product: "Alpha", category: "Audio", lifetime: 3, values: [1, 1, 1] }] };
+filterSandbox.controls();
+assert.deepEqual(retailerButtons().map(button => button.dataset.store), ["New source retailer", "Retailer A", "Retailer B"], "Unknown source retailers receive controls without a fixed brand list.");
+assert.equal(pickedAnalysis().totals.current, 84); assert.equal(JSON.stringify(originalFilterSnapshot), filterSourceBefore);
+assert.ok(!ids.some(id => ["storePicker", "storeAll", "storeLabel"].includes(id)), "Retailer dropdown/master-checkbox elements must be removed.");
+for (const id of ["productAll", "productClear"]) {
+  const button = [...html.matchAll(/<button\b[^>]*>/gi)].map(match => attributes(match[0])).find(attrs => attrs.get("id") === id);
+  assert.equal(button?.get("type"), "button", "SKU Select all and Clear use explicit native action buttons.");
 }
+assert.ok(!/<input\b[^>]*\bid="productAll"/.test(html) && !/\bdata-clear="products"/.test(html), "SKU master actions must not retain duplicate checkbox/All controls.");
 
 // Exercise the actual shaded Reporting table and native cell interactions.
 const reportSnapshot = { schemaVersion: 1, periods: ["2026-09-20", "2026-09-27", "2026-10-04", "2026-10-11", "2026-10-18"].map(date => ({ date, quarter: "FY26Q4" })), rows: [
