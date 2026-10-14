@@ -67,7 +67,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   if (process.argv.length > 2) throw new Error("Site versioning only updates prepared site HTML pages.");
   const version = process.env.PPC_SITE_VERSION || process.env.GITHUB_SHA || "";
   const preparedRoot = path.join(projectRoot, "_site");
-  const pages = ["index.html", "analytics.html"];
+  const pages = ["index.html", "analytics.html", "analytics-auth.html"];
   const prepared = [];
   for (const page of pages) {
     const output = path.join(preparedRoot, page);
@@ -75,7 +75,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
     try { html = await readFile(output, "utf8"); }
     catch (error) {
       // Keep the existing index-only preparation useful for older bundles.
-      if (page === "analytics.html" && error.code === "ENOENT") continue;
+      if (page !== "index.html" && error.code === "ENOENT") continue;
       throw error;
     }
     prepared.push({ output, html: renderVersionedIndex(html, version) });
