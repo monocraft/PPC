@@ -112,8 +112,9 @@ async function harness({ ready = true, initialization = null, load = async () =>
   const capture = () => JSON.stringify({ snapshot: state.snapshot, prices: state.prices, shortlist: state.shortlist, ppcProjection: state.ppcProjection, pricingSource: state.pricingSource, stores: state.stores, products: state.products });
   const initial = capture();
   const unchanged = () => { assert.equal(state.snapshot, active); assert.equal(capture(), initial, "A failed, cancelled or reviewed import must preserve the current report."); assert.equal(persistence.length, 0); };
-  const selectAction = action => { $("importButton").value = action; $("importButton").event("change"); assert.equal($("importButton").value, "", "Reset permits the same native action again."); };
-  const openLink = () => { selectAction("sharepoint"); $("sharepointLink").value = link; };
+  const loadWorkbook = () => $("importButton").click();
+  // Exercise the retained SharePoint controller internally; its entry is hidden in the published UI.
+  const openLink = () => { $("emptyLinkImport").click(); $("sharepointLink").value = link; };
   const submit = () => { const event = $("sharepointLinkForm").event("submit"); assert.equal(event.defaultPrevented, true); return $("sharepointLinkForm").lastPromise; };
   const workbook = (name, sheets) => {
     const contents = {
@@ -129,7 +130,7 @@ async function harness({ ready = true, initialization = null, load = async () =>
     return { name, size: bytes.byteLength, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
   };
   assert.equal(createCalls.length, 1); assert.equal(createCalls[0].config, config);
-  return { $, state, active, client, messages, persistence, privateCalls, loadCalls, timers, unchanged, openLink, submit, selectAction, workbook, initializeCalls: () => initializeCalls };
+  return { $, state, active, client, messages, persistence, privateCalls, loadCalls, timers, unchanged, openLink, submit, loadWorkbook, workbook, initializeCalls: () => initializeCalls };
 }
 
 // The deployed empty configuration must tell the truth and never invoke auth,
@@ -259,14 +260,14 @@ for (const file of [textFile("invalid.csv", "not,a,sellout,table\n1,2,3,4"), tex
 // It still goes to review, never picks up the pasted URL, and wins late success.
 {
   const gate = deferred(), h = await harness({ load: () => gate.promise }); h.openLink(); const run = h.submit();
-  h.selectAction("file"); assert.equal(h.loadCalls[0].signal.aborted, true);
+  h.loadWorkbook(); assert.equal(h.loadCalls[0].signal.aborted, true);
   await h.$("workbookFile").select(csvFile("ordinary.csv", 9)); h.unchanged();
   const pending = h.state.pending, review = h.$("importReview").innerHTML, messages = h.messages.length;
   assert.equal(pending.snapshot.title, "ordinary.csv"); assert.equal(pending.snapshot.sourceUrl || null, null); assert.equal(h.$("importDialog").open, true);
   assert.equal(h.$("sharepointDialog").open, false, "An ordinary file review closes the superseded sign-in dialog.");
   gate.resolve(csvFile("stale.csv", 99)); await run; h.unchanged();
   assert.equal(h.state.pending, pending); assert.equal(h.$("importReview").innerHTML, review); assert.equal(h.messages.length, messages);
-  h.selectAction("file"); assert.equal(h.$("workbookFile").clicks, 2, "The native action can be chosen repeatedly after cancellation.");
+  h.loadWorkbook(); assert.equal(h.$("workbookFile").clicks, 2, "The workbook button can be clicked repeatedly after cancellation.");
 }
 {
   const gate = deferred(), h = await harness({ load: async () => ({ name: "old-parser.csv", size: 100, text: () => gate.promise }) }); h.openLink(); const run = h.submit(); await flush();
