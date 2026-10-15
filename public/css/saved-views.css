@@ -1,0 +1,22 @@
+.saved-views-trigger{min-height:36px;white-space:nowrap}
+.saved-views-dialog{box-sizing:border-box;width:min(620px,calc(100vw - 28px));max-height:calc(100dvh - 36px);padding:24px;border:1px solid var(--color-border,#45474b);border-radius:16px;background:var(--color-surface,#222427);color:var(--color-text,#f5f5f5);box-shadow:0 24px 80px #0008;font:inherit;overflow:auto}
+.saved-views-dialog::backdrop{background:#0009}
+.saved-views-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.saved-views-heading h2{margin:0;font-size:1.25rem}
+.saved-views-help{color:var(--color-text-secondary,#b8bcc3);font-size:.9rem;line-height:1.5;margin:14px 0 20px}
+.saved-views-dialog button,.saved-views-dialog input{box-sizing:border-box;font:inherit;color:inherit;border:1px solid var(--color-border,#55585e);border-radius:7px;background:var(--color-header,#303338);min-height:40px;padding:8px 12px}
+.saved-views-dialog button{cursor:pointer}
+.saved-views-dialog button:hover{background:var(--color-surface-hover,#3f444b)}
+.saved-views-dialog :focus-visible{outline:2px solid var(--color-accent,#a9c6ff);outline-offset:3px}
+.saved-views-list{padding:0;margin:0 0 22px;list-style:none}
+.saved-views-list li{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid var(--color-border,#45474b)}
+.saved-views-info{min-width:0;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere}
+.saved-views-info small,.saved-views-empty{color:var(--color-text-secondary,#b8bcc3)}
+.saved-views-actions{display:flex;gap:6px;flex-shrink:0}
+.saved-views-actions button{font-size:.8rem;padding:7px 9px}
+.saved-views-form{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.saved-views-form label{flex-basis:100%;font-size:.9rem}
+.saved-views-form input{flex:1;min-width:140px}
+.saved-views-status{min-height:1.5em;font-size:.9rem;line-height:1.5;margin:16px 0 0;color:var(--color-text-secondary,#d1d7df)}
+.saved-views-dialog [hidden]{display:none!important}
+@media(max-width:540px){.saved-views-dialog{padding:18px}.saved-views-list li{align-items:flex-start;flex-direction:column}.saved-views-actions{width:100%}.saved-views-actions button{flex:1;min-height:44px}.saved-views-form input{flex-basis:100%}.saved-views-form button{flex:1;min-height:44px}.saved-views-close{min-height:44px!important}}

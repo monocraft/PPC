@@ -52,7 +52,9 @@
   window.HX_IMPORT_FILE = async function (file) {
     if (!/\.(xlsx|xlsm)$/i.test(file.name)) throw new Error('Choose an HX Blueprint .xlsx or .xlsm file.');
     if (file.size > 40 * 1024 * 1024) throw new Error('Choose a workbook smaller than 40 MB.');
-    const zip = await zipEntries(await file.arrayBuffer());
+    // A file handed over from the Analytics parent has a different realm.
+    // Construct bytes here so the bounded ZIP reader sees its own typed array.
+    const zip = await zipEntries(new Uint8Array(await file.arrayBuffer()));
     const workbookText = await zip.read('xl/workbook.xml');
     if (!workbookText) throw new Error('This file is not a supported Excel workbook.');
     const book = xml(workbookText), relationships = xml(await zip.read('xl/_rels/workbook.xml.rels'));

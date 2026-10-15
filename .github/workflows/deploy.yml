@@ -53,6 +53,8 @@ jobs:
         run: |
           mkdir -p _site/css _site/js _site/data
           cp public/index.html _site/
+          cp public/css/workflow-ui.css public/css/planning-intake.css public/css/saved-views.css _site/css/
+          cp public/js/workflow-model.js public/js/workflow-ui.js public/js/planning-intake.js public/js/planning-intake-ui.js public/js/saved-views.js _site/js/
           cp public/analytics.html _site/
           cp public/css/analytics-workspace.css _site/css/
           cp public/js/analytics-workspace.js _site/js/
@@ -95,6 +97,14 @@ jobs:
             test -e "_site/${required_path}"
           done
           test ! -e _site/project-data/private
+          test -f _site/js/workflow-ui.js
+          test -f _site/js/workflow-model.js
+          test -f _site/js/planning-intake.js
+          test -f _site/js/planning-intake-ui.js
+          test -f _site/js/saved-views.js
+          test -f _site/css/workflow-ui.css
+          test -f _site/css/planning-intake.css
+          test -f _site/css/saved-views.css
           test ! -e _site/docs
           test ! -e _site/artifacts
           test ! -e _site/scripts

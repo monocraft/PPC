@@ -224,7 +224,7 @@ for (const identity of [{ origin: "https://other.test" }, { sender: {} }]) {
 }
 for (const data of [null, "unrelated", { type: "unknown", ...validMaliciousState, state: { view: "unknown" } }, { type: "ppc:blueprint:state", state: { view: "javascript:malicious" }, sourceLabel: "Spoofed source" }]) workspace.message(data);
 assert.deepEqual({ url: workspace.window.location.href, source: workspace.source.textContent, height: workspace.frame.style.height }, trustedState, "Wrong windows, foreign origins and unsupported views cannot change analysis state.");
-workspace.message({ type: "ppc:blueprint:state", state: { view: "scenarios", year: "invalid", category: "x".repeat(81), revenue: Infinity, margin: 11, spend: -31 } });
+workspace.message({ type: "ppc:blueprint:state", state: { view: "scenarios", year: "invalid", category: "x".repeat(1201), revenue: Infinity, margin: 11, spend: -31 } });
 assert.equal(workspace.window.location.searchParams.get("year"), "2023");
 assert.equal(workspace.window.location.searchParams.get("category"), "Headsets");
 assert.equal(workspace.window.location.searchParams.get("revenue"), "-1.5");

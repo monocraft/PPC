@@ -702,6 +702,8 @@
         if (status === "update" && localEdit?.source !== "plc" && clean(localEdit?.value) === current && localEditTime && Number.isFinite(localEditTime.getTime()) && localDay(localEditTime) >= sourceDate) {
           status = "review"; reason = "PPC has a local date edit on or after this source report; verify the incoming date";
         }
+        const protection = product && root.PortfolioFieldProtection?.check({ categoryId: match.categoryId, productId: product.id, variantId: variantTarget?.variantId || '', field });
+        if (protection?.protected && status === "update") { status = "review"; reason = protection.unavailable ? protection.reason : "Protected on this browser. Release this date's protection before applying a source update."; }
         const ga = field === "generalAvailabilityDate" ? incoming : product?.generalAvailabilityDate, em = field === "endManufacturingDate" ? incoming : product?.endManufacturingDate;
         if (ga && em && em < ga && status === "update") { status = "review"; reason = "GA would fall after end of manufacturing"; }
         return { field, label: fieldLabels[field], current, incoming, currentPeriod: oldPeriod, period, displayCurrent: dateLabel(current, oldPeriod), displayIncoming: dateLabel(incoming, period), raw: parsed.raw || "", region: parsed.region || "", kind: parsed.kind, status, reason, source: parsed.source || row.sources?.[0] || {}, reportDate: sourceDate, ...(parsed.revision ? { revision: clone(parsed.revision) } : {}), ...(parsed.candidates ? { candidates: clone(parsed.candidates) } : {}) };
@@ -939,7 +941,8 @@
       portfolio.dateLocalEdits[productId] ||= {};
       portfolio.dateLocalEdits[productId][field] = { at, value, source };
       const evidence = product.plc?.fields?.[field];
-      if (source !== "plc" && evidence && !(evidence.sourceType === "local" && evidence.value === value && evidence.changedAt && !evidence.supersededAt)) evidence.supersededAt = at;
+      const reviewedPlanning = source === "planning" && evidence?.source?.kind === "planning" && evidence.reviewed === true && evidence.value === value && !evidence.supersededAt;
+      if (source !== "plc" && !reviewedPlanning && evidence && !(evidence.sourceType === "local" && evidence.value === value && evidence.changedAt && !evidence.supersededAt)) evidence.supersededAt = at;
     }
     return snapshotDateValues(portfolio);
   }

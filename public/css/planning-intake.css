@@ -1,0 +1,23 @@
+.planning-intake { color: #d5d7dc; background: #1a1b1c; border: 1px solid #676a70; border-radius: 12px; width: min(1120px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); padding: 0; overflow: auto; font: 14px Jost, Arial, sans-serif; }
+.planning-intake::backdrop { background: #080909b8; }
+.planning-intake button,.planning-intake input,.planning-intake select { font: inherit; }
+.planning-intake button { border: 1px solid #676a70; border-radius: 5px; padding: 7px 11px; background: #333538; color: #e6ebee; cursor: pointer; }
+.planning-intake button:disabled { opacity: .45; cursor: default; }
+.planning-intake input:not([type=checkbox]),.planning-intake select { width: 100%; min-width: 0; padding: 7px; border: 1px solid #676a70; border-radius: 4px; color: #e6ebee; background: #242527; box-sizing: border-box; }
+.planning-intake input[type=checkbox] { accent-color: #2dd4bf; }
+.planning-intake :focus-visible { outline: 2px solid #2dd4bf; outline-offset: 2px; }
+.planning-intake-header { position: sticky; top: 0; z-index: 2; background: #242527; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #4d5054; }
+.planning-intake h2 { margin: 0; font-size: 22px; }.planning-intake h3 { margin: 0 0 4px; font-size: 17px; }
+.planning-intake-intro,.planning-intake-status,.planning-intake-summary { margin: 16px 22px; line-height: 1.5; }
+.planning-intake-intro { color: #bbbcc0; }.planning-intake-status { padding: 10px 12px; border-left: 3px solid #2dd4bf; background: #242b2b; }
+.planning-intake-source { margin: 16px 22px; display: grid; grid-template-columns: 1.3fr 1fr .8fr auto; gap: 12px; align-items: end; }
+.planning-intake-source label,.planning-intake-row-controls label { display: grid; gap: 5px; }
+.planning-intake-toolbar { margin: 12px 22px; display: flex; align-items: center; gap: 10px; }.planning-intake-toolbar[hidden] { display: none; }.planning-intake-toolbar button:last-child { margin-left: auto; }
+.planning-intake-row { margin: 15px 22px; padding: 16px; border: 1px solid #4d5054; border-radius: 7px; background: #242527; }
+.planning-intake-row-source { color: #bbbcc0; margin: 0 0 12px; }.planning-intake-warning { color: #ffd569; font-size: 13px; }
+.planning-intake-row-controls { display: grid; grid-template-columns: minmax(160px,.7fr) minmax(220px,1.4fr) minmax(140px,.7fr); align-items: end; gap: 10px; }
+.planning-intake-fields { display: grid; gap: 6px; margin-top: 16px; }.planning-intake-field { display: grid; grid-template-columns: 190px minmax(150px,1fr) minmax(120px,.8fr); gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid #ffffff0c; }
+.planning-intake-field-check { display: flex; align-items: center; gap: 7px; }.planning-intake-before { color: #bbbcc0; font-size: 12px; overflow-wrap: anywhere; }.planning-intake-field.is-protected .planning-intake-before { color: #ffd569; }
+.planning-intake-proposal { justify-self: start; font-size: 12px !important; color: #ffd569 !important; }.planning-intake-override { display: flex; gap: 8px; margin-top: 13px; color: #bbbcc0; font-size: 12px; }
+.planning-intake-footer { position: sticky; bottom: 0; z-index: 2; display: flex; gap: 16px; justify-content: space-between; align-items: center; background: #242527; border-top: 1px solid #4d5054; padding: 14px 22px; }.planning-intake-footer span { color: #bbbcc0; font-size: 12px; }.planning-intake .planning-intake-apply { background: #23665c; border-color: #36897b; flex-shrink: 0; }
+@media(max-width: 760px) { .planning-intake { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }.planning-intake-source,.planning-intake-row-controls { grid-template-columns: 1fr; }.planning-intake-field { grid-template-columns: 1fr; gap: 5px; }.planning-intake-footer { flex-direction: column; align-items: stretch; }.planning-intake-toolbar { flex-wrap: wrap; }.planning-intake-row { margin: 12px; }.planning-intake-header,.planning-intake-footer { padding: 12px; } }

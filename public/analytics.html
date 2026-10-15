@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="css/sellout-dashboard.css">
   <link rel="stylesheet" href="css/sellout-months.css">
   <link rel="stylesheet" href="css/analytics-workspace.css">
+  <link rel="stylesheet" href="css/workflow-ui.css">
+  <link rel="stylesheet" href="css/saved-views.css">
   <script src="js/reference-theme.js"></script>
 </head>
 <body>
@@ -21,6 +23,7 @@
   </div>
   <span class="analysis-local"><i aria-hidden="true"></i> Local workspace</span>
 </header>
+<div class="workflow-analytics-tools"><button id="analyticsLoadData" type="button">Load data</button><button id="analyticsSavedViews" type="button">Saved views</button></div>
 <div id="selloutApp" class="so-app analysis-panel" role="tabpanel" aria-labelledby="analysis-retail-tab">
 
   <main class="so-main">
@@ -117,5 +120,9 @@
 <script src="js/sellout-motion.js"></script><script src="js/sellout-spring.js"></script>
 <script src="js/sellout-dashboard.js"></script>
 <script src="js/analytics-workspace.js"></script>
+<p id="workflowAnnouncement" class="so-visually-hidden" role="status" aria-live="polite"></p>
+<script src="js/workflow-model.js"></script>
+<script src="js/saved-views.js"></script>
+<script src="js/workflow-ui.js"></script>
 </body>
 </html>
