@@ -115,7 +115,7 @@
   const isComparison = () => isProductComparison() || (!hasDrill() && selectedCategories().length > 1);
   const inCategoryScope = category => allCategoriesSelected() || selectedCategories().includes(category);
   const scopeLabel = () => isProductComparison() ? `${state.compareIds.length} selected ${activeDrill?.scope?.level === 'group' ? state.compareIds.length === 1 ? 'project' : 'projects' : activeDrill?.scope?.level === 'project' ? state.compareIds.length === 1 ? 'SKU' : 'SKUs' : state.compareIds.length === 1 ? 'product group' : 'product groups'}` : hasDrill() && activeDrill?.scope?.title ? activeDrill.scope.title : allCategoriesSelected() ? 'All categories' : selectedCategories().join(' + ');
-  const categoryColor = category => colors[Math.max(0, getCategories().indexOf(category)) % colors.length];
+  const categoryColor = category => window.HX_WORKSPACE_MODEL?.categoryColor?.(category) || colors[({Controllers:0,Headsets:1,Keyboards:2,Mice:3,Others:4,'Standalone Mics':5})[category] ?? 0] || colors[0];
   function opts() { return { period: state.period, category: allCategoriesSelected() ? 'All' : selectedCategories(), groupId: state.groupId, projectId: state.projectId, skuId: state.skuId }; }
   function productComparison(metric = 'revenue', period = state.period, mode = state.comparisonScale) {
     if (!isProductComparison()) return null;

@@ -8,6 +8,16 @@
   };
   const finite = n => typeof n === 'number' && Number.isFinite(n);
   const keyOf = value => String(value || '').trim().toLowerCase();
+  const categoryPalette = Object.freeze({ controllers: '#895EF6', headsets: '#6984ED', keyboards: '#4DA1F7', mice: '#20CBDD', others: '#7AE3A9', 'standalone mics': '#FFC63B' });
+  function categoryColor(category) {
+    let name = keyOf(category).replace(/\s+/g, ' ');
+    if (['microphones', 'standalone microphones', 'mic', 'mics'].includes(name)) name = 'standalone mics';
+    if (/accessories$/.test(name)) name = 'others';
+    if (Object.hasOwn(categoryPalette, name)) return categoryPalette[name];
+    const fallback = ['#b69aff', '#42d4df', '#94e5b5', '#ffd172', '#8fa9ff', '#ed9bad', '#d6aff0', '#91c7c1'];
+    let hash = 0; for (const character of name) hash = (Math.imul(hash, 31) + character.charCodeAt(0)) >>> 0;
+    return fallback[hash % fallback.length];
+  }
   const safeSum = values => values.some(finite) ? values.filter(finite).reduce((a, b) => a + b, 0) : null;
   const scopeOf = child => ({ category: child.category, groupId: child.groupId, projectId: child.projectId, skuId: child.skuId });
   let cachedData, models = new Map();
@@ -96,15 +106,17 @@
     } else if (!state.groupId && !state.projectId && state.category?.length > 1 && !state.category.includes('all')) {
       entities = state.category.map(category => ({ id: 'category-' + category, name: category, scope: { category } }));
     } else entities = [{ id: state.skuId || state.projectId || state.groupId || (state.category?.length===1&&!state.category.includes('all')?'category-'+state.category[0]:'scope'), name: drill?.scope?.title || 'All categories', scope }];
+    const categoryEntities = new Map(entities.filter(entity => entity.id.startsWith('category-') && !entity.child && !entity.children && !entity.scope?.groupId && !entity.scope?.projectId && !entity.scope?.skuId).map(entity => [entity.id, entity.id.slice(9)]));
     const palette = ['#b69aff', '#42d4df', '#94e5b5', '#ffd172', '#8fa9ff', '#ed9bad', '#d6aff0', '#91c7c1'];
     function colorFor(id) {
       if (id === 'connection-wired') return '#42d4df';
       if (id === 'connection-wireless') return '#b69aff';
-      if (id.startsWith('category-')) {const categories=data.categories||[],index=categories.indexOf(id.slice(9));if(index>=0)return ['#895EF6','#6984ED','#4DA1F7','#20CBDD','#7AE3A9','#FFC63B'][index%6];}
+      if (categoryEntities.has(id)) return categoryColor(categoryEntities.get(id));
       let hash = 0; for (const c of id) hash = (Math.imul(hash, 31) + c.charCodeAt(0)) >>> 0;
       return palette[hash % palette.length];
     }
     function traceColorFor(id, metric) {
+      if (categoryEntities.has(id)) return categoryColor(categoryEntities.get(id));
       const metricIndex = ['revenue', 'units', 'grossProfit', 'budget'].indexOf(metric);
       const connections = {
         'connection-wired': ['#42d4df', '#86bdff', '#94e5b5', '#ffd172'],
@@ -199,5 +211,5 @@
     return finite(percent) ? percent : null;
   }
   function explain(point, trace) { return { title: `${metrics[trace.metric]?.label || trace.metric} · ${trace.name}`, value: point.value, baselineValue: point.baselineValue, formula: point.formula, basis: point.basis, source: point.source || [], assumptions: point.assumptions || null }; }
-  root.HX_WORKSPACE_MODEL = { metrics, build, scenarioSeries, selectionColor, comparisonBaseline, comparisonPercent, explain, selectedPoint, combine };
+  root.HX_WORKSPACE_MODEL = { metrics, categoryColor, build, scenarioSeries, selectionColor, comparisonBaseline, comparisonPercent, explain, selectedPoint, combine };
 })(typeof window !== 'undefined' ? window : globalThis);

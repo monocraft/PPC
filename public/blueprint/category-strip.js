@@ -57,6 +57,12 @@
     strip.append(header, grid);
     container.append(strip);
     const tiles = new Map();
+    const view = container.ownerDocument?.defaultView || window;
+    const reducedMotion = view.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const movements = new Map();
+    const cancelMovements = () => { for (const animation of movements.values()) animation.cancel(); movements.clear(); };
+    const motionChanged = () => { if (reducedMotion?.matches) cancelMovements(); };
+    reducedMotion?.addEventListener?.('change', motionChanged);
 
     function makeTile(categoryKey) {
       const button = node('button', 'hx-category-tile');
@@ -98,6 +104,28 @@
         seen.add(id);
         return true;
       })];
+      const itemById = new Map();
+      for (const item of items) if (item && !itemById.has(canonical(item.category))) itemById.set(canonical(item.category), item);
+      categories.sort((left, right) => {
+        const a = canonical(left), b = canonical(right);
+        if (a === 'all' || b === 'all') return a === b ? 0 : a === 'all' ? -1 : 1;
+        const av = numeric(itemById.get(a)?.revenue), bv = numeric(itemById.get(b)?.revenue);
+        if (av === null || bv === null) { if (av !== bv) return av === null ? 1 : -1; }
+        else if (av !== bv) return av > bv ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
+      });
+      const reordered = categories.length !== grid.children.length || categories.some((category, index) => grid.children[index]?.dataset.category !== canonical(category));
+      const focused = [...tiles.values()].find(tile => tile.button === document.activeElement)?.button;
+      const previous = new Map();
+      if (reordered) {
+        // Retarget from the visible position if another year is chosen mid-motion.
+        if (!reducedMotion?.matches) for (const { button } of tiles.values()) {
+          if (typeof button.animate !== 'function') continue;
+          const rect = button.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) previous.set(button, rect);
+        }
+        cancelMovements();
+      }
       available = seen;
       const selection = selectedKeys(config.selected, available);
       config = { ...config, selected: selection };
@@ -107,11 +135,11 @@
       });
       const periodText = period.label ?? period.period ?? period.year ?? '';
       const basisText = period.basis ?? period.kind ?? period.sourceKind ?? '';
-      context.textContent = [periodText, basisText, 'Source revenue · % of portfolio', 'Select categories to compare'].filter(Boolean).join(' · ');
+      context.textContent = [periodText, basisText, 'Source revenue, highest to lowest · % of portfolio', 'Select categories to compare'].filter(Boolean).join(' · ');
       const ordered = [];
       categories.forEach(category => {
         const id = canonical(category), name = isAll(category) ? 'All categories' : label(category);
-        const item = items.find(entry => canonical(entry.category) === id) || {};
+        const item = itemById.get(id) || {};
         let tile = tiles.get(id);
         if (!tile) { tile = makeTile(id); tiles.set(id, tile); }
         const selected = selection.includes(id);
@@ -134,15 +162,24 @@
         ordered.push(tile.button);
       });
       for (const [id, tile] of tiles) if (!seen.has(id)) { tile.button.remove(); tiles.delete(id); }
-      // Existing nodes stay in place during year/category updates so keyboard focus persists.
+      // Reuse keyed buttons so selection and color stay with the category, not its rank.
       ordered.forEach((button, index) => {
         if (grid.children[index] !== button) grid.insertBefore(button, grid.children[index] || null);
       });
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+      for (const [button, before] of previous) {
+        if (!button.isConnected) continue;
+        const after = button.getBoundingClientRect(), dx = before.left - after.left, dy = before.top - after.top;
+        if (Math.abs(dx) < .5 && Math.abs(dy) < .5) continue;
+        const animation = button.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }], { duration: 220, easing: 'cubic-bezier(.2,.75,.2,1)' });
+        movements.set(button, animation);
+        animation.onfinish = animation.oncancel = () => { if (movements.get(button) === animation) movements.delete(button); };
+      }
     }
     render();
     return {
       update(next) { if (!destroyed) { config = { ...config, ...next }; render(); } },
-      destroy() { if (!destroyed) { destroyed = true; strip.remove(); tiles.clear(); } }
+      destroy() { if (!destroyed) { destroyed = true; cancelMovements(); reducedMotion?.removeEventListener?.('change', motionChanged); strip.remove(); tiles.clear(); } }
     };
   }
   window.HX_CATEGORY_STRIP = Object.freeze({ mount });

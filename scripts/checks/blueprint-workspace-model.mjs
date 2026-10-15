@@ -25,12 +25,54 @@ function freeze(value) { if (value && typeof value === 'object') { Object.values
 const before = JSON.stringify(data); freeze(data);
 const window = { HX_DATA: data }; sources.forEach((source, i) => vm.runInNewContext(source, { window }, { filename: files[i] }));
 const engine = window.HX_ANALYTICS, api = window.HX_WORKSPACE_MODEL;
+const expectedCategoryColors = { Controllers: '#895EF6', Headsets: '#6984ED', Keyboards: '#4DA1F7', Mice: '#20CBDD', Others: '#7AE3A9', 'Standalone Mics': '#FFC63B' };
+assert.equal(typeof api.categoryColor, 'function');
+assert.equal(new Set(Object.keys(expectedCategoryColors).map(api.categoryColor)).size, 6, 'All six portfolio categories have distinct stable hues');
+for (const [category, color] of Object.entries(expectedCategoryColors)) assert.equal(api.categoryColor(category), color);
+assert.equal(api.categoryColor(' standalone MICROPHONES '), expectedCategoryColors['Standalone Mics']); assert.equal(api.categoryColor('mic'), expectedCategoryColors['Standalone Mics']);
+const dashboardSource = await readFile(new URL('../../public/blueprint/dashboard.js', import.meta.url), 'utf8');
+const categoryColorDeclaration = dashboardSource.match(/^  const categoryColor = .+$/m)?.[0]; assert.ok(categoryColorDeclaration);
+for (const colorWindow of [window, {}]) {
+  const colorContext = { window: colorWindow, colors: Object.values(expectedCategoryColors) };
+  vm.runInNewContext(`${categoryColorDeclaration}\nglobalThis.colorFor = categoryColor;`, colorContext);
+  for (const [category, color] of Object.entries(expectedCategoryColors)) assert.equal(colorContext.colorFor(category), color, 'Category selection and legacy chart colors use the same named palette as the main graph');
+}
 const defaults = { category: ['all'], groupId: null, projectId: null, skuId: null, compareIds: [], connectivity: ['all'], period: 2026, metrics: ['revenue'], revenueGrowth: 10, marginChange: 5, budgetChange: -20, scenarioStart: 2026 };
 function build(extra = {}) { const state = { ...defaults, ...extra }; const scope = { ...state, category: state.category.includes('all') ? 'All' : state.category }; return { state, model: api.build(data, engine, state, engine.drilldown(scope)) }; }
 const point = (trace, year) => trace.points.find(point => point.period === year);
 const trace = (model, metric, entityId = 'scope') => model.allSeries.find(trace => trace.metric === metric && trace.entityId === entityId);
 const plain = value => JSON.parse(JSON.stringify(value));
 const near = (actual, expected, note) => assert.ok(typeof actual === 'number' && Math.abs(actual - expected) < 1e-10, `${note}: ${actual} !== ${expected}`);
+
+const categoryData = structuredClone(data);
+categoryData.categories = ['Standalone Mics', 'Mice', 'Controllers', 'Others', 'Keyboards', 'Headsets'];
+categoryData.products.push(product('controller-family', 'Controller family', 'Controllers', 'Wired', [1, 2, 3, 4, 5, 6], [1, 1, 1, 1, 1, 1]), product('mic-family', 'Microphone family', 'Standalone Mics', 'Wired', [6, 5, 4, 3, 2, 1], [1, 1, 1, 1, 1, 1]));
+categoryData.projects.push({ id: 'category-Mice', name: 'Alpha family', category: 'Headsets', launchYear: 2026 });
+categoryData.npiSkuRecords.push(record('category-project26', 'category-Mice', 'Source SKU', 2026, 123, 45, 12), record('category-sku26', 'P-Alpha', 'category-Mice', 2026, 7, 3, 2));
+const categoryDataBefore = JSON.stringify(categoryData);
+function buildCategoryPalette(source, extra = {}) {
+  window.HX_DATA = source;
+  const state = { ...defaults, category: source.categories, metrics: ['revenue', 'units', 'grossProfit', 'budget'], ...extra };
+  return api.build(source, engine, state, engine.drilldown({ ...state, category: state.category }));
+}
+try {
+  const fullPalette = buildCategoryPalette(categoryData);
+  for (const category of Object.keys(expectedCategoryColors)) {
+    const traces = fullPalette.allSeries.filter(trace => trace.entityId === 'category-' + category);
+    assert.equal(traces.length, 4); assert.ok(traces.every(trace => trace.color === expectedCategoryColors[category] && trace.entityColor === expectedCategoryColors[category]), 'Category comparisons use category identity for their hue, with metric markers and patterns retained');
+  }
+  const reorderedCategoryData = structuredClone(categoryData); reorderedCategoryData.categories.reverse(); reorderedCategoryData.products.reverse();
+  const narrowed = buildCategoryPalette(reorderedCategoryData, { category: ['Controllers', 'Standalone Mics', 'Mice'], metrics: ['units'], period: 2025, productSort: 'revenue', sortDirection: 'asc' });
+  for (const trace of narrowed.allSeries) assert.equal(trace.color, expectedCategoryColors[trace.entityId.slice(9)], 'Category hue is independent of source ordering, selected subset, ranking, fiscal year and visible measure');
+  const oneCategory = buildCategoryPalette(categoryData, { category: ['Mice'], metrics: ['grossProfit'] }); assert.equal(oneCategory.series[0].color, expectedCategoryColors.Mice, 'A category keeps its comparison hue when selected alone');
+  for (const trace of api.scenarioSeries(fullPalette, defaults)) assert.equal(trace.color, fullPalette.allSeries.find(source => source.id + ':scenario' === trace.id).color, 'Scenario overlays retain the matching category hue');
+  for (const scope of [{ groupId: 'alpha', projectId: 'category-Mice', skuId: null }, { groupId: 'alpha', projectId: 'P-Alpha', skuId: 'category-Mice' }]) {
+    const descendant = buildCategoryPalette(categoryData, { category: ['Headsets'], ...scope });
+    assert.equal(new Set(descendant.allSeries.map(trace => trace.color)).size, 4, 'A project or SKU whose exact source ID starts with category- retains its per-measure colors');
+    assert.ok(descendant.allSeries.find(trace => trace.metric === 'revenue').points.some(point => point.value === (scope.skuId ? 7 : 123)), 'The prefix collision fixture retains its actual descendant source grain');
+  }
+  assert.equal(JSON.stringify(categoryData), categoryDataBefore, 'Category palette assignment does not change source data or category order');
+} finally { window.HX_DATA = data; }
 
 const baseline = build().model;
 assert.equal(baseline.summary.revenue.value, 328, 'Portfolio finance uses raw annual product-group observations');
