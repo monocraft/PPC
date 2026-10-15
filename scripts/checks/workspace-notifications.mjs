@@ -57,7 +57,7 @@ assert.equal(deniedStore.getState().attentionCount, 0, "blocked storage still ke
 
 const source = await readFile(new URL("../../public/js/workspace-notifications.js", import.meta.url), "utf8");
 function createUi({ withPull = true } = {}) {
-  let nextTimer = 0;
+  let nextTimer = 0, currentTime = Date.now();
   const timers = new Map(), intervals = new Map(), nodes = [];
   const document = { activeElement: null, visibilityState: "visible" };
   function node(tag) {
@@ -91,9 +91,9 @@ function createUi({ withPull = true } = {}) {
   toolbar.append(settings); document.body.append(toolbar);
   document.getElementById = (id) => nodes.find((entry) => entry.id === id && entry.isConnected) || null;
   document.querySelector = () => nodes.find((entry) => entry.isConnected && (entry.tagName === "DIALOG" && entry.open || entry.classList.contains("modal-backdrop") && !entry.classList.contains("hidden") && !entry.hidden)) || null;
-  const sandbox = { document, setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); }, setInterval(callback) { const id = ++nextTimer; intervals.set(id, callback); return id; }, clearInterval(id) { intervals.delete(id); } };
+  const sandbox = { document, Date: class extends Date { static now() { return currentTime; } }, setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); }, setInterval(callback) { const id = ++nextTimer; intervals.set(id, callback); return id; }, clearInterval(id) { intervals.delete(id); } };
   vm.createContext(sandbox); new vm.Script(source).runInContext(sandbox);
-  return { notifications: sandbox.PortfolioNotifications, document, nodes, timers, intervals, settings, pull, panel: document.getElementById("workspaceMessagesPanel"), button: document.getElementById("workspaceMessagesButton"), find: (className) => nodes.filter((entry) => entry.isConnected && entry.classList.contains(className)), tick() { for (const callback of [...timers.values()]) callback(); timers.clear(); }, settle: () => new Promise((resolve) => setImmediate(resolve)) };
+  return { notifications: sandbox.PortfolioNotifications, document, nodes, timers, intervals, settings, pull, advance(milliseconds) { currentTime += milliseconds; for (const callback of intervals.values()) callback(); }, panel: document.getElementById("workspaceMessagesPanel"), button: document.getElementById("workspaceMessagesButton"), find: (className) => nodes.filter((entry) => entry.isConnected && entry.classList.contains(className)), tick() { for (const callback of [...timers.values()]) callback(); timers.clear(); }, settle: () => new Promise((resolve) => setImmediate(resolve)) };
 }
 
 const ui = createUi();
@@ -164,5 +164,41 @@ assert.equal(acknowledgmentUi.find("workspace-message-actions")[0].children[0].t
 assert.equal(acknowledgmentUi.find("workspace-messages-footer")[0].children[1].disabled, true, "clear history never removes an ongoing acknowledged status");
 assert.equal(acknowledgmentUi.button.classList.contains("has-attention"), false);
 assert.match(acknowledgmentUi.button.getAttribute("aria-label"), /no new messages/);
+
+const notificationCss = await readFile(new URL("../../public/css/workspace-notifications.css", import.meta.url), "utf8");
+assert.match(notificationCss, /\.workspace-message-warning\[data-message-id="workspace-local-save"\] \{[^}]*background: var\(--color-surface\);[^}]*box-shadow: inset 2px 0 0 var\(--color-text-secondary\)/, "only the local-copy warning uses a neutral review treatment");
+assert.match(notificationCss, /\.workspace-message-error \{[^}]*var\(--color-danger-surface\)/, "genuine storage errors retain the existing error treatment");
+
+const liveUi = createUi();
+const liveAlert = liveUi.nodes.find(node => node.getAttribute('role') === 'alert');
+const liveStatus = liveUi.nodes.find(node => node.getAttribute('role') === 'status');
+liveUi.notifications.publish({ id: 'local-save', severity: 'error', title: 'Save blocked', message: 'Current local draft is protected', dismissible: false });
+assert.match(liveAlert.textContent, /Save blocked/);
+liveUi.notifications.resolve('local-save');
+assert.equal(liveAlert.textContent, '', 'a resolved error cannot survive in the accessibility alert region');
+assert.equal(liveUi.notifications.getState().attentionCount, 0);
+liveUi.notifications.publish({ id: 'severity-change', severity: 'error', title: 'Old error' });
+liveUi.notifications.publish({ id: 'severity-change', severity: 'success', title: 'Saved' });
+assert.equal(liveAlert.textContent, '', 'a replacement message clears its old severity channel');
+assert.match(liveStatus.textContent, /Saved/);
+liveUi.notifications.dismiss('severity-change'); assert.equal(liveStatus.textContent, '');
+liveUi.notifications.publish(publicationNotice); assert.match(liveAlert.textContent, /Downloadable copy delayed/);
+liveUi.notifications.dismiss(publicationNotice.id); assert.equal(liveAlert.textContent, '', 'acknowledgment clears the current live warning while preserving its row and actions');
+liveUi.notifications.publish({ id: 'temporary', title: 'Temporary update', ttl: 1000 }); assert.match(liveStatus.textContent, /Temporary/);
+liveUi.advance(1001); assert.equal(liveStatus.textContent, '', 'expiration clears the old live update');
+liveUi.notifications.publish({ id: 'current-error', severity: 'error', title: 'Still blocked', dismissible: false });
+liveUi.notifications.publish({ id: 'other-update', title: 'Different update' }); liveUi.notifications.resolve('other-update');
+assert.match(liveAlert.textContent, /Still blocked/, 'resolving another message must not silence the active warning');
+
+const boundedUi = createUi();
+const boundedStatus = boundedUi.nodes.find(node => node.getAttribute('role') === 'status');
+boundedUi.notifications.publish({ id: 'old-information', title: 'Old informational update' });
+for (let index = 0; index < 60; index++) boundedUi.notifications.publish({ id: `protected-${index}`, severity: 'warning', title: `Current warning ${index}`, dismissible: false });
+assert.equal(boundedUi.notifications.getState().items.some(item => item.id === 'old-information'), false);
+assert.equal(boundedStatus.textContent, '', 'publish-time history eviction clears the evicted live announcement');
+boundedUi.notifications.publish({ id: 'discarded-new-information', title: 'New informational update discarded by cap', toast: true });
+assert.equal(boundedUi.notifications.getState().items.some(item => item.id === 'discarded-new-information'), false);
+assert.equal(boundedStatus.textContent, '', 'an immediately evicted new item is never announced');
+assert.equal(boundedUi.find('workspace-toast').length, 0, 'an immediately evicted new item never creates a stale toast');
 
 console.log("Workspace message checks passed: source deduplication, durable publisher-only acknowledgment and recovery, quiet retained status/actions, critical-error isolation, unavailable-storage fallback, bounded history, safe text, modal focus and Escape, toast suppression, and guarded actions.");

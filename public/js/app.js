@@ -1434,11 +1434,15 @@ function scheduleSave() {
 }
 
 function showLocalSaveFailure(error) {
-  const message = error?.message || "This browser could not save your open changes. Export a backup before closing, then retry.";
-  if (!globalThis.PortfolioNotifications) { void PortfolioDialogs.alert(message, { title: "Changes are not saved on this device" }); return; }
-  globalThis.PortfolioNotifications.publish({ id: "workspace-local-save", severity: "error", title: "Changes are not saved on this device", message,
+  const conflict = error?.code === "WORKSPACE_CONFLICT";
+  const title = conflict ? "Local copies need review" : "Changes are not saved on this device";
+  const message = conflict
+    ? "Another portfolio tab in this browser saved a different local copy. Your edits remain open in this tab and still need a local save. Export a backup before reloading to review the saved copy. Shared portfolio Save status is shown separately."
+    : error?.message || "This browser could not save your open changes. Export a backup before closing, then retry.";
+  if (!globalThis.PortfolioNotifications) { void PortfolioDialogs.alert(message, { title }); return; }
+  globalThis.PortfolioNotifications.publish({ id: "workspace-local-save", severity: conflict ? "warning" : "error", title, message,
     revision: error?.code || message, dismissible: false, actions: [
-      { label: "Retry saving", onClick: () => flushWorkspaceSave() },
+      { label: conflict ? "Check local save again" : "Retry saving", onClick: () => flushWorkspaceSave() },
       { label: "Export data backup", onClick: () => downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data") },
     ] });
 }
@@ -1457,6 +1461,9 @@ async function flushWorkspaceSave() {
     }
     return true;
   } catch (error) {
+    // A newer edit already queued another autosave. Its obsolete prepared
+    // snapshot is expected to be rejected; the pending current save owns status.
+    if (error?.code === "WORKSPACE_CHANGED" && revision !== workspaceSaveRevision) return false;
     if (attempt === workspaceSaveAttempt) { workspaceSavePending = true; showLocalSaveFailure(error); }
     return false;
   }

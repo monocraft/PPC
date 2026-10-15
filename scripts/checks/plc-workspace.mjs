@@ -136,6 +136,31 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
 }
 
 {
+  const h = harness(); currentProduct(h.workspace).name = 'First edit'; h.sandbox.scheduleSave();
+  h.holdNextWrite(); const obsolete = h.flush();
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  currentProduct(h.workspace).name = 'Newer edit'; h.sandbox.scheduleSave();
+  h.releaseWrite(); assert.equal(await obsolete, false);
+  assert.equal(h.calls.notices.length, 0, 'a prepared autosave overtaken by a newer scheduled edit is not an actionable error');
+  assert.equal(h.sandbox.workspaceSavePending, true); assert.equal(h.timers.size, 1, 'the newer edit retains its scheduled durable save');
+  assert.equal(await h.flush(), true); assert.equal(h.stored.categories[0].board.products[0].name, 'Newer edit');
+  assert.equal(h.sandbox.workspaceSavePending, false);
+}
+{
+  const h = harness();
+  h.sandbox.showLocalSaveFailure(Object.assign(new Error('Old storage wording'), { code: 'WORKSPACE_CONFLICT' }));
+  const notice = h.calls.notices.at(-1);
+  assert.equal(notice.severity, 'warning'); assert.equal(notice.dismissible, false);
+  assert.equal(notice.title, 'Local copies need review');
+  assert.match(notice.message, /in this browser/); assert.match(notice.message, /Shared portfolio Save status is shown separately/);
+  assert.deepEqual(Array.from(notice.actions, a => a.label), ['Check local save again', 'Export data backup']);
+  assert.equal(h.calls.writes.length, 0, 'showing the local conflict cannot overwrite data, rebase observation or retry by itself');
+  assert.equal(await notice.actions[0].onClick(), true, 'the explicit local retry still calls the guarded durable save');
+  h.sandbox.showLocalSaveFailure(Object.assign(new Error('Storage quota exceeded'), { code: 'WORKSPACE_QUOTA' }));
+  assert.equal(h.calls.notices.at(-1).severity, 'error', 'actual storage failures retain error severity and retry');
+}
+
+{
   const previousQueue = clone(seed);
   previousQueue.plcReview = { version: 1, entries: [{ key: 'previous-exception', row: { key: 'previous-exception', name: 'Other unknown product', dates: {} }, metadata: { fingerprint: 'previous-source', fileName: 'Previous synthetic.xlsx', reportDate: '2026-09-24' }, reportDate: '2026-09-24', fields: [], matchNeeded: true, createdAt: firstAt, observedAt: firstAt }] };
   const h = harness({ initial: previousQueue, failStorage: true }), original = h.workspace, before = clone(h.workspace), storedBefore = h.stored;

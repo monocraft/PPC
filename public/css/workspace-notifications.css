@@ -17,11 +17,14 @@
 .workspace-message { min-width: 0; padding: 14px 15px 15px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); }
 .workspace-message-warning { background: var(--color-danger-surface); border-color: transparent;  box-shadow: inset 2px 0 0 var(--color-danger-border); }
 .workspace-message-error { background: var(--color-danger-surface); border-color: transparent;  box-shadow: inset 2px 0 0 var(--color-danger-border); }
+/* A protected local-copy conflict needs review without implying a shared Save failure. */
+.workspace-message-warning[data-message-id="workspace-local-save"] { background: var(--color-surface); box-shadow: inset 2px 0 0 var(--color-text-secondary); }
 .workspace-message-success { border-color: transparent; }
 .workspace-message-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
 .workspace-message-kind { color: var(--color-text-secondary); font-size: 9px; font-weight: 750; letter-spacing: .075em; text-transform: uppercase; }
 .workspace-message-warning .workspace-message-kind { color: var(--color-danger-text); }
 .workspace-message-error .workspace-message-kind { color: var(--color-danger-text); }
+.workspace-message-warning[data-message-id="workspace-local-save"] .workspace-message-kind { color: var(--color-text-secondary); }
 .workspace-message-success .workspace-message-kind { color: var(--color-text-secondary); }
 .workspace-message h3 { margin: 0 0 7px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .workspace-message-copy { margin: 0; color: var(--color-text-secondary, #D5D7DC); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
