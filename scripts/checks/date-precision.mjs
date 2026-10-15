@@ -28,7 +28,7 @@ const manual = { id: 'synthetic', ffsDate: q2.start, generalAvailabilityDate: '2
 const manifest = { categories: [{ board: { products: [manual] } }] };
 let clock = '2026-10-09T20:00:00.000Z', saves = 0;
 class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } }
-const sandbox = { PortfolioDatePrecision: dates, portfolio: manifest, Date: TestDate, selectedProduct: () => manual, escapeHtml: (value) => String(value ?? ''), updateProduct(id, patch) { assert.equal(id, manual.id); Object.assign(manual, globalThis.PortfolioModel.mergeProductUpdate(manual, structuredClone(patch))); saves++; } };
+const sandbox = { PortfolioDatePrecision: dates, PortfolioMasterModel: globalThis.PortfolioMasterModel, portfolio: manifest, Date: TestDate, selectedProduct: () => manual, escapeHtml: (value) => String(value ?? ''), updateProduct(id, patch) { assert.equal(id, manual.id); Object.assign(manual, globalThis.PortfolioModel.mergeProductUpdate(manual, structuredClone(patch))); saves++; } };
 vm.createContext(sandbox);
 for (const name of ['updateProductMilestone', 'productDatePrecisionControls']) {
   const definition = source.match(new RegExp(`^function ${name}\\([^]*?^\\}`, 'm'));
@@ -36,6 +36,7 @@ for (const name of ['updateProductMilestone', 'productDatePrecisionControls']) {
 }
 const scalarBefore = globalThis.PLCImporter.snapshotDateValues(manifest);
 assert.equal(sandbox.updateProductMilestone(manual.id, 'ffsDate', q2.start, q2), true);
+assert.equal(manual.plc.version, 1, 'The native quarter writer creates shared-save-compatible evidence.');
 assert.equal(manual.ffsDate, q2.start, 'A quarter uses its first day only as a compatible placement anchor.');
 assert.equal(manual.generalAvailabilityDate, '2028-08-20', 'Manual FFS precision never rewrites GA or its roadmap placement.');
 assert.equal(manual.roadmap.startMonth, '2028-08');

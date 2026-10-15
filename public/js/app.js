@@ -3831,7 +3831,8 @@ function updateProductMilestone(productId, field, value, period = null) {
   if (period && !normalized) throw new Error("Choose one valid calendar quarter.");
   const before = precision?.currentPeriod(product, field) || null;
   if ((product[field] || "") === value && JSON.stringify(before) === JSON.stringify(normalized)) return false;
-  const at = new Date().toISOString(), plc = JSON.parse(JSON.stringify(product.plc || {}));
+  const at = new Date().toISOString();
+  const plc = globalThis.PortfolioMasterModel.plcMetadata(product.plc) || { version: 1 };
   plc.fields ||= {};
   const previous = plc.fields[field] || {};
   plc.fields[field] = { value, sourceType: "local", changedAt: at, observedAt: at, raw: normalized?.label || value, source: { kind: "manual" }, ...(normalized ? { period: normalized } : {}) };
