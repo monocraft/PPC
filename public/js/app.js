@@ -7931,11 +7931,31 @@ window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
 // Draft actions keep complete records and images until the user saves or discards.
 const discardedDrafts = new Map();
-function localizeSharedProduct(record) {
+function localizeSharedProduct(record, previous = null) {
   const product = JSON.parse(JSON.stringify(record));
   const aliases = portfolio.masterLocalAssetIds || {};
   product.imageAssetId = aliases[product.imageAssetId] || product.imageAssetId;
   for (const group of product.variantGroups || []) for (const row of group.items || []) row.imageAssetId = aliases[row.imageAssetId] || row.imageAssetId;
+  if (previous) {
+    if (previous.id !== product.id) throw new Error("The shared product no longer matches the open local product. Your local images have been kept.");
+    const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+    // Historical merge hydration supplies complete source metadata. Existing
+    // image choices and presentation belong to this device, including clears.
+    for (const field of ["imageAssetId", "imageUrl", "featuredVariantId", "variantColor", "highlightEnabled", "highlightColor"]) {
+      if (Object.hasOwn(previous, field)) product[field] = copy(previous[field]);
+    }
+    // An authoritative placement change deliberately discards old free-move coordinates.
+    if (product.laneId === previous.laneId && product.order === previous.order && Object.hasOwn(previous, "manualPosition")) product.manualPosition = copy(previous.manualPosition);
+    const groups = new Map((previous.variantGroups || []).map((group) => [group.id, group]));
+    for (const group of product.variantGroups || []) {
+      const rows = new Map((groups.get(group.id)?.items || []).map((row) => [row.id, row]));
+      for (const row of group.items || []) {
+        const local = rows.get(row.id);
+        for (const field of ["imageAssetId", "imageUrl"]) if (Object.hasOwn(local || {}, field)) row[field] = copy(local[field]);
+      }
+    }
+    if (Object.hasOwn(previous, "featuredVariantId") && product.featuredVariantId && !(product.variantGroups || []).some((group) => group.type === "color" && (group.items || []).some((row) => row.id === product.featuredVariantId && row.imageAssetId))) product.featuredVariantId = "";
+  }
   delete product.categoryId;
   return product;
 }
@@ -8191,8 +8211,9 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
         const current = products[index];
         if (change.kind === "delete") { products.splice(index, 1); break; }
         const values = change.values || change.patch;
-        const original = change.fullProduct ? { ...localizeSharedProduct(change.fullProduct), order: current.order, laneId: current.laneId } : current;
-        products[index] = validPlacement(category.id, globalThis.PortfolioMasterModel.applyProductValues(original, values));
+        const original = change.fullProduct ? { ...change.fullProduct, order: current.order, laneId: current.laneId } : current;
+        const updated = globalThis.PortfolioMasterModel.applyProductValues(original, values);
+        products[index] = validPlacement(category.id, change.fullProduct ? localizeSharedProduct(updated, current) : updated);
         for (const field of Object.keys(globalThis.PLCImporter?.fieldLabels || {})) if ((current[field] || "") !== (products[index][field] || "")) dateEditsToClear.push([current.id, field]);
         break;
       }
