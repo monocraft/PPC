@@ -168,6 +168,7 @@ export function createSupabasePublisher(options = {}) {
   }
 
   async function github(operation, payload) {
+    if (!['blob', 'read', 'read-ref', 'deploy'].includes(operation)) throw failure('INVALID_CONFIGURATION');
     const headers = { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
     if (operation === 'blob') {
       headers.Accept = 'application/vnd.github.raw+json';
@@ -179,13 +180,12 @@ export function createSupabasePublisher(options = {}) {
     const url = operation === 'deploy' ? `${repository}/actions/workflows/deploy.yml/dispatches`
       : `${repository}/contents/${PACKAGE_PATH}${reading ? `?ref=${encodeURIComponent(operation === 'read-ref' ? payload : branch)}` : ''}`;
     if (!reading) headers['Content-Type'] = 'application/json';
-    const result = await call(url, { method: reading ? 'GET' : operation === 'deploy' ? 'POST' : 'PUT', headers,
+    const result = await call(url, { method: reading ? 'GET' : 'POST', headers,
       ...(!reading && payload ? { body: JSON.stringify(payload) } : {}) });
     if (operation === 'deploy') {
       if (result.response.status !== 204) throw failure('DEPLOY_DISPATCH_FAILED');
       return null;
     }
-    if (operation === 'write' && [409, 422].includes(result.response.status)) return { retry: true, status: result.response.status };
     if (!result.response.ok) throw failure(reading ? 'GITHUB_READ_FAILED' : 'GITHUB_WRITE_FAILED');
     try { return JSON.parse(new TextDecoder().decode(result.bytes)); } catch { throw failure('GITHUB_RESPONSE_INVALID'); }
   }
@@ -202,6 +202,54 @@ export function createSupabasePublisher(options = {}) {
     // or preservation of every archived asset in the publication flow.
     if (bytes.length !== metadata.size || blobSha(bytes) !== metadata.sha || !codec.isEncrypted(bytes)) throw failure('GITHUB_PACKAGE_INVALID');
     return { sha: metadata.sha, bytes };
+  }
+
+  async function gitObject(resource, method = 'GET', payload, allowConflict = false) {
+    const stage = resource.startsWith('ref') ? 'REF' : resource.startsWith('commits') ? 'COMMIT' : resource === 'trees' ? 'TREE' : 'BLOB';
+    let result;
+    try { result = await call(`${repository}/git/${resource}`, { method,
+      headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28', ...(payload ? { 'Content-Type': 'application/json' } : {}) },
+      ...(payload ? { body: JSON.stringify(payload) } : {}) }); }
+    catch (error) { if (['CONNECTION_FAILED', 'REQUEST_TIMEOUT'].includes(error.code)) throw failure(`GITHUB_${stage}_${error.code}`); throw error; }
+    if (allowConflict && [409, 422].includes(result.response.status)) return { retry: true, status: result.response.status };
+    if (!result.response.ok) throw failure(`GITHUB_${stage}_HTTP_${result.response.status}`);
+    try { return JSON.parse(new TextDecoder().decode(result.bytes)); } catch { throw failure(`GITHUB_${stage}_RESPONSE_INVALID`); }
+  }
+
+  async function branchHead() {
+    const ref = await gitObject(`ref/heads/${encodeURIComponent(branch)}`);
+    if (ref.ref !== `refs/heads/${branch}` || ref.object?.type !== 'commit' || !SHA.test(ref.object.sha || '')) throw failure('GITHUB_REF_RESPONSE_INVALID');
+    return ref.object.sha;
+  }
+
+  async function writePackage(encrypted, expectedPackageSha, revision) {
+    // Git Database avoids the file-contents update processor. A tree based on
+    // the observed head retains every unrelated path; a nonforce ref update
+    // rejects both code and package races instead of replacing their commits.
+    const head = await branchHead();
+    const parent = await gitObject(`commits/${head}`);
+    if (parent.sha !== head || !SHA.test(parent.tree?.sha || '')) throw failure('GITHUB_COMMIT_RESPONSE_INVALID');
+    const packageAtHead = await github('read-ref', head);
+    if (packageAtHead.type !== 'file' || !SHA.test(packageAtHead.sha || '')) throw failure('GITHUB_PACKAGE_INVALID');
+    if (packageAtHead.sha !== expectedPackageSha) return { retry: true, status: 409 };
+    const proposedSha = blobSha(encrypted);
+    const blob = await gitObject('blobs', 'POST', { content: Buffer.from(encrypted).toString('base64'), encoding: 'base64' });
+    if (blob.sha !== proposedSha) throw failure('GITHUB_BLOB_RESPONSE_INVALID');
+    const tree = await gitObject('trees', 'POST', { base_tree: parent.tree.sha,
+      tree: [{ path: PACKAGE_PATH, mode: '100644', type: 'blob', sha: proposedSha }] });
+    if (!SHA.test(tree.sha || '')) throw failure('GITHUB_TREE_RESPONSE_INVALID');
+    const commit = await gitObject('commits', 'POST', { message: `Publish PPC master revision ${revision}`, tree: tree.sha, parents: [head] });
+    if (!SHA.test(commit.sha || '') || commit.tree?.sha !== tree.sha || commit.parents?.length !== 1 || commit.parents[0].sha !== head) throw failure('GITHUB_COMMIT_RESPONSE_INVALID');
+    const accepted = await gitObject(`refs/heads/${encodeURIComponent(branch)}`, 'PATCH', { sha: commit.sha, force: false }, true);
+    if (accepted.retry) {
+      // A branch race is retryable even when it changed only application code.
+      // An unchanged head with validation rejection is not uploaded repeatedly.
+      if (await branchHead() === head) throw failure(`GITHUB_REF_HTTP_${accepted.status}`);
+      return accepted;
+    }
+    if (accepted.ref !== `refs/heads/${branch}` || accepted.object?.type !== 'commit' || accepted.object.sha !== commit.sha) throw failure('GITHUB_REF_RESPONSE_INVALID');
+    return { content: { sha: proposedSha } };
   }
 
   async function exported() {
@@ -299,26 +347,17 @@ export function createSupabasePublisher(options = {}) {
           } finally { plaintext?.fill(0); manifestBytes.fill(0); }
           const proposedSha = blobSha(encrypted);
           try {
-            // Contents API compares the package blob only, preserving unrelated
-            // main-branch code commits while refusing concurrent package changes.
             let accepted;
-            try { accepted = await github('write', { message: `Publish PPC master revision ${target.revision}`, branch,
-              sha: current.sha, content: Buffer.from(encrypted).toString('base64') }); }
+            try { accepted = await writePackage(encrypted, current.sha, target.revision); }
             catch (error) {
-              if (!['CONNECTION_FAILED', 'REQUEST_TIMEOUT', 'GITHUB_RESPONSE_INVALID'].includes(error.code)) throw error;
+              if (!['CONNECTION_FAILED', 'REQUEST_TIMEOUT', 'GITHUB_RESPONSE_INVALID'].includes(error.code) &&
+                !/^GITHUB_(BLOB|TREE|COMMIT|REF)_(CONNECTION_FAILED|REQUEST_TIMEOUT|RESPONSE_INVALID)$/.test(error.code || '')) throw error;
               const confirmed = await currentPackage();
               const matches = confirmed.sha === proposedSha; confirmed.bytes.fill(0);
               if (!matches) continue;
               accepted = { content: { sha: proposedSha } };
             }
-            if (accepted.retry) {
-              if (accepted.status === 422) {
-                const confirmed = await currentPackage();
-                const unchanged = confirmed.sha === current.sha; confirmed.bytes.fill(0);
-                if (unchanged) throw failure('GITHUB_WRITE_REJECTED');
-              }
-              continue;
-            }
+            if (accepted.retry) continue;
             if (accepted.content?.sha !== proposedSha) {
               const confirmed = await currentPackage();
               const matches = confirmed.sha === proposedSha; confirmed.bytes.fill(0);
