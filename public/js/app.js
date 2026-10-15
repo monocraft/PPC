@@ -43,7 +43,8 @@ const INFO_BUTTON_WIDTH = 54;
 const INFO_BUTTON_HEIGHT = 22;
 const FULL_SPEC_MIN_CARD_HEIGHT = 400;
 const FULL_SPEC_IMAGE_HEIGHT = 210;
-const HEADSET_IMAGE_HEIGHT = 260;
+const HEADSET_IMAGE_HEIGHT = 182;
+const HEADSET_IMAGE_WIDTH = 166.6;
 const FULL_SPEC_TITLE_TOP = STATUS_BANNER_HEIGHT + 10 + FULL_SPEC_IMAGE_HEIGHT + 8;
 const FULL_SPEC_DETAILS_TOP_OFFSET = 66;
 
@@ -1775,7 +1776,8 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
     ? Math.max(0, ...products.map((product) => variantFooterLayout(product).height))
     : 0;
   const audioProfile = globalThis.PortfolioImageFraming?.usesAudioFraming(categoryId) === true;
-  const imageHeight = audioProfile ? HEADSET_IMAGE_HEIGHT : FULL_SPEC_IMAGE_HEIGHT;
+  const hasNaturalAudio = audioProfile && products.some(product => !globalThis.PortfolioImageFraming.usesAudioFraming(categoryId, product));
+  const imageHeight = audioProfile ? Math.max(HEADSET_IMAGE_HEIGHT, hasNaturalAudio ? FULL_SPEC_IMAGE_HEIGHT : 0) : FULL_SPEC_IMAGE_HEIGHT;
   const titleTop = audioProfile ? STATUS_BANNER_HEIGHT + 10 + imageHeight + 8 : FULL_SPEC_TITLE_TOP;
   const detailsTop = titleTop + FULL_SPEC_DETAILS_TOP_OFFSET;
   const actionTop = Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + 10);
@@ -2643,9 +2645,10 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   const imageTop = y + layout.imageSlotTop;
   const imageRecord = loadImage(productImageSource(product));
   const framing = globalThis.PortfolioImageFraming;
+  const headset = framing?.usesAudioFraming(layout.categoryId, product);
   const naturalAudio = framing?.usesAudioFraming(layout.categoryId) && !framing.usesAudioFraming(layout.categoryId, product);
-  const imageHeight = naturalAudio ? (layout.detailed ? FULL_SPEC_IMAGE_HEIGHT : IMAGE_SLOT_HEIGHT) : layout.imageSlotHeight;
-  const imageInset = framing?.usesAudioFraming(layout.categoryId, product) ? 4 : 18;
+  const imageHeight = headset ? HEADSET_IMAGE_HEIGHT : naturalAudio ? (layout.detailed ? FULL_SPEC_IMAGE_HEIGHT : IMAGE_SLOT_HEIGHT) : layout.imageSlotHeight;
+  const imageInset = headset ? (CARD_WIDTH - HEADSET_IMAGE_WIDTH) / 2 : 18;
   if (imageRecord.ready) drawContainedImage(context, imageRecord.image, x + imageInset, imageTop + (layout.imageSlotHeight - imageHeight) / 2, CARD_WIDTH - imageInset * 2, imageHeight, { categoryId: layout.categoryId, product, assetName: typeof productImageAssetName === "function" ? productImageAssetName(product) : "" });
 
   if (presentation.secondaryLabel) {
