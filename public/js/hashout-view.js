@@ -107,7 +107,7 @@
     let width = 0, height = 0, leftWidth = 166, renderFrame = 0, animationFrame = 0, destroyed = false;
     let selectedKey = options.getSelectedKey?.() || null, hovered = null, hoverMemberKey = null, pinned = false, cardAnchor = null, cardEntries = [], hideTimer = 0, keyboardIndex = -1, drag = null, suppressClick = false;
     let railSignature = "", pickerSignature = "", searchSignature = "", viewportSignature = "";
-    let labelSignature = "";
+    let labelSignature = "", capsuleExpanded = false;
     let hoveredCategoryId = null, lanePointer = null, laneHoverFrame = 0;
     let ringState = null, ringCloseTimer = 0, previousViewport = null;
     let coarseInput = Boolean(root.matchMedia?.("(pointer: coarse)")?.matches), revealGeneration = 0, revealTimers = [], revealFrames = [];
@@ -494,19 +494,20 @@
       const signature = JSON.stringify([labelMode, width, height, leftWidth, viewport, font(), layout.glyphs.map((glyph) => [glyph.categoryId, glyph.x, glyph.width, glyph.centerY, glyph.memberKeys]), entries.map((entry) => [entry.key, entry.product?.name, entry.period?.label, entry.stage])]);
       if (signature === labelSignature) return;
       labelSignature = signature;
-      const candidates = [], seen = new Set(), maximumWidth = Math.min(226, Math.max(0, width - leftWidth - 12));
+      const candidates = [], seen = new Set(), maximumWidth = Math.min(270, Math.max(0, width - leftWidth - 12));
       for (const glyph of layout.glyphs) for (const entry of glyph.entries) {
-        if (seen.has(entry.key) || !entry.period || maximumWidth < 26) continue;
+        if (seen.has(entry.key) || !entry.period || maximumWidth < 72) continue;
         const source = glyph.type === "group" ? selectedOverlay(entry, glyph) : glyph;
         if (!source || source.centerX < leftWidth || source.centerX > width) continue;
         seen.add(entry.key);
         const name = entry.product?.name || "Unnamed product", date = entry.period.label;
-        context.font = `600 11px ${font()}`; const nameWidth = context.measureText(name).width;
+        context.font = `500 11px ${font()}`; const nameWidth = context.measureText(name).width;
         context.font = `10px ${font()}`; const dateWidth = context.measureText(date).width;
-        const labelWidth = Math.min(maximumWidth, Math.max(34, nameWidth, dateWidth) + 8);
-        context.font = `600 11px ${font()}`; const nameText = fitLabelText(context, name, labelWidth - 8);
-        context.font = `10px ${font()}`; const dateText = fitLabelText(context, date, labelWidth - 8);
-        candidates.push({ key: entry.key, categoryId: entry.categoryId, anchorX: source.centerX, anchorY: source.centerY, width: labelWidth, height: 28, markerRadius: source.radius || 5, name, date, nameText, dateText, entry, glyph: source });
+        const labelWidth = Math.min(maximumWidth, Math.max(34, nameWidth) + dateWidth + 36);
+        const chipWidth = Math.min(dateWidth + 14, labelWidth - 38);
+        context.font = `500 11px ${font()}`; const nameText = fitLabelText(context, name, labelWidth - chipWidth - 22);
+        context.font = `10px ${font()}`; const dateText = fitLabelText(context, date, chipWidth - 14);
+        candidates.push({ key: entry.key, categoryId: entry.categoryId, anchorX: source.centerX, anchorY: source.centerY, width: labelWidth, height: 28, markerRadius: source.radius || 5, name, date, nameText, dateText, chipWidth, entry, glyph: source });
       }
       labelLayout = typeof root.PortfolioHashoutLayout.labels === "function" ? root.PortfolioHashoutLayout.labels(layout, candidates, { mode: labelMode, gap: 6, padding: 4, markerGap: 5 }) : { mode: labelMode, labels: [], lanes: [] };
     }
@@ -519,10 +520,22 @@
         const lane = layout.lanes.find((item) => item.categoryId === label.categoryId);
         if (lane) { context.beginPath(); context.rect(leftWidth, lane.y, width - leftWidth, lane.height); context.clip(); }
         const active = label.key === selectedKey || !neutral && label.key === hoverMemberKey;
-        context.fillStyle = alpha(theme().page, .9); context.beginPath(); context.roundRect(label.x, label.y, label.width, label.height, 3); context.fill();
-        context.textAlign = "left"; context.textBaseline = "top";
-        context.font = `600 11px ${font()}`; context.fillStyle = active ? HASHOUT_SELECTION : theme().text; context.fillText(label.nameText, label.x + 4, label.y + 2);
-        context.font = `10px ${font()}`; context.fillStyle = theme().label; context.fillText(label.dateText, label.x + 4, label.y + 16);
+        const surface = "#2A2F30", chip = active ? "#3B514C" : "#373C3D";
+        context.fillStyle = surface; context.beginPath(); context.roundRect(label.x, label.y, label.width, label.height, 13); context.fill();
+        // A short, filled tail identifies the source without introducing a
+        // connector across neighboring products or changing the date position.
+        const tailX = clamp(label.anchorX, label.x + 12, label.x + label.width - 12), tailY = clamp(label.anchorY, label.y + 9, label.y + label.height - 9);
+        context.beginPath();
+        if (label.anchorX < label.x && label.anchorY >= label.y && label.anchorY <= label.y + label.height) { context.moveTo(label.x + 1, tailY - 4); context.lineTo(label.x - 5, tailY); context.lineTo(label.x + 1, tailY + 4); }
+        else if (label.anchorX > label.x + label.width && label.anchorY >= label.y && label.anchorY <= label.y + label.height) { context.moveTo(label.x + label.width - 1, tailY - 4); context.lineTo(label.x + label.width + 5, tailY); context.lineTo(label.x + label.width - 1, tailY + 4); }
+        else if (label.anchorY < label.y) { context.moveTo(tailX - 5, label.y + 1); context.lineTo(tailX, label.y - 5); context.lineTo(tailX + 5, label.y + 1); }
+        else if (label.anchorY > label.y + label.height) { context.moveTo(tailX - 5, label.y + label.height - 1); context.lineTo(tailX, label.y + label.height + 5); context.lineTo(tailX + 5, label.y + label.height - 1); }
+        context.closePath(); context.fill();
+        const chipX = label.x + label.width - label.chipWidth - 5;
+        context.fillStyle = chip; context.beginPath(); context.roundRect(chipX, label.y + 4, label.chipWidth, 20, 8); context.fill();
+        context.textAlign = "left"; context.textBaseline = "middle";
+        context.font = `500 11px ${font()}`; context.fillStyle = active ? "#DDF8F0" : "#E6EBE9"; context.fillText(label.nameText, label.x + 11, label.y + 14);
+        context.font = `10px ${font()}`; context.fillStyle = active ? "#B5F1E3" : "#BDC8C4"; context.textAlign = "center"; context.fillText(label.dateText, chipX + label.chipWidth / 2, label.y + 14);
         context.restore();
       }
     }
@@ -654,35 +667,8 @@
 
     function positionCard() {
       if (!cardAnchor || card.hidden) return;
-      if (card.classList.contains("is-inline")) {
-        const label = labelLayout.labels.find((item) => item.key === cardEntries[0]?.key);
-        if (label) {
-          const extra = card.querySelector(".hashout-inline-details");
-          // Measure the same candidates each time, independently of the last
-          // frame's wrapping or expansion direction.
-          card.style.setProperty("--hashout-inline-inset-left", "0px"); card.style.setProperty("--hashout-inline-inset-right", "0px");
-          if (extra) { extra.style.maxHeight = ""; extra.style.overflowY = ""; }
-          const w = card.offsetWidth, fullHeight = card.offsetHeight;
-          const x = clamp(label.x, leftWidth + 4, Math.max(leftWidth + 4, width - w - 8));
-          const fitsAbove = label.y >= headerHeight() + fullHeight - 30 + 4;
-          let above = fitsAbove && label.y + 28 < label.anchorY;
-          card.style.setProperty("--hashout-inline-offset-x", `${Math.max(0, label.x - x)}px`);
-          // Keep the expanding detail surface beside the source donut when a
-          // label sits above it; the name/date stay at their original position.
-          const coversMarker = !above && label.anchorY > label.y + 26 && label.anchorY < label.y + fullHeight + 8;
-          const rightInset = Math.max(0, label.anchorX + 12 - x), leftInset = Math.max(0, x + w - label.anchorX + 12);
-          card.style.setProperty("--hashout-inline-inset-left", `${coversMarker && w - rightInset >= 100 ? rightInset : 0}px`);
-          card.style.setProperty("--hashout-inline-inset-right", `${coversMarker && w - rightInset < 100 && w - leftInset >= 100 ? leftInset : 0}px`);
-          if (!above && label.y + card.offsetHeight > height - 8 && fitsAbove) above = true;
-          if (above) { card.style.setProperty("--hashout-inline-inset-left", "0px"); card.style.setProperty("--hashout-inline-inset-right", "0px"); }
-          card.classList.toggle("opens-up", above);
-          if (extra) { extra.style.maxHeight = `${Math.max(26, above ? label.y - headerHeight() - 4 : height - label.y - 38)}px`; extra.style.overflowY = "auto"; }
-          const h = card.offsetHeight;
-          card.style.left = `${x}px`; card.style.top = `${clamp(above ? label.y - (h - 30) : label.y, 0, Math.max(0, height - h))}px`;
-          return;
-        }
-        const entry = cardEntries[0], anchor = cardAnchor;
-        card.classList.remove("is-inline", "opens-up"); showEntries([entry], anchor, true); requestRender(); return;
+      if (card.classList.contains("is-capsule")) {
+        positionCapsule(); return;
       }
       const w = card.offsetWidth; let h = card.offsetHeight;
       const right = cardAnchor.x + 14, left = cardAnchor.x - w - 14;
@@ -707,16 +693,99 @@
       card.style.left = `${x}px`; card.style.top = `${clamp(y, 8, Math.max(8, height - h - 8))}px`;
     }
 
+    function positionCapsule() {
+      const entry = cardEntries[0], label = pinned && labelLayout.labels.find((item) => item.key === entry?.key);
+      const heading = card.querySelector(".hashout-capsule-heading"), disclosure = card.querySelector(".hashout-capsule-disclosure"), clip = card.querySelector(".hashout-capsule-clip");
+      if (!heading || !disclosure || !clip) return;
+      const bounds = { left: leftWidth + 6, right: width - 6, top: headerHeight() + 6, bottom: height - 6 };
+      const availableWidth = Math.max(1, bounds.right - bounds.left), desiredWidth = pinned ? 306 : 270;
+      const glyph = layout?.glyphs.find((item) => item.memberKeys.includes(entry?.key));
+      const mappedSource = glyph?.type === "group" ? selectedOverlay(entry, glyph) : glyph;
+      const orbitSlot = ringState?.geometry?.positions.find((slot) => ringState.entries[slot.index]?.key === entry?.key);
+      // A resize can hide Default labels and move every month coordinate. Read
+      // the current source geometry; cardAnchor is only a fallback for an
+      // unplotted list entry. An open orbit retains its current member anchor.
+      const source = label ? { x: label.anchorX, y: label.anchorY } : orbitSlot || (mappedSource ? { x: mappedSource.centerX, y: mappedSource.centerY } : cardAnchor);
+      let w = Math.min(desiredWidth, availableWidth);
+      let x = clamp((label?.x ?? source.x - w / 2), bounds.left, Math.max(bounds.left, bounds.right - w));
+      // Retain a side label's edge nearest its marker. Wider details expand
+      // away from that marker, and the original FFS donut remains unobscured.
+      if (label && label.anchorY >= label.y && label.anchorY <= label.y + label.height) {
+        const sideRoom = label.anchorX < label.x ? bounds.right - label.x : label.x + label.width - bounds.left;
+        if (sideRoom >= Math.min(174, availableWidth)) {
+          w = Math.min(w, sideRoom);
+          x = label.anchorX < label.x ? label.x : label.x + label.width - w;
+        }
+      }
+      card.style.width = `${w}px`; card.style.maxWidth = `${availableWidth}px`;
+      const nameEl = heading.querySelector(".hashout-capsule-name"), dateEl = heading.querySelector(".hashout-capsule-date");
+      card.classList.toggle("has-truncated-name", Boolean(nameEl && nameEl.scrollWidth > nameEl.clientWidth + 1));
+      card.classList.toggle("has-truncated-date", Boolean(dateEl && dateEl.scrollWidth > dateEl.clientWidth + 1));
+      const headingHeight = heading.offsetHeight || 32;
+      card.style.setProperty("--hashout-capsule-heading-height", `${headingHeight}px`);
+      // Measure natural body content, independently of its current animated
+      // grid height, so hover redraws cannot change expansion direction.
+      const naturalExtra = disclosure.querySelector(".hashout-capsule-content")?.scrollHeight || 0;
+      const extraHeight = capsuleExpanded ? naturalExtra : 0;
+      let above = Boolean(label && source.y > label.y + label.height);
+      let y = label ? label.y + (above ? label.height - headingHeight : source.y >= label.y && source.y <= label.y + label.height ? (label.height - headingHeight) / 2 : 0) : source.y + 15;
+      const sideLabel = label && (source.x < x - 6 || source.x > x + w + 6);
+      const coversSource = !sideLabel && source.y >= y - 12 && source.y <= y + headingHeight + 12;
+      if (!label || coversSource) {
+        let aboveAnchor = source.y - 15 - headingHeight, belowAnchor = source.y + 15;
+        if (ringState?.geometry) {
+          const geometry = ringState.geometry, half = geometry.targetSize / 2;
+          const minY = Math.min(geometry.center.y - half, ...geometry.positions.map((slot) => slot.y - half), ringState.pagerY ?? Infinity);
+          const maxY = Math.max(geometry.center.y + half, ...geometry.positions.map((slot) => slot.y + half), (ringState.pagerY ?? -Infinity) + 28);
+          aboveAnchor = minY - 12 - headingHeight; belowAnchor = maxY + 12;
+        }
+        const belowRoom = bounds.bottom - belowAnchor - headingHeight, aboveRoom = aboveAnchor - bounds.top;
+        above = belowRoom < extraHeight && aboveRoom > belowRoom;
+        y = above ? aboveAnchor : belowAnchor;
+      } else if (sideLabel) {
+        above = bounds.bottom - y - headingHeight < extraHeight && y - bounds.top > bounds.bottom - y - headingHeight;
+      } else {
+        // Vertical labels expand away from their source. At a plot boundary,
+        // move the complete capsule to the opposite side rather than cover it.
+        const room = above ? y - bounds.top : bounds.bottom - y - headingHeight;
+        if (room < Math.min(extraHeight, 42)) {
+          const oppositeY = above ? source.y + 15 : source.y - 15 - headingHeight;
+          const oppositeRoom = above ? bounds.bottom - oppositeY - headingHeight : oppositeY - bounds.top;
+          if (oppositeRoom > room) { above = !above; y = oppositeY; }
+        }
+      }
+      y = clamp(y, bounds.top, Math.max(bounds.top, bounds.bottom - headingHeight));
+      const maxExtra = Math.max(0, above ? y - bounds.top : bounds.bottom - y - headingHeight);
+      clip.style.maxHeight = `${maxExtra}px`;
+      card.classList.toggle("is-inline", Boolean(label)); card.classList.toggle("opens-up", above);
+      card.style.left = `${x}px`; card.style.top = `${y}px`;
+      // Tail placement is derived from the unchanged source point, never from
+      // the expanded surface's center. Side tails track the stable header row.
+      const horizontal = source.x < x && source.y >= y - 4 && source.y <= y + headingHeight + 4 ? "left"
+        : source.x > x + w && source.y >= y - 4 && source.y <= y + headingHeight + 4 ? "right" : null;
+      const plotted = entry?.period && mappedSource;
+      const sourceVisible = plotted && source.x >= leftWidth && source.x <= width && source.y >= headerHeight() && source.y <= height;
+      card.dataset.tail = sourceVisible ? horizontal || (source.y < y ? "top" : "bottom") : "none";
+      card.style.setProperty("--hashout-tail-x", `${clamp(source.x - x, 12, Math.max(12, w - 12))}px`);
+      card.style.setProperty("--hashout-tail-y", `${clamp(source.y - y, 8, headingHeight - 8)}px`);
+    }
+
     function closeCard(returnFocus = false) {
-      clearTimeout(hideTimer); card.hidden = true; card.replaceChildren(); cardEntries = []; cardAnchor = null; pinned = false; hovered = null; hoverMemberKey = null; canvas.title = "";
+      clearTimeout(hideTimer); card.hidden = true; card.replaceChildren(); cardEntries = []; cardAnchor = null; capsuleExpanded = false; pinned = false; hovered = null; hoverMemberKey = null; canvas.title = "";
       requestRender();
       if (returnFocus) canvas.focus({ preventScroll: true });
     }
 
     function entryActions(entry) {
       const actions = node("div", "hashout-card-actions");
-      const details = node("button", "", "Details"); details.type = "button"; details.setAttribute("aria-label", `Product details for ${entry.product?.name || "this product"}`); listen(details, "click", () => selectEntry(entry, { openDetails: true, preserveGroup: true })); actions.append(details);
-      if (options.onOpenLifecycle) { const lifecycle = node("button", "", "Lifecycle"); lifecycle.type = "button"; lifecycle.setAttribute("aria-label", `Lifecycle roadmap for ${entry.product?.name || "this product"}`); listen(lifecycle, "click", () => options.onOpenLifecycle(entry)); actions.append(lifecycle); }
+      const action = (label, kind, handler) => {
+        const button = node("button", `hashout-action-${kind}`); button.type = "button";
+        const icon = node("span", `hashout-action-circle is-${kind === "details" ? "filled" : "hollow"}`); icon.setAttribute("aria-hidden", "true");
+        button.append(icon, node("span", "", label)); button.setAttribute("aria-label", `${label === "Details" ? "Product details" : "Lifecycle roadmap"} for ${entry.product?.name || "this product"}`);
+        listen(button, "click", handler); return button;
+      };
+      actions.append(action("Details", "details", () => selectEntry(entry, { openDetails: true, preserveGroup: true })));
+      if (options.onOpenLifecycle) actions.append(action("Lifecycle", "lifecycle", () => options.onOpenLifecycle(entry)));
       return actions;
     }
 
@@ -914,47 +983,60 @@
       card.replaceChildren();
       card.classList.toggle("is-pinned", pinned); card.setAttribute("role", pin ? "dialog" : "region");
       const inlineLabel = pin && items.length === 1 && !heading ? labelLayout.labels.find((label) => label.key === items[0].key) : null;
-      card.classList.toggle("is-inline", Boolean(inlineLabel)); card.classList.remove("opens-up");
-      const inlineWidth = Math.min(256, Math.max(1, width - leftWidth - 12));
-      card.style.width = inlineLabel ? `${Math.min(inlineWidth, Math.max(220, inlineLabel.width))}px` : "";
-      card.style.minWidth = "";
-      card.style.maxWidth = inlineLabel ? `${inlineWidth}px` : "";
-      card.style.setProperty("--hashout-inline-inset-left", "0px"); card.style.setProperty("--hashout-inline-inset-right", "0px");
+      const single = items.length === 1 && !heading;
+      card.classList.toggle("is-capsule", single); card.classList.toggle("is-inline", Boolean(inlineLabel));
+      card.classList.remove("opens-up", "is-collapsed", "is-entering", "has-truncated-name", "has-truncated-date");
+      card.style.width = ""; card.style.minWidth = ""; card.style.maxWidth = ""; card.style.maxHeight = "";
+      if (single) {
+        buildCapsule(items[0], pin);
+        card.hidden = false; positionCard(); requestRender(); return;
+      }
       const close = node("button", "hashout-card-close", "×"); close.type = "button"; close.setAttribute("aria-label", "Close product card"); listen(close, "click", () => closeCard(true));
       const cardHeader = node("div", "hashout-card-header");
-      cardHeader.append(node("strong", "", heading || (items.length > 1 ? `${items.length} products` : inlineLabel?.nameText || items[0].product?.name || "Unnamed product")));
-      if (!inlineLabel) cardHeader.append(close);
+      cardHeader.append(node("strong", "", heading || `${items.length} products`));
+      cardHeader.append(close);
       card.append(cardHeader);
-      if (items.length === 1 && !heading) {
-        const entry = items[0];
-        if (inlineLabel) {
-          card.append(node("p", "hashout-card-time", inlineLabel.dateText));
-          const extra = node("div", "hashout-inline-details");
-          if (inlineLabel.nameText !== (entry.product?.name || "Unnamed product")) extra.append(node("strong", "hashout-inline-fullname", entry.product?.name || "Unnamed product"));
-          extra.append(node("p", "hashout-card-stage", STAGES[entry.stage] || STAGES.unknown)); appendWindowDetail(extra, entry, true);
-          const actions = entryActions(entry); actions.append(close); extra.append(actions); card.append(extra);
-        } else {
-          const meta = node("div", "hashout-card-meta");
-          meta.append(node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD"));
-          if (pin) meta.append(node("p", "hashout-card-stage", STAGES[entry.stage] || STAGES.unknown)); card.append(meta);
-          if (pin) appendWindowDetail(card, entry);
-          if (pin) card.append(entryActions(entry));
-        }
-        card.setAttribute("aria-label", `${entry.product?.name || "Unnamed product"}. Working product name and planning timing.`);
-      } else {
-        const list = node("div", "hashout-card-list"); list.setAttribute("role", "list");
-        const shown = pin ? items : items.slice(0, 6);
-        for (const entry of shown) {
-          if (pin) { const button = productButton(entry, (item) => selectEntry(item, { preserveGroup: true })); button.classList.toggle("is-selected", entry.key === selectedKey); list.append(button); }
-          else { const preview = node("div", "hashout-group-preview"); preview.append(node("strong", "", entry.product?.name || "Unnamed product"), node("span", "", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); list.append(preview); }
-        }
-        card.append(list);
-        if (pin) { const selected = items.find((entry) => entry.key === selectedKey); if (selected) updateMemberFocus(selected); }
-        if (!pin) { const more = node("button", "hashout-card-more", items.length > shown.length ? `+${items.length - shown.length} more · Expand all ${items.length}` : `Expand ${items.length} products`); more.type = "button"; listen(more, "click", () => openRing({ entries: items, memberKeys: items.map((entry) => entry.key), countLabelX: anchor.x, centerX: anchor.x, centerY: anchor.y })); card.append(more); }
+      const list = node("div", "hashout-card-list"); list.setAttribute("role", "list");
+      const shown = pin ? items : items.slice(0, 6);
+      for (const entry of shown) {
+        if (pin) { const button = productButton(entry, (item) => selectEntry(item, { preserveGroup: true })); button.classList.toggle("is-selected", entry.key === selectedKey); list.append(button); }
+        else { const preview = node("div", "hashout-group-preview"); preview.append(node("strong", "", entry.product?.name || "Unnamed product"), node("span", "", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); list.append(preview); }
       }
+      card.append(list);
+      if (pin) { const selected = items.find((entry) => entry.key === selectedKey); if (selected) updateMemberFocus(selected); }
+      if (!pin) { const more = node("button", "hashout-card-more", items.length > shown.length ? `+${items.length - shown.length} more · Expand all ${items.length}` : `Expand ${items.length} products`); more.type = "button"; listen(more, "click", () => openRing({ entries: items, memberKeys: items.map((entry) => entry.key), countLabelX: anchor.x, centerX: anchor.x, centerY: anchor.y })); card.append(more); }
       card.hidden = false;
       positionCard();
-      if (inlineLabel) { card.style.animation = "none"; void card.offsetHeight; card.style.animation = ""; }
+    }
+
+    function buildCapsule(entry, expand) {
+      const name = entry.product?.name || "Unnamed product", date = entry.period?.label || "TBD";
+      capsuleExpanded = expand;
+      card.classList.toggle("is-collapsed", !expand);
+      card.setAttribute("aria-label", `${name}, FFS estimate ${date}. Working product name and planning timing.`);
+      const heading = node("button", "hashout-capsule-heading"); heading.type = "button";
+      const nameEl = node("span", "hashout-capsule-name", name), dateEl = node("span", "hashout-capsule-date", date);
+      dateEl.setAttribute("aria-label", `FFS estimate ${date}`); heading.append(nameEl, dateEl);
+      const disclosure = node("div", "hashout-capsule-disclosure"), clip = node("div", "hashout-capsule-clip"), content = node("div", "hashout-capsule-content");
+      content.append(node("strong", "hashout-capsule-fullname", name), node("p", "hashout-capsule-fulltime", `FFS ${date}`));
+      const row = node("div", "hashout-capsule-row"), status = node("span", "hashout-capsule-status", STAGES[entry.stage] || STAGES.unknown);
+      row.append(status, entryActions(entry)); content.append(row);
+      clip.append(content); disclosure.append(clip); card.append(heading, disclosure);
+      const sync = () => {
+        card.classList.toggle("is-collapsed", !capsuleExpanded);
+        heading.setAttribute("aria-expanded", String(capsuleExpanded));
+        heading.setAttribute("aria-label", `${name}, FFS estimate ${date}. ${capsuleExpanded ? "Collapse" : "Expand"} product details`);
+        disclosure.inert = !capsuleExpanded; disclosure.setAttribute("aria-hidden", String(!capsuleExpanded));
+      };
+      sync();
+      if (expand && !root.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+        card.classList.add("is-entering");
+        requestAnimationFrame(() => { if (!destroyed && card.contains(heading)) card.classList.remove("is-entering"); });
+      }
+      listen(heading, "click", () => {
+        if (!pinned) { selectEntry(entry); return; }
+        capsuleExpanded = !capsuleExpanded; sync(); positionCard();
+      });
     }
 
     function focusProduct(value) {
@@ -992,11 +1074,23 @@
       if (event.key === "ArrowDown" || event.key === "ArrowUp") { buttons[clamp(index + (event.key === "ArrowDown" ? 1 : -1), 0, buttons.length - 1)]?.focus(); event.preventDefault(); }
       if (event.key === "Escape") { results.hidden = true; search.setAttribute("aria-expanded", "false"); search.focus(); }
     });
-    listen(document, "pointerdown", (event) => { if (event.pointerType === "touch") coarseInput = true; else if (event.pointerType === "mouse" && !root.matchMedia?.("(pointer: coarse)")?.matches) coarseInput = false; if (!picker.contains(event.target)) picker.open = false; if (!windowsControl.contains(event.target)) windowsKey.open = false; if (!searchShell.contains(event.target)) { results.hidden = true; search.setAttribute("aria-expanded", "false"); } if (ringState && !ring.contains(event.target) && !card.contains(event.target)) { closeRing(); closeCard(); } if (pinned && !card.contains(event.target) && !stage.contains(event.target)) closeCard(); });
+    listen(document, "pointerdown", (event) => {
+      if (event.pointerType === "touch") coarseInput = true;
+      else if (event.pointerType === "mouse" && !root.matchMedia?.("(pointer: coarse)")?.matches) coarseInput = false;
+      if (!picker.contains(event.target)) picker.open = false;
+      if (!windowsControl.contains(event.target)) windowsKey.open = false;
+      if (!searchShell.contains(event.target)) { results.hidden = true; search.setAttribute("aria-expanded", "false"); }
+      const insideCard = card.contains(event.target);
+      if (ringState && !ring.contains(event.target) && !insideCard) { closeRing(); closeCard(); }
+      // Dismiss the old disclosure without cancelling the click. A different
+      // product, category, or toolbar control must still work on that click.
+      if (pinned && !insideCard) closeCard();
+    });
     listen(card, "pointerenter", () => clearTimeout(hideTimer));
     listen(card, "pointerleave", () => { if (!pinned) hideTimer = setTimeout(() => closeCard(), 160); });
     listen(card, "click", (event) => { if (!pinned && !event.target.closest("button")) { if (cardEntries.length > 1) openRing({ entries: cardEntries, memberKeys: cardEntries.map((entry) => entry.key), countLabelX: cardAnchor.x, centerX: cardAnchor.x, centerY: cardAnchor.y }); else showEntries(cardEntries, cardAnchor, true); } });
     listen(card, "keydown", (event) => { if (event.key === "Escape") { closeCard(true); closeRing(); event.preventDefault(); } });
+    listen(document, "keydown", (event) => { if (event.key === "Escape" && pinned && !card.contains(event.target) && !ring.contains(event.target)) { closeCard(true); closeRing(); event.preventDefault(); } });
     listen(ring, "keydown", (event) => { if (event.key === "Escape") { closeRing(true); closeCard(); event.preventDefault(); } });
     listen(ring, "pointerenter", () => clearTimeout(hideTimer));
     listen(stage, "pointermove", (event) => {
