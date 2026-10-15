@@ -43,6 +43,7 @@ const INFO_BUTTON_WIDTH = 54;
 const INFO_BUTTON_HEIGHT = 22;
 const FULL_SPEC_MIN_CARD_HEIGHT = 400;
 const FULL_SPEC_IMAGE_HEIGHT = 210;
+const HEADSET_IMAGE_HEIGHT = 260;
 const FULL_SPEC_TITLE_TOP = STATUS_BANNER_HEIGHT + 10 + FULL_SPEC_IMAGE_HEIGHT + 8;
 const FULL_SPEC_DETAILS_TOP_OFFSET = 66;
 
@@ -574,6 +575,10 @@ function imageAssetWebUrl(assetId) {
 
 function productImageSource(product) {
   return imageAssetSource(productDisplayImageAssetId(product));
+}
+
+function productImageAssetName(product) {
+  return imageAssetById(productDisplayImageAssetId(product))?.name || "";
 }
 
 function productImageWebUrl(product) {
@@ -1738,8 +1743,11 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
   const categoryId = definition.id || activeCategoryId;
   const detailed = supportsDetailedCards && products.some((product) => (globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs).length);
   if (!detailed) {
+    const audioProfile = globalThis.PortfolioImageFraming?.usesAudioFraming(categoryId) === true;
+    const imageHeight = audioProfile ? HEADSET_IMAGE_HEIGHT : IMAGE_SLOT_HEIGHT;
+    const titleTop = audioProfile ? IMAGE_SLOT_TOP + imageHeight + 6 : TITLE_BLOCK_TOP;
     // Size the category together so filtering never moves cards or their hit regions.
-    const rowsTop = TITLE_BLOCK_TOP + DETAILS_TOP_OFFSET + 9;
+    const rowsTop = titleTop + DETAILS_TOP_OFFSET + 9;
     const maxContentHeight = Math.max(0, ...products.map((product) => (
       rowsTop + cardSpecifications(product, categoryId).length * 32 + (targetBoard.settings.showSkus ? variantFooterLayout(product).height : 0) + 10
     )));
@@ -1752,8 +1760,8 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
       cardHeight,
       laneHeight: cardHeight + 70,
       imageSlotTop: IMAGE_SLOT_TOP,
-      imageSlotHeight: IMAGE_SLOT_HEIGHT,
-      titleBlockTop: TITLE_BLOCK_TOP,
+      imageSlotHeight: imageHeight,
+      titleBlockTop: titleTop,
       priceBaselineOffset: PRICE_BASELINE_OFFSET,
       detailsTopOffset: DETAILS_TOP_OFFSET,
       actionHeight,
@@ -1766,7 +1774,10 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
   const maxFooterHeight = targetBoard.settings.showSkus
     ? Math.max(0, ...products.map((product) => variantFooterLayout(product).height))
     : 0;
-  const detailsTop = FULL_SPEC_TITLE_TOP + FULL_SPEC_DETAILS_TOP_OFFSET;
+  const audioProfile = globalThis.PortfolioImageFraming?.usesAudioFraming(categoryId) === true;
+  const imageHeight = audioProfile ? HEADSET_IMAGE_HEIGHT : FULL_SPEC_IMAGE_HEIGHT;
+  const titleTop = audioProfile ? STATUS_BANNER_HEIGHT + 10 + imageHeight + 8 : FULL_SPEC_TITLE_TOP;
+  const detailsTop = titleTop + FULL_SPEC_DETAILS_TOP_OFFSET;
   const actionTop = Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + 10);
   const cardHeight = actionHeight ? actionTop + actionHeight + maxFooterHeight : Math.max(FULL_SPEC_MIN_CARD_HEIGHT, detailsTop + 10 + maxDetailsHeight + maxFooterHeight + 10);
   const result = {
@@ -1775,8 +1786,8 @@ function productCardLayout(targetBoard = board, definition = categoryDefinition(
     cardHeight,
     laneHeight: cardHeight + 70,
     imageSlotTop: STATUS_BANNER_HEIGHT + 10,
-    imageSlotHeight: FULL_SPEC_IMAGE_HEIGHT,
-    titleBlockTop: FULL_SPEC_TITLE_TOP,
+    imageSlotHeight: imageHeight,
+    titleBlockTop: titleTop,
     priceBaselineOffset: PRICE_BASELINE_OFFSET,
     detailsTopOffset: FULL_SPEC_DETAILS_TOP_OFFSET,
     actionHeight,
@@ -2257,7 +2268,9 @@ function loadImage(src) {
   return record;
 }
 
-function drawContainedImage(context, image, x, y, width, height) {
+function drawContainedImage(context, image, x, y, width, height, { categoryId = "", assetName = "", product = null } = {}) {
+  const framing = globalThis.PortfolioImageFraming;
+  if (framing?.usesAudioFraming(categoryId, product) && framing.draw(context, image, { x, y, width, height }, { assetName })) return;
   const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
   const drawWidth = image.naturalWidth * scale;
   const drawHeight = image.naturalHeight * scale;
@@ -2629,7 +2642,11 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   }
   const imageTop = y + layout.imageSlotTop;
   const imageRecord = loadImage(productImageSource(product));
-  if (imageRecord.ready) drawContainedImage(context, imageRecord.image, x + 18, imageTop, CARD_WIDTH - 36, layout.imageSlotHeight);
+  const framing = globalThis.PortfolioImageFraming;
+  const naturalAudio = framing?.usesAudioFraming(layout.categoryId) && !framing.usesAudioFraming(layout.categoryId, product);
+  const imageHeight = naturalAudio ? (layout.detailed ? FULL_SPEC_IMAGE_HEIGHT : IMAGE_SLOT_HEIGHT) : layout.imageSlotHeight;
+  const imageInset = framing?.usesAudioFraming(layout.categoryId, product) ? 4 : 18;
+  if (imageRecord.ready) drawContainedImage(context, imageRecord.image, x + imageInset, imageTop + (layout.imageSlotHeight - imageHeight) / 2, CARD_WIDTH - imageInset * 2, imageHeight, { categoryId: layout.categoryId, product, assetName: typeof productImageAssetName === "function" ? productImageAssetName(product) : "" });
 
   if (presentation.secondaryLabel) {
     const label = presentation.secondaryLabel.toUpperCase();
