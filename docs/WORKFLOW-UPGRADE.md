@@ -32,11 +32,11 @@ Deferring hides that exact issue on this browser; a changed issue reappears. Err
 
 ## Reuse a view and export setup
 
-Open **Saved views** beside **Load data** in Portfolio, or near the Analytics tabs. Save, open, rename or delete a named view. Each browser stores up to 25 views. A view retains filters, category scope, dates and supported display settings. Opening it uses the current data. It does not restore products, images, credentials or workbook contents. Missing product or category selections are handled against current IDs rather than silently expanding to all records.
+Open **Saved views** beside the zoom controls in Portfolio, or near the Analytics tabs. It stays on the same row as **100%** when switching Products, Lifecycle and Hashout views, including narrow screens. **Settings** opens directly from the main toolbar. Save, open, rename or delete a named view. Each browser stores up to 25 views. A view retains filters, category scope, dates and supported display settings. Opening it uses the current data. It does not restore products, images, credentials or workbook contents. Missing product or category selections are handled against current IDs rather than silently expanding to all records.
 
 The PowerPoint dialog restores reusable options from the last successful export. **Use this view** copies the visible view's category scope and date range into the export controls for review. Those options do not retain a previous consent to export different reporting cutoffs. Review the displayed scope before exporting.
 
-On narrow screens, **View options** groups secondary roadmap controls. Search, category/type selection, range and Fit remain available. **Next 24 months**, **Selected product** and **Full range** adjust the visible timeline only. Quarter precision is retained when fitting date ranges.
+On narrow screens, **View options** groups secondary roadmap controls. Search, category/type selection, range, zoom, Saved views and Fit remain available. **Next 24 months**, **Zoom to selected product** and **Full range** adjust the visible timeline only. Quarter precision is retained when fitting date ranges.
 
 ## Review date evidence and protect a date
 
