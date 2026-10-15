@@ -141,5 +141,14 @@
     return bytes;
   }
 
-  root.PortfolioPackageClient = Object.freeze({ normalizePackageUrl, normalizeEndpoint, readLimitedResponse, downloadLatest });
+  async function gitBlobSha(bytes, { crypto = root.crypto } = {}) {
+    if (!(bytes instanceof Uint8Array) || bytes.length > root.PortfolioPackage.MAX_PACKAGE_BYTES) throw new TypeError("Bounded package bytes are required.");
+    if (!crypto?.subtle) return null;
+    const header = new TextEncoder().encode(`blob ${bytes.length}\0`), content = new Uint8Array(header.length + bytes.length);
+    content.set(header); content.set(bytes, header.length);
+    const digest = await crypto.subtle.digest("SHA-1", content);
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  root.PortfolioPackageClient = Object.freeze({ normalizePackageUrl, normalizeEndpoint, readLimitedResponse, downloadLatest, gitBlobSha });
 })(globalThis);

@@ -62,14 +62,14 @@ function appWorkspace(supplied = initial, { legacyBaseline = false } = {}) {
 }
 
 function pullClick(session, { configured = true } = {}) {
-  const handler = masterUi.match(/    button\.addEventListener\("click", \(event\) => \{[^]*?\n    \}, true\);/);
-  assert(handler, "Exercise the actual capture-phase Pull/Save handler");
-  let click, reviews = 0, refreshes = 0, prevented = false, stopped = false;
+  const handler = masterUi.match(/^    button\.addEventListener\("click", \(event\) => \{[^\n]*showUpdates\(\);[^\n]*\}, true\);/m);
+  assert(handler, "Exercise the actual capture-phase Updates handler");
+  let click, updates = 0, prevented = false, stopped = false;
   const context = { session, configured, button: { addEventListener(type, callback, capture) { assert.equal(type, "click"); assert.equal(capture, true); click = callback; } },
-    saveFlow() { reviews++; }, refreshQuietly(options) { assert.equal(options.force, true); refreshes++; } };
+    showUpdates() { updates++; } };
   vm.createContext(context); vm.runInContext(handler[0], context);
   click({ preventDefault() { prevented = true; }, stopImmediatePropagation() { stopped = true; } });
-  return { reviews, refreshes, prevented, stopped, packagePullAllowed: !stopped };
+  return { updates, prevented, stopped, packagePullAllowed: !stopped };
 }
 
 const directory = await mkdtemp(join(tmpdir(), "ppc-card-placement-app-")), filename = join(directory, "master_ppc.pkg");
@@ -106,7 +106,7 @@ try {
   const pending = session.track();
   assert(pending.length >= 4, "lane/reorder changes appear in the shared Save review");
   assert(pending.every(change => Object.keys(change.patch).every(field => field === "cardPlacement")), "the narrow shared update contains only atomic card placement");
-  assert.deepEqual(pullClick(session), { reviews: 1, refreshes: 0, prevented: true, stopped: true, packagePullAllowed: false }, "unsaved moves stop the whole-package Pull path and open Save review");
+  assert.deepEqual(pullClick(session), { updates: 1, prevented: true, stopped: true, packagePullAllowed: false }, "unsaved moves cannot turn Updates into an implicit package replacement");
   assert.equal(await a.context.flushWorkspaceSave(), true);
   const deviceReload = appWorkspace(JSON.parse(a.stored));
   assert.deepEqual(deviceReload.order("wireless"), a.order("wireless"), "completed device save and JSON reopen retain the lane/order draft");
@@ -114,8 +114,8 @@ try {
 
   await session.save({ reason: "Correct mouse lanes and order" }); await session.refresh();
   assert.equal(session.track().length, 0);
-  assert.deepEqual(pullClick(session), { reviews: 0, refreshes: 1, prevented: true, stopped: true, packagePullAllowed: false }, "connected clean Pull uses the newest team snapshot rather than a potentially delayed downloadable copy");
-  assert.deepEqual(pullClick({ track: () => [], getState: () => ({ hasKey: false }) }), { reviews: 0, refreshes: 0, prevented: false, stopped: false, packagePullAllowed: true }, "a disconnected workspace retains the normal package unlock flow");
+  assert.deepEqual(pullClick(session), { updates: 1, prevented: true, stopped: true, packagePullAllowed: false }, "a clean workspace opens explicit update controls before choosing a refresh or package load");
+  assert.deepEqual(pullClick({ track: () => [], getState: () => ({ hasKey: false }) }), { updates: 1, prevented: true, stopped: true, packagePullAllowed: false }, "disconnected Updates still explains the separate explicit package unlock action");
   const expectedOrder = a.order("wireless");
   const b = appWorkspace(), second = sessionFor(b); await second.connect({ key, editorToken });
   assert.deepEqual(b.order("wireless"), expectedOrder, "a second workspace receives accepted lane and exact order through the actual app adapter");

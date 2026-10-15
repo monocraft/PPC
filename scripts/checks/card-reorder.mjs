@@ -165,12 +165,15 @@ function harness() {
   const h = harness(); h.context.startProductReorder(); h.context.reorderProduct("a", "first", 2); const latest = h.layouts();
   const saveFlow = masterUi.match(/^    async function saveFlow\([^]*?^    \}/m)?.[0]; assert.ok(saveFlow, "Exercise the actual save entry point");
   let reviews = 0;
-  Object.assign(h.context, { running: false, discarding: false, session: { getState: () => ({ busy: false }) }, adapter: { beforeSave: () => h.context.finishProductReorder() }, review: async () => { reviews++; assert.equal(h.context.productLayoutEditing, false, "Reordering finishes before save review starts"); return null; }, updateStatus() {} });
+  Object.assign(h.context, { running: false, discarding: false, refreshRunning: false, session: { getState: () => ({ busy: false }) }, adapter: { beforeSave: () => h.context.finishProductReorder() }, review: async () => { reviews++; assert.equal(h.context.productLayoutEditing, false, "Reordering finishes before save review starts"); return null; }, updateStatus() {} });
   await new vm.Script(`${saveFlow}\n saveFlow();`).runInContext(h.context);
   assert.equal(reviews, 1); assert.deepEqual(h.layouts(), latest);
   h.context.startProductReorder(); h.context.running = true;
   await new vm.Script("saveFlow();").runInContext(h.context);
   assert.equal(h.context.productLayoutEditing, true, "A busy save ignores the action without prematurely ending another session");
+  h.context.running = false; h.context.refreshRunning = true;
+  await new vm.Script("saveFlow();").runInContext(h.context);
+  assert.equal(reviews, 1, "a shared check cannot race a second save review");
 }
 
 assert.equal((html.match(/id="productLayoutEditToggle"/g) || []).length, 1);

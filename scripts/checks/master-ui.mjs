@@ -13,7 +13,7 @@ const byTag = (node, tag) => all(node).filter((entry) => entry.tagName === tag.t
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
 
 function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null } = {}) {
-  const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [], beforeSaves: 0 };
+  const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [], beforeSaves: 0, packageOpens: [] };
   const notificationEvents = [], messageStore = globalThis.PortfolioNotifications.createStore({ acknowledgmentStorage });
   const syncNotices = () => { notices.clear(); for (const item of messageStore.getState().items) notices.set(item.id, item); };
   messageStore.subscribe(event => { notificationEvents.push(event); syncNotices(); });
@@ -33,7 +33,8 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
     return node;
   };
   const button = document.createElement("button"); button.id = "pullLatestData";
-  document.body = document.createElement("body"); document.body.append(button);
+  const saveButton = document.createElement("button"); saveButton.id = "saveSharedChanges";
+  document.body = document.createElement("body"); document.body.append(saveButton, button);
   document.getElementById = (id) => all(document.body).find((node) => node.id === id);
   const state = { configured, hasKey, connected: false, pending: structuredClone(initialPending), snapshot: { publication } };
   let saveHandler = async () => { state.pending = []; return { saved: true, snapshot: state.snapshot }; };
@@ -60,6 +61,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   };
   const sandbox = { document, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
     PortfolioMasterClient: { createSession: () => session }, PortfolioMasterModel: model,
+    PortfolioPackageUI: { open: mode => calls.packageOpens.push(mode) },
     PortfolioProductMergeAdapter: { getImageSource: (id) => id === "local-image" ? "blob:local-preview" : id === "latest-image" ? "blob:latest-preview" : "" },
     PortfolioNotifications: { publish(notice) { const result = messageStore.publish(notice); syncNotices(); return result; }, resolve: messageStore.resolve, show() {} },
     addEventListener(name, handler) { listeners.set(name, handler); }, dispatchEvent() {}, setInterval: () => 1, clearInterval() {},
@@ -67,7 +69,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   vm.createContext(sandbox); new vm.Script(source).runInContext(sandbox);
   const api = sandbox.PortfolioMasterUI.initialize({ source: { mode: "service", team: true, endpoint: "https://private.example/api/master" }, adapter });
   const dialog = document.getElementById("masterDialog");
-  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, calls, notices, state, listeners, messageStore, notificationEvents, setSave: (handler) => { saveHandler = handler; }, setRefresh: (handler) => { refreshHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
+  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, saveButton, document, adapter, calls, notices, state, listeners, messageStore, notificationEvents, setSave: (handler) => { saveHandler = handler; }, setRefresh: (handler) => { refreshHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
 }
 
 const base = model.productValues({ id: "p1", name: "Headset", specs: [{ id: "s1", label: "Weight", value: "200g" }, { id: "s2", label: "Notes", value: "Original" }], partSkus: [], variantGroups: [], roadmap: { startMonth: "2027-01", endMonth: "2028-01" } });
@@ -81,7 +83,8 @@ const pending = [edited,
 ];
 const ui = createUi(pending);
 await flush();
-assert.equal(ui.button.textContent, "Save changes");
+assert.equal(ui.button.textContent, "Updates", "drafts never change the Updates action into a save");
+assert.equal(ui.saveButton.textContent, "Save changes (8)");
 assert.equal(ui.notices.has("master-publication"), false, "accepted changes pending follow-up do not show distracting publication messages");
 assert.equal(typeof ui.publicApi.save, "function", "product actions can open the public save review");
 const flow = ui.publicApi.save();
@@ -120,7 +123,7 @@ assert.equal(ui.notices.get("master-save-result").title, "Changes saved");
 assert.doesNotMatch(ui.notices.get("master-save-result").message, /GitHub|master|package|private/i);
 assert.equal(ui.calls.disconnects, 0);
 
-const cancelled = createUi([edited]);
+const cancelled = createUi([edited]); await flush();
 const cancelledFlow = cancelled.api.save();
 assert.equal(byClass(cancelled.dialog, "master-review-search").length, 0, "small batches do not need extra controls");
 byTag(cancelled.dialog, "button").find((button) => button.textContent === "Keep editing").dispatchEvent({ type: "click" });
@@ -128,7 +131,7 @@ await cancelledFlow;
 assert.equal(cancelled.calls.saves.length, 0); assert.equal(cancelled.state.pending.length, 1);
 assert.equal(cancelled.calls.disconnects, 0, "keeping the draft never clears access");
 
-const failed = createUi([edited]);
+const failed = createUi([edited]); await flush();
 failed.setSave(async () => { throw new Error("GitHub failed to publish public/data/master_ppc.pkg at https://private.example/?key=secret"); });
 const failedFlow = failed.api.save(); failed.submit(); await failedFlow;
 assert.match(failed.notices.get("master-sync-error").message, /Could not save.*changes are safe/);
@@ -144,12 +147,12 @@ failed.setSave(async () => { failed.state.pending = []; return { saved: true }; 
 const retrySaved = failed.api.save(); failed.submit(); await retrySaved;
 assert.equal(failed.notices.has("master-sync-error"), false, "the write failure resolves after an accepted save");
 
-const staleMergeUi = createUi([pending[3]]);
+const staleMergeUi = createUi([pending[3]]); await flush();
 staleMergeUi.setSave(async () => { const error = new Error("A private master merge changed"); error.code = "MERGE_REVIEW_REQUIRED"; throw error; });
 const staleMergeFlow = staleMergeUi.api.save(); staleMergeUi.submit(); await staleMergeFlow;
 assert.equal(staleMergeUi.notices.get("master-sync-error").message, "These products changed. Review the merge again. Your draft is safe.");
 
-const conflictUi = createUi([edited]); let finalChoices;
+const conflictUi = createUi([edited]); await flush(); let finalChoices;
 conflictUi.setSave(async ({ resolveConflicts }) => {
   finalChoices = await resolveConflicts([{ productName: "Headset", label: "Launch", key: "launch", mine: "2027-01-20", master: "2027-02-01" }, { productName: "Headset", label: "Notes", key: "notes", mine: "My notes", master: "Latest notes" }]);
   conflictUi.state.pending = []; return { saved: true, keptMaster: true };
@@ -197,7 +200,7 @@ assert.deepEqual(byClass(independentReview.dialog, "master-choice-image").map((i
 assert.doesNotMatch(text(independentReview.dialog), /local-image|latest-image/, "image choices show previews instead of opaque asset IDs");
 independentReview.dialog.dispatchEvent({ type: "cancel" }); assert.equal(await imageChoices, null);
 
-const savingReview = createUi([edited]); let finishSaving;
+const savingReview = createUi([edited]); await flush(); let finishSaving;
 savingReview.setSave(() => new Promise((resolve) => { finishSaving = resolve; }));
 const savingReviewFlow = savingReview.api.save(); savingReview.submit(); await flush();
 assert.equal(savingReview.publicApi.reviewConflicts(reviewConflicts), null);
@@ -250,7 +253,7 @@ reopenedDelayed.state.snapshot.publication = { ...publicationFailure, requestedR
 assert.equal(reopenedDelayed.notices.get("master-publication").acknowledged, false, "a failure after a confirmed recovery is a new meaningful warning");
 assert.equal(reopenedDelayed.messageStore.getState().attentionCount, 1);
 
-const discardCancelled = createUi([edited, pending[1]]);
+const discardCancelled = createUi([edited, pending[1]]); await flush();
 const discardCancelledFlow = discardCancelled.api.save();
 byClass(discardCancelled.dialog, "master-discard-product")[0].dispatchEvent({ type: "click" }); await flush();
 assert.match(text(discardCancelled.dialog), /Discard changes\?.*Headset.*Edits will be reverted/);
@@ -259,7 +262,7 @@ assert.equal(discardCancelled.calls.discards.length, 0); assert.equal(discardCan
 assert.match(text(discardCancelled.dialog), /Review changes/, "cancelling discard returns to a fresh review");
 byTag(discardCancelled.dialog, "button").find((button) => button.textContent === "Keep editing").dispatchEvent({ type: "click" }); await discardCancelledFlow;
 
-const discardOne = createUi([edited, pending[1]]);
+const discardOne = createUi([edited, pending[1]]); await flush();
 const discardOneFlow = discardOne.api.save();
 byClass(discardOne.dialog, "master-discard-product")[0].dispatchEvent({ type: "click" }); await flush(); discardOne.submit(); await flush();
 assert.deepEqual(Array.from(discardOne.calls.discards[0]), ["p1"]);
@@ -271,7 +274,7 @@ await discardOne.notices.get("master-discard-result").actions[0].onClick();
 assert.equal(discardOne.state.pending.length, 2); assert.equal(discardOne.calls.undos[0], "undo-token");
 assert.equal(discardOne.calls.saves.length, 0, "discard and Undo never submit edits");
 
-const discardAll = createUi(pending);
+const discardAll = createUi(pending); await flush();
 const discardAllFlow = discardAll.api.save();
 const discardSearch = byClass(discardAll.dialog, "master-review-search")[0]; discardSearch.value = "new keyboard"; discardSearch.dispatchEvent({ type: "input" });
 byClass(discardAll.dialog, "master-discard-all")[0].dispatchEvent({ type: "click" }); await flush();
@@ -281,7 +284,7 @@ assert.equal(discardAll.calls.discards[0].length, 8, "Discard all targets the en
 assert.equal(discardAll.state.pending.length, 0); assert.equal(discardAll.dialog.open, false);
 assert.equal(discardAll.calls.disconnects, 0);
 
-const discardFailed = createUi([edited]); discardFailed.failDiscard();
+const discardFailed = createUi([edited]); await flush(); discardFailed.failDiscard();
 const discardFailedFlow = discardFailed.api.save();
 byClass(discardFailed.dialog, "master-discard-product")[0].dispatchEvent({ type: "click" }); await flush(); discardFailed.submit(); await flush();
 assert.equal(discardFailed.state.pending.length, 1);
@@ -309,4 +312,40 @@ byTag(automatic.dialog, "button").find((button) => button.textContent === "Keep 
 automatic.setScopedSave(async () => ({ status: "local", saved: false, code: "SHARING_ACCESS_REQUIRED" }));
 assert.equal((await automatic.publicApi.saveScoped(automaticOptions)).status, "local");
 assert.equal(automatic.dialog.open, false); assert.equal(automatic.calls.connects.length, 0, "missing access leaves collected data local without a credential prompt");
-console.log("Master UI checks passed: compact accessible disclosures, safe save/conflict/discard decisions, scoped PLC sharing, publisher acknowledgment through retry/reload/recovery with retained status action, critical write failures retained through background reads and cancelled review, and private-friendly messages.");
+const updatesUi = createUi([edited], { hasKey: false });
+updatesUi.button.dispatchEvent({ type: "click" });
+const updatesPanel = updatesUi.document.getElementById("portfolioUpdatesDialog");
+assert.equal(updatesPanel.open, true); assert.equal(updatesUi.calls.saves.length, 0); assert.equal(updatesUi.calls.refreshes, 0);
+assert.equal(updatesUi.button.textContent, "Updates"); assert.equal(updatesUi.saveButton.textContent, "Save changes (1)");
+assert.match(text(updatesPanel), /Team records.*Complete portfolio package/);
+assert.equal(byTag(updatesPanel, "button").find(b=>b.textContent==="Open complete package").disabled, true, "a full replacement is blocked while shared drafts exist");
+updatesUi.state.hasKey = true; updatesUi.state.pending = [];
+updatesUi.adapter.getLoadedPackageInfo = () => ({ version: 1, gitBlobSha: "a".repeat(40), loadedAt: "2026-10-15T02:00:00.000Z" });
+updatesUi.state.snapshot.publication = { status: "current", githubSha: "a".repeat(40) };
+updatesUi.api.updateStatus();
+assert.match(text(updatesPanel), /Check team updates to compare/, "old publication metadata alone never proves a fresh comparison");
+let releaseCheck;
+updatesUi.setRefresh(() => new Promise(resolve => { releaseCheck = resolve; }));
+updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" });
+assert.match(text(updatesPanel), /Checking team updates/); assert.equal(updatesUi.document.getElementById("checkTeamUpdates").disabled, true);
+assert.equal(byTag(updatesPanel, "button").find(b=>b.textContent==="Open complete package").disabled, true, "package replacement cannot compete with a running check");
+releaseCheck(); await flush();
+assert.match(text(updatesPanel), /Last checked/); assert.match(text(updatesPanel), /matches the published copy at the last check/);
+updatesUi.state.snapshot.publication.githubSha = "b".repeat(40); updatesUi.api.updateStatus();
+assert.match(text(updatesPanel), /matches the published copy at the last check/, "unverified later metadata cannot rewrite the last successful check's package proof");
+updatesUi.setRefresh(async () => undefined);
+updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
+assert.match(text(updatesPanel), /different published package/, "a changed package SHA detects image-only publication at the same record revision");
+updatesUi.adapter.getLoadedPackageInfo = () => null; updatesUi.api.updateStatus();
+assert.match(text(updatesPanel), /Package comparison unavailable/);
+updatesUi.setRefresh(async () => { throw new Error("Private source details"); });
+updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
+assert.match(text(updatesPanel), /Could not check team updates/); assert.match(text(updatesPanel), /Last successful check/); assert.match(text(updatesPanel), /Retry check/);
+assert.doesNotMatch(text(updatesPanel), /Private source details/);
+const checksBeforeBusy = updatesUi.calls.refreshes; updatesUi.adapter.canRefresh = () => false;
+updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
+assert.equal(updatesUi.calls.refreshes, checksBeforeBusy); assert.match(text(updatesPanel), /Finish the current edit or update/);
+updatesUi.adapter.canRefresh = () => true; updatesUi.setRefresh(async () => null);
+updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
+assert.match(text(updatesPanel), /Could not check team updates/, "a skipped client refresh is never reported as a successful check");
+console.log("Master UI checks passed: explicit Updates/Save controls, checked/error/busy/unknown package states and exact package identity, protected drafts, accessible save/conflict/discard decisions and existing publisher/scoped-sharing protections.");

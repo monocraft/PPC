@@ -45,7 +45,7 @@
     if (infoKey !== footerInfoKey) { footerInfoKey = infoKey; footerCommentsOpen = false; }
     const updated = document.createElement("span");
     updated.className = "statusbar-package-date";
-    updated.textContent = text.dateTime ? "Updated " : "Update date ";
+    updated.textContent = text.dateTime ? "Package dated " : "Package date ";
     const date = document.createElement("time");
     setPackageDate(date, text);
     updated.append(date);
@@ -125,7 +125,7 @@
     for (const control of form.querySelectorAll("input, textarea, button")) control.disabled = value;
     get("cancelPackage").disabled = value && applying;
     get("closePackage").disabled = value && applying;
-    submit.textContent = value ? (applying ? "Loading package…" : mode === "export" ? "Building package…" : "Downloading…") : mode === "pull" ? "Pull latest data" : mode === "export" ? "Build package" : "Import package";
+    submit.textContent = value ? (applying ? "Loading package…" : mode === "export" ? "Building package…" : "Downloading…") : mode === "pull" ? "Load complete package" : mode === "export" ? "Build package" : "Import package";
   }
 
   function close() {
@@ -209,7 +209,7 @@
         }
         if (cancelRequested) throw new DOMException("Download cancelled.", "AbortError");
         setBusy(true, true); status.textContent = "Checking and loading the complete package…";
-        result = await globalThis.importProjectPackage(new Blob([bytes]), { key, requireEncrypted: true });
+        result = await globalThis.importProjectPackage(new Blob([bytes]), { key, requireEncrypted: true, fromSharedDownload: true });
       } else if (mode === "import") {
         status.textContent = "Checking and loading the complete package…";
         result = await globalThis.importProjectPackage(selectedFile.file, { key });

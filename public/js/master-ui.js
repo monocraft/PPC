@@ -1,4 +1,4 @@
-/* One familiar action: pull the shared portfolio, or save the changes waiting on this device. */
+/* Shared record checks and complete package loading have distinct status/actions. */
 (function (root) {
   "use strict";
   let active = null;
@@ -53,6 +53,7 @@
   function initialize({ adapter = root.PortfolioMasterAdapter, source = root.PPC_MASTER_SOURCE || root.PPC_DATE_MASTER_SOURCE, fetchImpl } = {}) {
     if (active) return active;
     const button = document.getElementById("pullLatestData");
+    const saveButton = document.getElementById("saveSharedChanges");
     if (!button || !adapter || !root.PortfolioMasterClient || !root.PortfolioMasterModel) return null;
     const endpoint = source?.endpoint || (root.PPC_PACKAGE_SOURCE?.mode === "relay" ? root.PPC_PACKAGE_SOURCE.endpoint : "");
     const session = root.PortfolioMasterClient.createSession({ endpoint, source, adapter, fetchImpl });
@@ -63,6 +64,53 @@
     dialog.setAttribute("aria-labelledby", "masterDialogTitle"); dialog.setAttribute("aria-describedby", "masterDialogDescription");
     document.body.append(dialog);
     let running = false, discarding = false, connectingGitHub = false, modalResolve = null, modalCancel = null, lastError = "", lastErrorWasSave = false, publicationDelayed = false;
+    let lastCheckedAt = 0, checkedPublication = null, lastCheckError = "", checkMessage = "";
+    const updates = element("dialog", "master-dialog portfolio-updates-dialog");
+    updates.id = "portfolioUpdatesDialog"; updates.setAttribute("aria-labelledby", "portfolioUpdatesTitle");
+    document.body.append(updates);
+    const timeText = (at) => Number.isFinite(new Date(at).getTime()) ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(at)) : "time unavailable";
+    function closeUpdates() { if (updates.open) updates.close(); if (button.isConnected) button.focus({ preventScroll: true }); }
+    function renderUpdates() {
+      if (!updates.open) return;
+      const focusedId = document.activeElement?.id;
+      const state = session.getState(), count = state.pending.length, busy = running || discarding || refreshRunning || state.busy || Boolean(adapter.hasPendingPackageOperation?.());
+      const heading = element("header", "master-dialog-heading"), title = element("h2", "", "Portfolio updates"); title.id = "portfolioUpdatesTitle";
+      const dismiss = element("button", "icon-button master-dialog-close", "×"); dismiss.id = "closePortfolioUpdates"; dismiss.type = "button"; dismiss.setAttribute("aria-label", "Close portfolio updates"); dismiss.addEventListener("click", closeUpdates); heading.append(title, dismiss);
+      const body = element("div", "master-dialog-body portfolio-updates-body");
+      const team = element("section", "portfolio-update-card"); team.append(element("h3", "", "Team records"));
+      const teamStatus = element("p", "portfolio-update-status", refreshRunning ? "Checking team updates…" : lastCheckError ? "Could not check team updates." : !configured ? "Team updates are not connected." : !state.hasKey ? "Open the team portfolio to check updates." : lastCheckedAt ? `Last checked ${timeText(lastCheckedAt)}.` : "Check needed. No successful check in this session yet.");
+      teamStatus.setAttribute("role", "status"); team.append(teamStatus);
+      team.append(element("p", "", running ? "Saving your reviewed changes…" : count ? `${count} ${count === 1 ? "product has" : "products have"} changes to review and save.` : "No shared record changes waiting to save."));
+      if (lastCheckError) team.append(element("p", "portfolio-update-note", lastCheckError + (lastCheckedAt ? ` Last successful check: ${timeText(lastCheckedAt)}.` : "")));
+      if (checkMessage) team.append(element("p", "portfolio-update-note", checkMessage));
+      const check = element("button", "secondary-button", refreshRunning ? "Checking…" : lastCheckError ? "Retry check" : "Check team updates"); check.id = "checkTeamUpdates"; check.type = "button"; check.disabled = busy || !configured || !state.hasKey;
+      check.addEventListener("click", () => { void refreshQuietly({ force: true, manual: true }); }); team.append(check);
+      if (count) { const review = element("button", "quiet-button", "Review changes"); review.type = "button"; review.disabled = busy; review.addEventListener("click", () => { closeUpdates(); void saveFlow(); }); team.append(review); }
+      team.append(element("p", "portfolio-update-note", "Checks merge shared records while keeping your open edits. A check does not save your changes."));
+      const pack = element("section", "portfolio-update-card"); pack.append(element("h3", "", "Complete portfolio package"));
+      const loaded = adapter.getLoadedPackageInfo?.(), published = checkedPublication, latestSha = /^[a-f0-9]{40}$/i.test(published?.githubSha || "") ? published.githubSha.toLowerCase() : "";
+      const loadedSha = loaded?.version === 1 && /^[a-f0-9]{40}$/i.test(loaded.gitBlobSha || "") ? loaded.gitBlobSha.toLowerCase() : "";
+      const packageText = !lastCheckedAt || lastCheckError ? "Check team updates to compare the published package."
+        : published?.status === "error" ? "At the last check, the published package was delayed. Team records may already be saved."
+        : published?.status === "pending" ? "At the last check, a complete package was still being prepared. Team records and the download may differ."
+        : published?.status !== "current" || !latestSha || !loadedSha ? "Package comparison unavailable. The image package loaded here has not been verified against the published copy."
+        : loadedSha === latestSha ? "The package last opened here matches the published copy at the last check."
+        : "A different published package was available at the last check, including its images.";
+      pack.append(element("p", "portfolio-update-status", packageText));
+      if (loadedSha && loaded.loadedAt) pack.append(element("p", "portfolio-update-note", `Complete package opened ${timeText(loaded.loadedAt)}. Local edits may have been made since then.`));
+      pack.append(element("p", "portfolio-update-note", "Opening a complete package replaces this workspace, including local images and settings. Export a backup of work you want to keep."));
+      const publicationBlocked = published?.status === "pending" || published?.status === "error";
+      const load = element("button", "secondary-button", "Open complete package"); load.type = "button"; load.disabled = busy || count > 0 || publicationBlocked;
+      load.addEventListener("click", () => { const now = session.getState(); if (session.track().length || now.busy || adapter.hasPendingPackageOperation?.()) { checkMessage = "Review your changes and finish the current update before loading a package."; renderUpdates(); return; } if (["pending", "error"].includes(now.snapshot?.publication?.status)) { checkMessage = "The complete package is not ready. Check team updates again before opening it."; renderUpdates(); return; } closeUpdates(); root.PortfolioPackageUI?.open("pull"); }); pack.append(load);
+      const backup = element("button", "quiet-button", "Export current portfolio"); backup.type = "button"; backup.disabled = busy;
+      backup.addEventListener("click", () => { closeUpdates(); root.PortfolioPackageUI?.open("export"); }); pack.append(backup);
+      if (count) pack.append(element("p", "portfolio-update-note", "Save or discard the shared record changes above before opening a package."));
+      if (publicationBlocked) pack.append(element("p", "portfolio-update-note", "Wait for the complete package to finish publishing before replacing this workspace."));
+      body.append(team, pack); updates.replaceChildren(heading, body);
+      if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+    }
+    function showUpdates() { if (!updates.open) updates.showModal(); renderUpdates(); updates.querySelector("button")?.focus({ preventScroll: true }); }
+    updates.addEventListener("cancel", (event) => { event.preventDefault(); closeUpdates(); });
 
     function updateStatus() {
       const state = session.getState(), count = state.pending.length;
@@ -73,9 +121,10 @@
       // reload may temporarily omit its snapshot. Neither proves recovery.
       else if (publication?.status === "current") publicationDelayed = false;
       const duplicateAttention = /duplicate|repeated.*(?:product|sku)/i.test(lastError) || Boolean(root.PortfolioProductIssues?.getState()?.errors);
-      button.textContent = discarding ? "Discarding…" : running ? connectingGitHub ? "Connecting…" : "Saving…" : count ? "Save changes" : "Pull latest data";
-      button.disabled = running || discarding || Boolean(adapter.hasPendingPackageOperation?.());
-      button.title = count ? `Review and save changes for ${count} ${count === 1 ? "product" : "products"}` : "Get the latest portfolio updates";
+      button.textContent = "Updates";
+      button.disabled = Boolean(adapter.hasPendingPackageOperation?.());
+      button.title = "Check team records and complete package status";
+      if (saveButton) { saveButton.hidden = !count && !running && !discarding; saveButton.textContent = discarding ? "Discarding…" : running ? connectingGitHub ? "Connecting…" : "Saving…" : `Save changes${count ? ` (${count})` : ""}`; saveButton.disabled = running || discarding || refreshRunning || state.busy || Boolean(adapter.hasPendingPackageOperation?.()); }
       if (publicationDelayed) button.title += ". Saved changes are available to the team; the downloadable copy is waiting to update. See Messages for status.";
       button.classList.toggle("master-has-changes", count > 0);
       if (count) notices?.publish({ id: "master-pending", severity: "info", title: discarding ? "Discarding changes…" : running ? connectingGitHub ? "Connecting…" : "Saving changes…" : "Changes ready to save", message: running || discarding ? "Your changes are safe while this update finishes." : `${count} ${count === 1 ? "product has" : "products have"} unsaved changes. Review them when you’re ready.`, toast: false, dismissible: false, actions: running || discarding ? [] : [{ label: "Review changes", onClick: saveFlow }] });
@@ -87,6 +136,7 @@
       if (publication?.status === "error") notices?.publish({ id: "master-publication", severity: "warning", title: "Downloadable copy delayed", message: "Your saved changes are available to the team. The downloadable portfolio copy has not caught up yet. It will retry automatically; no need to save your changes again. If the delay continues, your portfolio owner can check the publishing job.", revision: "publication-retry", acknowledgeOnDismiss: true, toast: false, actions: [{ id: "check-status", label: "Check status", onClick: () => session.getState().hasKey ? refreshQuietly({ force: true }) : root.PortfolioPackageUI?.open("pull") }] });
       else if (publication?.status === "current") notices?.resolve("master-publication");
       root.dispatchEvent(new CustomEvent("portfolio:master-status", { detail: { connected: state.connected, hasKey: state.hasKey } }));
+      renderUpdates();
     }
 
     function close(value) {
@@ -296,7 +346,7 @@
     }
 
     async function saveFlow() {
-      if (running || discarding || session.getState().busy) return;
+      if (running || discarding || refreshRunning || session.getState().busy || adapter.hasPendingPackageOperation?.()) return;
       adapter.beforeSave?.();
       const reviewed = await review();
       if (!reviewed) { updateStatus(); return; }
@@ -363,35 +413,31 @@
       } finally { running = false; updateStatus(); }
     }
 
-    button.addEventListener("click", (event) => {
-      if (session.track().length) {
-        event.preventDefault(); event.stopImmediatePropagation(); saveFlow();
-      } else if (configured && session.getState().hasKey) {
-        // The accepted shared snapshot is newer than a delayed downloadable
-        // archive. Refresh it before any complete workspace replacement.
-        event.preventDefault(); event.stopImmediatePropagation();
-        void refreshQuietly({ force: true });
-      }
-    }, true);
+    button.addEventListener("click", (event) => { event.preventDefault(); event.stopImmediatePropagation(); showUpdates(); }, true);
+    saveButton?.addEventListener("click", () => { void saveFlow(); });
     root.addEventListener("portfolio:render", updateStatus);
     let refreshRunning = false, lastRefreshAt = 0, retryUntil = 0;
-    async function refreshQuietly({ force = false } = {}) {
-      if (!configured || running || discarding || dialog.open || refreshRunning || document.visibilityState === "hidden" || !session.getState().hasKey || adapter.canRefresh?.() === false) return;
+    async function refreshQuietly({ force = false, manual = false } = {}) {
+      const state = session.getState();
+      if (!configured || running || discarding || dialog.open || refreshRunning || state.busy || document.visibilityState === "hidden" || !state.hasKey || adapter.canRefresh?.({ allowUpdatesDialog: manual && updates.open }) === false) {
+        if (manual) { checkMessage = "Finish the current edit or update, then check again. Your workspace has not been replaced."; renderUpdates(); }
+        return { status: "blocked" };
+      }
       if (!force && Date.now() < retryUntil) return;
       if (githubMode && !force && Date.now() - lastRefreshAt < (session.getState().hasGitHubToken ? 120000 : 300000)) return;
       lastRefreshAt = Date.now();
-      refreshRunning = true;
-      try { await session.refresh(); if (!lastErrorWasSave || !session.getState().pending.length) lastError = ""; retryUntil = 0; }
-      catch (error) { if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); if (!lastErrorWasSave) lastError = friendlyError(error); }
+      refreshRunning = true; checkMessage = ""; updateStatus();
+      try { const result = await session.refresh(); if (result === null) throw Object.assign(new Error("Another update is in progress."), { code: "MASTER_BUSY" }); lastCheckedAt = Date.now(); checkedPublication = session.getState().snapshot?.publication ? JSON.parse(JSON.stringify(session.getState().snapshot.publication)) : null; lastCheckError = ""; if (!lastErrorWasSave || !session.getState().pending.length) lastError = ""; retryUntil = 0; return { status: "checked", checkedAt: lastCheckedAt }; }
+      catch (error) { lastCheckError = friendlyError(error); if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); if (!lastErrorWasSave) lastError = lastCheckError; return { status: "error" }; }
       finally { refreshRunning = false; updateStatus(); }
     }
     const timer = root.setInterval(refreshQuietly, githubMode ? 60000 : 45000);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "hidden") refreshQuietly(); });
     active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow, saveScoped,
       reviewConflicts(conflicts) { if (running || discarding || session.getState().busy || !Array.isArray(conflicts) || !conflicts.length) return null; return resolveConflicts(conflicts); },
-      markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
-      disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; updateStatus(); },
-      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); dialog.remove(); },
+      markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
+      disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckedAt = 0; checkedPublication = null; lastCheckError = ""; updateStatus(); },
+      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); updates.remove(); dialog.remove(); },
     });
     updateStatus();
     if (teamMode && configured && session.getState().hasKey) refreshQuietly();

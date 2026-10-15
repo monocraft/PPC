@@ -6,6 +6,10 @@ import { renderPackageSource } from "../configure-package-source.mjs";
 
 const codec = globalThis.PortfolioPackage;
 const client = globalThis.PortfolioPackageClient;
+assert.equal(await client.gitBlobSha(new TextEncoder().encode("hello")), "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0", "the encrypted-byte identity uses Git blob framing");
+assert.equal(await client.gitBlobSha(new Uint8Array()), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+assert.equal(await client.gitBlobSha(new Uint8Array([1]), { crypto: null }), null, "unavailable hashing means unknown freshness");
+await assert.rejects(client.gitBlobSha("not package bytes"), TypeError);
 const key = codec.generateKey();
 const endpoint = "https://package.example.org/api/package/latest";
 assert.equal(client.normalizeEndpoint(endpoint), endpoint);
