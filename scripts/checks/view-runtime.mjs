@@ -102,6 +102,17 @@ assert.deepEqual(plain(blockedNav.get()), { view: "roadmap", basis: "ffs", detai
 const failingNav = runtime.navigation({ key: "failing-nav", storage: { getItem() { throw new Error("read denied"); }, setItem() { throw new Error("quota"); } } });
 assert.equal(failingNav.get(), null); assert.equal(failingNav.set({ view: "products", basis: "lifecycle", detailsOpen: true }), true);
 assert.equal(runtime.navigation().get(), null); assert.equal(runtime.navigation().set({ view: "products", basis: "lifecycle", detailsOpen: true }), false);
+// Existing navigation is migrated as a read-only fallback. Each tab thereafter
+// keeps its own choice through Analytics round trips and reloads.
+const oldNavigation={version:1,view:'roadmap',basis:'ffs',detailsOpen:false},sharedNavigation=new Map([['tab-nav',JSON.stringify(oldNavigation)]]);
+const mapStore=map=>({getItem:key=>map.get(key)??null,setItem:(key,value)=>map.set(key,value)}),tabA=new Map(),tabB=new Map();
+const tabNavigation=map=>runtime.navigation({key:'tab-nav',storage:mapStore(map),fallbackStorage:mapStore(sharedNavigation)});
+assert.deepEqual(plain(tabNavigation(tabA).get()),{view:'roadmap',basis:'ffs',detailsOpen:false});
+tabNavigation(tabA).set({view:'roadmap',basis:'lifecycle',detailsOpen:false});
+tabNavigation(tabB).set({view:'products',basis:'ffs',detailsOpen:true});
+assert.equal(tabNavigation(tabA).get().basis,'lifecycle','Another tab cannot force Hashout after a reload or Analytics round trip.');
+assert.equal(tabNavigation(tabB).get().view,'products');
+assert.deepEqual(JSON.parse(sharedNavigation.get('tab-nav')),oldNavigation,'Legacy device preference is read but never overwritten by tab navigation.');
 
 // Real app activation restores each independent category scale before deciding Fit.
 const categories = ["audio", "mics", "new"].map(id => ({ id, board: { products: [{ id: `${id}-one` }], lanes: [] } }));

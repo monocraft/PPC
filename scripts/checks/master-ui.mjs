@@ -12,12 +12,13 @@ const byClass = (node, name) => all(node).filter((entry) => String(entry.classNa
 const byTag = (node, tag) => all(node).filter((entry) => entry.tagName === tag.toUpperCase());
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
 
-function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null } = {}) {
-  const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, discards: [], undos: [], beforeSaves: 0, packageOpens: [] };
+function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null, mode = "service" } = {}) {
+  const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, adoptions: 0, discards: [], undos: [], beforeSaves: 0, packageOpens: [] };
   const notificationEvents = [], messageStore = globalThis.PortfolioNotifications.createStore({ acknowledgmentStorage });
   const syncNotices = () => { notices.clear(); for (const item of messageStore.getState().items) notices.set(item.id, item); };
   messageStore.subscribe(event => { notificationEvents.push(event); syncNotices(); });
   const document = { activeElement: null, visibilityState: "visible", addEventListener() {} };
+  document.createTextNode = textContent => ({ textContent, children: [] });
   document.createElement = (tag) => {
     const handlers = new Map(), attributes = new Map(), classes = new Set();
     const node = { tagName: tag.toUpperCase(), className: "", children: [], textContent: "", open: false, hidden: false, disabled: false, value: "", isConnected: true,
@@ -40,6 +41,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   let saveHandler = async () => { state.pending = []; return { saved: true, snapshot: state.snapshot }; };
   let scopedSaveHandler = async () => ({ status: "saved", saved: true, message: "Imported values shared." });
   let refreshHandler = async () => { state.connected = true; };
+  let githubHandler = async () => ({ login: "test-user" });
   let discardedPending = [], discardFailure = false;
   const session = {
     getState: () => state, track: () => state.pending,
@@ -48,6 +50,8 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
     async save(options) { calls.saves.push(options); return saveHandler(options); },
     async saveScoped(options) { calls.scopedSaves.push(options); return scopedSaveHandler(options); },
     disconnect() { calls.disconnects += 1; state.hasKey = false; },
+    adoptLocalBaseline() { calls.adoptions += 1; state.connected = false; state.snapshot = null; },
+    setGitHubToken: token => githubHandler(token),
   };
   const adapter = { getProducts() {}, canRefresh: () => true,
     beforeSave() { calls.beforeSaves += 1; assert.equal(document.getElementById("masterDialog").open, false, "finish temporary layout mode before showing the save review"); },
@@ -67,9 +71,9 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
     addEventListener(name, handler) { listeners.set(name, handler); }, dispatchEvent() {}, setInterval: () => 1, clearInterval() {},
   };
   vm.createContext(sandbox); new vm.Script(source).runInContext(sandbox);
-  const api = sandbox.PortfolioMasterUI.initialize({ source: { mode: "service", team: true, endpoint: "https://private.example/api/master" }, adapter });
+  const api = sandbox.PortfolioMasterUI.initialize({ source: { mode, team: mode === "service", owner: "fixture", repo: "fixture", endpoint: "https://private.example/api/master" }, adapter });
   const dialog = document.getElementById("masterDialog");
-  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, saveButton, document, adapter, calls, notices, state, listeners, messageStore, notificationEvents, setSave: (handler) => { saveHandler = handler; }, setRefresh: (handler) => { refreshHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
+  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, saveButton, document, adapter, calls, notices, state, listeners, messageStore, notificationEvents, setSave: (handler) => { saveHandler = handler; }, setGitHub: handler => { githubHandler = handler; }, setRefresh: (handler) => { refreshHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
 }
 
 const base = model.productValues({ id: "p1", name: "Headset", specs: [{ id: "s1", label: "Weight", value: "200g" }, { id: "s2", label: "Notes", value: "Original" }], partSkus: [], variantGroups: [], roadmap: { startMonth: "2027-01", endMonth: "2028-01" } });
@@ -348,4 +352,48 @@ assert.equal(updatesUi.calls.refreshes, checksBeforeBusy); assert.match(text(upd
 updatesUi.adapter.canRefresh = () => true; updatesUi.setRefresh(async () => null);
 updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
 assert.match(text(updatesPanel), /Could not check team updates/, "a skipped client refresh is never reported as a successful check");
-console.log("Master UI checks passed: explicit Updates/Save controls, checked/error/busy/unknown package states and exact package identity, protected drafts, accessible save/conflict/discard decisions and existing publisher/scoped-sharing protections.");
+const adoptedUi = createUi([edited]); await flush();
+assert.ok(adoptedUi.api.getSummary().lastCheckedAt > 0);
+adoptedUi.setRefresh(async () => { throw new Error("Old copy check failed"); });
+await adoptedUi.api.refresh(); assert.equal(adoptedUi.api.getSummary().error, true);
+const refreshesBeforeAdoption = adoptedUi.calls.refreshes;
+adoptedUi.publicApi.adoptLocalBaseline();
+assert.equal(adoptedUi.calls.adoptions, 1); assert.equal(adoptedUi.calls.refreshes, refreshesBeforeAdoption, "local adoption never starts a quiet refresh");
+assert.equal(adoptedUi.calls.disconnects, 0); assert.equal(adoptedUi.state.hasKey, true);
+assert.equal(adoptedUi.api.getSummary().lastCheckedAt, 0); assert.equal(adoptedUi.api.getSummary().error, false);
+assert.equal(adoptedUi.api.getSummary().publicationStatus, ""); assert.equal(adoptedUi.api.getSummary().pendingCount, 1);
+assert.equal(adoptedUi.notices.has("master-sync-error"), false); assert.equal(adoptedUi.notices.has("master-save-result"), false);
+for (const staleCheck of ["success", "failure"]) {
+  let finishCheck, rejectCheck;
+  adoptedUi.setRefresh(() => new Promise((resolve, reject) => { finishCheck = resolve; rejectCheck = reject; }));
+  const checking = adoptedUi.api.refresh();
+  adoptedUi.publicApi.adoptLocalBaseline();
+  if (staleCheck === "success") finishCheck(); else rejectCheck(new Error("Obsolete check failed"));
+  assert.equal((await checking).status, "superseded");
+  assert.equal(adoptedUi.api.getSummary().lastCheckedAt, 0, "a held check cannot certify the replacement copy");
+  assert.equal(adoptedUi.api.getSummary().error, false, "an obsolete failure cannot resurrect an old copy's error");
+  assert.equal(adoptedUi.api.getSummary().busy, false); assert.equal(adoptedUi.state.hasKey, true);
+}
+for (const operation of ["save", "scoped", "github-profile", "github-refresh"]) {
+  for (const outcome of ["success", "failure"]) {
+    const oldUi = createUi([edited], { mode: operation.startsWith("github") ? "github" : "service" }); await flush();
+    let finish, fail;
+    const held = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    let oldOperation;
+    if (operation === "save") { oldUi.setSave(() => held); oldOperation = oldUi.api.save(); oldUi.submit(); await flush(); assert.equal(oldUi.calls.saves.length, 1); }
+    else if (operation === "scoped") { oldUi.setScopedSave(() => held); oldOperation = oldUi.publicApi.saveScoped({}); }
+    else {
+      if (operation === "github-profile") oldUi.setGitHub(() => held); else oldUi.setRefresh(() => held);
+      oldOperation = oldUi.publicApi.connectGitHub(); byClass(oldUi.dialog, "master-key")[0].value = "synthetic-memory-token"; oldUi.submit(); await flush();
+    }
+    const callsBeforeAdoption = oldUi.calls.refreshes;
+    oldUi.publicApi.adoptLocalBaseline();
+    if (outcome === "failure") fail(Object.assign(new Error("Obsolete request failed"), { code: "INVALID_KEY" }));
+    else finish(operation.startsWith("github") ? { login: "old-profile" } : { saved: true, status: "pending" });
+    await oldOperation;
+    assert.equal(oldUi.calls.refreshes, callsBeforeAdoption, `${operation} cannot start another fetch after local adoption`);
+    for (const id of ["master-sync-error", "master-save-result", "master-github-connected", "plc-master-sharing"]) assert.equal(oldUi.notices.has(id), false, `${operation}/${outcome} cannot republish a notice belonging to an old copy`);
+    assert.equal(oldUi.api.getSummary().error, false); assert.equal(oldUi.api.getSummary().busy, false); assert.equal(oldUi.state.hasKey, true);
+  }
+}
+console.log("Master UI checks passed: explicit Updates/Save controls, checked/error/busy/unknown package states and exact package identity, protected drafts, accessible save/conflict/discard decisions, publisher/scoped-sharing protections, and local-baseline adoption without fetching or stale check/save/scoped/GitHub results.");

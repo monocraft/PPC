@@ -277,6 +277,14 @@ for (const [status, body, code] of [[401, { error: "private key details" }, "INV
     assert.equal(asked, true, "GitHub storage uses the same explicit conflict flow");
     assert.equal(local.ffsDate, "2026-10-01"); assert.equal(session.track().length, 0);
     assert.equal(JSON.stringify({ baseline, state: session.getState() }).includes("memory-github-token"), false, "the GitHub token is never persisted or exposed by state");
+    const accessBeforeAdoption = session.getState(), operationsBeforeAdoption = operations.length, factoriesBeforeAdoption = factories.length;
+    session.adoptLocalBaseline();
+    assert.equal(operations.length, operationsBeforeAdoption, "adopting a device-local copy makes no GitHub request");
+    assert.equal(factories.length, factoriesBeforeAdoption, "adoption retains the existing transport and token");
+    assert.equal(session.getState().accessVersion, accessBeforeAdoption.accessVersion);
+    assert.equal(session.getState().hasKey, true); assert.equal(session.getState().hasGitHubToken, true);
+    assert.deepEqual(session.getState().identity, accessBeforeAdoption.identity);
+    assert.equal(session.getState().connected, false); assert.equal(session.getState().snapshot, null); assert.equal(session.track().length, 0);
     session.markImported(baseline, key); assert.equal(session.getState().hasGitHubToken, true, "a pull with the same package key keeps the memory token");
     session.markImported(baseline, "different-package-key"); assert.equal(session.getState().hasGitHubToken, false, "a different imported master clears GitHub access");
     await assert.rejects(session.setGitHubToken("rejected-token"), { code: "INVALID_GITHUB_TOKEN" }); assert.equal(session.getState().hasGitHubToken, false);
@@ -1009,4 +1017,47 @@ for (const legacy of [false, true]) {
   assert.equal(h.session.getState().connected, true); assert.equal(h.products[0].plc.variantProjects.white.colorway.colorName2, "", "Repeated refresh keeps the immutable source identity.");
 }
 
-console.log("Master client checks passed: narrow authenticated updates, real-model lifecycle conflicts, malformed-response safety, lost reply recovery, stale draft preservation, independent merges, reload/access safety, scoped parent and colorway PLC sharing without manual drafts, reviewed additions and group metadata, per-variant field/provenance scopes, invalid or changed targets before and during submission, cosmetic refinements, idempotent retries, and conflict fences.");
+// A saved local copy carries its own accepted baseline. Adopting it must not
+// compare those facts against a previous copy, or fetch/hydrate while adopting.
+for (const staleReply of ["success", "invalid-key"]) {
+  let products = [clone(fixture)], baseline = clone(initial().products), pendingReply = null, calls = [], applied = 0;
+  const adapter = { getProducts: () => products, getBaselineProducts: () => baseline,
+    setBaselineProducts(value) { baseline = clone(value); },
+    applyProductValues(changes) { applied += 1; products = products.map(product => { const change = changes.find(item => item.productId === product.id); return change ? model.applyProductValues(product, change.values) : product; }); },
+  };
+  const session = client.createSession({ endpoint, adapter, fetchImpl: async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    if (pendingReply) return pendingReply;
+    return Response.json({ snapshot: initial() });
+  } });
+  await session.connect({ key, editorToken: "local-adoption-editor-token" });
+  const accessVersion = session.getState().accessVersion, callsBeforeAdoption = calls.length;
+  let releaseReply;
+  pendingReply = new Promise(resolve => { releaseReply = resolve; });
+  const staleRefresh = session.refresh();
+  const accepted = model.applyProductValues(clone(fixture), { ...model.productValues(fixture), ffsDate: "2026-10-05" });
+  baseline = model.snapshot(manifestOf(accepted)).products;
+  baseline[0].revisions = { ffsDate: 43, generalAvailabilityDate: 47 };
+  products = [accepted];
+  session.adoptLocalBaseline();
+  assert.equal(calls.length, callsBeforeAdoption + 1, "baseline adoption itself makes zero additional fetches");
+  assert.equal(session.track().length, 0, "already shared facts in the chosen baseline are not pending");
+  assert.equal(session.getState().connected, false); assert.equal(session.getState().snapshot, null);
+  assert.equal(session.getState().accessVersion, accessVersion); assert.equal(session.getState().hasKey, true);
+  products[0] = model.applyProductValues(products[0], { ...model.productValues(products[0]), generalAvailabilityDate: "2026-11-15" });
+  const draft = session.track();
+  assert.equal(draft.length, 1); assert.deepEqual(draft[0].patch, { generalAvailabilityDate: "2026-11-15" });
+  assert.deepEqual(draft[0].baseRevisions, { ffsDate: 43, generalAvailabilityDate: 47 });
+  const appliedBeforeReply = applied;
+  releaseReply(staleReply === "success" ? Response.json({ snapshot: initial() }) : Response.json({ code: "INVALID_KEY", message: "Old copy access failed" }, { status: 401 }));
+  await assert.rejects(staleRefresh, staleReply === "success" ? /workspace changed/ : { code: "INVALID_KEY" });
+  assert.equal(applied, appliedBeforeReply, "an old response cannot hydrate the newly adopted copy");
+  assert.equal(products[0].ffsDate, "2026-10-05"); assert.equal(products[0].generalAvailabilityDate, "2026-11-15");
+  assert.equal(session.getState().connected, false); assert.equal(session.getState().snapshot, null);
+  assert.equal(session.getState().accessVersion, accessVersion); assert.equal(session.getState().hasKey, true, "even a stale access failure cannot disconnect the adopted copy");
+  pendingReply = null;
+  await session.refresh();
+  assert.equal(calls.at(-1).body.key, key); assert.equal(calls.at(-1).body.editorToken, "local-adoption-editor-token", "adoption preserves the in-memory editor token");
+}
+
+console.log("Master client checks passed: narrow authenticated updates, real-model lifecycle conflicts, malformed-response safety, lost reply recovery, stale draft preservation, independent merges, reload/access safety, scoped parent and colorway PLC sharing without manual drafts, reviewed additions and group metadata, per-variant field/provenance scopes, invalid or changed targets before and during submission, cosmetic refinements, idempotent retries, conflict fences, and local-baseline adoption with preserved access and stale-response protection.");

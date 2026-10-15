@@ -136,7 +136,7 @@ function harness(initial = portfolioFixture()) {
     CATEGORY_DEFINITIONS: clone(definitions), pendingLegacyImageBlobs: [],
     imageCache: new Map(), imageAssetUrlCache: new Map(), imageAssetLoadPromises: new Map(), missingImageAssetIds: new Set(),
     imageAssetGeneration: 0, packageOperationInProgress: false, workspaceOpening: false,
-    workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, saveTimer: null,
+    workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, workspaceSaveFlight: null, saveTimer: null,
     portfolio: clone(initial), activeCategoryId: initial.activeCategoryId,
     hashoutViewController: { destroy() { calls.hashoutResets++; } }, hashoutSelectedKey: "previous-product", hashoutViewportState: { start: 1, end: 2 },
     id: () => `fresh-${++nextId}`,

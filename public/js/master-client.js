@@ -439,7 +439,7 @@
         const applied = applySnapshot(result.snapshot, undefined, hydration.products, hydration.guards, hydration.stamps);
         connected = true; rememberTeamAccess(key); return applied;
       } catch (error) {
-        if (accessVersion === operationVersion) {
+        if (accessVersion === operationVersion && generation === operationGeneration) {
           connected = false;
           if (error.code === "INVALID_KEY") clearAccess();
           if (["INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) { resetGitHubAccess(); accessVersion += 1; }
@@ -455,9 +455,9 @@
       const nextEditorToken = team ? "" : String(access?.editorToken || "").trim();
       if (newKey !== key || nextEditorToken !== editorToken) { accessVersion += 1; connected = false; if (newKey !== key) rememberTeamAccess(""); resetGitHubAccess(); }
       key = newKey; editorToken = nextEditorToken;
-      const operationVersion = accessVersion;
+      const operationVersion = accessVersion, operationGeneration = generation;
       try { return await refresh(); }
-      catch (error) { if (accessVersion === operationVersion) { connected = false; if (error.code === "INVALID_KEY") clearAccess(); } throw error; }
+      catch (error) { if (accessVersion === operationVersion && generation === operationGeneration) { connected = false; if (error.code === "INVALID_KEY") clearAccess(); } throw error; }
     }
 
     function scopedVariantEvidence(entry, actual, base, selectedPatch, milestoneFields) {
@@ -681,7 +681,7 @@
           if (attempt >= 12) throw new Error("The master is changing frequently. Your local changes are safe; try saving again shortly.");
         }
       } catch (error) {
-        if (accessVersion === operationVersion) {
+        if (accessVersion === operationVersion && generation === operationGeneration) {
           if (error.code === "INVALID_KEY") clearAccess();
           if (["INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) { resetGitHubAccess(); accessVersion += 1; }
         }
@@ -771,12 +771,18 @@
       rememberTeamAccess(key);
       persistBaseline();
     }
-    return Object.freeze({ connect, refresh, save, saveScoped, applySnapshot, track, markImported,
+    function adoptLocalBaseline() {
+      // A local-copy choice changes comparison facts, never sharing access.
+      // seed advances the generation so an older request cannot hydrate it.
+      seed(adapter.getBaselineProducts?.() || adapter.getProducts());
+      connected = false;
+    }
+    return Object.freeze({ connect, refresh, save, saveScoped, applySnapshot, track, markImported, adoptLocalBaseline,
       async presence({ sessionId, displayName, editing, productId, categoryId, leave = false } = {}) {
         if (mode === "github" || !configured || !key) return null;
-        const operationVersion = accessVersion;
+        const operationVersion = accessVersion, operationGeneration = generation;
         try { return await request({ endpoint, operation: "presence", key, team, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, ...(categoryId ? { categoryId } : {}), leave: Boolean(leave) }); }
-        catch (error) { if (error.code === "INVALID_KEY" && accessVersion === operationVersion) clearAccess(); throw error; }
+        catch (error) { if (error.code === "INVALID_KEY" && accessVersion === operationVersion && generation === operationGeneration) clearAccess(); throw error; }
       },
       setEditorProfile({ sessionId, displayName, editorName: suppliedName } = {}) {
         const id = String(sessionId || "");
@@ -810,9 +816,9 @@
       },
       async reviewMerge(productId, sourceProductId) {
         if (mode !== "service" || !key || busy) throw errorOf("Wait for the current update to finish before reviewing these products.", "MERGE_REVIEW_REQUIRED");
-        const version = accessVersion;
+        const version = accessVersion, operationGeneration = generation;
         const result = await send("review", { productId, sourceProductId, sessionId: editorSessionId });
-        if (version !== accessVersion) throw errorOf("These products could not be reviewed. Your draft is safe.", "INVALID_RESPONSE");
+        if (version !== accessVersion || operationGeneration !== generation) throw errorOf("These products could not be reviewed. Your draft is safe.", "INVALID_RESPONSE");
         return validateReviewResult(result, [productId, sourceProductId]);
       },
       getState() { return { mode, team, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, editorProfile: { sessionId: editorSessionId, displayName: editorName }, busy, accessVersion, snapshot, pending: track() }; },

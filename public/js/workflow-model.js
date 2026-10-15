@@ -83,13 +83,13 @@
     return { suggested: [...new Set(suggested)], explanation: suggested.length === 1 ? 'A likely purpose was identified. Confirm the destination below.' : 'Choose the workbook purpose. PPC keeps portfolio, Retail and Blueprint sources separate.' };
   }
   function statusText({ localPending, localError, master = {} } = {}) {
-    if (localError) return { tone: 'error', text: 'Changes still need a local save' };
+    if (localError) return { tone: 'error', text: 'Local save blocked — Resolve' };
     if (localPending) return { tone: 'pending', text: 'Saving on this device…' };
-    if (master.error) return { tone: 'error', text: master.pendingCount ? 'Changes still need sharing' : 'Team check needs attention' };
-    if (master.pendingCount) return { tone: 'pending', text: `${master.pendingCount} product${master.pendingCount === 1 ? '' : 's'} ready to share` };
+    if (master.error) return { tone: 'error', text: master.pendingCount ? 'Saved on this device · Sharing needs attention' : 'Saved on this device · Team check unavailable' };
+    if (master.pendingCount) return { tone: 'pending', text: `Saved on this device · ${master.pendingCount} product${master.pendingCount === 1 ? '' : 's'} not shared` };
     if (master.publicationStatus === 'error') return { tone: 'error', text: 'Team records saved · Downloadable copy needs attention' };
     if (master.publicationStatus === 'pending') return { tone: 'pending', text: 'Team records saved · Downloadable copy preparing' };
-    return { tone: 'neutral', text: master.lastCheckedAt ? `Saved on this device · Team checked ${new Date(master.lastCheckedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Saved on this device · Team status not checked' };
+    return { tone: 'neutral', text: 'Saved on this device' };
   }
   root.PortfolioFieldProtection = Object.freeze({ ...protection, createStore: protectionStore, fields: Object.freeze(fields), identity });
   root.PortfolioWorkflowModel = Object.freeze({ identifyFile, statusText, fields: Object.freeze(fields) });

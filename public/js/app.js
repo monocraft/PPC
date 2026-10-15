@@ -181,6 +181,7 @@ let workspaceRecoveryExportText = null;
 let workspaceSavePending = false;
 let workspaceSaveRevision = 0;
 let workspaceSaveAttempt = 0;
+let workspaceSaveFlight = null;
 const productView = $("#productView");
 const roadmapView = $("#roadmapView");
 const splitView = $("#splitView");
@@ -274,7 +275,7 @@ let initialVerticalFitPending = true;
 let productLayoutEditing = false;
 let productReorderSession = null;
 const categoryZoomPreferences = globalThis.PortfolioViewRuntime?.preferences({ key: `${STORAGE_KEY}-view-state-v1`, storage: () => localStorage });
-const workspaceNavigation = globalThis.PortfolioViewRuntime?.navigation?.({ key: `${STORAGE_KEY}-navigation-v1`, storage: () => localStorage });
+const workspaceNavigation = globalThis.PortfolioViewRuntime?.navigation?.({ key: `${STORAGE_KEY}-navigation-v1`, storage: () => sessionStorage, fallbackStorage: () => localStorage });
 const queueImageViewRender = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && !pptxExportInProgress) renderActiveView(); });
 const queueBoardScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && activeView === "products" && !pptxExportInProgress) renderBoard(); });
 const queuedRoadmapRenders = new Map();
@@ -318,13 +319,7 @@ async function imageStoreGet(assetId) {
 }
 
 async function imageStoreDelete(assetId) {
-  const database = await openImageDatabase();
-  await new Promise((resolve, reject) => {
-    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
-    transaction.objectStore(IMAGE_STORE_NAME).delete(assetId);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error || new Error("Unable to remove the image."));
-  });
+  return imageStoreDeleteBatch([assetId]);
 }
 
 async function imageStoreClear() {
@@ -357,6 +352,12 @@ async function imageStoreWriteBatch(entries) {
 
 async function imageStoreDeleteBatch(assetIds) {
   if (!assetIds.length) return;
+  if (typeof workspaceStorage !== "undefined" && workspaceStorage.deleteUnusedImages) return workspaceStorage.deleteUnusedImages(assetIds);
+  if (typeof workspaceStorage !== "undefined" && workspaceStorage.listLocalCopies) {
+    const retained = new Set((await workspaceStorage.listLocalCopies()).flatMap(copy => localPackageImageIds(JSON.parse(copy.serialized))));
+    assetIds = assetIds.filter(assetId => !retained.has(assetId));
+    if (!assetIds.length) return;
+  }
   const database = await openImageDatabase();
   await new Promise((resolve, reject) => {
     const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
@@ -1444,14 +1445,15 @@ function scheduleSave() {
 
 function showLocalSaveFailure(error) {
   const conflict = error?.code === "WORKSPACE_CONFLICT";
-  const title = conflict ? "Local copies need review" : "Changes are not saved on this device";
+  globalThis.PortfolioLocalSaveFailure = { code: error?.code || "WORKSPACE_STORAGE", message: error?.message || "This browser could not save your changes." };
+  const title = conflict ? "Two tabs changed this portfolio" : "Local save failed";
   const message = conflict
-    ? "Another portfolio tab in this browser saved a different local copy. Your edits remain open in this tab and still need a local save. Export a backup before reloading to review the saved copy. Shared portfolio Save status is shown separately."
+    ? "Your open edits and the other tab's saved edits differ. Resolve local save shows both copies and keeps both originals before saving your choice."
     : error?.message || "This browser could not save your open changes. Export a backup before closing, then retry.";
   if (!globalThis.PortfolioNotifications) { void PortfolioDialogs.alert(message, { title }); return; }
   globalThis.PortfolioNotifications.publish({ id: "workspace-local-save", severity: conflict ? "warning" : "error", title, message,
-    revision: error?.code || message, dismissible: false, actions: [
-      { label: conflict ? "Check local save again" : "Retry saving", onClick: () => flushWorkspaceSave() },
+    revision: error?.code || message, dismissible: false, toast: true, actions: [
+      { label: conflict ? "Resolve local save" : "Try saving again", onClick: () => conflict ? globalThis.PortfolioWorkflowUI?.openLocalRecovery() : flushWorkspaceSave() },
       { label: "Export data backup", onClick: () => downloadBlob(new Blob([JSON.stringify(portfolio, null, 2)], { type: "application/json" }), "product-portfolio-data.data") },
     ] });
 }
@@ -1459,24 +1461,88 @@ function showLocalSaveFailure(error) {
 async function flushWorkspaceSave() {
   clearTimeout(saveTimer); saveTimer = null;
   if (workspaceOpening || packageOperationInProgress || !portfolio) return false;
-  const revision = workspaceSaveRevision;
-  const attempt = ++workspaceSaveAttempt;
-  try {
-    const owner = portfolio, serialized = JSON.stringify(owner);
-    await workspaceStorage.save(serialized, { isCurrent: () => portfolio === owner && JSON.stringify(portfolio) === serialized });
-    if (revision === workspaceSaveRevision && attempt === workspaceSaveAttempt) {
-      workspaceSavePending = false;
-      globalThis.PortfolioNotifications?.resolve("workspace-local-save");
-      globalThis.dispatchEvent?.(new CustomEvent("portfolio:local-status"));
+  // Autosave, visibility changes and navigation share the same save. Each
+  // caller waits until current edits are durable, including edits made while
+  // an earlier snapshot was being written.
+  if (workspaceSaveFlight) return workspaceSaveFlight;
+  const flight = (async () => {
+    while (!workspaceOpening && !packageOperationInProgress && portfolio) {
+      const revision = workspaceSaveRevision, attempt = ++workspaceSaveAttempt;
+      const owner = portfolio, serialized = JSON.stringify(owner);
+      try {
+        const receipt = await workspaceStorage.save(serialized, { reconcileViews: true, isCurrent: () => portfolio === owner && JSON.stringify(portfolio) === serialized });
+        if (receipt?.serialized && receipt.serialized !== serialized) {
+          if (portfolio !== owner || JSON.stringify(portfolio) !== serialized) { scheduleSave(); showLocalSaveFailure(Object.assign(new Error("Another tab's saved changes arrived while you were editing. Your open edits remain here. Resolve local save preserves both originals before saving your choice."), { code: "WORKSPACE_CONFLICT" })); return false; }
+          activateLocalSavedCopy(receipt.serialized);
+          workspaceStorage.acknowledgeReconciled(receipt);
+        }
+        if (revision !== workspaceSaveRevision) { clearTimeout(saveTimer); saveTimer = null; continue; }
+        if (attempt === workspaceSaveAttempt) {
+          workspaceSavePending = false;
+          globalThis.PortfolioLocalSaveFailure = null;
+          globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+          globalThis.dispatchEvent?.(new CustomEvent("portfolio:local-status"));
+        }
+        return true;
+      } catch (error) {
+        // A superseded snapshot is expected to be rejected. Save its current
+        // replacement before reporting success to a waiting navigation.
+        if (error?.code === "WORKSPACE_CHANGED" && (revision !== workspaceSaveRevision || portfolio !== owner || JSON.stringify(portfolio) !== serialized)) { clearTimeout(saveTimer); saveTimer = null; continue; }
+        if (attempt === workspaceSaveAttempt) { workspaceSavePending = true; showLocalSaveFailure(error); }
+        return false;
+      }
     }
-    return true;
-  } catch (error) {
-    // A newer edit already queued another autosave. Its obsolete prepared
-    // snapshot is expected to be rejected; the pending current save owns status.
-    if (error?.code === "WORKSPACE_CHANGED" && revision !== workspaceSaveRevision) return false;
-    if (attempt === workspaceSaveAttempt) { workspaceSavePending = true; showLocalSaveFailure(error); }
     return false;
-  }
+  })();
+  workspaceSaveFlight = flight;
+  try { return await flight; }
+  finally { if (workspaceSaveFlight === flight) workspaceSaveFlight = null; }
+}
+
+function activateLocalSavedCopy(serialized) {
+  const next = ensurePortfolioSchema(JSON.parse(serialized)), previousView = activeView;
+  // Product/source adoption must not switch this tab's selected roadmap.
+  next.settings.roadmapBasis = portfolio.settings.roadmapBasis;
+  if (next.categories.some(category => category.id === activeCategoryId)) next.activeCategoryId = activeCategoryId;
+  const previousOperation = packageOperationInProgress;
+  packageOperationInProgress = true;
+  try {
+    resetHashoutView(); portfolio = next;
+    globalThis.PortfolioMasterUI?.adoptLocalBaseline?.();
+    localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
+    activateCategory(portfolio.activeCategoryId, { fitVertical: false });
+    setView(previousView); globalThis.PortfolioMasterUI?.updateStatus();
+  } finally { packageOperationInProgress = previousOperation; }
+}
+
+async function inspectLocalSaveCopies() {
+  const token = await workspaceStorage.readRecovery();
+  if (token.record?.version !== 1 || typeof token.record.serialized !== "string") throw new Error("The saved copy needs backup recovery. Your open copy is kept.");
+  const openSerialized = JSON.stringify(portfolio), savedSerialized = token.record.serialized;
+  ensurePortfolioSchema(JSON.parse(savedSerialized));
+  return { token, openSerialized, savedSerialized };
+}
+
+async function resolveLocalSaveCopies(preview, prefer) {
+  if (workspaceOpening || packageOperationInProgress) throw new Error("Finish the current file operation first.");
+  if (JSON.stringify(portfolio) !== preview.openSerialized) throw new Error("Your open edits changed. The comparison has been refreshed; choose the copy again.");
+  const chosen = prefer === "open" ? preview.openSerialized : preview.savedSerialized;
+  ensurePortfolioSchema(JSON.parse(chosen));
+  const owner = portfolio; clearTimeout(saveTimer);
+  const receipt = await workspaceStorage.resolveLocalConflict(preview.openSerialized, { recovery: preview.token, prefer, requireAdoption: true, adoptionBaseline: preview.openSerialized, isCurrent: () => !workspaceOpening && !packageOperationInProgress && portfolio === owner && JSON.stringify(portfolio) === preview.openSerialized });
+  assertLocalCopyOwner(owner, preview.openSerialized);
+  activateLocalSavedCopy(receipt.serialized);
+  workspaceStorage.acknowledgeReconciled(receipt);
+  workspaceSavePending = false; globalThis.PortfolioLocalSaveFailure = null;
+  globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+  globalThis.dispatchEvent?.(new CustomEvent("portfolio:local-status"));
+  return receipt;
+}
+
+function assertLocalCopyOwner(owner, expected) {
+  if (!workspaceOpening && !packageOperationInProgress && portfolio === owner && JSON.stringify(portfolio) === expected) return;
+  const error = Object.assign(new Error("New edits arrived while the local copy was being saved. They remain open. Both earlier originals are kept; the comparison now includes your newest edits."), { code: "WORKSPACE_CONFLICT" });
+  scheduleSave(); showLocalSaveFailure(error); throw error;
 }
 
 function activateCategory(categoryId, { render = true, fitVertical = true } = {}) {
@@ -8465,6 +8531,29 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
   getPortfolio: () => portfolio,
   getSelectedProductId: () => selectedId,
   getStatus: () => ({ localPending: workspaceSavePending, localError: Boolean(globalThis.PortfolioNotifications?.getState().items.some(item => item.id === "workspace-local-save")), master: globalThis.PortfolioMasterUI?.getSummary() || {} }),
+  getLocalSaveFailure: () => globalThis.PortfolioLocalSaveFailure || null,
+  retryLocalSave: flushWorkspaceSave,
+  inspectLocalSave: inspectLocalSaveCopies,
+  resolveLocalSave: resolveLocalSaveCopies,
+  listLocalCopies: () => workspaceStorage.listLocalCopies(),
+  async restoreLocalCopy(copy) {
+    if (workspaceOpening || packageOperationInProgress) throw new Error("Finish the current file operation first.");
+    if (workspaceSavePending && !await flushWorkspaceSave()) { globalThis.PortfolioWorkflowUI?.openLocalRecovery(); return false; }
+    const current = await inspectLocalSaveCopies();
+    const selected = (await workspaceStorage.listLocalCopies()).find(item => item.id === copy.id);
+    if (!selected) throw new Error("This saved copy is no longer available.");
+    const owner = portfolio, expected = JSON.stringify(owner);
+    ensurePortfolioSchema(JSON.parse(selected.serialized));
+    const receipt = await workspaceStorage.resolveLocalConflict(selected.serialized, { recovery: current.token, prefer: "open", requireAdoption: true, adoptionBaseline: expected, isCurrent: () => !workspaceOpening && !packageOperationInProgress && portfolio === owner && JSON.stringify(portfolio) === expected });
+    assertLocalCopyOwner(owner, expected);
+    activateLocalSavedCopy(receipt.serialized); workspaceStorage.acknowledgeReconciled(receipt); globalThis.PortfolioLocalSaveFailure = null; workspaceSavePending = false;
+    globalThis.PortfolioNotifications?.resolve("workspace-local-save"); globalThis.dispatchEvent?.(new CustomEvent("portfolio:local-status")); return true;
+  },
+  async navigateToAnalytics(destination) {
+    if (workspaceOpening || packageOperationInProgress) return false;
+    if (workspaceSavePending && !await flushWorkspaceSave()) { globalThis.PortfolioWorkflowUI?.openLocalRecovery(); return false; }
+    globalThis.location.assign(new URL(destination === "source" ? "analytics.html?analysis=blueprint#blueprint/source" : "analytics.html", globalThis.location.href).href); return true;
+  },
   openProduct(productId) { const entry = portfolio.categories.flatMap(category => category.board.products.filter(product => product.id === productId).map(product => ({ category, product }))); if (entry.length !== 1) throw new Error("This product is no longer available. Refresh the review list."); openProductIssue(entry[0]); },
   openPlcReview: () => globalThis.PortfolioPlcUI?.open({ tab: "review" }),
   async loadFile(file, kind) {

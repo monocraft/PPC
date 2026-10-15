@@ -45,7 +45,7 @@ function appWorkspace(supplied = initial, { legacyBaseline = false } = {}) {
   if (legacyBaseline) for (const product of portfolio.masterLocalBaseline) delete product.values.cardPlacement;
   let stored = "";
   const context = { portfolio, board: portfolio.categories[0].board, activeCategoryId: "mice", selectedId: "hydra", productReorderSession: null,
-    packageOperationInProgress: false, workspaceOpening: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, workspaceSavePending: false, saveTimer: null, localDateBaseline: null,
+    packageOperationInProgress: false, workspaceOpening: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, workspaceSaveFlight: null, workspaceSavePending: false, saveTimer: null, localDateBaseline: null,
     setTimeout, clearTimeout, workspaceStorage: { async save(value) { stored = value; } },
     PortfolioMasterModel: model, PortfolioProductMerge: globalThis.PortfolioProductMerge, PortfolioPackage: codec, PortfolioNotifications: { resolve() {} },
     PLCImporter: { fieldLabels: { ffsDate: "FFS" }, snapshotDateValues: () => null },

@@ -16,17 +16,23 @@ Use **Load data** in Portfolio or Analytics, including the empty Portfolio welco
 
 Portfolio can send the selected file directly to its Analytics tab. The file stays in memory during that handoff. Review or unlock still happens in the destination. A cancelled or invalid load retains the existing source. Selecting an Analytics source does not import it as portfolio product records.
 
-## Understand save status
+## Save and resolve local copies
 
-The status below the Portfolio toolbar opens the existing team and package details. It distinguishes local saving, a local save failure, products ready to share, the last team check, and preparation or failure of the downloadable encrypted copy. **Save changes** remains the explicit review for sharing normal portfolio edits and planning decisions. A local save is not a team receipt. No new background health checks are added.
+Portfolio saves local edits automatically without a separate status bar. A save failure shows an actionable notification and remains in **Needs review** until resolved. **Save changes** remains the explicit review for sharing normal portfolio edits and planning decisions. Team and downloadable-copy details remain in that review and **Other review tools → All messages**.
 
-Use **Needs review** for outstanding warnings, saved PLC exceptions and current planning decisions. Separate filters show missing FFS timing, stale evidence, missing main artwork and locally deferred items. There is no combined quality score. Each item opens its existing editor or source review. The source diagnostics action opens Portfolio plan **Source & quality**. Counts only reflect the current browser's loaded portfolio and review state.
+Portfolio and Analytics navigation stays in the current tab and completes any pending local save before leaving Portfolio. Each tab remembers its own selected view and roadmap type. Harmless differences in Hashout labels, scope, viewport and other allowlisted display preferences reconcile automatically while preserving newer product and source data. Atomic imports retain strict conflict protection.
+
+Autosave and navigation wait for the same in-progress local save. Edits made during that save are saved before navigation continues; an obsolete snapshot cannot leave a false blocked status after a successful save.
+
+If two tabs contain different product or source edits, **Resolve local save** shows their differences. Choose **Keep my open copy** or **Use the latest saved copy**; either action preserves both complete originals under **Saved local copies** before saving the chosen copy. Those copies remain available after reload and can be opened or downloaded. A later change by another tab refreshes the comparison instead of overwriting newer work. Browser storage failures show their actual error and a save retry/backup action.
+
+Use **Needs review** for outstanding warnings, saved PLC exceptions and current planning decisions. It opens on required actions with search cleared. A blocked local save stays visible above every filter. Each card has a named action; optional missing-date, source-age and image checks are separate. Additional source/evidence tools and saved local copies are under **Other review tools**. Counts reflect the current browser's loaded portfolio and review state.
 
 Deferring hides that exact issue on this browser; a changed issue reappears. Errors and mandatory warnings cannot be deferred. The preference store is bounded, so the oldest deferrals can be removed when capacity is reached.
 
 ## Reuse a view and export setup
 
-Open **More → Saved views** in Portfolio, or **Saved views** near the Analytics tabs. Save, open, rename or delete a named view. Each browser stores up to 25 views. A view retains filters, category scope, dates and supported display settings. Opening it uses the current data. It does not restore products, images, credentials or workbook contents. Missing product or category selections are handled against current IDs rather than silently expanding to all records.
+Open **Saved views** beside **Load data** in Portfolio, or near the Analytics tabs. Save, open, rename or delete a named view. Each browser stores up to 25 views. A view retains filters, category scope, dates and supported display settings. Opening it uses the current data. It does not restore products, images, credentials or workbook contents. Missing product or category selections are handled against current IDs rather than silently expanding to all records.
 
 The PowerPoint dialog restores reusable options from the last successful export. **Use this view** copies the visible view's category scope and date range into the export controls for review. Those options do not retain a previous consent to export different reporting cutoffs. Review the displayed scope before exporting.
 

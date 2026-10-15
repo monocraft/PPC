@@ -104,24 +104,24 @@
     const adapter = root.PortfolioWorkflowAdapter; if (!adapter) return;
     doc.documentElement.classList.add('workflow-enhanced');
     const settings = doc.getElementById('workspaceSettingsButton'); if (settings) doc.getElementById('workflowSettingsSlot')?.append(settings);
-    const strip = node('div','workflow-status-strip'), statusButton = button('Opening workspace…',()=>adapter.getStatus().localError ? root.PortfolioNotifications.show('workspace-local-save') : root.PortfolioMasterUI.openUpdates());
-    statusButton.id='workflowStatus'; statusButton.setAttribute('aria-live','polite'); strip.append(statusButton); doc.querySelector('.topbar')?.after(strip);
     planning = root.PortfolioPlanningIntakeUI?.create({ getPortfolio: adapter.getPortfolio, applyPlanning: adapter.applyPlanning, openProduct: adapter.openProduct, onStateChange: () => root.dispatchEvent(new CustomEvent('portfolio:planning-review')) });
     const review = dialog('Needs review', 'workflowReviewDialog'), protection = dialog('Date evidence and protection', 'workflowProtectionDialog');
     const reviewSearch = node('input'); reviewSearch.type = 'search'; reviewSearch.placeholder = 'Find a product or issue'; reviewSearch.setAttribute('aria-label', 'Filter review items');
     const reviewFilter = node('select'); reviewFilter.setAttribute('aria-label', 'Review issue type');
-    for (const [value, title] of [['attention','Action needed'],['missing','Missing dates'],['stale','Stale evidence'],['images','Image completeness'],['deferred','Deferred']]) { const option = node('option', '', title); option.value = value; reviewFilter.append(option); }
+    for (const [value, title] of [['attention','Actions to resolve'],['missing','Missing dates · optional'],['stale','Source age · optional'],['images','Images · optional'],['deferred','Deferred']]) { const option = node('option', '', title); option.value = value; reviewFilter.append(option); }
     const reviewList = node('div', 'workflow-review-list');
     const actions = node('div', 'workflow-actions');
-    actions.append(button('PLC source review', () => { review.el.close(); adapter.openPlcReview(); }), button('Planning candidates', () => { review.el.close(); planning?.open(); }), button('Date evidence & protection', () => { review.el.close(); openProtection(); }), button('Portfolio plan source diagnostics', () => { review.el.close(); root.open(new URL('analytics.html?analysis=blueprint#blueprint/source',root.location.href).href,'_blank','noopener'); }), button('All messages', () => { review.el.close(); root.PortfolioNotifications.show(); }));
-    review.body.append(node('p', 'workflow-note', 'Review business exceptions first. Completeness indicators are separate; a missing image is not a business conflict.'), actions, reviewFilter, reviewSearch, reviewList);
+    actions.append(button('PLC source review', () => { review.el.close(); adapter.openPlcReview(); }), button('Planning candidates', () => { review.el.close(); planning?.open(); }), button('Date evidence & protection', () => { review.el.close(); openProtection(); }), button('Portfolio plan source diagnostics', async () => { review.el.close(); await adapter.navigateToAnalytics('source'); }), button('All messages', () => { review.el.close(); root.PortfolioNotifications.show(); }), button('Saved local copies',()=>{review.el.close();openLocalRecovery();}));
+    const tools=node('details','workflow-review-tools');tools.append(node('summary','','Other review tools'),actions);
+    const reviewHeading=node('p','workflow-review-summary'),localBlock=node('section','workflow-save-block');localBlock.id='workflowLocalSaveBlock';
+    review.body.append(localBlock,reviewHeading,reviewFilter,reviewSearch,reviewList,tools);
     const deferKey = 'ppc-review-deferrals-v1'; let deferrals = {};
     try { const raw = root.localStorage.getItem(deferKey); const parsed = raw && raw.length <= 262144 ? JSON.parse(raw) : null; if (parsed?.version === 1 && parsed.items && typeof parsed.items === 'object' && !Array.isArray(parsed.items)) deferrals = Object.fromEntries(Object.entries(parsed.items).filter(([id, value]) => id.length < 500 && typeof value === 'string' && value.length <= 16384).slice(0, 500)); } catch (_) {}
     function items() {
       const portfolio = adapter.getPortfolio(), all = [];
       const pendingPlanning=planning?.getState();
       if(pendingPlanning?.rowCount)all.push({id:'planning:current',type:'attention',title:`${pendingPlanning.rowCount} planning candidates`,detail:'Finish the current match, create or ignore decisions. Nothing is accepted until you apply the reviewed choices.',fingerprint:JSON.stringify([pendingPlanning.source?.fingerprint,pendingPlanning.source?.sheet,pendingPlanning.rowCount]),open:()=>planning.open()});
-      for (const item of root.PortfolioNotifications.getState().items.filter(item => ['warning','error'].includes(item.severity) && !item.acknowledged)) all.push({ id: 'message:' + item.id, type: 'attention', title: item.title, detail: item.message, fingerprint: JSON.stringify([item.title,item.message,item.revision]), urgent: item.severity === 'error' || item.dismissible === false, open: () => item.actions[0]?.onClick ? item.actions[0].onClick() : root.PortfolioNotifications.show(item.id) });
+      for (const item of root.PortfolioNotifications.getState().items.filter(item => ['warning','error'].includes(item.severity) && !item.acknowledged)) all.push({ id: 'message:' + item.id, type: 'attention', title: item.title, detail: item.message, fingerprint: JSON.stringify([item.title,item.message,item.revision]), urgent: item.severity === 'error' || item.dismissible === false, actionLabel:item.id==='workspace-local-save'?'Resolve local save':'Open details',open: () => item.id==='workspace-local-save'?openLocalRecovery():root.PortfolioNotifications.show(item.id) });
       for (const entry of portfolio.plcReview?.entries || []) all.push({ id: 'plc:' + entry.key, type: 'attention', title: entry.row?.name || entry.row?.codename || 'PLC project match', detail: entry.matchNeeded ? 'Match this source project to a product.' : 'Review source dates: ' + (entry.fields || []).map(field => root.PLCImporter.fieldLabels[field]).join(', '), fingerprint: JSON.stringify([entry.metadata?.fingerprint,entry.fields,entry.row?.dates]), open: () => adapter.openPlcReview() });
       for (const category of portfolio.categories) for (const product of category.board.products) {
         const open = () => adapter.openProduct(product.id), name = product.name || 'Unnamed product';
@@ -133,11 +133,16 @@
     }
     function renderReview() {
       const all = items(), query = reviewSearch.value.trim().toLowerCase(), type = reviewFilter.value;
-      const filtered = all.filter(item => (type === 'deferred' ? deferrals[item.id] === item.fingerprint : item.type === type && deferrals[item.id] !== item.fingerprint) && (item.title + ' ' + item.detail).toLowerCase().includes(query));
-      reviewList.replaceChildren(node('p', 'workflow-note', `${filtered.length} item${filtered.length === 1 ? '' : 's'} in this view`));
+      const blocked=adapter.getStatus().localError;
+      localBlock.hidden=!blocked;localBlock.replaceChildren();
+      if(blocked){const failure=adapter.getLocalSaveFailure(),conflict=failure?.code==='WORKSPACE_CONFLICT';localBlock.append(node('strong','',conflict?'Two local copies need a choice':'Local save failed'),node('p','',conflict?'Choose the copy to continue with. Both originals will be kept automatically.':failure?.message||'The browser could not save your open edits.'),button(conflict?'Resolve local save':'Fix local save',()=>{review.el.close();openLocalRecovery();},'primary-button'));}
+      const attention=all.filter(item=>item.type==='attention'&&deferrals[item.id]!==item.fingerprint).length;
+      reviewHeading.textContent=attention?`${attention} action${attention===1?'':'s'} to resolve`:'No actions needed. Optional data checks are below.';
+      const filtered = all.filter(item => item.id!=='message:workspace-local-save'&&(type === 'deferred' ? deferrals[item.id] === item.fingerprint : item.type === type && deferrals[item.id] !== item.fingerprint) && (item.title + ' ' + item.detail).toLowerCase().includes(query));
+      reviewList.replaceChildren();if(filtered.length)reviewList.append(node('p', 'workflow-note', `${filtered.length} item${filtered.length === 1 ? '' : 's'} in this view`));
       for (const item of filtered.slice(0, reviewLimit)) {
         const card = node('article', 'workflow-review-item'), text = node('div'); text.append(node('strong','',item.title),node('p','',item.detail));
-        card.append(text, button('Review', () => { review.el.close(); try { item.open(); } catch (error) { announce(error.message); } }));
+        card.append(text, button(item.actionLabel||(item.id.startsWith('plc:')?'Review milestones':item.id.startsWith('planning:')?'Match planning rows':'Open product'), () => { review.el.close(); try { item.open(); } catch (error) { announce(error.message); } }));
         if (!item.urgent) card.append(button(type === 'deferred' ? 'Restore' : 'Defer', () => {
           const next = { ...deferrals }; if (type === 'deferred') delete next[item.id]; else next[item.id] = item.fingerprint;
           try { const entries = Object.entries(next).filter(([id,value])=>id.length<500 && value.length<=16384).slice(-500); if(type !== 'deferred' && item.fingerprint.length>16384) throw Error('Issue is too large to defer.'); let stored; while((stored=JSON.stringify({version:1,items:Object.fromEntries(entries)})).length>262144)entries.shift(); root.localStorage.setItem(deferKey,stored); deferrals = Object.fromEntries(entries); updateStatus(); }
@@ -146,11 +151,59 @@
         reviewList.append(card);
       }
       if(filtered.length>reviewLimit)reviewList.append(button(`Show more (${filtered.length-reviewLimit} remaining)`,()=>{reviewLimit+=150;renderReview();}));
-      if (!filtered.length) reviewList.append(node('p','','No items in this view. You can still open source review or inspect date evidence.'));
+      if (!filtered.length) reviewList.append(node('p','',blocked?'No other actions need attention. Optional checks are available above.':type==='attention'?'No actions need attention.':'No matching items for this optional check.'));
     }
     let reviewLimit=150;
     reviewSearch.addEventListener('input', ()=>{reviewLimit=150;renderReview();}); reviewFilter.addEventListener('change', ()=>{reviewLimit=150;renderReview();});
-    doc.getElementById('workflowReviewButton')?.addEventListener('click', () => { renderReview(); review.open(); });
+    function openReview(){reviewFilter.value='attention';reviewSearch.value='';reviewLimit=150;renderReview();review.open();}
+    doc.getElementById('workflowReviewButton')?.addEventListener('click',openReview);
+    const recovery=dialog('Resolve local save','workflowLocalRecoveryDialog');
+    let recoveryBusy=false,recoveryFailureCode=null,recoveryRender=0;
+    const downloadCopy=copy=>{const url=URL.createObjectURL(new Blob([copy.serialized],{type:'application/json'})),link=node('a');link.href=url;link.download=`portfolio-${copy.kind||'open'}-copy.data`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+    function copySummary(serialized){const value=JSON.parse(serialized);return `${value.categories.length} categories · ${value.categories.reduce((count,category)=>count+category.board.products.length,0)} products`;}
+    function differences(open,saved){
+      const products=value=>new Map(JSON.parse(value).categories.flatMap(category=>category.board.products.map(product=>[product.id,{product,category:category.name||category.id}]))),a=products(open),b=products(saved),rows=[];
+      for(const id of new Set([...a.keys(),...b.keys()])){const left=a.get(id),right=b.get(id);if(JSON.stringify(left)===JSON.stringify(right))continue;const title=left?.product.name||right?.product.name||id;
+        if(!left||!right){rows.push(`${title}: ${left?'only in your open copy':'only in the latest saved copy'}`);continue;}
+        const fields=[...new Set([...Object.keys(left.product),...Object.keys(right.product)])].filter(key=>JSON.stringify(left.product[key])!==JSON.stringify(right.product[key]));
+        const labels=fields.map(field=>{const before=left.product[field],after=right.product[field];return typeof before==='string'&&typeof after==='string'?`${root.PLCImporter.fieldLabels[field]||field}: “${before.slice(0,120)}” / “${after.slice(0,120)}”`:root.PLCImporter.fieldLabels[field]||field;});
+        if(left.category!==right.category)labels.unshift(`category: ${left.category} / ${right.category}`);rows.push(`${title}: ${labels.join('; ')}`);
+      }return rows;
+    }
+    async function appendLocalCopies(generation){
+      const copies=await adapter.listLocalCopies();if(generation!==recoveryRender||!copies.length)return;
+      const section=node('section','workflow-local-copies');section.id='workflowSavedLocalCopies';section.append(node('h3','','Saved local copies'),node('p','workflow-note','Both originals stay on this device. Open a copy to continue it, or download it as a data backup.'));
+      for(const copy of copies){const card=node('article','workflow-copy-card');card.append(node('strong','',`${copy.kind==='open'?'Your open copy':'Other tab’s saved copy'} · ${new Date(copy.at).toLocaleString()}`),node('p','workflow-note',copySummary(copy.serialized)));
+        card.append(button('Download copy',()=>downloadCopy(copy)),button('Open this copy',async()=>{if(recoveryBusy)return;recoveryBusy=true;try{if(await adapter.restoreLocalCopy(copy))await showLocalRecovery('Saved copy opened on this device. The previous saved portfolio is also kept.');}catch(error){announce(error.message);await showLocalRecovery(error.message);}finally{recoveryBusy=false;}}));section.append(card);}
+      recovery.body.append(section);
+    }
+    async function showLocalRecovery(feedback=''){
+      const generation=++recoveryRender;recovery.body.replaceChildren();const failure=adapter.getLocalSaveFailure();
+      recoveryFailureCode=failure?.code||'';
+      doc.getElementById('workflowLocalRecoveryDialog-title').textContent=failure?'Resolve local save':feedback?'Local save resolved':'Saved local copies';
+      if(feedback)recovery.body.append(node('p','workflow-feedback',feedback));
+      if(failure?.code==='WORKSPACE_CONFLICT'){
+        recovery.body.append(node('p','','Two tabs saved different local copies. Choose the copy to continue with. Both originals will be saved automatically on this device.'));
+        const preview=await adapter.inspectLocalSave();
+        if(generation!==recoveryRender)return;
+        const comparison=node('div','workflow-copy-comparison');comparison.append(node('p','',`Your open copy: ${copySummary(preview.openSerialized)}`),node('p','',`Latest saved copy: ${copySummary(preview.savedSerialized)}`));
+        const rows=differences(preview.openSerialized,preview.savedSerialized);comparison.append(node('strong','','Differences · your open value / latest saved value'));
+        for(const text of rows.slice(0,40))comparison.append(node('p','workflow-note',text));
+        if(!rows.length)comparison.append(node('p','workflow-note','Workspace source or save metadata differs. Both complete records are preserved.'));
+        if(rows.length>40)comparison.append(node('p','workflow-note',`${rows.length-40} more changed products. Complete copies are kept.`));
+        recovery.body.append(comparison);
+        const choose=async prefer=>{if(recoveryBusy)return;recoveryBusy=true;for(const control of recovery.body.querySelectorAll('button'))control.disabled=true;try{await adapter.resolveLocalSave(preview,prefer);await showLocalRecovery('Saved on this device. Both originals are kept below.');}catch(error){await showLocalRecovery(error.message);}finally{recoveryBusy=false;}};
+        const open=button('Keep my open copy',()=>choose('open'),'primary-button');open.id='workflowKeepOpenCopy';
+        const saved=button('Use the latest saved copy',()=>choose('saved'));saved.id='workflowUseSavedCopy';
+        recovery.body.append(open,node('p','workflow-note','Keep my open copy saves the edits visible in this tab. The other original is kept below.'),saved,node('p','workflow-note','Use the latest saved copy opens the other tab’s saved portfolio. Your current edits are kept below.'));
+      }else if(failure){
+        recovery.body.append(node('p','workflow-error',failure.message),button('Try saving again',async()=>{if(recoveryBusy)return;recoveryBusy=true;try{await adapter.retryLocalSave();await showLocalRecovery(adapter.getStatus().localError?'The browser still could not save. Your open copy is available below.':'Saved on this device.');}finally{recoveryBusy=false;}}));
+      }else if(!feedback)recovery.body.append(node('p','','Your current portfolio is saved on this device.'));
+      if(adapter.getStatus().localError)recovery.body.append(button('Download my open copy',()=>downloadCopy({serialized:JSON.stringify(adapter.getPortfolio()),kind:'open'})));
+      await appendLocalCopies(generation);
+    }
+    async function openLocalRecovery(){recovery.open();recovery.body.replaceChildren(node('p','','Opening local copies…'));try{await showLocalRecovery();}catch(error){recovery.body.replaceChildren(node('p','workflow-error',error.message),button('Download my open copy',()=>downloadCopy({serialized:JSON.stringify(adapter.getPortfolio()),kind:'open'})));}}
+    for(const link of doc.querySelectorAll('a[href="analytics.html"]'))link.addEventListener('click',event=>{if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();void adapter.navigateToAnalytics();});
     const select = node('select'); select.id = 'workflowProtectionProduct'; select.setAttribute('aria-label','Product for date evidence');
     const evidence = node('div', 'workflow-evidence'); protection.body.append(node('p','workflow-note','Protection applies to automatic imports on this browser and follows the product when it moves category. Teammates have independent settings. Manual edits remain available.'), select, evidence);
     function renderProtection() {
@@ -180,11 +233,11 @@
     }
     select.addEventListener('change',renderProtection);
     function updateStatus() {
-      const state = adapter.getStatus(), summary = root.PortfolioWorkflowModel.statusText(state), status = doc.getElementById('workflowStatus');
-      if (status) { status.textContent=summary.text; status.dataset.tone=summary.tone; status.title='Open team and complete package details'; }
+      const state = adapter.getStatus();
       const count = items().filter(item=>item.type==='attention'&&deferrals[item.id]!==item.fingerprint).length;
       const trigger = doc.getElementById('workflowReviewButton'); if(trigger) trigger.textContent=`Needs review${count ? ' ('+count+')' : ''}`;
       if(review.el.open) renderReview(); if(protection.el.open) renderProtection();
+      if(recovery.el.open&&!recoveryBusy&&recoveryFailureCode!==(adapter.getLocalSaveFailure()?.code||''))void showLocalRecovery(state.localError?'':'Saved on this device.').catch(error=>announce(error.message));
     }
     const groups=[];
     function groupTools(container,targets,id) {
@@ -221,7 +274,7 @@
     root.PortfolioNotifications?.subscribe(()=>{if(notificationRefreshQueued)return;notificationRefreshQueued=true;Promise.resolve().then(()=>{notificationRefreshQueued=false;updateStatus();});});
     for(const action of doc.querySelectorAll('[data-workflow-range]')) action.addEventListener('click',()=>{try{adapter.rangePreset(action.dataset.workflowRange);}catch(error){announce(error.message);}});
     updateStatus();
-    root.PortfolioWorkflowUI = Object.freeze({ openLoad:()=>load.open(),openReview(){renderReview();review.open();},openProtection,planning,getReviewItems:items,refresh:updateStatus });
+    root.PortfolioWorkflowUI = Object.freeze({ openLoad:()=>load.open(),openReview,openLocalRecovery,openProtection,planning,getReviewItems:items,refresh:updateStatus });
   }
   if(root.PortfolioWorkflowAdapter) void Promise.resolve(root.PortfolioWorkspaceReady).then(portfolioFeatures).catch(()=>{});
   const request = new URL(root.location.href).searchParams.get('loadRequest');
