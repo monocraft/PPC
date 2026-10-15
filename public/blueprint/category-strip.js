@@ -45,7 +45,7 @@
     const identifier = `hx-category-strip-${++sequence}`;
     const strip = node('section', 'hx-category-strip');
     const header = node('div', 'hx-category-strip-header');
-    const heading = node('h2', 'hx-category-strip-title', 'Categories');
+    const heading = node('h2', 'hx-category-strip-title', 'Compare categories');
     heading.id = `${identifier}-title`;
     const context = node('p', 'hx-category-strip-context');
     context.id = `${identifier}-context`;
@@ -63,12 +63,8 @@
       button.type = 'button';
       button.dataset.category = categoryKey;
       const top = node('span', 'hx-category-tile-top');
-      const dot = node('span', 'hx-category-tile-dot');
-      dot.setAttribute('aria-hidden', 'true');
       const name = node('span', 'hx-category-tile-name');
-      const check = node('span', 'hx-category-tile-check', '✓');
-      check.setAttribute('aria-hidden', 'true');
-      top.append(dot, name, check);
+      top.append(name);
       const metrics = node('span', 'hx-category-tile-metrics');
       const value = node('span', 'hx-category-tile-value');
       const proportion = node('span', 'hx-category-tile-share');
@@ -132,8 +128,9 @@
         tile.proportion.classList.toggle('is-unavailable', ratio === null);
         const productCount = numeric(item.productCount);
         const detail = [name, `${periodText} ${basisText}`.trim(), `Source revenue ${money(item.revenue, currency, true)}`, ratio === null ? 'Portfolio share unavailable' : `${ratio} of portfolio`, productCount === null ? null : `${new Intl.NumberFormat('en-US').format(productCount)} product groups`].filter(Boolean).join(' · ');
-        tile.button.title = `${detail} · ${id === 'all' ? 'Show the combined portfolio and clear individual selections' : selected ? 'Remove this category from comparison' : 'Add this category to comparison'}`;
-        tile.button.setAttribute('aria-label', detail);
+        const action=id==='all'?'Show the combined portfolio and clear individual selections':selected?'Remove this category from comparison':'Add this category to comparison';
+        tile.button.title = `${detail} · ${action}`;
+        tile.button.setAttribute('aria-label', `${detail}. ${action}.`);
         ordered.push(tile.button);
       });
       for (const [id, tile] of tiles) if (!seen.has(id)) { tile.button.remove(); tiles.delete(id); }

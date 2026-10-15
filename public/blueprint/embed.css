@@ -1,5 +1,6 @@
 /* The Analytics hub supplies navigation and the surrounding workspace. */
-html[data-embedded="true"],html[data-embedded="true"] body{min-height:0;overflow-x:hidden}
+/* The host follows the app-shell height and owns page scrolling. */
+html[data-embedded="true"],html[data-embedded="true"] body{min-height:0;overflow:hidden}
 html[data-embedded="true"] .app-shell{display:block;min-height:0}
 html[data-embedded="true"] .sidebar,html[data-embedded="true"] .topbar{display:none}
 html[data-embedded="true"] .workspace{margin-left:0;width:100%}

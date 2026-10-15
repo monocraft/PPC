@@ -102,6 +102,10 @@
   function switchModule(module, push = true) {
     if (!['retail','blueprint'].includes(module)) return;
     currentModule = module;
+    document.body?.setAttribute('data-analysis-module',module);
+    const title = document.getElementById('analysisTitle');
+    if (title) title.textContent = module === 'blueprint' ? 'Portfolio Blueprint' : 'Analytics';
+    document.getElementById('blueprintImport').hidden = module !== 'blueprint';
     retail.hidden = module !== 'retail';
     blueprint.hidden = module !== 'blueprint';
     for (const button of tabs) {

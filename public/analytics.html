@@ -16,14 +16,14 @@
 </head>
 <body>
 <header class="analysis-header">
-  <div class="analysis-heading"><a href="index.html" class="analysis-brand" aria-label="Open Product Portfolio"><span aria-hidden="true">P</span><span>Product Portfolio</span></a><span class="analysis-slash" aria-hidden="true">/</span><h1>Analytics</h1></div>
+  <div class="analysis-heading"><a href="index.html" class="analysis-brand" aria-label="Open Product Portfolio"><span aria-hidden="true">P</span><span>Product Portfolio</span></a><span class="analysis-slash" aria-hidden="true">/</span><h1 id="analysisTitle">Analytics</h1></div>
   <div class="analysis-modules" role="tablist" aria-label="Analysis workspace">
     <button id="analysis-retail-tab" type="button" role="tab" data-analysis-module="retail" aria-selected="true" aria-controls="selloutApp">Retail <span>Sell-out &amp; demand</span></button>
     <button id="analysis-blueprint-tab" type="button" role="tab" data-analysis-module="blueprint" aria-selected="false" aria-controls="blueprintPane" tabindex="-1">Portfolio <span>Investment &amp; growth</span></button>
   </div>
+  <div class="workflow-analytics-tools"><button id="analyticsLoadData" type="button">Load data</button><button id="analyticsSavedViews" type="button">Saved views</button><button id="blueprintImport" type="button" hidden>Import workbook</button></div>
   <span class="analysis-local"><i aria-hidden="true"></i> Local workspace</span>
 </header>
-<div class="workflow-analytics-tools"><button id="analyticsLoadData" type="button">Load data</button><button id="analyticsSavedViews" type="button">Saved views</button></div>
 <div id="selloutApp" class="so-app analysis-panel" role="tabpanel" aria-labelledby="analysis-retail-tab">
 
   <main class="so-main">
@@ -99,7 +99,7 @@
       <button type="button" data-blueprint-view="performance" aria-current="page">Analysis canvas</button>
       <button type="button" data-blueprint-view="source">Data &amp; quality</button>
     </nav>
-    <div class="analysis-source-actions"><span id="blueprintSource" class="analysis-source-label">No workbook loaded</span><button id="blueprintImport" type="button">Import workbook</button></div>
+    <div class="analysis-source-actions"><span id="blueprintSource" class="analysis-source-label">No workbook loaded</span></div>
   </div>
   <p id="blueprintLoading" class="analysis-loading" role="status">Opening portfolio analysis…</p>
   <iframe id="blueprintFrame" title="Portfolio planning and growth analysis" data-src="blueprint/index.html?embedded=1" class="analysis-frame" hidden></iframe>

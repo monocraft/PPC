@@ -1,5 +1,5 @@
 /* One PPC entry, with contextual analysis views inside a shared workspace. */
-.analysis-header{max-width:2000px;margin:0 auto;padding:16px 28px 13px;display:flex;align-items:center;gap:28px;border-bottom:1px solid var(--color-border,#333538)}
+.analysis-header{max-width:2000px;margin:0 auto;padding:10px 28px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;border-bottom:1px solid var(--color-border,#333538)}
 .analysis-heading,.analysis-brand{display:flex;align-items:center;gap:10px;white-space:nowrap}
 .analysis-brand{color:var(--color-text,#d5d7dc);text-decoration:none;font-size:12px}
 .analysis-brand>span:first-child{width:28px;height:28px;background:var(--color-header,#333538);border-radius:8px;display:grid;place-items:center;font-size:17px;color:var(--color-text,#d5d7dc)}
@@ -12,6 +12,18 @@
 .analysis-modules button:hover{background:var(--color-surface,#242527);color:var(--color-text,#d5d7dc)}
 .analysis-local{display:flex;align-items:center;gap:7px;color:var(--color-text-secondary,#a0a1a7);font-size:10px;white-space:nowrap}
 .analysis-local i{height:5px;width:5px;border-radius:50%;background:#7ae3a9}
+.analysis-header .workflow-analytics-tools{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-left:auto;padding:0;background:transparent}
+.analysis-header .workflow-analytics-tools button{font:inherit;font-size:11px;min-height:32px;padding:6px 9px;white-space:nowrap}
+.analysis-header .workflow-analytics-tools [hidden]{display:none!important}
+body[data-analysis-module=blueprint] .analysis-header{min-height:54px;padding-block:9px;border-bottom:0;gap:14px}
+body[data-analysis-module=blueprint] .analysis-heading{min-width:0;gap:10px}
+body[data-analysis-module=blueprint] .analysis-heading h1{font-size:23px;line-height:1.25;letter-spacing:-.35px;white-space:normal}
+body[data-analysis-module=blueprint] .analysis-brand{flex-shrink:0}
+body[data-analysis-module=blueprint] .analysis-brand>span:last-child,body[data-analysis-module=blueprint] .analysis-slash,body[data-analysis-module=blueprint] .analysis-local,body[data-analysis-module=blueprint] .analysis-contextbar{display:none}
+body[data-analysis-module=blueprint] .analysis-modules{margin:0 0 0 auto;flex:0 0 auto;align-self:center}
+body[data-analysis-module=blueprint] .analysis-modules button{padding:6px 10px}
+body[data-analysis-module=blueprint] .analysis-modules button span{display:none}
+body[data-analysis-module=blueprint] .workflow-analytics-tools{margin-left:0}
 .analysis-panel[hidden]{display:none!important}
 .analysis-panel{animation:analysis-arrive .22s ease-out}
 .analysis-panel .so-topbar .so-brand{display:none}
@@ -36,4 +48,5 @@
 @media(max-width:1100px){.analysis-header{gap:16px}.analysis-modules button{gap:7px;padding:8px 12px}.analysis-modules button span{display:none}.analysis-source-label{display:none}.analysis-contextbar{gap:10px}}
 @media(max-width:760px){.analysis-header{padding:13px 20px 11px;gap:12px;flex-wrap:wrap}.analysis-brand>span:last-child{display:none}.analysis-heading{gap:8px}.analysis-local{margin-left:auto}.analysis-modules{order:3;flex:1 1 100%;margin:0;gap:8px}.analysis-modules button{flex:1;justify-content:center;padding:8px 12px}.analysis-modules button span{display:inline}.analysis-contextbar{padding:8px 20px;gap:5px;flex-wrap:wrap}#blueprintViews{gap:2px;flex:1 1 100%}#blueprintViews button{padding:6px 9px}.analysis-source-actions{margin-left:auto}.analysis-source-label{display:block;max-width:210px}.analysis-loading{margin:15px 20px}.analysis-panel .so-topbar{padding-top:6px}}
 @media(max-width:480px){.analysis-header{padding-inline:14px}.analysis-modules button{gap:8px}.analysis-contextbar{padding-inline:14px}.analysis-local{font-size:9px}.analysis-source-label{max-width:170px}#blueprintViews button{padding:6px 8px;font-size:10px}}
+@media(max-width:760px){body[data-analysis-module=blueprint] .analysis-header{gap:7px 10px}body[data-analysis-module=blueprint] .analysis-heading{flex:1 1 200px;gap:8px}body[data-analysis-module=blueprint] .analysis-heading h1{font-size:20px}body[data-analysis-module=blueprint] .analysis-modules{order:0;gap:2px;flex:0 0 auto;margin:0}body[data-analysis-module=blueprint] .analysis-modules button{flex:0 0 auto;padding:6px 8px;font-size:12px}body[data-analysis-module=blueprint] .workflow-analytics-tools{flex:1 1 100%;justify-content:flex-end;gap:6px}body[data-analysis-module=blueprint] .workflow-analytics-tools button{padding:5px 8px}}
 @media(prefers-reduced-motion:reduce){.analysis-panel{animation:none}.analysis-header button{transition:none}}

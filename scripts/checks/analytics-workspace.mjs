@@ -62,8 +62,15 @@ const retainedViewNavigation = tagById(html, 'blueprintViews');
 assert.ok(retainedViewNavigation, 'Blueprint keeps its internal view navigation for compatible routes.');
 assert.match(retainedViewNavigation.tag, /\bhidden(?:\s|>|=)/, 'Analysis canvas and Data & quality are hidden from the top navigation.');
 assert.match(hubStyle, /#blueprintViews\[hidden\]\s*\{[^}]*display:\s*none\b/, 'The retained navigation stays hidden despite its desktop and mobile flex styles.');
-assert.equal((html.match(/<h2\b[^>]*class="blueprint-title"[^>]*>Portfolio Blueprint<\/h2>/g) || []).length, 1, 'The host has one visible Portfolio Blueprint heading.');
-assert.ok(Number(/\.blueprint-title\s*\{[^}]*font-size:\s*([\d.]+)px/.exec(hubStyle)?.[1]) >= 22, 'The Portfolio Blueprint heading is distinct from small navigation text.');
+const analyticsHeader = html.match(/<header\b[^>]*class="analysis-header"[\s\S]*?<\/header>/)?.[0] || '';
+assert.equal((analyticsHeader.match(/<h1\b[^>]*id="analysisTitle"/g) || []).length, 1, 'One shared header title identifies the current analysis module.');
+for (const id of ['analyticsLoadData', 'analyticsSavedViews', 'blueprintImport']) {
+  assert.ok(tagById(analyticsHeader, id), `${id} remains available in the shared header.`);
+  assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, 'Moving a header action preserves its existing unique identity and event binding.');
+}
+assert.match(tagById(analyticsHeader, 'blueprintImport').tag, /\bhidden(?:\s|>|=)/, 'Workbook import starts hidden until Portfolio Blueprint is active.');
+assert.match(hubStyle, /body\[data-analysis-module=blueprint\] \.analysis-contextbar\s*\{[^}]*display:\s*none\b/, 'The old context bar and its retained heading do not add a second visible header.');
+assert.ok(Number(/body\[data-analysis-module=blueprint\] \.analysis-heading h1\s*\{[^}]*font-size:\s*([\d.]+)px/.exec(hubStyle)?.[1]) >= 22, 'The active Blueprint title remains distinct from small navigation text.');
 assert.match(blueprintHtml, /class="explorer-pane-header"[\s\S]*?<h2>Portfolio Blueprint<\/h2>/, 'Standalone analysis retains the same product title.');
 assert.match(analysisStyle, /html\[data-embedded="true"\] \.unified-analysis \.explorer-pane-header > div:first-child\s*\{[^}]*display:\s*none\b/, 'The embedded title is hidden so the host and chart do not repeat visible headings.');
 assert.match(analysisStyle, /\.unified-analysis \.page-heading\s*\{[^}]*clip-path:\s*inset\(50%\)/, 'The retained page heading stays accessible without adding a second visible title.');
@@ -259,15 +266,16 @@ function workspaceFixture(url = "https://example.test/PPC/analytics.html") {
     };
   }
   const retail = element(), blueprint = element(), frame = element({ src: "blueprint/index.html?embedded=1" });
-  const loading = element(), source = element(), importButton = element(), viewNavigation = element(); viewNavigation.hidden = true;
+  const loading = element(), source = element(), importButton = element(), viewNavigation = element(), analysisTitle = element(), body = element(); viewNavigation.hidden = true; importButton.hidden = true; analysisTitle.textContent = 'Analytics';
   const tabs = [element({ analysisModule: "retail" }), element({ analysisModule: "blueprint" })];
   const views = exposedViews.map(view => element({ blueprintView: view }));
   const posts = [], lifecycle = [], history = [], listeners = new Map();
   let loads = 0;
   frame.contentWindow = { postMessage(message, origin) { posts.push({ message: structuredClone(message), origin }); } };
   Object.defineProperty(frame, "src", { get() { return frame.attrs.get("src") || ""; }, set(value) { loads++; frame.attrs.set("src", String(value)); } });
-  const nodes = new Map([["selloutApp", retail], ["blueprintPane", blueprint], ["blueprintFrame", frame], ["blueprintLoading", loading], ["blueprintSource", source], ["blueprintImport", importButton], ['blueprintViews', viewNavigation]]);
+  const nodes = new Map([["selloutApp", retail], ["blueprintPane", blueprint], ["blueprintFrame", frame], ["blueprintLoading", loading], ["blueprintSource", source], ["blueprintImport", importButton], ['blueprintViews', viewNavigation], ['analysisTitle', analysisTitle]]);
   const document = {
+    body,
     getElementById: id => nodes.get(id), currentScript: { src: "https://example.test/PPC/js/analytics-workspace.js?v=fixture-release" },
     querySelectorAll: selector => selector === "[data-analysis-module]" ? tabs : selector === "[data-blueprint-view]" ? views : [],
   };
@@ -281,20 +289,30 @@ function workspaceFixture(url = "https://example.test/PPC/analytics.html") {
     },
   };
   vm.runInNewContext(hubSource, { document, globalThis: window, URL, URLSearchParams, console }, { filename: "analytics-workspace.js" });
-  return { window, retail, blueprint, frame, loading, source, importButton, viewNavigation, tabs, views, posts, lifecycle, history, get loads() { return loads; },
+  return { window, retail, blueprint, frame, loading, source, importButton, viewNavigation, analysisTitle, body, tabs, views, posts, lifecycle, history, get loads() { return loads; },
     emit(name, event) { for (const callback of listeners.get(name) || []) callback(event); },
     message(data, { origin = window.location.origin, sender = frame.contentWindow } = {}) { this.emit("message", { origin, source: sender, data }); },
   };
 }
 const workspace = workspaceFixture();
+const assertModuleHeader = (fixture, module) => {
+  assert.equal(fixture.analysisTitle.textContent, module === 'blueprint' ? 'Portfolio Blueprint' : 'Analytics', 'The shared title follows the active module.');
+  assert.equal(fixture.body.getAttribute('data-analysis-module'), module, 'The active module selects its own compact header style.');
+  assert.equal(fixture.importButton.hidden, module !== 'blueprint', 'The existing workbook import action appears only for Portfolio Blueprint.');
+};
+assertModuleHeader(workspace, 'retail');
 const defaultScaleWorkspace = workspaceFixture('https://example.test/PPC/analytics.html#blueprint/performance');
+assertModuleHeader(defaultScaleWorkspace, 'blueprint');
 assert.equal(new URL(defaultScaleWorkspace.frame.src).searchParams.get('scale'), 'values', 'A newly opened Portfolio plan starts with Values in the retained frame');
 assert.equal(defaultScaleWorkspace.window.PPCAnalyticsWorkspace.captureView().scale, 'values');
 const explicitTrendWorkspace = workspaceFixture('https://example.test/PPC/analytics.html?scale=trend#blueprint/performance');
 assert.equal(new URL(explicitTrendWorkspace.frame.src).searchParams.get('scale'), 'trend', 'An explicitly requested trend URL remains indexed');
 explicitTrendWorkspace.frame.emit('load');
+const savedViewFrameSource = explicitTrendWorkspace.frame.src;
+explicitTrendWorkspace.tabs[0].emit('click'); assertModuleHeader(explicitTrendWorkspace, 'retail');
 explicitTrendWorkspace.window.PPCSavedViews = { sanitizePreferences(kind, value) { assert.equal(kind, 'blueprint'); return structuredClone(value); } };
 await explicitTrendWorkspace.window.PPCAnalyticsWorkspace.applyView({ view: 'performance', scale: 'trend', year: '2027' }, 'blueprint');
+assertModuleHeader(explicitTrendWorkspace, 'blueprint'); assert.equal(explicitTrendWorkspace.frame.src, savedViewFrameSource); assert.equal(explicitTrendWorkspace.loads, 1, 'Opening a saved Blueprint view from Retail restores the header without replacing the loaded source.');
 assert.equal(explicitTrendWorkspace.posts.at(-1).message.preferences.scale, 'trend', 'A saved view retains its explicit Indexed trend preference');
 assert.equal(explicitTrendWorkspace.window.PPCAnalyticsWorkspace.captureView().scale, 'trend');
 await explicitTrendWorkspace.window.PPCAnalyticsWorkspace.applyView({ view: 'performance', year: '2026' }, 'blueprint');
@@ -305,6 +323,7 @@ assert.equal(workspace.loads, 0, "Starting Retail does not instantiate another s
 assert.equal(workspace.retail.hidden, false); assert.equal(workspace.blueprint.hidden, true);
 assert.deepEqual(workspace.lifecycle, [true]);
 workspace.tabs[1].emit("click");
+assertModuleHeader(workspace, 'blueprint');
 assert.equal(workspace.window.PPCAnalyticsWorkspace.currentModule, "blueprint");
 assert.equal(workspace.retail.hidden, true); assert.equal(workspace.blueprint.hidden, false);
 assert.equal(workspace.tabs[1].getAttribute("aria-selected"), "true");
@@ -330,6 +349,7 @@ assert.equal(workspace.window.location.searchParams.get("margin"), "0");
 assert.equal(workspace.source.textContent, "Synthetic source");
 assert.ok(!workspace.window.location.href.includes("EXCLUDED"), "Routes exclude source rows and credentials even if a message includes them.");
 workspace.tabs[0].emit("click");
+assertModuleHeader(workspace, 'retail');
 assert.equal(workspace.posts.at(-1).message.type, "ppc:blueprint:suspend", "Hiding Portfolio plan stops its playback through the suspend command.");
 workspace.tabs[1].emit("click");
 assert.equal(workspace.loads, 1, "Switching modules retains the same imported frame.");
@@ -369,14 +389,17 @@ assert.ok(prevented && workspace.tabs[0].focused, "Native tab keyboard navigatio
 assert.equal(workspace.window.PPCAnalyticsWorkspace.currentModule, "retail");
 
 const deepLink = workspaceFixture("https://example.test/PPC/analytics.html?analysis=blueprint&year=2028&category=Mice&revenue=99&margin=-99&spend=12#blueprint/performance");
+assertModuleHeader(deepLink, 'blueprint'); const deepLinkRoute = deepLink.window.location.href;
 assert.equal(deepLink.window.PPCAnalyticsWorkspace.currentModule, "blueprint");
 const deepSource = new URL(deepLink.frame.src);
 assert.equal(deepSource.hash, "#performance"); assert.equal(deepSource.searchParams.get("year"), "2028");
 assert.equal(deepSource.searchParams.get("revenue"), "30"); assert.equal(deepSource.searchParams.get("margin"), "-10");
 assert.equal(deepSource.searchParams.get("spend"), "12");
 deepLink.window.location = new URL("https://example.test/PPC/analytics.html?analysis=retail"); deepLink.emit("popstate");
+assertModuleHeader(deepLink, 'retail');
 assert.equal(deepLink.window.PPCAnalyticsWorkspace.currentModule, "retail", "Browser history activates the intended module without rebuilding its frame.");
 assert.equal(deepLink.loads, 1);
+deepLink.window.location = new URL(deepLinkRoute); deepLink.emit('popstate'); assertModuleHeader(deepLink, 'blueprint'); assert.equal(deepLink.loads, 1, 'Forward navigation restores the compact Blueprint header and keeps the original frame.');
 const scopedLink = workspaceFixture('https://example.test/PPC/analytics.html?analysis=blueprint&year=2026&category=Headsets&groupId=product-12&projectId=PROJECT%20A&skuId=SKU%2F001#blueprint/performance');
 const scopedSource = new URL(scopedLink.frame.src);
 const scopeParams = url => new URLSearchParams(url.hash.split('?')[1] || '');
