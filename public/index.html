@@ -56,7 +56,6 @@
         </div>
         <div class="toolbar-actions">
           <a class="settings-trigger" href="analytics.html" aria-label="Open Analytics">Analytics</a>
-          <button id="loadDataButton" type="button" class="settings-trigger">Load data</button>
           <button id="workflowReviewButton" type="button" class="settings-trigger">Needs review</button>
           <button id="saveSharedChanges" class="shared-data-trigger master-save-trigger" hidden>Save changes</button>
           <button id="pullLatestData" class="shared-data-trigger" title="Check team records and complete package status">Updates</button>
@@ -206,6 +205,7 @@
           <section id="settingsDataPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabData" data-settings-panel="data">
             <div class="settings-section-heading"><h3>Data & export</h3><span class="scope-badge">Entire portfolio</span></div>
             <p class="settings-note">PLC reports update project milestones. ASCM adds and updates products. Package and data imports replace the workspace.</p>
+            <div class="shared-package-settings"><div><h4>Load a source file</h4><p class="settings-note">Choose a workbook or backup, then review how to use it.</p></div><button id="loadDataButton" type="button" class="primary-button" aria-haspopup="dialog">Load data</button></div>
             <section class="plc-settings-summary" aria-label="PLC update freshness"><div><h4>HyperX project updates</h4><p id="plcSettingsStatus" class="settings-note">Drop in the biweekly PLC workbook. Reliable dates update automatically with timestamps and aging days.</p></div><button id="settingsPlcUpdates" type="button">Open PLC updates</button></section>
             <div class="shared-package-settings"><div><h4>Portfolio access</h4><p id="sharedPackageStatus" class="settings-note"></p></div><button id="settingsPullLatestData" type="button">Open portfolio</button></div>
             <section class="package-info" aria-label="Loaded package information"><dl><dt>Package updated</dt><dd><time id="sharedPackageUpdated"></time></dd><dt>Updater comments</dt><dd id="sharedPackageComments" class="package-info-comments"></dd></dl></section>

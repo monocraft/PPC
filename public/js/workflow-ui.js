@@ -95,9 +95,10 @@
     catch (error) { if (generation !== loadGeneration) return; selectedFile = null; result.textContent = error.message; renderChoices(); }
   });
   load.body.append(description, fileInput, result, choices, privacy); renderChoices();
+  function openLoad() { root.PortfolioWorkspaceUI?.closeSettings?.(); load.open(); }
   const loadButton = doc.getElementById('loadDataButton') || doc.getElementById('analyticsLoadData');
-  loadButton?.addEventListener('click', () => { load.open(); });
-  doc.getElementById('emptyLoadData')?.addEventListener('click',()=>load.open());
+  loadButton?.addEventListener('click', openLoad);
+  doc.getElementById('emptyLoadData')?.addEventListener('click',openLoad);
   let planning = null;
 
   function portfolioFeatures() {
@@ -279,7 +280,7 @@
     root.PortfolioNotifications?.subscribe(()=>{if(notificationRefreshQueued)return;notificationRefreshQueued=true;Promise.resolve().then(()=>{notificationRefreshQueued=false;updateStatus();});});
     for(const action of doc.querySelectorAll('[data-workflow-range]')) action.addEventListener('click',()=>{try{adapter.rangePreset(action.dataset.workflowRange);}catch(error){announce(error.message);}});
     updateStatus();
-    root.PortfolioWorkflowUI = Object.freeze({ openLoad:()=>load.open(),openReview,openLocalRecovery,openProtection,planning,getReviewItems:items,refresh:updateStatus });
+    root.PortfolioWorkflowUI = Object.freeze({ openLoad,openReview,openLocalRecovery,openProtection,planning,getReviewItems:items,refresh:updateStatus });
   }
   if(root.PortfolioWorkflowAdapter) void Promise.resolve(root.PortfolioWorkspaceReady).then(portfolioFeatures).catch(()=>{});
   const request = new URL(root.location.href).searchParams.get('loadRequest');

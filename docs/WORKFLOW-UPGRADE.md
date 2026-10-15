@@ -2,7 +2,7 @@
 
 ## Load the right source
 
-Use **Load data** in Portfolio or Analytics, including the empty Portfolio welcome screen. Choose a local file, then confirm what you want to do. A likely destination is highlighted when the workbook structure is recognizable; an uncertain file never chooses a destination for you.
+In Portfolio, open **Settings → Data & export → Load data**. The empty welcome screen also offers **Load data** for initial setup. In Analytics, use its **Load data** button. Choose a local file, then confirm what you want to do. A likely destination is highlighted when the workbook structure is recognizable; an uncertain file never chooses a destination for you.
 
 | Purpose | Destination and review |
 | --- | --- |
