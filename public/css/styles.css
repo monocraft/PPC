@@ -59,6 +59,16 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .master-dialog-description { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.65; }
 .master-dialog-close { position: absolute; top: 16px; right: 16px; width: 30px; min-height: 30px; padding: 0; border: 0; background: transparent; font-size: 24px; }
 .master-dialog-body { display: grid; flex: 1 1 auto; min-height: 0; align-content: start; gap: 16px; padding: 0 24px 20px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.portfolio-updates-dialog[open] { display: flex; flex-direction: column; }
+.portfolio-updates-dialog { width: min(600px, calc(100vw - 32px)); }
+.portfolio-updates-body { gap: 14px; }
+.portfolio-update-card { padding: 18px; border-radius: var(--corner-control); background: var(--color-header); }
+.portfolio-update-card h3 { margin: 0 0 10px; font-size: 14px; }
+.portfolio-update-card p { margin: 8px 0; font-size: 12px; line-height: 1.65; }
+.portfolio-update-card .portfolio-update-status { font-size: 13px; color: var(--color-text); }
+.portfolio-update-note { color: var(--color-text-secondary); }
+.portfolio-update-card button { margin: 8px 8px 0 0; }
+.master-save-trigger[hidden] { display: none; }
 .master-dialog a { color: var(--color-text-secondary); text-underline-offset: 3px; }
 .master-dialog-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 9px; padding: 16px 24px; border-top: 1px solid transparent; background: var(--color-surface); }
 .master-dialog-actions button { min-height: 36px; padding-inline: 16px; }

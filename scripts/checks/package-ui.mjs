@@ -108,7 +108,7 @@ assert.equal(staticUi.elements.get("sharedPackageComments").textContent, loadedI
 const footerDate = (ui) => ui.elements.get("statusbarPackage").children[0].children[0];
 const footerComment = (ui) => ui.elements.get("statusbarPackage").children[1];
 assert.equal(footerDate(staticUi).textContent, formatDate(loadedInfo));
-assert.equal(staticUi.elements.get("statusbarPackage").children[0].textContent, "Updated ", "the everyday footer uses a plain update label");
+assert.equal(staticUi.elements.get("statusbarPackage").children[0].textContent, "Package dated ", "a package timestamp never claims the whole workspace is current");
 assert.equal(footerDate(staticUi).dateTime, loadedInfo.updatedAt);
 assert.equal(footerComment(staticUi).children[1].textContent, loadedInfo.comments);
 assert.equal(footerComment(staticUi).children[1].tabIndex, 0, "long comment content must support keyboard scrolling");
@@ -140,6 +140,7 @@ staticUi.elements.get("packageKey").value = key;
 await staticUi.submit();
 assert.equal(staticUi.calls.downloads.length, 1, "wrong-key retry should reuse encrypted bytes for this dialog only");
 assert.equal(staticUi.calls.imports.at(-1).requireEncrypted, true);
+assert.equal(staticUi.calls.imports.at(-1).fromSharedDownload, true, "only the actual shared download path records its package identity");
 assert.match(staticUi.elements.get("packageStatus").textContent, /198 products across 11 categories/);
 assertSimpleCopy(staticUi);
 assert.equal(staticUi.elements.get("packageKey").value, "");
@@ -243,7 +244,7 @@ assert.equal(legacyUi.elements.get("sharedPackageUpdated").textContent, "Date no
 assert.equal(legacyUi.elements.get("packageResultUpdated").dateTime, "");
 assert.equal(legacyUi.elements.get("packageResultComments").textContent, "No comments supplied.");
 assert.equal(footerDate(legacyUi).dateTime, "", "legacy package dates must not invent a timestamp in the footer");
-assert.equal(legacyUi.elements.get("statusbarPackage").children[0].textContent, "Update date ");
+assert.equal(legacyUi.elements.get("statusbarPackage").children[0].textContent, "Package date ");
 assert.equal(footerComment(legacyUi).textContent, "No comments supplied.");
 legacyUi.ui.close();
 legacyUi.setImportInfo({ ...incomingInfo, comments: " \n \t " });

@@ -6063,6 +6063,7 @@ async function buildProjectPackageBytes(packageInfo) {
   delete manifest.masterLocalRemovedProducts;
   delete manifest.masterLocalMerges;
   delete manifest.masterLocalAssetIds;
+  delete manifest.loadedPackageInfo;
   manifest.packageInfo = packageInfo === undefined ? codec.createPackageInfo() : codec.normalizePackageInfo(packageInfo);
   if (!manifest.packageInfo) throw new Error("The package update information is invalid.");
   validatePackageManifest(manifest);
@@ -6106,9 +6107,13 @@ async function exportProjectPackage(key = "", { comments = "" } = {}) {
   }
 }
 
-async function importProjectPackage(file, { key = "", requireEncrypted = false } = {}) {
+async function importProjectPackage(file, { key = "", requireEncrypted = false, fromSharedDownload = false } = {}) {
   if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
-  if (globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Wait for the master update to finish before loading a package.");
+  const sharingState = globalThis.PortfolioMasterUI?.getSession?.()?.getState();
+  if (sharingState?.busy) throw new Error("Wait for the master update to finish before loading a package.");
+  if (sharingState?.pending?.length) throw new Error("Save or discard your shared record changes before loading a complete package. Your current workspace has been kept.");
+  if (fromSharedDownload && ["pending", "error"].includes(sharingState?.snapshot?.publication?.status)) throw new Error("The complete package is not ready. Check team updates again before opening it. Your current workspace has been kept.");
+  const expectedPackageSha = fromSharedDownload && /^[a-f0-9]{40}$/i.test(sharingState?.snapshot?.publication?.githubSha || "") ? sharingState.snapshot.publication.githubSha.toLowerCase() : "";
   const codec = packageCodec();
   if (Number(file?.size || 0) > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
   packageOperationInProgress = true;
@@ -6120,7 +6125,7 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
     const input = new Uint8Array(await file.arrayBuffer());
     if (input.length > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
     const encrypted = codec.isEncrypted(input);
-    if (requireEncrypted && !encrypted) throw new Error("The shared master must be an encrypted package.");
+    if ((requireEncrypted || fromSharedDownload) && !encrypted) throw new Error("The shared master must be an encrypted package.");
     const bytes = encrypted ? await codec.decrypt(input, key) : input;
     const entries = codec.readZip(bytes);
     const manifestBytes = entries.get("portfolio.json");
@@ -6161,6 +6166,16 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false }
       }
     }
     draft.masterLocalAssetIds = Object.fromEntries(replacements);
+    delete draft.loadedPackageInfo;
+    if (fromSharedDownload && encrypted) {
+      // Identity comes from the actual encrypted download, never mutable shared
+      // snapshot metadata or a package timestamp. A known published identity must
+      // match before activation; without one, missing hashing leaves it unknown.
+      let gitBlobSha = "";
+      try { gitBlobSha = await globalThis.PortfolioPackageClient?.gitBlobSha?.(input) || ""; } catch (_) {}
+      if (expectedPackageSha && gitBlobSha !== expectedPackageSha) throw new Error("The downloaded package does not match the published copy from your last team check. Check team updates and try again. Your current workspace has been kept.");
+      if (/^[a-f0-9]{40}$/.test(gitBlobSha)) draft.loadedPackageInfo = { version: 1, gitBlobSha, loadedAt: new Date().toISOString() };
+    }
     const result = await commitPackageDraft(draft, expectedCurrent, stagedImages);
     globalThis.PortfolioMasterUI?.markImported(draft.masterLocalBaseline || [], key);
     return { ...result, encrypted };
@@ -7160,6 +7175,7 @@ function importJson(file) {
         return { id: nextId, blob: entry.blob };
       });
       remapImportedLocalImages(draft, replacements);
+      delete draft.loadedPackageInfo;
       await commitPackageDraft(draft, expectedCurrent, images, { cleanupImages: false });
       globalThis.PortfolioMasterUI?.disconnect();
       globalThis.PortfolioMasterUI?.markImported(portfolio.masterLocalBaseline || []);
@@ -8153,6 +8169,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
     scheduleSave();
   },
   getPackageInfo: () => getCurrentPackageInfo(),
+  getLoadedPackageInfo: () => portfolio.loadedPackageInfo ? JSON.parse(JSON.stringify(portfolio.loadedPackageInfo)) : null,
   getSelectedProductId: () => selectedId || "",
   getSelectedCategoryId: () => activeCategoryId || "",
   hasPendingPackageOperation: () => packageOperationInProgress || workspaceOpening,
@@ -8168,7 +8185,7 @@ globalThis.PortfolioMasterAdapter = Object.freeze({
     }
     scheduleSave();
   },
-  canRefresh: () => !packageOperationInProgress && !roadmapDragState && !dragState && !productCardMotion && !document.querySelector('.modal-backdrop:not(.hidden), dialog[open]') && !document.activeElement?.closest('#inspector'),
+  canRefresh: ({ allowUpdatesDialog = false } = {}) => !packageOperationInProgress && !roadmapDragState && !dragState && !productCardMotion && !document.querySelector(allowUpdatesDialog ? '.modal-backdrop:not(.hidden), dialog[open]:not(#portfolioUpdatesDialog)' : '.modal-backdrop:not(.hidden), dialog[open]') && !document.activeElement?.closest('#inspector'),
   applyPatches: (changes) => {
     if (packageOperationInProgress) throw new Error("Finish loading the package before saving shared changes.");
     const nextProducts = new Map(portfolio.categories.map((category) => [category.id, category.board.products.slice()]));

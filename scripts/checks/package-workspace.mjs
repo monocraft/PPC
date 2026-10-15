@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 await import("../../public/js/package-codec.js");
+await import("../../public/js/package-client.js");
 await import("../../public/js/workspace-store.js");
 await import("../../public/js/master-model.js");
 const codec = globalThis.PortfolioPackage;
@@ -129,7 +130,7 @@ function harness(initial = portfolioFixture()) {
   };
   const sandbox = {
     Blob, Uint8Array, ArrayBuffer, DataView, TextEncoder, TextDecoder, Map, Set, Date, atob,
-    PortfolioPackage: codec, PortfolioModel: { syncTimelineSettings() {} },
+    PortfolioPackage: codec, PortfolioPackageClient: globalThis.PortfolioPackageClient, PortfolioModel: { syncTimelineSettings() {} },
     STORAGE_KEY: storageKey, PREVIOUS_STORAGE_KEY: "previous", PACKAGE_RECOVERY_KEY: recoveryKey,
     MAX_PACKAGE_MANIFEST_BYTES: 64 * 1024 * 1024, IMAGE_STORE_NAME: "images",
     CATEGORY_DEFINITIONS: clone(definitions), pendingLegacyImageBlobs: [],
@@ -257,6 +258,31 @@ const encrypted = await codec.encrypt(packageBytes(newManifest), key);
 const secured = harness();
 assert.equal((await secured.sandbox.importProjectPackage(new Blob([encrypted]), { key, requireEncrypted: true })).encrypted, true);
 assert.ok([...secured.stored.values()].every((value) => !value.includes(key)), "the package key must never be persisted");
+const provenance = harness();
+await provenance.sandbox.importProjectPackage(new Blob([encrypted]), { key, requireEncrypted: true, fromSharedDownload: true });
+assert.equal(provenance.sandbox.portfolio.loadedPackageInfo.gitBlobSha, await globalThis.PortfolioPackageClient.gitBlobSha(encrypted), "loaded identity is calculated from the exact encrypted input bytes");
+assert.equal(provenance.sandbox.portfolio.loadedPackageInfo.version, 1);
+const loadedMarker = JSON.stringify(provenance.sandbox.portfolio.loadedPackageInfo);
+provenance.sandbox.portfolio.masterSync = { supabaseRevision: 999 }; provenance.sandbox.portfolio.packageInfo = codec.createPackageInfo();
+assert.equal(JSON.stringify(provenance.sandbox.portfolio.loadedPackageInfo), loadedMarker, "mutable team metadata cannot advance the loaded image package identity");
+await provenance.sandbox.exportProjectPackage(key);
+const provenanceExport = codec.readZip(await codec.decrypt(new Uint8Array(await provenance.calls.downloads[0].blob.arrayBuffer()), key));
+assert.equal(Object.hasOwn(JSON.parse(decoder.decode(provenanceExport.get("portfolio.json"))), "loadedPackageInfo"), false, "local loaded identity is not re-exported as package provenance");
+const forgedManifest = clone(newManifest); forgedManifest.loadedPackageInfo = { version: 1, gitBlobSha: "a".repeat(40), loadedAt: "2026-01-01T00:00:00.000Z" };
+await provenance.sandbox.importProjectPackage(new Blob([packageBytes(forgedManifest)]));
+assert.equal(Object.hasOwn(provenance.sandbox.portfolio, "loadedPackageInfo"), false, "manual imported files cannot claim a verified shared download identity");
+const pendingPackage = harness(), pendingBefore = JSON.stringify(pendingPackage.sandbox.portfolio);
+pendingPackage.sandbox.PortfolioMasterUI = { getSession: () => ({ getState: () => ({ busy: false, pending: [{ productId: "draft" }] }) }) };
+await assert.rejects(pendingPackage.sandbox.importProjectPackage(new Blob([encrypted]), { key, fromSharedDownload: true }), /Save or discard/);
+assert.equal(JSON.stringify(pendingPackage.sandbox.portfolio), pendingBefore); assert.equal(pendingPackage.calls.workspaceWrites, 0); assert.equal(pendingPackage.sandbox.packageOperationInProgress, false);
+const wrongPublished = harness(), wrongBefore = JSON.stringify(wrongPublished.sandbox.portfolio);
+wrongPublished.sandbox.PortfolioMasterUI = { getSession: () => ({ getState: () => ({ busy: false, pending: [], snapshot: { publication: { status: "current", githubSha: "f".repeat(40) } } }) }) };
+await assert.rejects(wrongPublished.sandbox.importProjectPackage(new Blob([encrypted]), { key, requireEncrypted: true, fromSharedDownload: true }), /does not match the published copy/);
+assert.equal(JSON.stringify(wrongPublished.sandbox.portfolio), wrongBefore); assert.equal(wrongPublished.calls.workspaceWrites, 0); assert.equal(wrongPublished.images.size, 1, "a stale or changed package cannot stage or replace current pixels");
+const delayedPublished = harness();
+delayedPublished.sandbox.PortfolioMasterUI = { getSession: () => ({ getState: () => ({ busy: false, pending: [], snapshot: { publication: { status: "pending" } } }) }) };
+await assert.rejects(delayedPublished.sandbox.importProjectPackage(new Blob([encrypted]), { key, fromSharedDownload: true }), /complete package is not ready/);
+assert.equal(delayedPublished.calls.workspaceWrites, 0);
 await secured.sandbox.exportProjectPackage(key);
 assert.equal(secured.calls.downloads[0].name, "master_ppc.pkg");
 const exported = new Uint8Array(await secured.calls.downloads[0].blob.arrayBuffer());
