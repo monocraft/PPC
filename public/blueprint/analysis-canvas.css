@@ -1,11 +1,12 @@
 /* Flat entity values above a full-width financial plot. */
 .hx-analysis-canvas{--hac-text:var(--text,#d5d7dc);--hac-muted:var(--muted,#9b9ea5);font-family:var(--font,'Jost',sans-serif);color:var(--hac-text);min-width:0;width:100%;font-variant-numeric:tabular-nums}
 .hx-analysis-canvas *{box-sizing:border-box}
-.hac-chart-context,.hac-readout-head>span:not(.hac-comparison-context),.hac-legend-status,.hac-value-basis.is-source{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;clip-path:inset(50%);overflow:hidden;white-space:nowrap}
+.hac-chart-context,.hac-readout-head>span:not(.hac-comparison-context):not(.hac-yoy-context),.hac-legend-status,.hac-value-basis.is-source{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;clip-path:inset(50%);overflow:hidden;white-space:nowrap}
 .hac-readout{padding:3px 0 7px;min-width:0}
 .hac-readout-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 10px;margin-bottom:3px;line-height:1.4}
 .hac-readout-head strong{font-size:11px;font-weight:400;color:#aeb6c3}
 .hac-comparison-context{font-size:11px;font-weight:400;color:#aeb6c3}
+.hac-yoy-context{flex:1 1 200px;min-width:0;max-width:100%;font-size:11px;font-weight:400;color:#8e9bad;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hac-value-with-difference{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px}
 .hac-readout-difference{color:#aeb8c6;font-size:15px;font-weight:400;line-height:1.35;white-space:nowrap;font-variant-numeric:tabular-nums}
 .hac-readout-difference.is-positive{color:#84d6a4}
@@ -71,6 +72,13 @@
 .hac-point-value-name{font-size:11px;fill:#e3e6ed;font-weight:400}
 .hac-point-value-amount{font-size:15px;font-weight:400;font-variant-numeric:tabular-nums}
 .hac-point-value.is-primary .hac-point-value-amount{font-weight:600}
+.hac-point-value.is-next-year .hac-point-value-amount{fill:#8e9bad;font-weight:400}
+.hac-next-year-change,.hac-yoy-label{font-size:15px;font-weight:400;font-variant-numeric:tabular-nums;fill:#9ba6b5;paint-order:stroke fill;stroke:var(--page,#1a1b1c);stroke-width:3px;stroke-linejoin:round}
+.hac-next-year-change.is-positive,.hac-yoy-label.is-positive{fill:#84d6a4}
+.hac-next-year-change.is-negative,.hac-yoy-label.is-negative{fill:#f08b8d}
+.hac-next-year-change.is-unavailable,.hac-yoy-label.is-unavailable{fill:#737f90}
+.hac-yoy-axis-label{font-size:11px;font-weight:400;fill:#8e9bad}
+.hac-yoy-band{pointer-events:none}
 .hac-empty-label{fill:#a6aebb;font-size:12px}
 .hac-year-rail{padding:0 var(--hac-right,24px) 7px var(--hac-left,76px);border:0;background:#ffffff06}
 .hac-rail-track{position:relative;min-width:0}

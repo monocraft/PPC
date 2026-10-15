@@ -9,8 +9,41 @@ const [source, css, workspaceSource] = await Promise.all([
 ]);
 const context = { window: {}, Intl, AbortController };
 vm.runInNewContext(source, context);
-const { prepare, create } = context.window.HX_ANALYSIS_CANVAS;
+const { prepare, create, yearOverYear } = context.window.HX_ANALYSIS_CANVAS;
 assert.equal(typeof prepare, 'function'); assert.equal(typeof create, 'function');
+assert.equal(typeof yearOverYear, 'function');
+const yoyRawPoints = [
+  { period: 2025, value: 100, rawValue: -20, kind: 'unclassified', source: [{ cell: 'raw-negative-prior' }] },
+  { period: 2026, value: 50, rawValue: -10, kind: 'unclassified', source: [{ cell: 'raw-negative-current' }] }
+];
+const yoyRawBefore = JSON.stringify(yoyRawPoints), recoveredLoss = yearOverYear(yoyRawPoints, 2026);
+assert.equal(recoveredLoss.percent, 50); assert.equal(recoveredLoss.previousValue, -20); assert.equal(recoveredLoss.currentValue, -10, 'YoY compares exact source values, including recovery from a negative prior year, rather than indexed coordinates');
+assert.equal(String(recoveredLoss.previousPeriod), '2025'); assert.equal(recoveredLoss.currentPoint.source[0].cell, 'raw-negative-current'); assert.equal(recoveredLoss.previousPoint.source[0].cell, 'raw-negative-prior');
+assert.equal(yearOverYear([{ period: 2025, value: 20 }, { period: 2026, value: -10 }], 2026).percent, -150, 'A move from positive revenue to a loss retains its signed change');
+assert.equal(yearOverYear([{ period: 2025, value: 20 }, { period: 2026, value: 0 }], 2026).percent, -100, 'A recorded zero current year is a valid decrease rather than missing data');
+assert.equal(yearOverYear([{ period: 2025, value: -20 }, { period: 2026, value: 0 }], 2026).percent, 100);
+assert.equal(yearOverYear([{ period: '2025', value: 20 }, { period: '2026', value: 20 }], '2026').percent, 0, 'Exact calendar-year strings retain a genuine neutral result');
+for (const [points, period] of [
+  [[{ period: 2024, value: 20 }, { period: 2026, value: 40 }], 2026],
+  [[{ period: 2025, value: 20 }, { period: 2027, value: 40 }], 2026],
+  [[{ period: 2025, value: 0 }, { period: 2026, value: 40 }], 2026],
+  [[{ period: 2025, value: null }, { period: 2026, value: 40 }], 2026],
+  [[{ period: 2025, value: 20 }, { period: 2026, value: null }], 2026],
+  [[{ period: 2025, value: 20 }, { period: 2025, value: 30 }, { period: 2026, value: 40 }], 2026],
+  [[{ period: 2025, value: 20 }, { period: 2026, value: 30 }, { period: 2026, value: 40 }], 2026],
+  [[{ period: 2025, value: -Number.MAX_VALUE }, { period: 2026, value: Number.MAX_VALUE }], 2026],
+  [[{ period: 'Baseline', value: 20 }, { period: 'Next', value: 40 }], 'Next']
+]) {
+  const result = yearOverYear(points, period);
+  assert.equal(result.percent, null, 'Missing calendar neighbors, zero prior values, duplicates, invalid years and overflow cannot produce a fabricated YoY result');
+  assert.ok(result.reason, 'Unavailable YoY has an explicit diagnostic reason');
+}
+assert.equal(JSON.stringify(yoyRawPoints), yoyRawBefore, 'YoY analysis never changes source observations or their evidence');
+const subtotalChange = yearOverYear([
+  { period: 2025, value: 100, coverage: { complete: false, selectedCount: 2, availableIds: ['A'] } },
+  { period: 2026, value: 200, coverage: { complete: false, selectedCount: 2, availableIds: ['B'] } }
+], 2026);
+assert.equal(subtotalChange.percent, 100); assert.equal(subtotalChange.partial, true); assert.equal(subtotalChange.coverageChanged, true, 'Known subtotals retain incomplete and changing source-population diagnostics rather than pretending missing members are zero');
 const periods = [2025, 2026, 2027];
 const trace = (id, metric, values, extra = {}) => ({ id, name: id, metric, color: '#20CBDD', unit: metric === 'units' ? 'units' : 'currency', points: periods.map((period, index) => ({ period, value: values[index], kind: period === 2025 ? 'actual' : period === 2026 ? 'unclassified' : 'projection', source: [{ sheet: 'Synthetic source', cell: `${id}-${period}`, value: values[index] }], basis: 'Explicit synthetic source basis' })), ...extra });
 const alpha = { entityId: 'Alpha', name: 'Alpha' };
@@ -186,7 +219,7 @@ assert.deepEqual(yearButtons.map(button => button.querySelectorAll('.hac-year-pr
 assert.deepEqual(yearButtons.map(button => button.querySelectorAll('.hac-year-number')[0]?.textContent), ['25', '26', '27']);
 assert.equal(root.querySelectorAll('.hac-readout-head')[0].children[0].textContent, 'Selected FY26');
 assert.equal(root.querySelectorAll('.hac-scale-label')[0].textContent, 'Trend index · FY25 = 100', 'The precise scale remains available when visible readout hints are removed');
-assert.equal(root.querySelectorAll('.hac-readout-head')[0].children.length, 3, 'The readout heading contains the year, optional source-comparison context and accessible diagnostics');
+assert.equal(root.querySelectorAll('.hac-readout-head')[0].children.length, 4, 'The readout heading contains the year, source-comparison and YoY contexts, plus accessible diagnostics');
 assert.equal(root.querySelectorAll('.hac-comparison-context')[0].hidden, true, 'A normal single-entity chart does not show an invented comparison baseline');
 assert.ok(root.querySelectorAll('.hac-notice')[0].className.split(/\s+/).includes('hac-sr-only')); assert.match(stage.getAttribute('aria-description'), /Trend index · FY25 = 100/); assert.match(root.getAttribute('aria-label'), /Trend index · FY25 = 100/, 'The simplified heading does not hide the chart’s normalization basis from assistive technology');
 const svgDescendants = node => node.children.flatMap(child => [child, ...svgDescendants(child)]);
@@ -199,19 +232,20 @@ root.querySelectorAll('.hac-legend-row')[0].dispatch('click');
 assert.equal(inspected.length, 0, 'Normal value selection never invokes source evidence or a popup callback');
 assert.equal(selected.length, selectedBeforeClick + 1, 'Selecting a value announces its year even if that year was already selected');
 assert.equal(root.querySelectorAll('.hac-legend-row')[0].getAttribute('aria-pressed'), 'true');
-assert.equal(stage.querySelectorAll('.hac-selected-point').length, 4, 'The selected fiscal year is marked without overlaying repeated values on the plot');
+assert.equal(stage.querySelectorAll('.hac-selected-point').filter(point => point.getAttribute('data-period') === '2025').length, 4, 'Every selected-year metric keeps its ring alongside the exact selected curve’s separate next-year ring');
 assert.equal(stage.querySelectorAll('.hac-point-label-text').length, 0); assert.equal(stage.querySelectorAll('.hac-point-leader').length, 0);
 const hasClass = (element, className) => element.className.split(/\s+/).includes(className);
 const primaryValues = () => stage.querySelectorAll('.hac-point-value').filter(element => hasClass(element, 'is-primary'));
 const secondaryValues = () => stage.querySelectorAll('.hac-point-value').filter(element => hasClass(element, 'is-secondary'));
 const primaryRings = () => stage.querySelectorAll('.hac-selected-point').filter(element => hasClass(element, 'is-primary'));
-const assertLabelGeometry = () => {
-  const band = stage.querySelectorAll('.hac-year-band')[0], top = Number(band.getAttribute('y')), bottom = top + Number(band.getAttribute('height'));
-  const groups = stage.querySelectorAll('.hac-point-value');
-  for (const group of groups) assert.ok(Number(group.getAttribute('data-label-top')) >= top && Number(group.getAttribute('data-label-bottom')) <= bottom, 'Every visible source-value label fits within the financial plot');
-  for (const side of ['left', 'right']) {
-    const boxes = groups.filter(group => group.getAttribute('data-label-side') === side).map(group => ({ top: Number(group.getAttribute('data-label-top')), bottom: Number(group.getAttribute('data-label-bottom')) })).sort((a, b) => a.top - b.top);
-    for (let index = 1; index < boxes.length; index++) assert.ok(boxes[index].top >= boxes[index - 1].bottom, 'Labels on the same side of the year guide never overlap');
+const assertLabelGeometry = (labelStage = stage) => {
+  const band = labelStage.querySelectorAll('.hac-year-band')[0], top = Number(band.getAttribute('y')), bottom = top + Number(band.getAttribute('height'));
+  const clip = labelStage.querySelectorAll('.hac-time-clip')[0].children[0], left = Number(clip.getAttribute('x')), right = left + Number(clip.getAttribute('width'));
+  const boxes = labelStage.querySelectorAll('.hac-point-value').map(group => ({ top: Number(group.getAttribute('data-label-top')), bottom: Number(group.getAttribute('data-label-bottom')), left: Number(group.getAttribute('data-label-left')), right: Number(group.getAttribute('data-label-right')) }));
+  for (const box of boxes) assert.ok(Number.isFinite(box.left) && Number.isFinite(box.right) && box.left >= left && box.right <= right && box.top >= top && box.bottom <= bottom, 'Every visible source-value label fits within both dimensions of the financial plot');
+  for (let first = 0; first < boxes.length; first++) for (let second = first + 1; second < boxes.length; second++) {
+    const a = boxes[first], b = boxes[second];
+    assert.ok(a.right + 4 <= b.left + 1e-6 || b.right + 4 <= a.left + 1e-6 || a.bottom + 4 <= b.top + 1e-6 || b.bottom + 4 <= a.top + 1e-6, 'Selected-year and next-year annotations have a collision-free two-dimensional gap');
   }
 };
 assert.equal(primaryValues().length, 1, 'The clicked value has one primary annotation');
@@ -345,9 +379,10 @@ const inspectedBeforeCrowding = inspected.length; root.querySelectorAll('.hac-le
 assert.equal(inspected.length, inspectedBeforeCrowding, 'A crowded point selection still does not open source evidence automatically');
 assert.equal(primaryValues().length, 1); assert.equal(primaryValues()[0].getAttribute('data-series-id'), 'Crowded 0', 'Crowding never discards the primary selected point label');
 assert.equal(primaryValues()[0].querySelectorAll('.hac-point-value-amount')[0].textContent, '$1,000.00', 'The primary label shows exact source dollars instead of its 200000 trend index');
-assert.equal(stage.querySelectorAll('.hac-selected-point').length, 40); assert.equal(root.querySelectorAll('.hac-legend-value').length, 40, 'Dense annotation placement keeps every source point ring and exact top value');
+assert.equal(stage.querySelectorAll('.hac-selected-point').filter(point => point.getAttribute('data-period') === '2026').length, 40); assert.equal(root.querySelectorAll('.hac-legend-value').length, 40, 'Dense annotation placement keeps every selected-year source ring and exact top value');
 assert.ok(stage.querySelectorAll('.hac-point-value').length < 40, 'Crowded secondary annotations are bounded by available geometry instead of overlapping or shrinking');
-assert.ok(stage.querySelectorAll('.hac-point-value').every(group => group.querySelectorAll('.hac-point-value-amount')[0].textContent === '$1,000.00')); assertLabelGeometry();
+assert.ok(stage.querySelectorAll('.hac-point-value').filter(group => !hasClass(group, 'is-next-year')).every(group => group.querySelectorAll('.hac-point-value-amount')[0].textContent === '$1,000.00'));
+assert.equal(stage.querySelectorAll('.hac-point-value').find(group => hasClass(group, 'is-next-year'))?.querySelectorAll('.hac-point-value-amount')[0].textContent, '$2,000.00', 'Crowded comparisons protect the selected curve’s exact next-year value as well as its selected value'); assertLabelGeometry();
 chart.update({ periods: ['Baseline'], period: 'Baseline', series: [trace('Custom period', 'revenue', [], { points: [{ period: 'Baseline', value: 2 }] })] });
 const customYearButton = root.querySelectorAll('.hac-year-buttons')[0].querySelectorAll('button')[0];
 assert.equal(customYearButton.textContent, 'Baseline'); assert.equal(customYearButton.getAttribute('aria-label'), 'Baseline'); assert.equal(customYearButton.querySelectorAll('.hac-year-prefix').length, 0, 'Non-fiscal labels remain intact rather than acquiring a misleading FY prefix');
@@ -399,6 +434,74 @@ const missingComparison = structuredClone(comparisonModel); for (const entity of
 comparisonChart.update(missingComparison); assert.equal(comparisonContext.hidden, true); assert.equal(delta('A:revenue').textContent, '(n/a)'); assert.equal(delta('B:units').textContent, '(n/a)', 'No finite source-revenue baseline produces unavailable comparisons rather than a made-up product');
 comparisonChart.update({ ...comparisonModel, series: comparisonSources.slice(0, 4), comparison: { entities: comparisonEntities.slice(0, 1) } }); assert.equal(comparisonContext.hidden, true); assert.ok(comparisonRoot.querySelectorAll('.hac-readout-difference').every(item => item.hidden), 'One selected product clears comparison context and every percentage');
 assert.equal(JSON.stringify(comparisonModel), comparisonBefore, 'Inspect comparisons never mutate source values, scenarios or annual plans'); comparisonChart.destroy();
+
+// Annual change stays anchored to raw calendar-year observations. A second
+// product and a large scenario make accidental cross-curve borrowing visible.
+const yoyYears = [2023, 2024, 2025, 2026, 2027, 2029, 2030];
+const yoyTrace = (id, metric, values, extra = {}) => ({ id, entityId: id.startsWith('A') ? 'A' : 'B', name: id, metric, unit: metric === 'units' ? 'units' : 'currency', color: id.startsWith('A') ? '#20CBDD' : '#895EF6', points: yoyYears.map((period, index) => ({ period, value: values[index], kind: 'unclassified', basis: 'Exact annual synthetic source', source: [{ cell: `${id}-${period}`, value: values[index] }] })), ...extra });
+const yoySeries = [yoyTrace('A revenue', 'revenue', [50, 100, 150, 0, -50, 200, 300]), yoyTrace('A gross profit', 'grossProfit', [5, 10, 20, -5, -10, 30, 40]), yoyTrace('B revenue', 'revenue', [1000, 900, 900, 900, 900, 900, 900]), yoyTrace('A scenario', 'revenue', [null, null, 500, 800, 1200, 1600, 1800], { scenario: true }), yoyTrace('B units', 'units', [10, 20, 30, null, 50, 60, 70])];
+const yoyModel = { periods: yoyYears, period: 2025, scale: 'trend', series: yoySeries, yoy: { metric: 'revenue', label: 'Selected source scope', points: yoyYears.map((period, index) => ({ period, value: yoySeries[0].points[index].value + yoySeries[2].points[index].value, coverage: { complete: true, selectedCount: 2, availableIds: ['A', 'B'] } })) } };
+const yoyBefore = JSON.stringify(yoyModel), yoyContainer = new Element('div', doc), yoyPeriods = [], yoyEvidence = [], yoyChart = create(yoyContainer, { onPeriod: period => yoyPeriods.push(period), onPoint: payload => yoyEvidence.push(payload) });
+const yoyPrepared = yoyChart.update(yoyModel), yoyRoot = yoyContainer.children[0], yoyStage = yoyRoot.querySelectorAll('.hac-stage')[0];
+const yoyBandValue = period => yoyStage.querySelectorAll('.hac-yoy-value').find(label => label.getAttribute('data-period') === String(period));
+const nextYearGroups = () => yoyStage.querySelectorAll('.hac-point-value').filter(group => hasClass(group, 'is-next-year'));
+let yoyPointerId = 100;
+const pinYoyPoint = (id, period) => {
+  const trace = yoyPrepared.series.find(trace => trace.id === id), index = yoyPrepared.periods.findIndex(value => String(value) === String(period));
+  const point = yoyStage.querySelectorAll('.hac-point').find(point => point.getAttribute('data-point-key') === `${trace.key}|${index}`);
+  assert.ok(point, 'The synthetic selected point exists in its exact source trace');
+  const pointerId = ++yoyPointerId;
+  yoyStage.dispatch('pointerdown', { target: point, clientX: Number(point.children[0].getAttribute('cx')), clientY: 100, pointerId, button: 0 });
+  yoyStage.dispatch('pointerup', { target: point, pointerId });
+};
+assert.equal(Number(yoyBandValue(2025).getAttribute('data-yoy-percent')), 5, 'The default band compares the selected source scope, excluding the scenario overlay');
+assert.match(yoyRoot.querySelectorAll('.hac-yoy-context')[0].textContent, /Selected source scope/);
+pinYoyPoint('A revenue', 2025);
+assert.equal(Number(yoyBandValue(2025).getAttribute('data-yoy-percent')), 50, 'Point focus changes the annual band to the exact source curve');
+assert.equal(nextYearGroups().length, 1, 'Only the selected curve receives a next-year annotation');
+assert.equal(nextYearGroups()[0].getAttribute('data-series-id'), 'A revenue');
+assert.equal(nextYearGroups()[0].querySelectorAll('.hac-point-value-amount')[0].textContent, '$0.00', 'A zero next-year source value stays visible and is never replaced by another product or scenario');
+assert.match(nextYearGroups()[0].querySelectorAll('.hac-next-year-change')[0].textContent, /−100\.0%/);
+assert.equal(yoyEvidence.length, 0, 'The selected and next-year comparisons remain on the chart without a source popup');
+const otherEntityHeader = yoyRoot.querySelectorAll('.hac-entity-header').find(header => header.parent.getAttribute('data-entity-key') === 'B' || header.parent.parent?.getAttribute('data-entity-key') === 'B');
+assert.ok(otherEntityHeader); otherEntityHeader.dispatch('click');
+assert.equal(yoyRoot.querySelectorAll('.hac-yoy-context')[0].getAttribute('data-yoy-series'), 'scope'); assert.equal(Number(yoyBandValue(2025).getAttribute('data-yoy-percent')), 5, 'Entity emphasis uses the selected scope’s default YoY measure instead of silently switching to one product');
+pinYoyPoint('A revenue', 2025);
+assert.equal(nextYearGroups()[0].getAttribute('data-from-period'), '2025'); assert.equal(nextYearGroups()[0].getAttribute('data-period'), '2026');
+assert.equal(yoyStage.querySelectorAll('.hac-selected-point').filter(point => hasClass(point, 'is-next-year')).length, 1);
+assertLabelGeometry(yoyStage);
+const pinnedYear = yoyPeriods.at(-1);
+yoyStage.dispatch('pointermove', { clientX: 950, pointerId: 200 });
+assert.equal(yoyPeriods.at(-1), pinnedYear); assert.equal(nextYearGroups()[0].getAttribute('data-from-period'), '2025'); assert.equal(nextYearGroups()[0].getAttribute('data-period'), '2026', 'Hovering another year does not reanchor the selected-to-next-year comparison');
+pinYoyPoint('A gross profit', 2026);
+assert.equal(Number(yoyBandValue(2026).getAttribute('data-yoy-percent')), -125, 'Focused gross-profit YoY uses its own raw source losses rather than revenue or indexed dollars');
+assert.equal(nextYearGroups().length, 1); assert.equal(nextYearGroups()[0].getAttribute('data-series-id'), 'A gross profit');
+assert.equal(nextYearGroups()[0].querySelectorAll('.hac-point-value-amount')[0].textContent, '-$10.00'); assert.equal(Number(nextYearGroups()[0].getAttribute('data-next-year-percent')), -100); assertLabelGeometry(yoyStage);
+pinYoyPoint('A scenario', 2025);
+assert.equal(yoyBandValue(2025).getAttribute('data-yoy-percent') ?? '', '', 'A scenario cannot borrow the source trace’s missing prior scenario year'); assert.ok(hasClass(yoyBandValue(2025), 'is-unavailable')); assert.equal(yoyBandValue(2025).textContent, '—');
+assert.equal(Number(yoyBandValue(2026).getAttribute('data-yoy-percent')), 60); assert.equal(nextYearGroups()[0].getAttribute('data-series-id'), 'A scenario'); assert.equal(nextYearGroups()[0].querySelectorAll('.hac-point-value-amount')[0].textContent, '$800.00', 'A scenario focus compares the next point on that same scenario, without changing source values');
+pinYoyPoint('A revenue', 2026);
+assert.equal(nextYearGroups()[0].querySelectorAll('.hac-point-value-amount')[0].textContent, '-$50.00');
+assert.equal(nextYearGroups()[0].getAttribute('data-next-year-percent'), ''); assert.ok(hasClass(nextYearGroups()[0].querySelectorAll('.hac-next-year-change')[0], 'is-unavailable'), 'A zero selected denominator keeps the exact next value but never invents a finite growth percentage');
+pinYoyPoint('B units', 2025); assert.equal(nextYearGroups().length, 0, 'A missing observation in the next calendar year has no fabricated callout');
+pinYoyPoint('A revenue', 2027); assert.equal(nextYearGroups().length, 0, 'An absent FY28 is not substituted with the later observed FY29');
+assert.equal(yoyBandValue(2029).getAttribute('data-yoy-percent') ?? '', '', 'The annual band also requires the exact previous calendar year rather than the previous plotted observation'); assert.ok(hasClass(yoyBandValue(2029), 'is-unavailable'));
+pinYoyPoint('A revenue', 2030); assert.equal(nextYearGroups().length, 0, 'The final source year never extrapolates a next-year value');
+pinYoyPoint('A revenue', 2025);
+const yoyZoom = yoyRoot.querySelectorAll('.hac-zoom-range')[0], yoySelectedBeforeView = yoyPeriods.length, stableYoyValue = yoyBandValue(2025), stableYoyRow = yoyRoot.querySelectorAll('.hac-legend-row')[0];
+yoyZoom.value = '400'; yoyZoom.dispatch('input');
+for (let step = 0; step < 4; step++) yoyStage.dispatch('keydown', { key: 'ArrowLeft', preventDefault() {} });
+assert.equal(yoyChart.getView().zoom, 4); assert.equal(nextYearGroups().length, 0, 'An offscreen next year is clipped instead of forcing the user’s chosen time view to pan');
+assert.equal(yoyPeriods.length, yoySelectedBeforeView); assert.equal(yoyRoot.querySelectorAll('.hac-legend-row')[0], stableYoyRow); assert.equal(yoyBandValue(2025), stableYoyValue, 'Time-view changes reposition the existing annual labels without rebuilding the financial readout');
+const yoyGuide = Number(yoyStage.querySelectorAll('.hac-selected-line')[0].getAttribute('x1'));
+const yoyClip = yoyStage.querySelectorAll('.hac-time-clip')[0].children[0]; assert.ok(yoyGuide >= Number(yoyClip.getAttribute('x')) && yoyGuide <= Number(yoyClip.getAttribute('x')) + Number(yoyClip.getAttribute('width')), 'The selected year stays visible while the next year lies outside this panned viewport');
+assert.equal(Number(yoyBandValue(2025).getAttribute('x')), yoyGuide, 'The annual change label stays aligned to its transformed selected-year guide');
+assert.equal(Number(yoyBandValue(2025).getAttribute('y')), 402, 'The YoY row remains in the existing SVG floor, above the fiscal-year rail');
+yoyRoot.querySelectorAll('.hac-view-reset')[0].dispatch('click'); assert.equal(nextYearGroups().length, 1); assertLabelGeometry(yoyStage);
+assert.equal(svgDescendants(yoyStage).filter(node => node.tagName === 'title').length, 0, 'New annual labels and next-year callouts do not restore native hover popups');
+assert.equal(JSON.stringify(yoyModel), yoyBefore, 'YoY, focus, scenarios and next-year comparisons preserve every source value and reference');
+yoyChart.destroy(); assert.equal(yoyContainer.children.length, 0); assert.equal(yoyStage.events.get('keydown').size, 0, 'The new chart annotations share the existing lifecycle cleanup');
+
 const dragContainer = new Element('div', doc), dragSelections = [];
 let dragChart;
 dragChart = create(dragContainer, { onPeriod(period) { dragSelections.push(period); dragChart.update({ ...input, period }); } });
@@ -523,6 +626,9 @@ const reducedRoot = reducedContainer.children[0], reducedRange = reducedRoot.que
 reducedRange.value = '2'; reducedRange.dispatch('input');
 assert.equal(Number(reducedRoot.querySelectorAll('.hac-selected-line')[0].getAttribute('x1')), 956, 'Reduced motion selects the year directly');
 assert.equal(frames.size, 0, 'Reduced motion does not schedule inertial movement');
+reducedRange.value = '0'; reducedRange.dispatch('input'); reducedRoot.querySelectorAll('.hac-legend-row')[0].dispatch('click');
+const reducedNext = reducedRoot.querySelectorAll('.hac-point-value').find(group => hasClass(group, 'is-next-year'));
+assert.equal(reducedNext.querySelectorAll('.hac-point-value-amount')[0].textContent, '$200.00'); assert.equal(Number(reducedNext.getAttribute('data-next-year-percent')), 100); assert.equal(frames.size, 0, 'Reduced motion renders the exact next-year comparison without an animation loop');
 const reducedZoom = reducedRoot.querySelectorAll('.hac-zoom-range')[0]; reducedZoom.value = '200'; reducedZoom.dispatch('input'); nearView(reducedChart.getView().zoom, 2, 'Reduced motion applies time zoom directly');
 assert.equal(frames.size, 0); reducedRoot.querySelectorAll('.hac-view-reset')[0].dispatch('click'); nearView(reducedChart.getView().zoom, 1); assert.equal(frames.size, 0); reducedChart.destroy();
 assert.match(css, /prefers-reduced-motion:reduce/); assert.match(css, /touch-action:pan-y/); assert.match(css, /\.hac-legend\{display:flex;flex-wrap:nowrap/); assert.match(css, /overflow-x:auto;overflow-y:hidden/); assert.match(css, /\.hac-entity-evidence/); assert.match(css, /focus-visible/);
@@ -533,6 +639,8 @@ assert.match(css, /\.hac-selected-point\.is-secondary\{opacity:\.5\}/, 'Other se
 for (const selector of ['hac-selected-point', 'hac-point-value']) assert.match(css, new RegExp(`\\.${selector}\\.is-primary\\{opacity:1\\}`), 'The exact selected point and its value remain the primary focus');
 assert.match(css, /\.hac-point-value\.is-secondary\{opacity:1\}/, 'Secondary value text stays opaque enough to read');
 assert.match(css, /\.hac-point-value\.is-secondary \.hac-point-value-amount,\.hac-point-value\.is-secondary \.hac-point-value-name\{fill:#8e9bad\}/, 'Secondary value labels use a neutral muted color while the primary keeps its trace color');
+assert.match(css, /\.hac-next-year-change,\.hac-yoy-label\{[^}]*font-size:15px/, 'Annual percentages share the secondary financial value scale');
+assert.match(css, /\.hac-next-year-change\.is-positive,\.hac-yoy-label\.is-positive\{fill:#84d6a4\}/); assert.match(css, /\.hac-next-year-change\.is-negative,\.hac-yoy-label\.is-negative\{fill:#f08b8d\}/, 'Annual change directions retain the same signed color meaning');
 const valueFontRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selector, body]) => selector.includes('.hac-legend-value') && /font-size\s*:/.test(body));
 assert.equal(valueFontRules.length, 1, 'Readout figures have one uniform font size with no container or data-dependent override');
 for (const [, selector] of valueFontRules) {

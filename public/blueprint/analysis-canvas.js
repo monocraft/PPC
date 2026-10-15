@@ -46,6 +46,17 @@
     const suffix = magnitude === 1e9 ? 'B' : magnitude === 1e6 ? 'M' : magnitude === 1e3 ? 'K' : '';
     return `${value < 0 ? '−' : ''}${unit === 'currency' ? '$' : ''}${(magnitude === 1 ? AXIS_NUMBER : AXIS_COMPACT).format(absolute / magnitude)}${suffix}`;
   }
+  const calendarYear=value=>/^\d{4}$/.test(String(value))?Number(value):null;
+  const rawNumber=point=>point?number(Object.prototype.hasOwnProperty.call(point,'rawValue')?point.rawValue:point.value):null;
+  function yearOverYear(points,period) {
+    const currentYear=calendarYear(period),rows=Array.isArray(points)?points:[],current=currentYear===null?[]:rows.filter(point=>calendarYear(point?.period)===currentYear),previous=currentYear===null?[]:rows.filter(point=>calendarYear(point?.period)===currentYear-1);
+    const currentPoint=current.length===1?current[0]:null,previousPoint=previous.length===1?previous[0]:null,currentValue=rawNumber(currentPoint),previousValue=rawNumber(previousPoint);
+    let reason=currentYear===null?'A calendar fiscal year is required':current.length>1||previous.length>1?'Duplicate source year':currentValue===null?'Current source value unavailable':previousValue===null?'Prior calendar year unavailable':previousValue===0?'Prior source value is zero':'';
+    let percent=reason?null:(currentValue-previousValue)/Math.abs(previousValue)*100;if(percent!==null&&!Number.isFinite(percent)){percent=null;reason='Change exceeds the supported numeric range';}
+    const coverageKey=point=>JSON.stringify({selectedCount:point?.coverage?.selectedCount,availableIds:[...(point?.coverage?.availableIds||[])].map(String).sort(),components:point?.sourceCoverage||null}),partial=Boolean(currentPoint?.coverage?.complete===false||previousPoint?.coverage?.complete===false),coverageChanged=Boolean(currentPoint&&previousPoint&&coverageKey(currentPoint)!==coverageKey(previousPoint));
+    return {period,previousPeriod:currentYear===null?null:currentYear-1,percent,currentValue,previousValue,currentPoint,previousPoint,reason,partial,coverageChanged};
+  }
+  function signedPercent(value) {return value===null?'—':`${value>0?'+':value<0?'−':''}${value!==0&&Math.abs(value)<.1?'<0.1':Math.abs(value).toFixed(1)}%`;}
   function axisDomain(values) {
     const finite = values.filter(value => value !== null);
     let low = Math.min(0, ...finite), high = Math.max(0, ...finite);
@@ -146,7 +157,9 @@
       const sourcePoints=points=>(Array.isArray(points)?points:[]).filter(point=>point&&['number','string'].includes(typeof point.period)).map(point=>({period:point.period,value:number(Object.prototype.hasOwnProperty.call(point,'rawValue')?point.rawValue:point.value)}));
       comparison={entities:comparisonInputs.map(entity=>({id:entity.id,name:String(entity.name||entity.id),revenuePoints:sourcePoints(entity.revenuePoints),unitsPoints:sourcePoints(entity.unitsPoints)}))};
     }
-    return { periods, period: periods[selectedIndex] ?? null, selectedIndex, series, axes, scale, requestedScale, indexed, basePeriod, reason, warnings, supported,comparison };
+    const fallback=series.find(trace=>trace.metric==='revenue'&&!trace.scenario&&!trace.estimate)||series.find(trace=>!trace.scenario&&!trace.estimate),yoyInput=model.yoy&&Array.isArray(model.yoy.points)?model.yoy:fallback?{metric:fallback.metric,label:fallback.name,points:fallback.points}:null;
+    const yoy=yoyInput?{metric:String(yoyInput.metric||'revenue'),label:String(yoyInput.label||'Source scope'),points:yoyInput.points.filter(point=>point&&calendarYear(point.period)!==null).map(point=>({...point,rawValue:rawNumber(point),value:rawNumber(point)}))}:null;
+    return { periods, period: periods[selectedIndex] ?? null, selectedIndex, series, axes, scale, requestedScale, indexed, basePeriod, reason, warnings, supported,comparison,yoy };
   }
 
   function create(container, options = {}) {
@@ -164,16 +177,16 @@
     for (const marker of [yearIndicator, railConnector, railMarker, hoverConnector, hoverMarker, hoverIndicator]) marker.setAttribute('aria-hidden', 'true');
     slider.type = 'range'; slider.min = '0'; slider.step = '1'; slider.setAttribute('aria-label', 'Selected fiscal year');
     railTrack.append(slider, railConnector, railMarker, hoverConnector, hoverMarker, years); rail.appendChild(railTrack);
-    const notice = node('span', 'hac-notice hac-sr-only'), readout = node('div', 'hac-readout'), readoutHead = node('div', 'hac-readout-head'), readoutYear = node('strong'), comparisonContext=node('span','hac-comparison-context'),legend = node('div', 'hac-legend');comparisonContext.hidden=true;
+    const notice = node('span', 'hac-notice hac-sr-only'), readout = node('div', 'hac-readout'), readoutHead = node('div', 'hac-readout-head'), readoutYear = node('strong'), comparisonContext=node('span','hac-comparison-context'),yoyContext=node('span','hac-yoy-context'),legend = node('div', 'hac-legend');comparisonContext.hidden=true;yoyContext.hidden=true;
     readout.setAttribute('aria-label', 'Financial values by series for the inspected fiscal year');
     legend.tabIndex = 0; legend.setAttribute('role', 'region'); legend.setAttribute('aria-label', 'Series values. Scroll horizontally for more.');
-    readoutHead.append(readoutYear,comparisonContext,notice); readout.append(readoutHead, legend);
+    readoutHead.append(readoutYear,comparisonContext,yoyContext,notice); readout.append(readoutHead, legend);
     const announcement = node('p', 'hac-sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
     root.append(header, readout, stage, rail, announcement); container.appendChild(root);
     const viewControls=node('div','hac-view-controls'),zoomLabel=node('label','hac-zoom-label'),zoomRange=node('input','hac-zoom-range'),viewReset=node('button','hac-view-reset','100% · Fit');
     viewControls.setAttribute('role','group');viewControls.setAttribute('aria-label','Time view');zoomRange.type='range';zoomRange.min='100';zoomRange.max='400';zoomRange.step='5';zoomRange.value='100';zoomRange.setAttribute('aria-label','Time zoom');zoomRange.title='Zoom the time axis; financial values and value axes stay fixed';viewReset.type='button';viewReset.title='Fit all fiscal years';viewReset.setAttribute('aria-label','Fit all fiscal years');zoomLabel.append(node('span','','Zoom'),zoomRange);viewControls.append(zoomLabel,viewReset);(options.viewControlsContainer||root).appendChild(viewControls);
     const clipId=`hac-time-clip-${++canvasSequence}`;
-    let geometry = null, selectedLine = null, selectedBand = null, selectionColor = '#bac0ca', hoverLine = null, labelLayer = null, plot = null, rows = [], entityControls = [], tracePaths=[],pointNodes=[], renderLifetime = new AbortController();
+    let geometry = null, selectedLine = null, selectedBand = null, selectionColor = '#bac0ca', hoverLine = null, labelLayer = null, plot = null,yoyBand=null,yoyNodes=[],yoyKey=null, rows = [], entityControls = [], tracePaths=[],pointNodes=[], renderLifetime = new AbortController();
     let guideFrame = null, guideLastTime = 0, selectedPosition = null, selectedTarget = null, hoverPosition = null, hoverTarget = null, pointerInside = false, followPreview = false, capturedYear = null, railDragId = null, railDragX = null;
     let timeZoom=1,timeOffset=0,zoomTarget=1,offsetTarget=0,pinch=null;const touchPoints=new Map();
     const requestFrame = typeof view.requestAnimationFrame === 'function' ? callback => view.requestAnimationFrame(callback) : null;
@@ -206,6 +219,23 @@
     function fitView() {leaveGuide();preview(state.selected);setView(1,0);}
     function revealYear(index) { const x=geometry.left+(baseX(index)-geometry.left)*zoomTarget+offsetTarget,margin=Math.min(18,geometry.plotWidth*.05);if(x<geometry.left||x>geometry.width-geometry.right){const edge=x<geometry.left?geometry.left+margin:geometry.width-geometry.right-margin;setView(zoomTarget,offsetTarget+edge-x);} }
     function setPanning(active) {root.classList.toggle('is-panning',active);stage.classList.toggle('is-panning',active);}
+    function paintYoyBand() {
+      const occupied=[];for(const {element,index} of [...yoyNodes].sort((a,b)=>(b.index===state.selected?2:b.index===state.preview?1:0)-(a.index===state.selected?2:a.index===state.preview?1:0)||a.index-b.index)){
+        const x=xAt(index),width=element.textContent.length*8.5,anchor=x-width/2<geometry.left?'start':x+width/2>geometry.width-geometry.right?'end':'middle',left=anchor==='start'?x:anchor==='end'?x-width:x-width/2,right=left+width,eligible=inView(x)&&(index===state.selected||index===state.preview||index===state.model.periods.length-1||index%state.yearStride===0),visible=eligible&&occupied.every(box=>right+4<=box.left||left>=box.right+4);
+        element.setAttribute('x',x);element.setAttribute('text-anchor',anchor);element.setAttribute('visibility',visible?'visible':'hidden');element.classList.toggle('is-selected',index===state.selected);if(visible)occupied.push({left,right});
+      }
+    }
+    function refreshYoyBand() {
+      if(!yoyBand||!geometry)return;
+      const focused=!state.headerFocus&&state.model.series.find(trace=>trace.key===state.activeTraceKey),spec=focused?{metric:focused.metric,label:(focused.displayName||focused.name)+(focused.scenario&&!/scenario/i.test(focused.displayName||focused.name)?' · Scenario':focused.estimate?' · Annual plan':''),points:focused.points}:state.model.yoy,identity=focused?focused.key:'scope';
+      if(yoyKey===identity)return;yoyKey=identity;yoyBand.replaceChildren();yoyNodes=[];yoyContext.hidden=!spec;
+      if(!spec){yoyContext.textContent='';return;}
+      const metric=metricStyle(spec.metric),unit=unitFor(null,spec.metric),caption=`${metric.label} YoY · ${spec.label}`,descriptions=[];yoyContext.textContent=caption;yoyContext.setAttribute('data-yoy-metric',spec.metric);yoyContext.setAttribute('data-yoy-series',focused?.id||'scope');
+      yoyBand.appendChild(svgNode('text',{x:geometry.left-12,y:geometry.height-8,'text-anchor':'end',class:'hac-yoy-axis-label','aria-hidden':'true'},'YoY'));
+      state.model.periods.forEach((period,index)=>{const change=yearOverYear(spec.points,period),direction=change.percent===null?'unavailable':change.percent>0?'positive':change.percent<0?'negative':'neutral',qualifiers=[change.reason,change.partial?'Known source subtotal':null,change.coverageChanged?'Source coverage differs':null,change.currentPoint?.basis,change.previousPoint?.basis].filter(Boolean).join(' · '),description=`${caption}, ${periodName(period)} versus ${periodName(change.previousPeriod)}: ${signedPercent(change.percent)}. ${exact(change.currentValue,unit)} versus ${exact(change.previousValue,unit)}. ${qualifiers}`;
+        const element=svgNode('text',{x:xAt(index),y:geometry.height-8,'text-anchor':'middle',class:`hac-yoy-label hac-yoy-value is-${direction}`,'clip-path':`url(#${clipId})`,'data-period':period,'data-yoy-percent':change.percent===null?'':change.percent,'data-current-value':change.currentValue===null?'':change.currentValue,'data-prior-value':change.previousValue===null?'':change.previousValue,'data-yoy-basis':qualifiers,'aria-label':description},signedPercent(change.percent));element.setAttribute('data-yoy-percent',change.percent===null?'':String(change.percent));element.setAttribute('data-current-value',change.currentValue===null?'':String(change.currentValue));element.setAttribute('data-prior-value',change.previousValue===null?'':String(change.previousValue));yoyBand.appendChild(element);yoyNodes.push({element,index});descriptions.push(description);
+      });yoyContext.setAttribute('aria-label',descriptions.join(' '));paintYoyBand();
+    }
     function paintGuides() {
       if (!geometry) return;
       if (selectedLine && selectedPosition !== null) { selectedLine.setAttribute('x1', selectedPosition); selectedLine.setAttribute('x2', selectedPosition);selectedLine.setAttribute('visibility',inView(selectedPosition)?'visible':'hidden'); }
@@ -222,6 +252,7 @@
       const hoverVisible = pointerInside && hoverPosition !== null && Math.abs(hoverPosition - selectedPosition) > .7;
       for (const marker of [hoverConnector, hoverMarker, hoverIndicator]) { marker.style.left = `${hoverPosition === null ? 0 : (hoverPosition - geometry.left) / geometry.plotWidth * 100}%`; marker.hidden = !hoverVisible; }
       years.querySelectorAll('button').forEach((button, index) => { const hovered = pointerInside && capturedYear === index; button.classList.toggle('is-hovered', hovered); button.hidden = !inView(xAt(index))||(!hovered && index !== state.selected && index !== state.model.periods.length - 1 && index % state.yearStride !== 0); });
+      paintYoyBand();
       if (followPreview && pointerInside && capturedYear !== null) preview(capturedYear);
     }
     function cancelGuides(snap = false) {
@@ -293,6 +324,7 @@
       state.activeTraceKey = clearFocus ? null : trace.key; state.activeTracePeriod = clearFocus ? null : key(point.period); state.pinnedPoint = clearFocus ? null : { traceKey: trace.key, period: key(point.period) }; state.headerFocus = false; state.labelsVisible = true;
       choose(index, true);
       emphasize(state.activeTraceKey); renderPointLabels();
+      if(!clearFocus&&calendarYear(point.period)!==null&&rawNumber(point)!==null){const next=yearOverYear(trace.points,calendarYear(point.period)+1);if(next.currentValue!==null)announcement.textContent+=` Next calendar year ${periodName(next.period)}: ${exact(next.currentValue,trace.unit)}, ${signedPercent(next.percent)} versus the selected value. ${next.reason}`;}
     }
     function inspect(trace, point) {
       selectPoint(trace, point, true);
@@ -317,7 +349,7 @@
         group.classList.toggle('is-selected', selected); const header=group.querySelectorAll('.hac-entity-header')[0];if(header&&header.getAttribute('data-entity-action')!=='navigate')header.setAttribute('aria-pressed',String(selected));
       }
       const colors = focused ? [...new Set(state.model.series.filter(trace => entityKey(trace) === entityKey(focused) && !trace.scenario && !trace.estimate && trace.points.some(point => point.rawValue !== null)).map(trace => trace.color))] : [];
-      selectionColor = focused && !state.headerFocus ? focused.color : colors.length === 1 ? colors[0] : '#bac0ca'; root.classList.toggle('has-point-focus',Boolean(focused && !state.headerFocus)); paintGuides(); refreshEvidence();
+      selectionColor = focused && !state.headerFocus ? focused.color : colors.length === 1 ? colors[0] : '#bac0ca'; root.classList.toggle('has-point-focus',Boolean(focused && !state.headerFocus));refreshYoyBand(); paintGuides(); refreshEvidence();
     }
     function evidenceTrace(entity) { return entity.traces.find(trace => trace.key === state.activeTraceKey) || entity.traces.find(trace => !trace.scenario && !trace.estimate && trace.metric === 'revenue') || entity.traces.find(trace => !trace.scenario && !trace.estimate) || entity.traces[0]; }
     function refreshEvidence() {
@@ -329,30 +361,31 @@
       }
     }
     function renderPointLabels() {
-      if (!labelLayer || !geometry) return;
+      if(!labelLayer||!geometry)return;
       labelLayer.replaceChildren();
-      if (!state.labelsVisible || !state.model.supported || !inView(xAt(state.selected))) return;
-      const pinned = state.pinnedPoint, primaryKey = pinned?.period === key(state.model.periods[state.selected]) ? pinned.traceKey : null, x = xAt(state.selected);
-      const entries = state.model.series.map(trace => ({trace,point:trace.points[state.selected]})).filter(({point}) => point && point.value !== null).map(entry => ({...entry,y:yAt(entry.point.value,entry.trace),primary:entry.trace.key===primaryKey}));
-      for (const {trace,point,y,primary} of entries) labelLayer.appendChild(svgNode('circle', { cx:x, cy:y, r:primary?8:5, fill:'none', stroke:trace.color, 'stroke-width':primary?2:1, class:`hac-selected-point ${primary?'is-primary':'is-secondary'}`, 'data-series-id':trace.id }));
-      // Labels occupy geometric slots beside the guide. Crowded points retain
-      // their rings and exact top readouts rather than overlapping or shrinking.
-      const occupied = {left:[],right:[]}, top = geometry.top + 3, bottom = geometry.height - geometry.bottom - 3, preferred = x < geometry.left + geometry.plotWidth * .55 ? 'right' : 'left';
-      const available = side => side==='right'?geometry.width-geometry.right-x-12:x-geometry.left-12;
-      const place = (side,height,target,maxShift) => {
-        const limit=bottom-height;if(limit<top)return null;
-        const choices=[Math.max(top,Math.min(limit,target)),top,limit,...occupied[side].flatMap(box=>[box.bottom+4,box.top-height-4])];
-        return choices.filter(y=>y>=top&&y<=limit&&Math.abs(y-target)<=maxShift&&occupied[side].every(box=>y+height+4<=box.top||y>=box.bottom+4)).sort((a,b)=>Math.abs(a-target)-Math.abs(b-target))[0]??null;
-      };
-      for (const {trace,point,y,primary} of [...entries].sort((a,b)=>Number(b.primary)-Number(a.primary)||a.y-b.y)) {
-        const amount=exact(point.rawValue,trace.unit), textWidth=amount.length*8.5, height=primary?36:20, target=primary?(y<top+48?y+10:y-43):y-10;
-        const choices=[preferred,preferred==='right'?'left':'right'].map(side=>({side,labelTop:available(side)>=textWidth?place(side,height,target,primary?Infinity:48):null})).filter(choice=>choice.labelTop!==null).sort((a,b)=>Math.abs(a.labelTop-target)-Math.abs(b.labelTop-target));
-        const fallback=primary&&textWidth<=geometry.plotWidth-6?place(preferred,height,target,Infinity):null,placement=choices[0]||(fallback===null?null:{side:preferred,labelTop:fallback});if(!placement)continue;
-        const {side,labelTop}=placement,labelX=side==='right'?Math.max(geometry.left,Math.min(x+12,geometry.width-geometry.right-textWidth)):Math.min(geometry.width-geometry.right,Math.max(x-12,geometry.left+textWidth)),anchor=side==='right'?'start':'end',group=svgNode('g',{class:`hac-point-value ${primary?'is-primary':'is-secondary'}`,'aria-hidden':'true','data-series-id':trace.id,'data-label-top':labelTop,'data-label-bottom':labelTop+height,'data-label-side':side});
-        group.setAttribute('data-financial-description',`${trace.name} · ${trace.style.label} · ${periodName(point.period)} · ${amount} · ${point.status}`);
-        if(primary){const caption=`${trace.displayName||trace.name} · ${trace.style.label}`,captionSpace=side==='right'?geometry.width-geometry.right-labelX:labelX-geometry.left,characters=Math.max(8,Math.min(48,Math.floor(captionSpace/5.5)));group.appendChild(svgNode('text',{x:labelX,y:labelTop+13,'text-anchor':anchor,class:'hac-point-value-name'},caption.length>characters?caption.slice(0,characters-1)+'…':caption));}
-        group.appendChild(svgNode('text',{x:labelX,y:labelTop+(primary?32:15),'text-anchor':anchor,fill:trace.color,class:'hac-point-value-amount'},amount));
-        const box={top:labelTop,bottom:labelTop+height};occupied[side].push(box);if(side==='right'&&labelX<x||side==='left'&&labelX>x)occupied[side==='right'?'left':'right'].push(box);labelLayer.appendChild(group);
+      if(!state.labelsVisible||!state.model.supported)return;
+      const pinned=state.pinnedPoint,primaryKey=pinned?.period===key(state.model.periods[state.selected])?pinned.traceKey:null;
+      const entries=state.model.series.map(trace=>({trace,point:trace.points[state.selected],index:state.selected})).filter(({point,index})=>point&&point.value!==null&&inView(xAt(index))).map(entry=>({...entry,x:xAt(entry.index),y:yAt(entry.point.value,entry.trace),primary:entry.trace.key===primaryKey,nextYear:false}));
+      const selectedTrace=primaryKey&&state.model.series.find(trace=>trace.key===primaryKey),selectedYear=calendarYear(state.model.periods[state.selected]),nextIndexes=selectedYear===null?[]:state.model.periods.map((period,index)=>({period,index})).filter(record=>calendarYear(record.period)===selectedYear+1);
+      if(selectedTrace&&rawNumber(selectedTrace.points[state.selected])!==null&&nextIndexes.length===1){const index=nextIndexes[0].index,point=selectedTrace.points[index];if(point&&point.value!==null&&point.rawValue!==null&&inView(xAt(index)))entries.push({trace:selectedTrace,point,index,x:xAt(index),y:yAt(point.value,selectedTrace),primary:false,nextYear:true,change:yearOverYear(selectedTrace.points,point.period)});}
+      for(const {trace,point,x,y,primary,nextYear} of entries)labelLayer.appendChild(svgNode('circle',{cx:x,cy:y,r:primary?8:5,fill:'none',stroke:trace.color,'stroke-width':primary?2:1,class:`hac-selected-point ${primary?'is-primary':'is-secondary'}${nextYear?' is-next-year':''}`,'data-series-id':trace.id,'data-period':point.period}));
+      // Protect the selected/next-year pair first. Remaining exact values use
+      // nearby collision-free slots; every finite point keeps its marker/readout.
+      const occupied=[],top=geometry.top+3,bottom=geometry.height-geometry.bottom-3,left=geometry.left+3,right=geometry.width-geometry.right-3,gap=4;
+      const overlapsX=(a,b)=>a.left<b.right+gap&&a.right+gap>b.left;
+      const place=(bounds,height,target,maxShift)=>{const limit=bottom-height;if(limit<top)return null;const relevant=occupied.filter(box=>overlapsX(bounds,box)),choices=[Math.max(top,Math.min(limit,target)),top,limit,...relevant.flatMap(box=>[box.bottom+gap,box.top-height-gap])];return choices.filter(y=>y>=top&&y<=limit&&Math.abs(y-target)<=maxShift&&relevant.every(box=>y+height+gap<=box.top||y>=box.bottom+gap)).sort((a,b)=>Math.abs(a-target)-Math.abs(b-target))[0]??null;};
+      for(const {trace,point,x,y,primary,nextYear,change} of [...entries].sort((a,b)=>(b.primary?2:b.nextYear?1:0)-(a.primary?2:a.nextYear?1:0)||a.y-b.y)){
+        const amount=exact(point.rawValue,trace.unit),protectedLabel=primary||nextYear,percent=nextYear?`(${signedPercent(change.percent)})`:'',caption=primary?`${trace.displayName||trace.name} · ${trace.style.label}`:nextYear?periodName(point.period):'',amountWidth=amount.length*8.5,inlineWidth=amountWidth+(nextYear?percent.length*8.5+6:0),stacked=nextYear&&inlineWidth>right-left&&amountWidth<=right-left;
+        const textWidth=Math.max(stacked?Math.max(amountWidth,percent.length*8.5):inlineWidth,primary?Math.min(caption.length*5.5,180):0),height=stacked?54:protectedLabel?36:20,target=protectedLabel?(y<top+48?y+10:y-43):y-10,preferred=x<geometry.left+geometry.plotWidth*.55?'right':'left';
+        if(textWidth>right-left)continue;
+        const choices=[preferred,preferred==='right'?'left':'right'].map(side=>{const natural=side==='right'?x+12:x-12-textWidth;if(!protectedLabel&&(natural<left||natural+textWidth>right))return null;const bounds={left:Math.max(left,Math.min(right-textWidth,natural)),right:0};bounds.right=bounds.left+textWidth;const labelTop=place(bounds,height,target,protectedLabel?Infinity:48);return labelTop===null?null:{side,bounds,labelTop,cost:Math.abs(labelTop-target)+Math.abs(bounds.left-natural)*.1};}).filter(Boolean).sort((a,b)=>a.cost-b.cost);
+        if(!choices.length)continue;
+        const {side,bounds,labelTop}=choices[0],anchor=side==='right'?'start':'end',labelX=side==='right'?bounds.left:bounds.right,group=svgNode('g',{class:`hac-point-value ${primary?'is-primary':'is-secondary'}${nextYear?' is-next-year':''}`,'aria-hidden':'true','data-series-id':trace.id,'data-period':point.period,'data-label-top':labelTop,'data-label-bottom':labelTop+height,'data-label-left':bounds.left,'data-label-right':bounds.right,'data-label-side':side});
+        group.setAttribute('data-financial-description',`${trace.name} · ${trace.style.label} · ${periodName(point.period)} · ${amount} · ${point.status}${nextYear?` · ${signedPercent(change.percent)} versus ${periodName(state.model.periods[state.selected])} · ${change.reason}`:''}`);
+        if(caption){const characters=Math.max(8,Math.floor(textWidth/5.5));group.appendChild(svgNode('text',{x:labelX,y:labelTop+13,'text-anchor':anchor,class:'hac-point-value-name'},caption.length>characters?caption.slice(0,characters-1)+'…':caption));}
+        const amountElement=svgNode('text',{x:labelX,y:labelTop+(protectedLabel?32:15),'text-anchor':anchor,fill:trace.color,class:'hac-point-value-amount'},amount);
+        if(nextYear){const direction=change.percent===null?'unavailable':change.percent>0?'positive':change.percent<0?'negative':'neutral',attrs={class:`hac-next-year-change is-${direction}`,'data-next-year-percent':change.percent===null?'':change.percent,'data-from-period':state.model.periods[state.selected],'data-period':point.period};if(stacked)group.appendChild(svgNode('text',{...attrs,x:labelX,y:labelTop+51,'text-anchor':anchor},percent));else amountElement.appendChild(svgNode('tspan',{...attrs,dx:6},percent));group.setAttribute('data-next-year-percent',change.percent===null?'':change.percent);group.setAttribute('data-from-period',state.model.periods[state.selected]);}
+        group.appendChild(amountElement);occupied.push({...bounds,top:labelTop,bottom:labelTop+height});labelLayer.appendChild(group);
       }
     }
     function updateComparison(period) {
@@ -450,6 +483,7 @@
       });
       if (!model.series.length || !model.series.some(trace => trace.points.some(point => point.rawValue !== null))) svg.appendChild(svgNode('text', { x: geometry.left + geometry.plotWidth / 2, y: geometry.top + geometry.plotHeight / 2, 'text-anchor': 'middle', class: 'hac-empty-label' }, 'No values available for this selection'));
       labelLayer = svgNode('g', { class: 'hac-point-labels', 'aria-hidden': 'true' }); svg.appendChild(labelLayer);
+      yoyBand=svgNode('g',{class:'hac-yoy-band','aria-label':'Year over year change'});svg.appendChild(yoyBand);yoyNodes=[];yoyKey=null;
       stage.replaceChildren(svg);
       slider.max = String(Math.max(0, model.periods.length - 1)); slider.disabled = model.periods.length < 2;zoomRange.disabled=model.periods.length<2;viewReset.disabled=model.periods.length<2; slider.value = String(state.selected); slider.setAttribute('aria-valuetext', model.periods.length ? periodName(model.periods[state.selected]) : 'No fiscal years');
       years.replaceChildren(yearIndicator, hoverIndicator); model.periods.forEach((period, index) => { const label=periodName(period), fiscal=/^FY(\d+)$/.exec(label),button = node('button', index === state.selected ? 'is-selected' : '');if(fiscal)button.append(node('span','hac-year-prefix','FY'),node('span','hac-year-number',fiscal[1]));else button.textContent=label;button.type = 'button';button.setAttribute('aria-label',label); button.style.left = `${model.periods.length > 1 ? index / (model.periods.length - 1) * 100 : 50}%`; button.hidden = index !== state.selected && index !== model.periods.length - 1 && index % state.yearStride !== 0; button.setAttribute('aria-pressed', String(index === state.selected)); button.addEventListener('click', () => choose(index, true), { signal: renderLifetime.signal }); years.appendChild(button); });
@@ -569,5 +603,5 @@
       destroy() { if (state.destroyed) return; state.destroyed = true; cancelGuides(); lifetime.abort(); renderLifetime.abort(); observer?.disconnect(); state.drag = null;touchPoints.clear();pinch=null;viewControls.remove();root.remove(); }
     };
   }
-  window.HX_ANALYSIS_CANVAS = Object.freeze({ create, prepare });
+  window.HX_ANALYSIS_CANVAS = Object.freeze({ create, prepare,yearOverYear });
 })();
