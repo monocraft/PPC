@@ -206,7 +206,13 @@
     const centerTargetSize = Math.max(1, finite(options.centerTargetSize, targetSize));
     const minimumRadius = Math.max((targetSize + centerTargetSize) / 2 + gap, spacing / 2);
     const naturalRadius = Math.max(minimumRadius, desired > 1 ? spacing / (2 * Math.sin(Math.PI / desired)) : minimumRadius);
-    const maximumRadius = Math.max(minimumRadius, Math.min(naturalRadius * 1.5, finite(options.maxRadius ?? options.preferredRadius, naturalRadius * 1.5)));
+    const viewportRadius = Math.max(Math.hypot(bounds.left - anchor.x, bounds.top - anchor.y), Math.hypot(bounds.right - anchor.x, bounds.top - anchor.y),
+      Math.hypot(bounds.left - anchor.x, bounds.bottom - anchor.y), Math.hypot(bounds.right - anchor.x, bounds.bottom - anchor.y));
+    // A small group near a corner needs a slightly wider inward arc to show all
+    // members together. Search that bounded space before falling back to pages;
+    // the first fitting radius is still refined to its minimum below.
+    const radiusBudget = total <= 6 ? Math.min(naturalRadius * 2.25, viewportRadius) : naturalRadius * 1.5;
+    const maximumRadius = Math.max(minimumRadius, Math.min(radiusBudget, finite(options.maxRadius ?? options.preferredRadius, radiusBudget)));
     const normalizeAngle = value => ((value % tau) + tau) % tau;
     const towardCenter = Math.atan2((bounds.top + bounds.bottom) / 2 - anchor.y, (bounds.left + bounds.right) / 2 - anchor.x);
 
@@ -325,6 +331,35 @@
     return Object.freeze(windows);
   }
 
+  // A seasonal display band covers the planning span from the ideal FFS month
+  // through its later on-shelf month. It is deliberately a separate type from
+  // an FFS target, so extending the visual guide cannot imply product readiness.
+  function seasonalBands(range, options = {}) {
+    if (!validRange(range) || range.start < 1900 * 12 || range.end > 9999 * 12 + 11) return Object.freeze([]);
+    const displayStart = Math.max(range.start, finite(options?.viewportStart, range.start));
+    const displayEnd = Math.min(range.end + 1, finite(options?.viewportEnd, range.end + 1));
+    if (displayEnd <= displayStart) return Object.freeze([]);
+    // Ask for the complete calendar years, even when the visible horizon starts
+    // after February/July. A March-only horizon still intersects the Spring band.
+    const annualStart = Math.floor(range.start / 12) * 12, annualEnd = Math.floor(range.end / 12) * 12 + 11;
+    const targets = seasonalWindows({ start: annualStart, end: annualEnd, count: annualEnd - annualStart + 1 });
+    const bands = [];
+    for (const target of targets) {
+      const startMonth = target.startMonth, endMonth = target.onShelfMonth + 1;
+      if (endMonth <= displayStart || startMonth >= displayEnd) continue;
+      const spring = target.season === "spring", onShelfMonthNumber = target.onShelfMonth % 12;
+      const lastDay = new Date(Date.UTC(target.year, onShelfMonthNumber + 1, 0)).getUTCDate();
+      const month = String(onShelfMonthNumber + 1).padStart(2, "0");
+      bands.push(Object.freeze({ key: `${target.year}-${target.season}-on-shelf-window`, season: target.season,
+        type: "on-shelf-window", year: target.year, label: `${spring ? "Spring" : "Fall"} on-shelf`,
+        startMonth, endMonth, start: target.start, end: `${target.year}-${month}-${lastDay}`,
+        displayStart: Math.max(startMonth, displayStart), displayEnd: Math.min(endMonth, displayEnd),
+        ffsMonth: target.startMonth, ffsLabel: `${spring ? "Feb" : "Jul"} ${target.year}`, ffsStart: target.start, ffsEnd: target.end,
+        onShelfMonth: target.onShelfMonth, onShelfLabel: target.onShelfLabel }));
+    }
+    return Object.freeze(bands);
+  }
+
   function windowMatches(period, windows) {
     const parse = value => {
       const match = typeof value === "string" && /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -364,6 +399,13 @@
     }
     const overlaps = (a, b, distance = 0) => a.x < b.x + b.width + distance && a.x + a.width + distance > b.x
       && a.y < b.y + b.height + distance && a.y + a.height + distance > b.y;
+    // Equal-distance alternatives can differ by a few floating-point bits as
+    // the viewport moves. Rank those ties explicitly rather than letting a
+    // sub-pixel translation flip a name to the opposite side of its marker.
+    const compareRank = (a, b) => Math.abs(a - b) <= 1e-6 ? 0 : a - b;
+    const placementPriority = { right: 0, left: 1, above: 2, below: 3 };
+    const compareProposal = (a, b) => compareRank(a.cost, b.cost) || placementPriority[a.placement] - placementPriority[b.placement]
+      || compareRank(a.y, b.y) || compareRank(a.x, b.x);
     const output = [], lanes = [];
     for (const lane of sourceLanes) {
       const candidates = candidatesByLane.get(lane.categoryId);
@@ -417,7 +459,7 @@
             if (!obstacles.some(obstacle => overlaps(rectangle, obstacle, markerGap))) proposals.push(proposal);
           }
         }
-        proposals.sort((a, b) => a.cost - b.cost || a.y - b.y || a.x - b.x);
+        proposals.sort(compareProposal);
         choices.set(candidate.key, proposals);
         // Explicit On is an override: preserve every measured label even when a
         // very short/narrow viewport cannot offer a collision-free position.
@@ -435,7 +477,7 @@
           const position = choices.get(candidate.key).find(proposal => !placed.some(other => overlaps(proposal, other, gap)));
           if (position) { placed.push({ ...candidate, ...position }); cost += position.cost; }
         }
-        if (placed.length > packed.length || placed.length === packed.length && cost < bestCost) { packed = placed; bestCost = cost; }
+        if (placed.length > packed.length || placed.length === packed.length && compareRank(cost, bestCost) < 0) { packed = placed; bestCost = cost; }
         if (packed.length === candidates.length) break;
       }
       const fitCount = packed.length, complete = fitCount === candidates.length;
@@ -448,7 +490,7 @@
           const scored = fallbackChoices.get(candidate.key).map(position => ({ position,
             score: packed.reduce((sum, other) => sum + intersection(position, other, gap), 0)
               + obstacles.reduce((sum, obstacle) => sum + intersection(position, obstacle, markerGap), 0) }));
-          scored.sort((a, b) => a.score - b.score || a.position.cost - b.position.cost || a.position.y - b.position.y || a.position.x - b.position.x);
+          scored.sort((a, b) => compareRank(a.score, b.score) || compareProposal(a.position, b.position));
           if (scored.length) packed.push({ ...candidate, ...scored[0].position, forced: true });
         }
       }
@@ -461,5 +503,5 @@
     return { mode, labels: output, lanes, hiddenCount: lanes.reduce((sum, lane) => sum + lane.hiddenCount, 0) };
   }
 
-  root.PortfolioHashoutLayout = Object.freeze({ project, layout, compositeKey, radialLayout, radial, labels, seasonalWindows, windowMatches });
+  root.PortfolioHashoutLayout = Object.freeze({ project, layout, compositeKey, radialLayout, radial, labels, seasonalWindows, seasonalBands, windowMatches });
 })(globalThis);

@@ -122,17 +122,20 @@ vm.createContext(todaySandbox);
 vm.runInContext(`function drawToday(context, range, height) { const timelineX = 190; ${source.slice(todayStart, todayEnd)} }`, todaySandbox);
 const todayStrokes = [], todayPath = [];
 const todayContext = {
-  strokeStyle: "", lineWidth: 1,
+  strokeStyle: "", lineWidth: 1, dash: [],
+  setLineDash(value) { this.dash = Array.from(value); },
   beginPath() { todayPath.length = 0; },
   moveTo(x, y) { todayPath.push([x, y]); },
   lineTo(x, y) { todayPath.push([x, y]); },
-  stroke() { todayStrokes.push({ color: this.strokeStyle, width: this.lineWidth, path: todayPath.map(point => [...point]) }); },
+  stroke() { todayStrokes.push({ color: this.strokeStyle, width: this.lineWidth, dash: [...this.dash], path: todayPath.map(point => [...point]) }); },
 };
 todaySandbox.drawToday(todayContext, range(month(2026), month(2026, 12)), 500);
 assert.equal(todayStrokes.length, 1);
 assert.equal(todayStrokes[0].color, globalThis.PortfolioTheme.colors.alert, "Today uses the shared alert color without muting it.");
-assert.equal(todayStrokes[0].width, 1.8, "Today remains visible on the timeline.");
-near(todayStrokes[0].path[0][0], 190 + (9 + 13 / 31) * 82, "The stronger marker keeps the actual day position");
+assert.equal(todayStrokes[0].width, 1, "Today uses a fine one-pixel line.");
+assert.deepEqual(todayStrokes[0].dash, [4, 4], "Today uses a restrained, evenly spaced dash.");
+assert.deepEqual(todayContext.dash, [], "The Today dash cannot leak into later roadmap drawing.");
+near(todayStrokes[0].path[0][0], 190 + (9 + 13 / 31) * 82, "The dashed marker keeps the actual day position");
 assert.deepEqual(todayStrokes[0].path.map(point => point[1]), [80, 500]);
 todaySandbox.drawToday(todayContext, range(month(2027), month(2027, 12)), 500);
 assert.equal(todayStrokes.length, 1, "An outside-range Today marker stays absent.");

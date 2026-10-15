@@ -62,15 +62,15 @@
     }
     labelControl.append(labelTitle, labelOptions);
     const windowsControl = node("div", "hashout-windows-control");
-    const windowsToggle = node("button", "hashout-windows-toggle", "Windows"); windowsToggle.type = "button"; windowsToggle.setAttribute("aria-label", "Show seasonal FFS target windows");
+    const windowsToggle = node("button", "hashout-windows-toggle", "Windows"); windowsToggle.type = "button"; windowsToggle.setAttribute("aria-label", "Show seasonal on-shelf planning windows");
     const windowsKey = node("details", "hashout-windows-key");
     const windowsSummary = node("summary", "", "?"); windowsSummary.setAttribute("aria-label", "About seasonal planning windows");
     const windowsPanel = node("div", "hashout-windows-panel");
     windowsPanel.append(node("strong", "hashout-windows-heading", "Seasonal planning windows"));
-    for (const [season, title, months] of [["spring", "Spring", "FFS Feb → On shelf May"], ["fall", "Fall", "FFS Jul → On shelf Oct"]]) {
+    for (const [season, title, months] of [["spring", "Spring on-shelf", "Feb–May · ideal FFS Feb"], ["fall", "Fall on-shelf", "Jul–Oct · ideal FFS Jul"]]) {
       const row = node("div", `hashout-windows-key-row is-${season}`); row.append(node("span", "hashout-windows-swatch"), node("span", "", title), node("strong", "", months)); windowsPanel.append(row);
     }
-    windowsPanel.append(node("p", "", "The shaded FFS months are ideal planning targets for the later on-shelf windows. Product positions use their own FFS estimates."), node("p", "", "A quarter or broader estimate may overlap a target; that overlap does not confirm readiness."), node("p", "hashout-windows-exceptions", "Retailer-specific exceptions apply. Amazon and Micro Center use flexible timing. Walmart fall and Target spring are special-case launches."));
+    windowsPanel.append(node("p", "", "Each shaded window spans the ideal FFS month through the on-shelf target: February through May for spring, July through October for fall. Product positions use their own FFS estimates."), node("p", "", "Being inside a shaded window does not confirm readiness. The ideal FFS targets remain February for May on-shelf and July for October on-shelf; later FFS estimates are not automatically on time. A quarter or broader estimate may only overlap the ideal FFS target."), node("p", "hashout-windows-exceptions", "Retailer-specific exceptions apply. Amazon and Micro Center use flexible timing. Walmart fall and Target spring are special-case launches."));
     windowsKey.append(windowsSummary, windowsPanel); windowsControl.append(windowsToggle, windowsKey);
     toolbar.append(picker, searchShell, labelControl, windowsControl, back, scopeCount);
     const stage = node("div", "hashout-stage");
@@ -82,6 +82,8 @@
     const laneHover = node("div", "hashout-lane-hover-frame"); laneHoverClip.append(laneHover);
     const selectionEffects = node("div", "hashout-selection-effects"); selectionEffects.setAttribute("aria-hidden", "true");
     const selectionWave = node("div", "hashout-selection-wave"); selectionWave.hidden = true; selectionEffects.append(selectionWave);
+    const selectionGuide = node("div", "hashout-selection-guide"); selectionGuide.hidden = true; selectionGuide.setAttribute("aria-hidden", "true");
+    const guideStroke = node("div", "hashout-selection-guide-stroke"), guideMonth = node("span", "hashout-selection-guide-month"); selectionGuide.append(guideStroke, guideMonth);
     const rail = node("div", "hashout-lane-rail");
     rail.setAttribute("aria-label", "Category lanes");
     const empty = node("div", "hashout-empty");
@@ -93,13 +95,14 @@
     const ring = node("section", "hashout-ring-overlay"); ring.hidden = true; ring.tabIndex = -1; ring.setAttribute("role", "group"); ring.setAttribute("aria-label", "Expanded roadmap products");
     const live = node("span", "visually-hidden");
     live.setAttribute("role", "status");
-    stage.append(canvas, laneHoverClip, selectionEffects, rail, empty, card, ring);
+    stage.append(canvas, laneHoverClip, selectionGuide, selectionEffects, rail, empty, card, ring);
     shell.append(toolbar, stage, live);
     host.append(shell);
 
     let scope = options.getScope?.() ?? null;
     let labelMode = normalizeLabelMode(options.getLabelMode?.()), labelLayout = { mode: labelMode, labels: [], lanes: [] };
-    let windowsVisible = options.getWindows?.() !== false, seasonalWindows = [], seasonalSignature = "";
+    let windowsVisible = options.getWindows?.() !== false, seasonalWindows = [], seasonalBands = [], seasonalSignature = "";
+    const headerHeight = () => windowsVisible ? 78 : 46;
     let entries = [], allCategories = [], layout = null, horizon = null, viewport = null;
     let width = 0, height = 0, leftWidth = 166, renderFrame = 0, animationFrame = 0, destroyed = false;
     let selectedKey = options.getSelectedKey?.() || null, hovered = null, hoverMemberKey = null, pinned = false, cardAnchor = null, cardEntries = [], hideTimer = 0, keyboardIndex = -1, drag = null, suppressClick = false;
@@ -116,11 +119,16 @@
     shell.style.setProperty("--hashout-spring", seasonColor("spring")); shell.style.setProperty("--hashout-fall", seasonColor("fall"));
     const targetMatches = (period) => windowsVisible && root.PortfolioHashoutLayout.windowMatches ? root.PortfolioHashoutLayout.windowMatches(period, seasonalWindows.filter((window) => window.type === "ffs")) : [];
     const productWindowTone = (entry) => { const matches = targetMatches(entry?.period).filter((match) => match.match === "within"); return matches.length === 1 ? seasonColor(matches[0].season) : null; };
-    const syncWindowsControl = () => windowsToggle.setAttribute("aria-pressed", String(windowsVisible));
-    const appendWindowDetail = (parent, entry) => {
+    const syncWindowsControl = () => {
+      windowsToggle.setAttribute("aria-pressed", String(windowsVisible));
+      shell.style.setProperty("--hashout-header-height", `${headerHeight()}px`);
+      canvas.setAttribute("aria-description", windowsVisible ? "Spring on-shelf planning windows span February through May, with ideal FFS in February. Fall on-shelf planning windows span July through October, with ideal FFS in July. All product positions use their own estimated FFS dates." : "Seasonal planning windows are hidden.");
+    };
+    const appendWindowDetail = (parent, entry, compact = false) => {
       const matches = targetMatches(entry?.period); if (!matches.length) return;
       const seasons = [...new Set(matches.map((match) => match.season))];
-      const text = matches.length === 1 ? `${matches[0].match === "overlap" ? "Overlaps " : ""}${matches[0].season === "spring" ? "Spring" : "Fall"} ${matches[0].year} FFS target → ${matches[0].onShelfLabel} on shelf`
+      const text = compact && matches.length === 1 ? `${matches[0].match === "overlap" ? "FFS target overlap · " : ""}${matches[0].season === "spring" ? "Spring" : "Fall"} on-shelf · ${matches[0].onShelfLabel}`
+        : matches.length === 1 ? `${matches[0].match === "overlap" ? "Overlaps " : ""}${matches[0].season === "spring" ? "Spring" : "Fall"} ${matches[0].year} FFS target → ${matches[0].onShelfLabel} on shelf`
         : `Overlaps ${seasons.map((season) => season === "spring" ? "Spring (Feb → May)" : "Fall (Jul → Oct)").join(" and ")} FFS targets`;
       const detail = node("p", "hashout-card-window", text); detail.dataset.seasons = [...new Set(matches.map((match) => match.season))].join(" "); parent.append(detail);
     };
@@ -143,6 +151,7 @@
     };
     const chooseLabelMode = (value) => {
       const next = normalizeLabelMode(value); if (next === labelMode) return;
+      if (!pinned) closeCard();
       labelMode = next; syncLabelControl(); options.onLabelModeChange?.(labelMode); requestRender();
     };
     for (const button of labelOptions.children) {
@@ -229,7 +238,11 @@
       }
       if (options.getSelectedKey) selectedKey = options.getSelectedKey() || selectedKey;
       const nextSeasonalSignature = `${horizon.start}:${horizon.end}`;
-      if (nextSeasonalSignature !== seasonalSignature) { seasonalSignature = nextSeasonalSignature; seasonalWindows = root.PortfolioHashoutLayout.seasonalWindows?.(horizon, { context: true }) || []; }
+      if (nextSeasonalSignature !== seasonalSignature) {
+        seasonalSignature = nextSeasonalSignature;
+        seasonalWindows = root.PortfolioHashoutLayout.seasonalWindows?.(horizon, { context: true }) || [];
+        seasonalBands = root.PortfolioHashoutLayout.seasonalBands?.(horizon) || [];
+      }
       if (selectedKey && !getEntry(selectedKey)) { hovered = null; if (pinned) closeCard(); }
       updatePicker();
       updateSearch();
@@ -333,6 +346,7 @@
       leftWidth = width < 520 ? 112 : width < 800 ? 142 : 166;
       shell.style.setProperty("--hashout-plot-left", `${leftWidth}px`);
       selectionEffects.style.left = `${leftWidth}px`;
+      selectionGuide.style.left = `${leftWidth}px`;
       const ratio = Math.min(root.devicePixelRatio || 1, 3);
       const pixelWidth = Math.round(width * ratio), pixelHeight = Math.round(height * ratio);
       if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) { canvas.width = pixelWidth; canvas.height = pixelHeight; }
@@ -341,7 +355,7 @@
     }
 
     function drawCalendar(context) {
-      const colors = theme(), span = viewport.end - viewport.start, plotWidth = width - leftWidth;
+      const colors = theme(), span = viewport.end - viewport.start, plotWidth = width - leftWidth, header = headerHeight();
       context.save(); context.beginPath(); context.rect(leftWidth, 0, plotWidth, height); context.clip();
       const xAt = (month) => leftWidth + (month - viewport.start) / span * plotWidth;
       const startYear = Math.floor(viewport.start / 12), endYear = Math.floor((viewport.end - .0001) / 12);
@@ -349,7 +363,7 @@
       const yearStride = yearPixels < 36 ? 3 : yearPixels < 58 ? 2 : 1;
       for (let year = startYear; year <= endYear; year++) {
         const x = xAt(year * 12), nextX = xAt((year + 1) * 12);
-        if (year % 2) { context.fillStyle = alpha(colors.label, .024); context.fillRect(Math.max(leftWidth, x), 46, Math.min(width, nextX) - Math.max(leftWidth, x), height - 46); }
+        if (year % 2) { context.fillStyle = alpha(colors.label, .024); context.fillRect(Math.max(leftWidth, x), header, Math.min(width, nextX) - Math.max(leftWidth, x), height - header); }
         context.strokeStyle = alpha(colors.label, .11); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, 0); context.lineTo(x + .5, height); context.stroke();
         if ((year - startYear) % yearStride === 0) {
           context.font = `600 ${width < 520 ? 10 : 12}px ${font()}`; context.fillStyle = colors.text; context.textAlign = "left"; context.textBaseline = "middle";
@@ -363,7 +377,7 @@
           const x = xAt(month), yearMonth = month % 12;
           context.fillStyle = colors.label; context.font = `10px ${font()}`; context.textAlign = "center";
           context.fillText(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][yearMonth], xAt(month + .5), 35);
-          context.strokeStyle = alpha(colors.label, .045); context.beginPath(); context.moveTo(x + .5, 46); context.lineTo(x + .5, height); context.stroke();
+          context.strokeStyle = alpha(colors.label, .045); context.beginPath(); context.moveTo(x + .5, header); context.lineTo(x + .5, height); context.stroke();
         }
       } else if (monthPixels * 3 >= 35) {
         for (let month = Math.floor(viewport.start / 3) * 3; month < viewport.end; month += 3) {
@@ -371,29 +385,47 @@
         }
       }
       if (windowsVisible) {
-        for (const window of seasonalWindows.filter((item) => item.type === "ffs")) {
+        for (const window of seasonalBands) {
           const color = seasonColor(window.season), x = xAt(window.startMonth), right = xAt(window.endMonth);
-          if (right > leftWidth && x < width) {
-            context.fillStyle = alpha(color, .04); context.fillRect(Math.max(leftWidth, x), 46, Math.min(width, right) - Math.max(leftWidth, x), Math.max(0, height - 46));
-            context.strokeStyle = alpha(color, .2); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, 46); context.lineTo(x + .5, height); context.moveTo(right + .5, 46); context.lineTo(right + .5, height); context.stroke();
+          const visibleX = Math.max(leftWidth, x), visibleRight = Math.min(width, right), visibleWidth = visibleRight - visibleX;
+          if (visibleWidth <= 0) continue;
+          context.fillStyle = alpha(color, .045); context.fillRect(visibleX, header, visibleWidth, Math.max(0, height - header));
+          context.fillStyle = alpha(color, .12); context.fillRect(visibleX, 46, visibleWidth, header - 46);
+          context.strokeStyle = alpha(color, .2); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, 46); context.lineTo(x + .5, height); context.moveTo(right + .5, 46); context.lineTo(right + .5, height); context.stroke();
+          // The full names remain readable in the fixed corner key. Repeated
+          // annual titles are shown only when they fit their own visible span.
+          context.save(); context.beginPath(); context.rect(visibleX, 46, visibleWidth, header - 46); context.clip();
+          context.font = `500 10px ${font()}`; context.fillStyle = color; context.textAlign = "center"; context.textBaseline = "middle";
+          const center = (visibleX + visibleRight) / 2;
+          if (context.measureText(window.label).width + 12 <= visibleWidth) {
+            context.fillText(window.label, center, 56);
+            context.font = `9px ${font()}`; context.fillStyle = alpha(colors.text, .7);
+            context.fillText(window.season === "spring" ? "Feb–May" : "Jul–Oct", center, 69);
+          } else {
+            context.font = `500 9px ${font()}`;
+            if (Math.max(context.measureText("Spring").width, context.measureText("on-shelf").width) + 6 <= visibleWidth) {
+              context.fillText(window.season === "spring" ? "Spring" : "Fall", center, 56);
+              context.fillText("on-shelf", center, 69);
+            }
           }
-          const from = xAt(window.startMonth + .5), to = xAt(window.onShelfMonth + .5);
-          if (to < leftWidth || from > width) continue;
-          context.strokeStyle = alpha(color, .55); context.lineWidth = 1.2; context.beginPath(); context.moveTo(from, 39); context.lineTo(from, 44); context.moveTo(from, 42.5); context.lineTo(to, 42.5); context.moveTo(to - 2.5, 40); context.lineTo(to, 42.5); context.lineTo(to - 2.5, 45); context.stroke();
-        }
-        for (const window of seasonalWindows.filter((item) => item.type === "on-shelf")) {
-          const x = xAt(window.startMonth + .5); if (x < leftWidth || x > width) continue;
-          context.strokeStyle = alpha(seasonColor(window.season), .55); context.lineWidth = 1.2; context.beginPath(); context.moveTo(x, 40); context.lineTo(x, 45); context.stroke();
+          context.restore();
         }
       }
       const now = new Date(), today = now.getFullYear() * 12 + now.getMonth() + (now.getDate() - 1) / new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
       if (today >= viewport.start && today < viewport.end) {
-        const x = xAt(today); context.strokeStyle = colors.alert; context.lineWidth = 1.8; context.beginPath(); context.moveTo(x, 46); context.lineTo(x, height); context.stroke();
+        const x = xAt(today); context.strokeStyle = colors.alert; context.lineWidth = 1; context.setLineDash([4, 4]); context.beginPath(); context.moveTo(x, header); context.lineTo(x, height); context.stroke(); context.setLineDash([]);
       }
       context.restore();
-      context.fillStyle = colors.surface; context.fillRect(0, 0, leftWidth, 46);
+      context.fillStyle = colors.surface; context.fillRect(0, 0, leftWidth, header);
       context.font = `500 11px ${font()}`; context.fillStyle = colors.label; context.textAlign = "left"; context.textBaseline = "middle"; context.fillText("Category", 14, 24);
-      context.strokeStyle = alpha(colors.label, .14); context.beginPath(); context.moveTo(0, 45.5); context.lineTo(width, 45.5); context.stroke();
+      if (windowsVisible) {
+        context.font = `500 10px ${font()}`;
+        for (const [season, label, y] of [["spring", "Spring on-shelf", 55], ["fall", "Fall on-shelf", 69]]) {
+          context.fillStyle = seasonColor(season); context.beginPath(); context.roundRect(14, y - 3, 5, 6, 2); context.fill();
+          context.fillStyle = colors.text; context.fillText(label, 25, y);
+        }
+      }
+      context.strokeStyle = alpha(colors.label, .14); context.beginPath(); context.moveTo(0, header - .5); context.lineTo(width, header - .5); context.stroke();
     }
 
     function drawGlyph(context, glyph, selected = false, highlighted = false) {
@@ -482,6 +514,7 @@
     function drawLabels(context, focused, neutral) {
       updateLabels(context);
       for (const label of labelLayout.labels) {
+        if (!neutral && !card.hidden && card.classList.contains("is-inline") && cardEntries.length === 1 && cardEntries[0].key === label.key) continue;
         context.save(); if (focused && !focused.has(label.key)) context.globalAlpha = .33;
         const lane = layout.lanes.find((item) => item.categoryId === label.categoryId);
         if (lane) { context.beginPath(); context.rect(leftWidth, lane.y, width - leftWidth, lane.height); context.clip(); }
@@ -498,14 +531,30 @@
       const visibleInOrbit = ringState?.geometry?.positions.some((slot) => ringState.entries[slot.index]?.key === selectedKey);
       const glyph = selectedKey && layout.glyphs.find((item) => item.memberKeys.includes(selectedKey));
       const source = glyph?.type === "group" ? selectedOverlay(getEntry(selectedKey), glyph) : glyph;
-      const visible = Boolean(source && !visibleInOrbit && source.centerX >= leftWidth && source.centerX <= width && source.centerY >= 46 && source.centerY <= height);
+      updateSelectionGuide(getEntry(selectedKey), source);
+      const visible = Boolean(source && !visibleInOrbit && source.centerX >= leftWidth && source.centerX <= width && source.centerY >= headerHeight() && source.centerY <= height);
       selectionWave.hidden = !visible;
       if (!visible) { selectionWave.classList.remove("is-active"); return; }
       const changed = selectionWave.dataset.productKey !== selectedKey;
       selectionWave.dataset.productKey = selectedKey;
-      selectionWave.style.left = `${source.centerX - leftWidth}px`; selectionWave.style.top = `${source.centerY - 46}px`;
+      selectionWave.style.left = `${source.centerX - leftWidth}px`; selectionWave.style.top = `${source.centerY - headerHeight()}px`;
       if (changed) { selectionWave.classList.remove("is-active"); void selectionWave.offsetWidth; }
       selectionWave.classList.add("is-active");
+    }
+
+    function updateSelectionGuide(entry, source) {
+      const visible = Boolean(entry?.period && source && source.centerX >= leftWidth && source.centerX <= width && source.centerY >= headerHeight() && source.centerY <= height);
+      selectionGuide.hidden = !visible;
+      if (!visible) { selectionGuide.classList.remove("is-active"); selectionGuide.dataset.productKey = ""; return; }
+      const changed = selectionGuide.dataset.productKey !== entry.key;
+      const period = entry.period, label = ["day", "month"].includes(period.precision) ? monthText(monthIndex(period.start)) : period.label;
+      if (guideMonth.textContent !== label) guideMonth.textContent = label;
+      selectionGuide.dataset.productKey = entry.key;
+      const x = source.centerX - leftWidth, labelWidth = guideMonth.offsetWidth;
+      guideStroke.style.left = `${x}px`; guideStroke.style.height = `${Math.max(0, source.centerY - 52)}px`;
+      guideMonth.style.left = `${clamp(x - labelWidth / 2, 3, Math.max(3, width - leftWidth - labelWidth - 3))}px`;
+      if (changed) { selectionGuide.classList.remove("is-active"); void guideStroke.offsetHeight; }
+      selectionGuide.classList.add("is-active");
     }
 
     function clearLaneHover() {
@@ -515,13 +564,13 @@
     function syncLaneHover(immediate = false) {
       if (!lanePointer || !layout || drag || pinned || ringState) { clearLaneHover(); return; }
       const lane = layout.lanes.find((item) => lanePointer.y >= item.y && lanePointer.y < item.y + item.height);
-      if (!lane || lanePointer.x < 0 || lanePointer.x > width || lanePointer.y < 46) { clearLaneHover(); return; }
+      if (!lane || lanePointer.x < 0 || lanePointer.x > width || lanePointer.y < headerHeight()) { clearLaneHover(); return; }
       const entering = !hoveredCategoryId;
       if (immediate || entering) {
         cancelAnimationFrame(laneHoverFrame); laneHover.classList.add("is-immediate");
         laneHoverFrame = requestAnimationFrame(() => { laneHoverFrame = 0; laneHover.classList.remove("is-immediate"); });
       }
-      laneHover.style.transform = `translateY(${lane.y - 46 + 1}px)`; laneHover.style.height = `${Math.max(0, lane.height - 2)}px`;
+      laneHover.style.transform = `translateY(${lane.y - headerHeight() + 1}px)`; laneHover.style.height = `${Math.max(0, lane.height - 2)}px`;
       if (immediate || entering) void laneHover.offsetHeight;
       laneHover.style.opacity = "1"; hoveredCategoryId = lane.categoryId; laneHover.dataset.categoryId = lane.categoryId;
     }
@@ -530,12 +579,12 @@
       if (destroyed || !horizon) return;
       const ratio = dimensions();
       if (width <= 1 || height <= 1) return;
-      layout = root.PortfolioHashoutLayout.layout(entries, horizon, { width, height, leftWidth, headerHeight: 46, maxLaneHeight: height, viewportStart: viewport.start, viewportEnd: viewport.end });
+      layout = root.PortfolioHashoutLayout.layout(entries, horizon, { width, height, leftWidth, headerHeight: headerHeight(), maxLaneHeight: height, viewportStart: viewport.start, viewportEnd: viewport.end });
       const context = canvas.getContext("2d"); context.setTransform(ratio, 0, 0, ratio, 0, 0);
       const colors = theme(); context.fillStyle = colors.page; context.fillRect(0, 0, width, height);
       const focused = focusKeys(neutral);
       drawCalendar(context);
-      context.save(); context.beginPath(); context.rect(leftWidth, 46, Math.max(0, width - leftWidth), Math.max(0, height - 46)); context.clip();
+      context.save(); context.beginPath(); context.rect(leftWidth, headerHeight(), Math.max(0, width - leftWidth), Math.max(0, height - headerHeight())); context.clip();
       for (const [index, lane] of layout.lanes.entries()) {
         if (index % 2 === 0) { context.fillStyle = alpha(colors.label, .026); context.fillRect(leftWidth, lane.y, width - leftWidth, lane.height); }
         context.strokeStyle = alpha(colors.label, .065); context.beginPath(); context.moveTo(leftWidth, lane.y + lane.height - .5); context.lineTo(width, lane.y + lane.height - .5); context.stroke();
@@ -577,7 +626,7 @@
 
     function point(event) { const rectangle = canvas.getBoundingClientRect(); return { x: event.clientX - rectangle.left, y: event.clientY - rectangle.top }; }
     function hit(position) {
-      if (!layout || position.x < leftWidth || position.y < 46) return null;
+      if (!layout || position.x < leftWidth || position.y < headerHeight()) return null;
       // Explicit On can overlap text at extreme density; the original marker
       // and group controls stay on top and retain their own hit targets.
       const direct = layout.glyphs.find((glyph) => {
@@ -605,6 +654,36 @@
 
     function positionCard() {
       if (!cardAnchor || card.hidden) return;
+      if (card.classList.contains("is-inline")) {
+        const label = labelLayout.labels.find((item) => item.key === cardEntries[0]?.key);
+        if (label) {
+          const extra = card.querySelector(".hashout-inline-details");
+          // Measure the same candidates each time, independently of the last
+          // frame's wrapping or expansion direction.
+          card.style.setProperty("--hashout-inline-inset-left", "0px"); card.style.setProperty("--hashout-inline-inset-right", "0px");
+          if (extra) { extra.style.maxHeight = ""; extra.style.overflowY = ""; }
+          const w = card.offsetWidth, fullHeight = card.offsetHeight;
+          const x = clamp(label.x, leftWidth + 4, Math.max(leftWidth + 4, width - w - 8));
+          const fitsAbove = label.y >= headerHeight() + fullHeight - 30 + 4;
+          let above = fitsAbove && label.y + 28 < label.anchorY;
+          card.style.setProperty("--hashout-inline-offset-x", `${Math.max(0, label.x - x)}px`);
+          // Keep the expanding detail surface beside the source donut when a
+          // label sits above it; the name/date stay at their original position.
+          const coversMarker = !above && label.anchorY > label.y + 26 && label.anchorY < label.y + fullHeight + 8;
+          const rightInset = Math.max(0, label.anchorX + 12 - x), leftInset = Math.max(0, x + w - label.anchorX + 12);
+          card.style.setProperty("--hashout-inline-inset-left", `${coversMarker && w - rightInset >= 100 ? rightInset : 0}px`);
+          card.style.setProperty("--hashout-inline-inset-right", `${coversMarker && w - rightInset < 100 && w - leftInset >= 100 ? leftInset : 0}px`);
+          if (!above && label.y + card.offsetHeight > height - 8 && fitsAbove) above = true;
+          if (above) { card.style.setProperty("--hashout-inline-inset-left", "0px"); card.style.setProperty("--hashout-inline-inset-right", "0px"); }
+          card.classList.toggle("opens-up", above);
+          if (extra) { extra.style.maxHeight = `${Math.max(26, above ? label.y - headerHeight() - 4 : height - label.y - 38)}px`; extra.style.overflowY = "auto"; }
+          const h = card.offsetHeight;
+          card.style.left = `${x}px`; card.style.top = `${clamp(above ? label.y - (h - 30) : label.y, 8, Math.max(8, height - h - 8))}px`;
+          return;
+        }
+        const entry = cardEntries[0], anchor = cardAnchor;
+        card.classList.remove("is-inline", "opens-up"); showEntries([entry], anchor, true); requestRender(); return;
+      }
       const w = card.offsetWidth; let h = card.offsetHeight;
       const right = cardAnchor.x + 14, left = cardAnchor.x - w - 14;
       let x = right + w <= width - 8 ? right : left >= 8 ? left : clamp(cardAnchor.x - w / 2, 8, Math.max(8, width - w - 8));
@@ -636,8 +715,8 @@
 
     function entryActions(entry) {
       const actions = node("div", "hashout-card-actions");
-      const details = node("button", "", "Product details"); details.type = "button"; details.setAttribute("aria-label", `Product details for ${entry.product?.name || "this product"}`); listen(details, "click", () => selectEntry(entry, { openDetails: true, preserveGroup: true })); actions.append(details);
-      if (options.onOpenLifecycle) { const lifecycle = node("button", "", "Lifecycle roadmap"); lifecycle.type = "button"; lifecycle.setAttribute("aria-label", `Lifecycle roadmap for ${entry.product?.name || "this product"}`); listen(lifecycle, "click", () => options.onOpenLifecycle(entry)); actions.append(lifecycle); }
+      const details = node("button", "", "Details"); details.type = "button"; details.setAttribute("aria-label", `Product details for ${entry.product?.name || "this product"}`); listen(details, "click", () => selectEntry(entry, { openDetails: true, preserveGroup: true })); actions.append(details);
+      if (options.onOpenLifecycle) { const lifecycle = node("button", "", "Lifecycle"); lifecycle.type = "button"; lifecycle.setAttribute("aria-label", `Lifecycle roadmap for ${entry.product?.name || "this product"}`); listen(lifecycle, "click", () => options.onOpenLifecycle(entry)); actions.append(lifecycle); }
       return actions;
     }
 
@@ -726,8 +805,8 @@
       if (!ringState || !entry) return;
       ringState.activeKey = entry.key;
       const detail = ring.querySelector(".hashout-ring-detail"); if (!detail) return;
-      detail.style.width = `${Math.min(320, Math.max(40, width - leftWidth - 12))}px`;
-      detail.replaceChildren(); detail.append(node("strong", "", entry.product?.name || "Unnamed product"), node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); appendWindowDetail(detail, entry); detail.hidden = false;
+      detail.style.width = "max-content"; detail.style.maxWidth = `${Math.min(260, Math.max(40, width - leftWidth - 12))}px`;
+      detail.replaceChildren(); detail.append(node("strong", "", entry.product?.name || "Unnamed product"), node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); detail.hidden = false;
       const geometry = ringState.geometry, rectangle = detail.getBoundingClientRect(), w = rectangle.width, h = rectangle.height, half = geometry.targetSize / 2;
       const slots = geometry.positions, minY = Math.min(geometry.center.y - half, ...slots.map((slot) => slot.y - half)), maxY = Math.max(geometry.center.y + half, ...slots.map((slot) => slot.y + half));
       const slot = slots.find((item) => ringState.entries[item.index]?.key === entry.key) || geometry.center;
@@ -744,6 +823,7 @@
       for (const button of ring.querySelectorAll(".hashout-orbit-product")) { const selected = button.dataset.productKey === entry.key; button.classList.toggle("is-selected", selected); button.setAttribute("aria-pressed", String(selected)); }
       ringDetail(entry); ring.querySelector(".hashout-ring-detail").hidden = true;
       const slot = ringState.geometry.positions.find((item) => ringState.entries[item.index]?.key === entry.key) || ringState.geometry.center;
+      if (labelLayout.labels.some((label) => label.key === entry.key)) closeRing();
       showEntries([entry], { x: slot.x, y: slot.y }, true);
       live.textContent = `${entry.product?.name}, FFS ${entry.period?.label || "TBD"}`; requestRender();
     }
@@ -753,7 +833,7 @@
       cancelRingReveal(); ring.classList.remove("is-open");
       const state = ringState;
       const targetSize = coarseInput ? 44 : 28;
-      const geometry = root.PortfolioHashoutLayout.radialLayout(state.entries.length, { anchor: state.anchor, width, height, leftWidth, headerHeight: 46, page: state.page, maxVisible: coarseInput ? 8 : 12, targetSize, gap: coarseInput ? 4 : 6 });
+      const geometry = root.PortfolioHashoutLayout.radialLayout(state.entries.length, { anchor: state.anchor, width, height, leftWidth, headerHeight: headerHeight(), page: state.page, maxVisible: coarseInput ? 8 : 12, targetSize, gap: coarseInput ? 4 : 6 });
       state.geometry = geometry; state.page = geometry.page; state.pageSize = geometry.capacity; state.radius = geometry.radius;
       ring.replaceChildren();
       if (!geometry.fit) { closeRing(); showEntries(state.entries, state.anchor, true); return; }
@@ -791,7 +871,7 @@
       const list = node("button", "hashout-ring-list", "≡"); list.type = "button"; list.setAttribute("aria-label", "List all products in group"); list.title = "List all products"; listen(list, "click", () => { const snapshot = ringState; closeRing(); showEntries(snapshot.entries, snapshot.anchor, true); }); pager.append(list);
       const zoom = node("button", "hashout-ring-zoom", "↗"); zoom.type = "button"; zoom.setAttribute("aria-label", "Zoom to these products"); zoom.title = "Zoom to these products"; listen(zoom, "click", () => zoomEntries(state.entries)); pager.append(zoom);
       const minY = Math.min(geometry.center.y - half, ...geometry.positions.map((slot) => slot.y - half)), maxY = Math.max(geometry.center.y + half, ...geometry.positions.map((slot) => slot.y + half));
-      state.pagerY = maxY + 34 <= height - 4 ? maxY + 6 : Math.max(48, minY - 34);
+      state.pagerY = maxY + 34 <= height - 4 ? maxY + 6 : Math.max(headerHeight() + 2, minY - 34);
       state.pagerWidth = singlePage ? 56 : 158;
       state.pagerX = clamp(geometry.center.x - state.pagerWidth / 2, leftWidth + 4, Math.max(leftWidth + 4, width - state.pagerWidth - 4));
       pager.style.width = `${state.pagerWidth}px`; pager.style.left = `${state.pagerX}px`; pager.style.top = `${state.pagerY}px`; ring.append(pager);
@@ -826,37 +906,55 @@
       pinned = pin; cardEntries = items; cardAnchor = anchor;
       // Place a reused card at its new anchor before content reflow, so it never covers a newly hovered circle for a frame.
       card.hidden = true;
-      const anticipatedWidth = Math.min(352, Math.max(1, width - 16));
+      const anticipatedWidth = Math.min(272, Math.max(1, width - 16));
       const anticipatedRight = anchor.x + 14, anticipatedLeft = anchor.x - anticipatedWidth - 14;
       card.style.left = `${anticipatedRight + anticipatedWidth <= width - 8 ? anticipatedRight : anticipatedLeft >= 8 ? anticipatedLeft : clamp(anchor.x - anticipatedWidth / 2, 8, Math.max(8, width - anticipatedWidth - 8))}px`;
       card.style.maxHeight = `${Math.max(80, height - 16)}px`;
       card.style.setProperty("--hashout-member-list-height", `${Math.max(60, height - 120)}px`);
       card.replaceChildren();
       card.classList.toggle("is-pinned", pinned); card.setAttribute("role", pin ? "dialog" : "region");
+      const inlineLabel = pin && items.length === 1 && !heading ? labelLayout.labels.find((label) => label.key === items[0].key) : null;
+      card.classList.toggle("is-inline", Boolean(inlineLabel)); card.classList.remove("opens-up");
+      const inlineWidth = Math.min(256, Math.max(1, width - leftWidth - 12));
+      card.style.width = inlineLabel ? `${Math.min(inlineWidth, Math.max(220, inlineLabel.width))}px` : "";
+      card.style.minWidth = "";
+      card.style.maxWidth = inlineLabel ? `${inlineWidth}px` : "";
+      card.style.setProperty("--hashout-inline-inset-left", "0px"); card.style.setProperty("--hashout-inline-inset-right", "0px");
       const close = node("button", "hashout-card-close", "×"); close.type = "button"; close.setAttribute("aria-label", "Close product card"); listen(close, "click", () => closeCard(true));
       const cardHeader = node("div", "hashout-card-header");
-      cardHeader.append(node("strong", "", heading || (items.length > 1 ? `${items.length} products` : items[0].product?.name || "Unnamed product")), close);
+      cardHeader.append(node("strong", "", heading || (items.length > 1 ? `${items.length} products` : inlineLabel?.nameText || items[0].product?.name || "Unnamed product")));
+      if (!inlineLabel) cardHeader.append(close);
       card.append(cardHeader);
       if (items.length === 1 && !heading) {
         const entry = items[0];
-        card.append(node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD"), node("p", "hashout-card-stage", `${STAGES[entry.stage] || STAGES.unknown} · ${entry.categoryName}`));
-        appendWindowDetail(card, entry);
+        if (inlineLabel) {
+          card.append(node("p", "hashout-card-time", inlineLabel.dateText));
+          const extra = node("div", "hashout-inline-details");
+          if (inlineLabel.nameText !== (entry.product?.name || "Unnamed product")) extra.append(node("strong", "hashout-inline-fullname", entry.product?.name || "Unnamed product"));
+          extra.append(node("p", "hashout-card-stage", STAGES[entry.stage] || STAGES.unknown)); appendWindowDetail(extra, entry, true);
+          const actions = entryActions(entry); actions.append(close); extra.append(actions); card.append(extra);
+        } else {
+          const meta = node("div", "hashout-card-meta");
+          meta.append(node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD"));
+          if (pin) meta.append(node("p", "hashout-card-stage", STAGES[entry.stage] || STAGES.unknown)); card.append(meta);
+          if (pin) appendWindowDetail(card, entry);
+          if (pin) card.append(entryActions(entry));
+        }
         card.setAttribute("aria-label", `${entry.product?.name || "Unnamed product"}. Working product name and planning timing.`);
-        if (pin) card.append(entryActions(entry));
       } else {
-        const subtitle = node("p", "hashout-card-stage", items[0].categoryName); card.append(subtitle);
         const list = node("div", "hashout-card-list"); list.setAttribute("role", "list");
-        const shown = pin ? items : items.slice(0, 2);
+        const shown = pin ? items : items.slice(0, 6);
         for (const entry of shown) {
           if (pin) { const button = productButton(entry, (item) => selectEntry(item, { preserveGroup: true })); button.classList.toggle("is-selected", entry.key === selectedKey); list.append(button); }
           else { const preview = node("div", "hashout-group-preview"); preview.append(node("strong", "", entry.product?.name || "Unnamed product"), node("span", "", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); list.append(preview); }
         }
         card.append(list);
         if (pin) { const selected = items.find((entry) => entry.key === selectedKey); if (selected) updateMemberFocus(selected); }
-        if (!pin) { const more = node("button", "hashout-card-more", `Expand ${items.length} products`); more.type = "button"; listen(more, "click", () => openRing({ entries: items, memberKeys: items.map((entry) => entry.key), countLabelX: anchor.x, centerX: anchor.x, centerY: anchor.y })); card.append(more); }
+        if (!pin) { const more = node("button", "hashout-card-more", items.length > shown.length ? `+${items.length - shown.length} more · Expand all ${items.length}` : `Expand ${items.length} products`); more.type = "button"; listen(more, "click", () => openRing({ entries: items, memberKeys: items.map((entry) => entry.key), countLabelX: anchor.x, centerX: anchor.x, centerY: anchor.y })); card.append(more); }
       }
       card.hidden = false;
       positionCard();
+      if (inlineLabel) { card.style.animation = "none"; void card.offsetHeight; card.style.animation = ""; }
     }
 
     function focusProduct(value) {
@@ -915,6 +1013,14 @@
       }
       if (pinned || ringState || event.pointerType === "touch") return;
       const previousMemberKey = hoverMemberKey, glyph = hit(position); canvas.style.cursor = glyph ? "pointer" : "grab"; hoverMemberKey = glyph?.labelKey || null;
+      const inlineNamesVisible = glyph && (labelMode === "on" || glyph.entries.every((entry) => labelLayout.labels.some((label) => label.key === entry.key)));
+      if (inlineNamesVisible) {
+        const nextMemberKey = glyph.labelKey || (glyph.entries.length === 1 ? glyph.entries[0].key : null);
+        const changed = !sameGlyph(glyph, hovered) || previousMemberKey !== nextMemberKey || !card.hidden;
+        clearTimeout(hideTimer); if (!card.hidden) closeCard();
+        hovered = glyph; hoverMemberKey = nextMemberKey;
+        if (changed) requestRender(); return;
+      }
       if (sameGlyph(glyph, hovered)) { hovered = glyph; clearTimeout(hideTimer); if (previousMemberKey !== hoverMemberKey) requestRender(); return; }
       hovered = glyph; requestRender();
       if (!glyph) { hideTimer = setTimeout(() => { if (!pinned) closeCard(); }, 160); return; }
@@ -966,7 +1072,7 @@
       draw(true);
       const image = document.createElement("canvas"); image.width = canvas.width; image.height = canvas.height;
       const context = image.getContext("2d"), ratio = canvas.width / width; context.drawImage(canvas, 0, 0); context.scale(ratio, ratio);
-      context.fillStyle = theme().surface; context.fillRect(0, 46, leftWidth, height - 46);
+      context.fillStyle = theme().surface; context.fillRect(0, headerHeight(), leftWidth, height - headerHeight());
       for (const lane of layout.lanes) {
         context.save(); context.beginPath(); context.rect(8, lane.y, leftWidth - 16, lane.height); context.clip(); context.fillStyle = theme().text; context.font = `500 11px ${font()}`; context.textAlign = "left"; context.textBaseline = "middle";
         let label = lane.name; while (label.length > 1 && context.measureText(label).width > leftWidth - 35) label = label.slice(0, -2) + "…";
@@ -988,7 +1094,7 @@
       getState() {
         const focused = focusKeys();
         return { scope: scope === null ? null : [...scope], selectedKey, viewport: viewport ? { ...viewport } : null, zoom: horizon && viewport ? horizon.count / (viewport.end - viewport.start) : 1,
-          counts: layout?.counts || {}, entries, layout, labelMode, labelLayout, windowsVisible, seasonalWindows, windowMatches: Object.fromEntries(entries.map((entry) => [entry.key, targetMatches(entry.period)])), hoveredCategoryId, sourcePulseKey: selectionWave.hidden ? null : selectionWave.dataset.productKey, focusKeys: focused ? [...focused] : null, previousViewport: previousViewport ? { ...previousViewport } : null,
+          counts: layout?.counts || {}, entries, layout, labelMode, labelLayout, windowsVisible, seasonalWindows, seasonalBands, windowMatches: Object.fromEntries(entries.map((entry) => [entry.key, targetMatches(entry.period)])), hoveredCategoryId, sourcePulseKey: selectionWave.hidden ? null : selectionWave.dataset.productKey, sourceGuideKey: selectionGuide.hidden ? null : selectionGuide.dataset.productKey, focusKeys: focused ? [...focused] : null, previousViewport: previousViewport ? { ...previousViewport } : null,
           ring: ringState ? { ...ringState.geometry, open: true, page: ringState.page, pageSize: ringState.pageSize, radius: ringState.radius, activeKey: ringState.activeKey, selectedKey: ringState.selectedKey, animationDuration: ringState.animationDuration, staggerMs: RING_STAGGER_MS, motionMs: RING_MOTION_MS, memberKeys: ringState.entries.map((entry) => entry.key) } : { open: false } };
       },
       destroy() { destroyed = true; clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); abort.abort(); shell.remove(); },

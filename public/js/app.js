@@ -3194,11 +3194,13 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const fraction = Math.min(.98, Math.max(.02, (today.getDate() - 1) / new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()));
     const x = timelineX + (todayIndex - range.start + fraction) * roadmapMonthWidth;
     context.strokeStyle = UI_PALETTE.amaranth;
-    context.lineWidth = 1.8;
+    context.lineWidth = 1;
+    context.setLineDash([4, 4]);
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT - 8);
     context.lineTo(x, height);
     context.stroke();
+    context.setLineDash([]);
   }
 
   // Sticky family rail.
