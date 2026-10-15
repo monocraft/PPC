@@ -170,6 +170,7 @@ const loadDefinition = appSource.match(/^function loadPortfolio\([^]*?^\}/m)?.[0
 const importDefinition = appSource.match(/^function normalizeImportedPortfolio\([^]*?^\}/m)?.[0];
 const initializeDefinition = appSource.match(/^async function initializeWorkspace\([^]*?^\}/m)?.[0];
 const startDefinition = appSource.match(/^function startWorkspace\([^]*?^\}/m)?.[0];
+const resetHashoutDefinition = appSource.match(/^function resetHashoutView\([^]*?^\}/m)?.[0];
 assert.ok(loadDefinition && importDefinition && initializeDefinition && startDefinition);
 const startupPortfolio = (first = "audio", activeCategoryId = "mice", version = 4) => ({
   version, activeCategoryId, settings: { timeline: { startMonth: "2026-01", endMonth: "2030-12" } },
@@ -185,6 +186,7 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
   let durable = typeof database === "string" || database === null ? database : JSON.stringify(database), release;
   const boot = {
     portfolio: null, activeCategoryId: null, localDateBaseline: null, workspaceOpening: true, workspaceRecovery: null, workspaceRecoveryPlan: null,
+    hashoutViewController: { destroy() {} }, hashoutSelectedKey: "previous-product", hashoutViewportState: { start: 1, end: 2 },
     pendingLegacyImageBlobs: [], workspaceValidationPending: false,
     STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
     localStorage: { getItem(key) { if (denyLegacy) throw new Error("Synthetic denied legacy storage"); return stored.get(key) ?? null; } },
@@ -204,7 +206,7 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
     packageCodec: () => ({ normalizePackageInfo: value => value || null }),
   };
   Object.assign(boot, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
-vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${initializeDefinition}\n${startDefinition}`, boot);
+vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${resetHashoutDefinition}\n${initializeDefinition}\n${startDefinition}`, boot);
   return { boot, activation, stored, baselineReads, writes, notices, events, features, shell, retry, release: value => release(value), get durable() { return durable; } };
 }
 for (const [label, saved, prior, expected] of [
@@ -215,6 +217,9 @@ for (const [label, saved, prior, expected] of [
 ]) {
   const { boot, activation, stored, baselineReads, writes, events } = bootHarness({ saved, prior });
   await boot.startWorkspace();
+  assert.equal(boot.hashoutViewController, null, "A freshly opened workspace must hydrate its own map preferences.");
+  assert.equal(boot.hashoutSelectedKey, null);
+  assert.equal(boot.hashoutViewportState, null);
   assert.equal(boot.activeCategoryId, expected, `${label}: app initialization starts at the first listed category.`);
   assert.equal(activation.length, 1); assert.equal(activation[0].options.render, false); assert.equal(activation[0].options.fitVertical, true);
   assert.deepEqual(structuredClone(boot.portfolio.categories), baselineReads[0], "Startup navigation preserves every product, date, and roadmap record.");
@@ -331,7 +336,7 @@ assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty full-spec
 layoutLaneCount = 1;
 assert.equal(layoutSandbox.productCardLayout().detailed, false, "empty single-lane categories use compact geometry");
 
-const presentationSandbox = { PortfolioModel: model, UI_PALETTE: { charcoal600: "#2c2c2c", carbon: "#111111" },
+const presentationSandbox = { portfolio: { settings: { roadmapBasis: "lifecycle" } }, PortfolioModel: model, UI_PALETTE: { charcoal600: "#2c2c2c", carbon: "#111111" },
   normalizeRoadmapStatus: (stage) => stage || "in-planning" };
 Object.assign(presentationSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(presentationSandbox);
@@ -711,6 +716,8 @@ const viewBoard = { settings: { freeMove: true }, lanes: [{ id: "audio" }, { id:
   { id: "b", laneId: "accessories", manualPosition: { x: 460, y: 100 }, order: 0 },
 ] };
 const viewSandbox = {
+  isFfsRoadmap: () => false,
+  hasDedicatedHashoutView: () => false,
   $: viewElement, zoom: 1, roadmapMonthWidth: 82, activeView: "products", board: viewBoard,
   ROADMAP_DEFAULT_MONTH_WIDTH: 82, ROADMAP_MIN_MONTH_WIDTH: 8, ROADMAP_MAX_MONTH_WIDTH: 164, ROADMAP_LEFT_WIDTH: 190,
   PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 2,

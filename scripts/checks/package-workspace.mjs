@@ -60,7 +60,7 @@ const functionNames = [
   "dataUriToBlob", "extensionForImageAsset", "createImageAssetMetadata", "ensureImageAssetRegistry", "migrateLegacyProductImages",
   "loadLocalImageAsset", "normalizeAscmSnapshot", "createDefaultPortfolio", "ensurePortfolioSchema", "emptyBoardFromCatalogCategory", "portfolioFromCatalogImport", "normalizeImportedPortfolio",
   "persistPortfolioStorage", "reportWorkspaceSaveFailure", "scheduleSave", "showLocalSaveFailure", "flushWorkspaceSave", "clonePortfolioData", "packageCodec", "getCurrentPackageInfo", "validatePackageManifest", "validatePackageImageReferences",
-  "localPackageImageIds", "clearPackageImageCaches", "commitPackageDraft",
+  "localPackageImageIds", "clearPackageImageCaches", "resetHashoutView", "commitPackageDraft",
   "buildProjectPackageBytes", "exportProjectPackage", "importProjectPackage", "parsePortfolioImportText", "normalizeIsolatedPortfolioImport", "remapImportedLocalImages", "importJson",
   "findPortfolioProductLocation", "restoreMergeDraft", "undoProductMergeDraft",
 ];
@@ -75,7 +75,7 @@ function harness(initial = portfolioFixture()) {
   const images = new Map(initial.imageAssets.filter((asset) => asset.sourceType === "local").map((asset) => [asset.id, imageBlob(`original:${asset.id}`)]));
   const stored = new Map([[storageKey, JSON.stringify(initial)]]);
   const faults = { transaction: false, deleteTransaction: false, synchronousPut: 0, storageKey: "", removeKey: "", activation: false, rollbackStorage: false };
-  const calls = { writes: 0, workspaceWrites: 0, clears: 0, deletes: [], revokes: [], creates: 0, downloads: [], activations: [], notices: [] };
+  const calls = { writes: 0, workspaceWrites: 0, clears: 0, deletes: [], revokes: [], creates: 0, downloads: [], activations: [], notices: [], hashoutResets: 0 };
   const timers = new Map();
   let timerId = 0;
   let nextId = 0;
@@ -138,6 +138,7 @@ function harness(initial = portfolioFixture()) {
     imageAssetGeneration: 0, packageOperationInProgress: false, workspaceOpening: false,
     workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, saveTimer: null,
     portfolio: clone(initial), activeCategoryId: initial.activeCategoryId,
+    hashoutViewController: { destroy() { calls.hashoutResets++; } }, hashoutSelectedKey: "previous-product", hashoutViewportState: { start: 1, end: 2 },
     id: () => `fresh-${++nextId}`,
     openImageDatabase: async () => database,
     categoryDefinition: (categoryId) => definitions.find((definition) => definition.id === categoryId) || definitions[0],
@@ -189,6 +190,10 @@ function harness(initial = portfolioFixture()) {
 const first = harness();
 const newManifest = portfolioFixture("Updated", ["shared-image", "variant-image"]);
 const result = await first.sandbox.importProjectPackage(new Blob([packageBytes(newManifest)]));
+assert.equal(first.calls.hashoutResets, 1, "A different package must dispose the previous map before activation.");
+assert.equal(first.sandbox.hashoutViewController, null);
+assert.equal(first.sandbox.hashoutSelectedKey, null);
+assert.equal(first.sandbox.hashoutViewportState, null);
 assert.equal(result.productCount, 1);
 assert.equal(result.categoryCount, definitions.length);
 assert.equal(result.encrypted, false);

@@ -9,6 +9,7 @@
   <link rel="preload" href="assets/fonts/Jost-Variable.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/hashout-roadmap.css">
   <link rel="stylesheet" href="css/workspace-notifications.css">
   <link rel="stylesheet" href="css/product-issues.css">
   <link rel="stylesheet" href="css/product-merge.css">
@@ -75,6 +76,7 @@
         </section>
         <section id="roadmapControls" class="controlbar view-controls hidden" aria-label="Roadmap controls">
           <label class="search-shell"><span aria-hidden="true">⌕</span><input id="roadmapSearch" class="search-input" type="search" aria-label="Search roadmap" placeholder="Find a product or SKU in any category"></label>
+          <div class="roadmap-basis-control"><div id="roadmapBasis" class="roadmap-interaction-mode" role="group" aria-label="Roadmap version"><button id="roadmapBasisLifecycle" data-roadmap-basis="lifecycle" type="button" aria-pressed="true" title="Show the current GA to EM lifecycle roadmap">Lifecycle roadmap</button><button id="roadmapBasisFfs" data-roadmap-basis="ffs" type="button" aria-pressed="false" title="Show the Hashout roadmap based only on FFS timing">Hashout roadmap</button></div></div>
           <div class="roadmap-interaction-mode" role="group" aria-label="Timeline drag behavior">
             <button id="roadmapModePan" type="button" aria-pressed="true" title="Browse the timeline without changing products">View Mode</button>
             <button id="roadmapModeDates" type="button" aria-pressed="false" title="Adjust product dates and row order">Edit Mode</button>
@@ -88,6 +90,7 @@
             <button id="roadmapToday" class="view-tool" title="Center the current month">Today</button>
           </div></div>
           <span id="roadmapEditAnnouncement" class="visually-hidden" role="status" aria-live="polite"></span>
+          <div id="ffsRoadmapLegend" class="ffs-roadmap-legend" role="note"><span id="roadmapBasisDescription">Lifecycle roadmap uses GA to EM.</span><span id="ffsRoadmapCounts" aria-live="polite"></span></div>
         </section>
         <div class="selection-bar"><div class="selection-actions"><span id="workspaceSelection">No product selected</span><button id="quickEditSelected" class="compact-button" disabled>Edit product</button></div></div>
       </div>
@@ -112,6 +115,8 @@
           <span id="navPosition" class="nav-position">0%</span>
         </nav>
       </section>
+
+      <section id="hashoutView" class="view-pane hashout-view hidden" aria-label="Hashout roadmap"></section>
 
       <section id="roadmapView" class="view-pane roadmap-view hidden">
         <div id="roadmapScroll" class="canvas-scroll roadmap-scroll">
@@ -401,6 +406,9 @@
   <script src="js/catalog-data.js"></script>
   <script src="js/ascm-import.js"></script>
   <script src="js/date-precision.js"></script>
+  <script src="js/ffs-roadmap.js"></script>
+  <script src="js/hashout-layout.js"></script>
+  <script src="js/hashout-view.js"></script>
   <script src="js/plc-import.js"></script>
   <script src="js/plc-import-ui.js"></script>
   <script src="js/pptx-pagination.js"></script>

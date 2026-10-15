@@ -30,6 +30,8 @@ let months = 120;
 const products = [{ id: "one", order: 4, manualPosition: { x: 400, y: 90 }, launchDate: "2026-09-01" }];
 const unchangedProducts = JSON.stringify(products);
 const sandbox = {
+  isFfsRoadmap: () => false,
+  hasDedicatedHashoutView: () => false,
   $: element, zoom: 1, roadmapMonthWidth: 82, activeView: "products", board: { products },
   PRODUCT_MIN_ZOOM: appConstant("PRODUCT_MIN_ZOOM"), PRODUCT_MAX_ZOOM: appConstant("PRODUCT_MAX_ZOOM"),
   ROADMAP_LEFT_WIDTH: 190, ROADMAP_DEFAULT_MONTH_WIDTH: appConstant("ROADMAP_DEFAULT_MONTH_WIDTH"),

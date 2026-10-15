@@ -72,6 +72,8 @@ jobs:
           cp public/js/workspace-notifications.js public/js/product-issues.js public/js/product-merge.js public/js/product-merge-ui.js _site/js/
           cp public/js/portfolio-search.js public/js/portfolio-search-ui.js _site/js/
           cp public/js/date-history.js public/js/date-precision.js _site/js/
+          cp public/js/ffs-roadmap.js public/js/hashout-layout.js public/js/hashout-view.js _site/js/
+          cp public/css/hashout-roadmap.css _site/css/
           cp public/js/launch-records.js _site/js/
           cp public/js/card-specs.js _site/js/
           cp public/js/workspace-store.js _site/js/
@@ -100,6 +102,10 @@ jobs:
           test -f _site/data/master_ppc.pkg
           test -f _site/js/date-history.js
           test -f _site/js/date-precision.js
+          test -f _site/js/ffs-roadmap.js
+          test -f _site/js/hashout-layout.js
+          test -f _site/js/hashout-view.js
+          test -f _site/css/hashout-roadmap.css
           test -f _site/js/launch-records.js
           test -f _site/js/card-specs.js
           test -f _site/js/workspace-store.js

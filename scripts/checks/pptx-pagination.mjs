@@ -112,6 +112,7 @@ const recordingContext = new Proxy({
 }, { get: (target, property) => property in target ? target[property] : () => {} });
 const activeBoard = { id: "active", settings: { roadmap: { categoryLabel: "Active category" } } };
 const rendererSandbox = {
+  isFfsRoadmap: () => false,
   console, Date, Math,
   PortfolioModel: globalThis.PortfolioModel,
   ROADMAP_LEFT_WIDTH: 190, ROADMAP_HEADER_HEIGHT: 88, ROADMAP_GROUP_HEADER_HEIGHT: 28,
@@ -264,6 +265,8 @@ function recordImage(kind, category, page = null) {
 }
 const limitControl = { id: "pptxRoadmapLimit", checked: false };
 const sandbox = {
+  isFfsRoadmap: () => false,
+  hasDedicatedHashoutView: () => false,
   UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
   PPTXPagination: globalThis.PPTXPagination, paginateRoadmapGroupsForPptx: paginateRoadmapGroups,
   CARD_WIDTH: 246, CARD_GAP: 10, GUTTER: 18, SIDE_PADDING: 40, LANE_TOP: 34,
@@ -448,7 +451,7 @@ for (const [scope, expectedKinds, expectedFilename] of [
     const expectedProducts = call.image.products;
     const nativeProductTexts = slide.texts.slice(1);
     assert.equal(slide.texts.length, 1 + expectedProducts.length * (call.kind === "roadmap" ? 1 : 4), "product labels, prices, specifications, and SKUs remain native editable text beside the slide title");
-    assert.equal(slide.texts[0].text, `${category.name} — ${call.kind === "products" ? "Product Portfolio" : "Roadmap"}${previousSameView ? " (continued)" : ""}`, "both portfolio and roadmap continuation titles retain user content without numeric pagination");
+    assert.equal(slide.texts[0].text, `${category.name} — ${call.kind === "products" ? "Product Portfolio" : "Lifecycle roadmap"}${previousSameView ? " (continued)" : ""}`, "both portfolio and roadmap continuation titles retain user content without numeric pagination");
     assert.equal(slide.background.color, "1A1B1C");
     assert.equal(slide.shapes.length, 1 + (call.kind === "products" ? expectedProducts.length : 0), "each portfolio card retains its own editable rounded rectangle");
     assert.deepEqual(structuredClone(slide.shapes[0].options.line), { color: "333538", width: .4, transparency: 25 }, "slide divider remains faint");
