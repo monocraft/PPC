@@ -228,6 +228,49 @@ for (const label of sparseFiftyOverlay.labels) {
     'The small vertical correction never compromises the full marker halo and label clearance.');
   same(label.anchorY, marker.centerY, 'Only the annotation moves inside the lane; its marker anchor remains exact');
 }
+// At x≈400, a 200px name straddles a floating-point exponent boundary.
+// A 0.001px pan previously made equal-cost left/right choices alternate by
+// roughly 227px, despite there being no collision or meaningful layout change.
+function fractionalLabelFixture(anchorX, labelWidth, count = 1) {
+  const keys = Array.from({ length: count }, (_, index) => `fractional-${index}`);
+  const glyphs = keys.map(key => ({ type: 'point', categoryId: 'fractional', centerX: anchorX, centerY: 103, radius: 4.5, memberKeys: [key] }));
+  const map = { leftWidth: 166, width: 1280, height: 128, headerHeight: 78,
+    entriesByKey: new Map(keys.map(key => [key, { key, categoryId: 'fractional' }])),
+    lanes: [{ categoryId: 'fractional', y: 78, height: 50, glyphs }] };
+  const candidates = keys.map(key => ({ key, categoryId: 'fractional', anchorX, anchorY: 103, width: labelWidth, height: 28, markerRadius: 4.5 }));
+  return { map, candidates };
+}
+for (const mode of ['default', 'on']) for (const labelWidth of [200, 200.6845703125]) {
+  let first = null;
+  for (let step = 0; step < 250; step++) {
+    const translation = step * .001, fixture = fractionalLabelFixture(400 + translation, labelWidth);
+    const source = JSON.stringify(fixture), result = model.labels(fixture.map, fixture.candidates, { mode });
+    assert.equal(result.labels.length, 1);
+    const label = result.labels[0]; first ||= label;
+    assert.equal(label.placement, 'right', 'Equal-cost adjacent labels keep an explicit placement priority throughout fractional pans.');
+    same(label.x - first.x, translation, 'A tiny pan translates its label by the same tiny amount instead of jumping across its marker');
+    same(label.y, first.y, 'Fractional horizontal movement cannot change a stable label row');
+    assert.equal(label.anchorX, fixture.candidates[0].anchorX, 'Stability never rounds the actual FFS anchor.');
+    assert.equal(label.width, labelWidth, 'Stability never rounds measured text widths.');
+    labelAccounting(fixture.map, result);
+    assert.equal(JSON.stringify(fixture), source, 'Stable ranking never mutates anchors, lane geometry, or measurements.');
+  }
+}
+let firstForced = null;
+for (let step = 0; step < 100; step++) {
+  const translation = step * .001, fixture = fractionalLabelFixture(400 + translation, 200, 3);
+  const result = model.labels(fixture.map, fixture.candidates, { mode: 'on' });
+  assert.equal(result.labels.length, 3);
+  assert.ok(result.labels.some(label => label.forced), 'This regression exercises explicit On overlap scoring as well as ordinary placement.');
+  firstForced ||= result.labels;
+  for (const label of result.labels) {
+    const initial = firstForced.find(candidate => candidate.key === label.key);
+    assert.equal(label.placement, initial.placement, 'A fractional pan cannot reshuffle equal-cost forced label alternatives.');
+    same(label.x - initial.x, translation, 'Forced labels follow the same smooth translation as their unchanged source group');
+    same(label.y, initial.y, 'Forced labels retain their chosen row while the group pans');
+  }
+  labelAccounting(fixture.map, result);
+}
 const narrowLabelMap = model.layout(model.project(separated), horizon, { width: 390, height: 350, leftWidth: 112, headerHeight: 42, maxLaneHeight: 350 });
 const narrowOverlay = model.labels(narrowLabelMap, measuredLabels(narrowLabelMap, { width: 112 }));
 labelAccounting(narrowLabelMap, narrowOverlay);
@@ -305,6 +348,72 @@ const beforeSeasonMatch = JSON.stringify({ horizon, annualWindows, matchingPerio
 assert.equal(model.windowMatches(matchingPeriod, annualWindows)[0].match, 'overlap');
 assert.equal(JSON.stringify({ horizon, annualWindows, matchingPeriod }), beforeSeasonMatch, 'Matching never mutates source periods, calendar guides, or horizon settings.');
 
+const beforeSeasonBands = JSON.stringify({ horizon, annualWindows, portfolio, matchingPeriod });
+const seasonalBands = model.seasonalBands(horizon);
+assert.equal(seasonalBands.length, 20, 'The ten-year horizon repeats two full seasonal planning spans per year.');
+assert.deepEqual(seasonalBands.slice(0, 2).map(band => [band.label, band.type, band.start, band.end, band.endMonth - band.startMonth]),
+  [['Spring on-shelf', 'on-shelf-window', '2026-02-01', '2026-05-31', 4],
+    ['Fall on-shelf', 'on-shelf-window', '2026-07-01', '2026-10-31', 4]],
+  'The visual bands cover every month from ideal FFS through the on-shelf month, with exact full labels.');
+assert.ok(Object.isFrozen(seasonalBands) && seasonalBands.every(Object.isFrozen), 'Seasonal display bands are immutable view data.');
+assert.deepEqual(model.seasonalBands(horizon), seasonalBands, 'Seasonal display spans are deterministic.');
+assert.equal(new Set(seasonalBands.map(band => band.key)).size, 20, 'Repeated annual spans retain distinct identities.');
+assert.ok(seasonalBands.every(band => band.startMonth === band.ffsMonth && band.endMonth === band.onShelfMonth + 1),
+  'The exclusive display endpoint includes the full later on-shelf month.');
+const leapBand = seasonalBands.find(band => band.year === 2028 && band.season === 'spring');
+assert.equal(leapBand.ffsStart, '2028-02-01');
+assert.equal(leapBand.ffsEnd, '2028-02-29', 'The underlying ideal FFS target retains leap day.');
+assert.equal(leapBand.ffsLabel, 'Feb 2028');
+assert.equal(leapBand.onShelfLabel, 'May 2028');
+assert.equal(leapBand.end, '2028-05-31');
+assert.equal(seasonalBands[1].ffsLabel, 'Jul 2026');
+assert.equal(seasonalBands[1].ffsEnd, '2026-07-31');
+assert.equal(seasonalBands[1].onShelfLabel, 'Oct 2026');
+const monthHorizon = (year, month) => ({ start: year * 12 + month - 1, end: year * 12 + month - 1, count: 1 });
+for (const [month, season] of [[2, 'spring'], [3, 'spring'], [4, 'spring'], [5, 'spring'], [7, 'fall'], [8, 'fall'], [9, 'fall'], [10, 'fall']]) {
+  const partialHorizon = monthHorizon(2028, month), visible = model.seasonalBands(partialHorizon);
+  assert.equal(visible.length, 1, `A month-only horizon inside ${season} retains its full planning span even without the FFS target month.`);
+  assert.equal(visible[0].season, season);
+  assert.equal(visible[0].displayStart, partialHorizon.start);
+  assert.equal(visible[0].displayEnd, partialHorizon.end + 1);
+  assert.equal(visible[0].start, season === 'spring' ? '2028-02-01' : '2028-07-01', 'Clipping does not rewrite canonical calendar span dates.');
+  assert.equal(visible[0].end, season === 'spring' ? '2028-05-31' : '2028-10-31');
+}
+for (const month of [1, 6, 11, 12]) assert.deepEqual(model.seasonalBands(monthHorizon(2028, month)), [],
+  'Adjacent months outside the seasonal spans never acquire a band.');
+const partialSpring = model.seasonalBands(horizon, { viewportStart: 2028 * 12 + 2.25, viewportEnd: 2028 * 12 + 3.75 });
+assert.equal(partialSpring.length, 1, 'A March–April viewport retains Spring even though February is offscreen.');
+same(partialSpring[0].displayStart, 2028 * 12 + 2.25, 'Spring clips to the exact fractional viewport start');
+same(partialSpring[0].displayEnd, 2028 * 12 + 3.75, 'Spring clips to the exact fractional viewport end');
+assert.equal(partialSpring[0].ffsStart, '2028-02-01');
+assert.equal(partialSpring[0].end, '2028-05-31');
+const mayTail = model.seasonalBands(horizon, { viewportStart: 2028 * 12 + 4.999, viewportEnd: 2028 * 12 + 5 });
+assert.equal(mayTail.length, 1, 'The final fraction of May remains inside the Spring span.');
+same(mayTail[0].displayEnd, 2028 * 12 + 5, 'May ends exactly at the exclusive June boundary');
+assert.deepEqual(model.seasonalBands(horizon, { viewportStart: 2028 * 12 + 5, viewportEnd: 2028 * 12 + 6 }), [],
+  'A June-only viewport touches the Spring endpoint without overlapping it.');
+assert.deepEqual(model.seasonalBands(horizon, { viewportStart: 2028 * 12 + 10, viewportEnd: 2028 * 12 + 11 }), [],
+  'A November-only viewport touches the Fall endpoint without overlapping it.');
+const clippedSpringHorizon = model.seasonalBands(monthHorizon(2028, 4), { viewportStart: 2028 * 12, viewportEnd: 2029 * 12 });
+assert.equal(clippedSpringHorizon[0].displayStart, 2028 * 12 + 3, 'An oversized viewport cannot escape the source horizon.');
+assert.equal(clippedSpringHorizon[0].displayEnd, 2028 * 12 + 4);
+for (const invalidRange of [null, {}, { start: horizon.start, end: horizon.end, count: 2 },
+  { start: 1899 * 12, end: 1900 * 12, count: 13 }, { start: 9999 * 12, end: 10000 * 12, count: 13 }]) {
+  const invalidBands = model.seasonalBands(invalidRange);
+  assert.deepEqual(invalidBands, []);
+  assert.ok(Object.isFrozen(invalidBands), 'Malformed horizons return a safe immutable empty collection.');
+}
+assert.deepEqual(model.seasonalBands(horizon, { viewportStart: horizon.end + 1, viewportEnd: horizon.end + 2 }), []);
+assert.deepEqual(model.seasonalBands(horizon, { viewportStart: 10, viewportEnd: 5 }), []);
+for (const date of ['2028-02-15', '2028-03-15', '2028-05-31', '2028-07-15', '2028-10-31']) {
+  assert.deepEqual(model.windowMatches(ffs.period(product(`display-band-${date}`, date)), seasonalBands), [],
+    'A visual seasonal span cannot masquerade as an FFS target or imply on-shelf readiness.');
+}
+assert.equal(model.windowMatches(ffs.period(product('mixed-season-types', '2028-02-15')), [...annualWindows, ...seasonalBands]).length, 1,
+  'Only the original ideal FFS guide matches when calendar targets and display spans are supplied together.');
+assert.equal(JSON.stringify({ horizon, annualWindows, portfolio, matchingPeriod }), beforeSeasonBands,
+  'Constructing and clipping seasonal display spans leaves source products, FFS periods, target guides, and horizon settings unchanged.');
+
 function radialAccounting(result, dimensions) {
   assert.deepEqual(result.center, result.anchor, 'Every expansion remains at the exact original cluster origin.');
   assert.equal(result.connector, null, 'An anchored expansion never adds lines or a relocated center.');
@@ -379,6 +488,24 @@ for (const [targetSize, gap] of [[28, 6], [28, 8], [44, 4]]) {
 const leftTwoAnchor = { x: radialDimensions.leftWidth + 27, y: 325 };
 assert.deepEqual(model.radialLayout(2, { ...radialDimensions, anchor: leftTwoAnchor }).center, leftTwoAnchor,
   'A small boundary group expands from its original count without any horizontal shift.');
+for (const [targetSize, gap] of [[28, 6], [44, 4]]) {
+  for (const dimensions of [{ width: 1280, height: 610, leftWidth: 166, headerHeight: 78 },
+    { width: 390, height: 240, leftWidth: 112, headerHeight: 78 }]) {
+    for (const anchor of [{ x: dimensions.leftWidth + 4, y: dimensions.headerHeight + 4 },
+      { x: dimensions.width - 8, y: dimensions.headerHeight + 4 },
+      { x: dimensions.leftWidth + 4, y: dimensions.height - 8 }, { x: dimensions.width - 8, y: dimensions.height - 8 }]) {
+      const picker = { ...dimensions, anchor, targetSize, gap }, cornerGroup = model.radialLayout(3, picker);
+      assert.equal(cornerGroup.capacity, 3, 'Three products near a plot corner stay together when a bounded inward arc has room.');
+      assert.equal(cornerGroup.pageCount, 1, 'A three-product group no longer appears to contain only two products behind an avoidable second page.');
+      assert.deepEqual(cornerGroup.positions.map(position => position.index), [0, 1, 2]);
+      assert.deepEqual(cornerGroup.center, anchor, 'Making room for the third product never moves its group origin.');
+      assert.ok(cornerGroup.radius <= (targetSize + gap) * 2.25 + 1e-7, 'The small-group expansion stays inside its count-derived radius budget.');
+      radialAccounting(cornerGroup, dimensions);
+      const smaller = model.radialLayout(3, { ...picker, maxRadius: cornerGroup.radius - .001 });
+      assert.ok(smaller.capacity < 3, 'The wider corner search still returns the smallest radius that can fit all three full-size targets.');
+    }
+  }
+}
 const shortOrbit = model.radialLayout(100, { width: 650, height: 120, leftWidth: 142, headerHeight: 46, anchor: { x: 400, y: 83 } });
 assert.equal(shortOrbit.mode, 'arc');
 assert.equal(shortOrbit.capacity, 2, 'A short map preserves full-size targets by offering a few products at a time.');
@@ -388,6 +515,15 @@ assert.equal(tiny.mode, 'arc');
 assert.equal(tiny.capacity, 1);
 assert.equal(tiny.showCenterControl, true, 'A one-member page retains an origin control separated from the product target.');
 radialAccounting(tiny, tinyDimensions);
+const tinyThree = model.radialLayout(3, { ...tinyDimensions, anchor: { x: 170, y: 62 } });
+assert.equal(tinyThree.capacity, 1, 'A physically narrow surface keeps safe full-size targets instead of forcing all three into an overlap.');
+assert.equal(tinyThree.pageCount, 3);
+assert.deepEqual(Array.from({ length: tinyThree.pageCount }, (_, page) => model.radialLayout(3,
+  { ...tinyDimensions, anchor: { x: 170, y: 62 }, page }).positions.map(position => position.index)).flat(), [0, 1, 2],
+  'Every small-group product remains reachable when physical bounds still require paging.');
+radialAccounting(tinyThree, tinyDimensions);
+assert.equal(model.radialLayout(3, { width: 150, height: 80, leftWidth: 142, headerHeight: 46 }).fit, false,
+  'The broader small-group search cannot produce clipped targets on an impossible surface.');
 assert.equal(model.radialLayout(100, { width: 150, height: 80, leftWidth: 142, headerHeight: 46 }).fit, false,
   'An impossible target surface is explicit rather than using clipped controls.');
 assert.equal(model.radialLayout(0, radialDimensions).capacity, 0);
