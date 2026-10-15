@@ -36,7 +36,7 @@ Open **Saved views** beside the zoom controls in Portfolio, or near the Analytic
 
 The PowerPoint dialog restores reusable options from the last successful export. **Use this view** copies the visible view's category scope and date range into the export controls for review. Those options do not retain a previous consent to export different reporting cutoffs. Review the displayed scope before exporting.
 
-On narrow screens, **View options** groups secondary roadmap controls. Search, category/type selection, range, zoom, Saved views and Fit remain available. **Next 24 months**, **Zoom to selected product** and **Full range** adjust the visible timeline only. Quarter precision is retained when fitting date ranges.
+Roadmap controls use consistent groups for search, roadmap type and date range; product editing; and view navigation. Zoom, Saved views, Fit and Today stay together, with timeline range presets alongside in the same navigation group. The GA-to-EM explanatory line is removed. On narrow screens, **View options** groups secondary roadmap controls while zoom and Saved views stay directly available. **Next 24 months**, **Zoom to selected product** and **Full range** adjust the visible timeline only. Quarter precision is retained when fitting date ranges.
 
 ## Review date evidence and protect a date
 

@@ -271,7 +271,6 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .workspace-tool-menu-panel .inline-field select { width: 100%; min-height: 32px; }
 .workspace-tool-menu-panel > button { min-height: 32px; padding: 7px 10px; text-align: left; font-size: 11px; }
 .workspace-direct-tool { flex: 0 0 auto; min-height: 32px; padding: 6px 9px; font-size: 11px; white-space: nowrap; }
-#roadmapControls:has(.roadmap-edit-controls.is-adjusting-dates) { flex-wrap: wrap; }
 .card-reorder-start { flex: 0 0 auto; min-height: 32px; padding: 6px 9px; background: transparent; font-size: 11px; white-space: nowrap; }
 .card-reorder-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 3px 4px 3px 9px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); }
 .card-reorder-actions > span { color: var(--color-text); font-size: 10px; white-space: nowrap; }
@@ -1049,20 +1048,46 @@ select:not([multiple]):not([size]), select:not([multiple])[size="0"], select:not
 .roadmap-interaction-mode > button[aria-pressed="true"] { background: var(--color-header); color: var(--color-text);   box-shadow: inset 0 -2px 0 var(--color-accent); }
 .roadmap-interaction-mode > button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .roadmap-basis-control { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--color-text-secondary); font-size: 10px; }
-#roadmapControls { flex-wrap: wrap; }
-.ffs-roadmap-legend { display: grid; flex: 1 0 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 18px; min-width: 0; min-height: 15px; color: var(--color-text-secondary); font-size: 10px; line-height: 1.5; }
-.ffs-roadmap-legend > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ffs-roadmap-legend > :last-child { font-variant-numeric: tabular-nums; }
-@media (max-width: 700px) { .ffs-roadmap-legend { grid-template-columns: minmax(0, 1fr); grid-template-rows: 15px 15px; } }
-.app-shell.is-hashout-roadmap #roadmapControls > .search-shell,
-.app-shell.is-hashout-roadmap #roadmapControls > .portfolio-search-shell,
-.app-shell.is-hashout-roadmap #roadmapControls > .roadmap-interaction-mode,
-.app-shell.is-hashout-roadmap #roadmapControls > .roadmap-edit-controls,
-.app-shell.is-hashout-roadmap #ffsRoadmapLegend,
+.workspace-controls:has(#roadmapControls:not(.hidden)) { display: block; }
+.workspace-controls > #roadmapControls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 18px; }
+.roadmap-context-tools, .roadmap-editing-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.roadmap-context-tools { grid-column: 1; grid-row: 1; }
+.roadmap-editing-tools { grid-column: 1; grid-row: 2; }
+.roadmap-context-tools > .search-shell, .roadmap-context-tools > .portfolio-search-shell { flex: 1 1 180px; width: min(230px, 24vw); min-width: 160px; max-width: 280px; }
+.roadmap-context-tools .search-shell { width: 100%; min-width: 0; }
+.roadmap-navigation-tools { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-start; gap: 6px; min-width: 0; max-width: 100%; }
+#roadmapNavigationTools .view-tools-shell { flex: 0 0 auto; margin: 0; }
+#roadmapNavigationTools .view-tools { flex-wrap: nowrap; }
+#roadmapEditingTools .selection-bar { display: flex; flex: 0 1 auto; max-width: 100%; margin: 0; padding: 0; border: 0; }
+#roadmapEditingTools .selection-actions { justify-content: flex-start; }
+#roadmapEditingTools #workspaceSelection { display: block; max-width: min(220px, 19vw); }
+#roadmapEditingTools .roadmap-edit-controls { flex-wrap: wrap; max-width: 100%; }
+.app-shell.is-hashout-roadmap #roadmapContextTools > .search-shell,
+.app-shell.is-hashout-roadmap #roadmapContextTools > .portfolio-search-shell,
+.app-shell.is-hashout-roadmap #roadmapEditingTools,
+.app-shell.is-hashout-roadmap #workflowRoadmapOptions .roadmap-interaction-mode,
+.app-shell.is-hashout-roadmap #workflowRoadmapOptions .roadmap-edit-controls,
+.app-shell.is-hashout-roadmap #workflowRoadmapOptions #toggleRoadmapDetails,
 .app-shell.is-hashout-roadmap .selection-bar,
 .app-shell.is-hashout-roadmap .category-switcher { display: none; }
 .app-shell.is-hashout-roadmap #productControls { display: none !important; }
+.app-shell.is-hashout-roadmap #roadmapNavigationTools { grid-row: 1; }
 .roadmap-edit-controls:not(.is-adjusting-dates) { display: none; }
+@media (max-width: 1100px) {
+  .workspace-controls > #roadmapControls { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  #roadmapContextTools, #roadmapNavigationTools, #roadmapEditingTools { grid-column: 1; grid-row: auto; }
+  .app-shell.is-hashout-roadmap #roadmapNavigationTools { grid-row: auto; }
+  #roadmapNavigationTools { flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; }
+  #roadmapEditingTools #workspaceSelection { max-width: min(260px, 38vw); }
+}
+@media (max-width: 700px) {
+  #roadmapContextTools { gap: 6px; }
+  #roadmapContextTools > .search-shell, #roadmapContextTools > .portfolio-search-shell { flex: 1 0 100%; width: 100%; max-width: none; }
+  #roadmapContextTools .roadmap-basis-control { min-width: 0; }
+  #roadmapContextTools .roadmap-basis-control button { padding-inline: 8px; font-size: 10px; }
+  #roadmapNavigationTools .view-tools .view-tool { padding-inline: 6px; }
+  #roadmapEditingTools #workspaceSelection { max-width: calc(100vw - 130px); }
+}
 
 /* Recovery stays reachable while an unreadable workspace is protected. */
 .workspace-opening-status { position: fixed; z-index: 900; left: 50%; top: 40%; transform: translate(-50%, -50%); width: min(520px, calc(100vw - 40px)); padding: 24px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface, #242527); box-shadow: var(--shadow-overlay); }
