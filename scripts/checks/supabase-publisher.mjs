@@ -19,7 +19,7 @@ const attachment = Uint8Array.of(17, 19, 21, 23, 0, 25);
 const original = {
   version: 4, activeCategoryId: 'pc', privateSource: { preserve: 'metadata' },
   packageInfo: { version: 1, updatedAt: '2026-01-01T00:00:00.000Z', comments: 'Keep owner comments' },
-  imageAssets: [{ id: 'hero', sourceType: 'local', packagePath: 'images/hero.webp' }],
+  imageAssets: [{ id: 'hero', sourceType: 'local', name: 'hero.webp', mimeType: 'image/webp', size: image.length, url: '', updatedAt: '2026-01-01T00:00:00Z', packagePath: 'images/hero.webp' }],
   categories: [{ id: 'pc', board: { lanes: [{ id: 'wired', name: 'Wired' }], savedBoard: { spacing: 18 },
     products: [{ id: 'headset', name: 'Shared headset', laneId: 'wired', imageAssetId: 'hero', privateExtra: { owner: 'Team' },
       generalAvailabilityDate: '2027-01-20', endManufacturingDate: '2029-01-20', ffsDate: '2026-12-05',
@@ -42,8 +42,9 @@ function targetFor(manifest = original, patch = { ffsDate: '2026-12-10' }) {
     { requestId: 'fixture-request-one', now: '2026-10-08T00:00:00.000Z', actor: 'Optional name' }).manifest;
 }
 
-async function harness({ seeded = true, revision = 1, cacheMode = 'match' } = {}) {
+export async function harness({ seeded = true, revision = 1, cacheMode = 'match' } = {}) {
   const initial = await packed(original), blobs = new Map([[sha(initial), initial]]);
+  const candidateRefs = new Map();
   let current = sha(initial), manifest = revision ? targetFor() : clone(original), storageRevision = revision;
   let sourceSha = current, seedDigest = null;
   let publication = { requestedRevision: revision, publishedRevision: 0, githubSha: current, status: revision ? 'pending' : 'current' };
@@ -97,8 +98,8 @@ async function harness({ seeded = true, revision = 1, cacheMode = 'match' } = {}
       if (deployFails) { deployFails -= 1; return json({}, 403); }
       return new Response(null, { status: 204 });
     }
-    assert.match(url, /\/contents\/public\/data\/master_ppc\.pkg(?:\?ref=main)?$/);
-    if (options.method === 'GET') return json({ type: 'file', sha: current, size: blobs.get(current).length, download_url: 'https://untrusted.invalid/never-fetch' });
+    assert.match(url, /\/contents\/public\/data\/master_ppc\.pkg(?:\?ref=(?:main|[a-f0-9]{40}))?$/);
+    if (options.method === 'GET') { const ref=new URL(url).searchParams.get('ref'),chosen=ref&&ref!=='main'?candidateRefs.get(ref):current;return chosen?json({ type: 'file', sha: chosen, size: blobs.get(chosen).length, download_url: 'https://untrusted.invalid/never-fetch' }):json({},404); }
     const body = JSON.parse(options.body); calls.push({ operation: 'put', body: { sha: body.sha, branch: body.branch } });
     if (writeDenied) return json({ error: 'Protected branch' }, 422);
     if (putHook) { const hook = putHook; putHook = null; await hook(); }
@@ -107,13 +108,14 @@ async function harness({ seeded = true, revision = 1, cacheMode = 'match' } = {}
     if (losePut) { losePut = false; throw new Error(`${githubToken} private network detail`); }
     return json({ content: { sha: current } });
   };
-  const publisher = createSupabasePublisher({ endpoint, packageKey, githubToken, publisherSecret, fetchImpl, readCachedPackage: async () => {
+  const makePublisher=imagesCommit=>createSupabasePublisher({ endpoint, packageKey, githubToken, publisherSecret, fetchImpl, imagesCommit, readCachedPackage: async () => {
     if (cacheMode === 'missing') return null;
     if (cacheMode === 'unavailable') throw new Error('Synthetic unavailable cache');
     const cached = blobs.get(current).slice();
     if (cacheMode === 'corrupt') cached[30] ^= 1;
     return cacheMode === 'short' ? cached.subarray(1) : cached;
   } });
+  const publisher=makePublisher();
   return { publisher, calls, acknowledgements, failures, get current() { return current; }, get bytes() { return blobs.get(current).slice(); },
     get publication() { return clone(publication); },
     failAck(count = 1) { ackFails = count; }, failDeploy(count = 1) { deployFails = count; }, loseWriteReply() { losePut = true; },
@@ -123,8 +125,11 @@ async function harness({ seeded = true, revision = 1, cacheMode = 'match' } = {}
     replaceRaw(bytes) { current = sha(bytes); blobs.set(current, bytes.slice()); },
     advance(patch) { manifest = targetFor(manifest, patch); storageRevision += 1; publication.requestedRevision = storageRevision; publication.status = 'pending'; },
     staleExport(value, revisionValue) { manifest = clone(value); storageRevision = revisionValue; publication.publishedRevision = Math.min(publication.publishedRevision, revisionValue); },
+    candidate(commit,bytes) { const digest=sha(bytes);blobs.set(digest,bytes);candidateRefs.set(commit,digest);return makePublisher(commit); },
+    get sourceSha() { return sourceSha; },
   };
 }
+export {original,packed,unpacked,packageKey};
 
 assert.equal(normalizePublisherEndpoint(endpoint), endpoint);
 for (const value of ['http://fixture.supabase.co/functions/v1/ppc-master/api/master', `${endpoint}?key=private`, 'https://name:password@fixture.supabase.co/functions/v1/ppc-master/api/master']) assert.throws(() => normalizePublisherEndpoint(value), error => error.code === 'INVALID_CONFIGURATION');

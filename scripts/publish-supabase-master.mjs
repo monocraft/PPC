@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import '../public/js/package-codec.js';
 import '../public/js/master-model.js';
+import {projectOwnerImages} from './owner-image-layer.mjs';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -137,6 +138,8 @@ export function createSupabasePublisher(options = {}) {
   try { packageKey = codec.normalizeKey(options.packageKey); } catch { throw failure('INVALID_CONFIGURATION'); }
   for (const [value, minimum] of [[publisherSecret, 32], [githubToken, 24]]) if (typeof value !== 'string' || value.length < minimum || value.length > 512 || /[\s\u0000-\u001f\u007f]/.test(value)) throw failure('INVALID_CONFIGURATION');
   const owner = options.owner || 'monocraft', repo = options.repo || 'PPC', branch = options.branch || 'main';
+  const imagesCommit = options.imagesCommit || '';
+  if (imagesCommit && !SHA.test(imagesCommit)) throw failure('OWNER_IMAGES_COMMIT_INVALID');
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo) || !/^[A-Za-z0-9_./-]{1,200}$/.test(branch) || branch.includes('..')) throw failure('INVALID_CONFIGURATION');
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const repository = `https://api.github.com/repos/${owner}/${repo}`;
@@ -172,25 +175,26 @@ export function createSupabasePublisher(options = {}) {
       if (!result.response.ok) throw failure('GITHUB_READ_FAILED');
       return result.bytes;
     }
+    const reading = operation === 'read' || operation === 'read-ref';
     const url = operation === 'deploy' ? `${repository}/actions/workflows/deploy.yml/dispatches`
-      : `${repository}/contents/${PACKAGE_PATH}${operation === 'read' ? `?ref=${encodeURIComponent(branch)}` : ''}`;
-    if (operation !== 'read') headers['Content-Type'] = 'application/json';
-    const result = await call(url, { method: operation === 'read' ? 'GET' : operation === 'deploy' ? 'POST' : 'PUT', headers,
-      ...(payload ? { body: JSON.stringify(payload) } : {}) });
+      : `${repository}/contents/${PACKAGE_PATH}${reading ? `?ref=${encodeURIComponent(operation === 'read-ref' ? payload : branch)}` : ''}`;
+    if (!reading) headers['Content-Type'] = 'application/json';
+    const result = await call(url, { method: reading ? 'GET' : operation === 'deploy' ? 'POST' : 'PUT', headers,
+      ...(!reading && payload ? { body: JSON.stringify(payload) } : {}) });
     if (operation === 'deploy') {
       if (result.response.status !== 204) throw failure('DEPLOY_DISPATCH_FAILED');
       return null;
     }
     if (operation === 'write' && [409, 422].includes(result.response.status)) return { retry: true, status: result.response.status };
-    if (!result.response.ok) throw failure(operation === 'read' ? 'GITHUB_READ_FAILED' : 'GITHUB_WRITE_FAILED');
+    if (!result.response.ok) throw failure(reading ? 'GITHUB_READ_FAILED' : 'GITHUB_WRITE_FAILED');
     try { return JSON.parse(new TextDecoder().decode(result.bytes)); } catch { throw failure('GITHUB_RESPONSE_INVALID'); }
   }
 
-  async function currentPackage() {
-    const metadata = await github('read');
+  async function currentPackage(ref) {
+    const metadata = await github(ref ? 'read-ref' : 'read', ref);
     if (metadata.type !== 'file' || !SHA.test(metadata.sha || '') || !Number.isSafeInteger(metadata.size) || metadata.size < 36 || metadata.size > codec.MAX_PACKAGE_BYTES) throw failure('GITHUB_PACKAGE_INVALID');
     let cached;
-    try { cached = await (options.readCachedPackage || readCheckoutPackage)(metadata); } catch {}
+    try { if (!ref) cached = await (options.readCachedPackage || readCheckoutPackage)(metadata); } catch {}
     let bytes;
     if (cached instanceof Uint8Array && cached.length === metadata.size && blobSha(cached) === metadata.sha && codec.isEncrypted(cached)) bytes = cached;
     else { cached?.fill?.(0); bytes = await github('blob', metadata.sha); }
@@ -243,17 +247,28 @@ export function createSupabasePublisher(options = {}) {
         const target = await exported(); desiredRevision = target.revision;
         const current = await currentPackage();
         const source = await unpack(current.bytes, packageKey);
+        let ownerPackage, ownerUnlocked, projected;
         try {
           const marker = trustedMarker(source, target);
-          const expected = preparedManifest(target.manifest, target.revision);
-          validateManifest(expected, source.entries);
+          let input;
+          if (imagesCommit) {
+            if (target.revision < 1) throw failure('OWNER_IMAGES_REQUIRE_INITIALIZED');
+            ownerPackage = await currentPackage(imagesCommit);
+            ownerUnlocked = await unpack(ownerPackage.bytes, packageKey);
+            try { input = { descriptor: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(ownerUnlocked.entries.get('owner-image-input.json'))), manifest: ownerUnlocked.manifest, entries: ownerUnlocked.entries }; }
+            catch { throw failure('OWNER_IMAGES_INPUT_MISSING'); }
+          }
+          projected = projectOwnerImages(preparedManifest(target.manifest, target.revision), source.manifest, source.entries,
+            { input, commit: imagesCommit, blobSha: ownerPackage?.sha, sourceSha: target.sourceSha });
+          const expected = projected.manifest;
+          validateManifest(expected, projected.entries);
           const expectedDigest = hash(canonical(expected));
           if (marker && marker.revision > target.revision) {
             // An overlapping publisher may have advanced while this export was read.
             // Read a fresh consistent snapshot; never write an older package.
             continue;
           }
-          if (marker?.revision === target.revision) {
+          if (marker?.revision === target.revision && !projected.changedInput) {
             if (marker.manifestDigest !== expectedDigest) throw failure('REVISION_CONTENT_MISMATCH');
             if (target.publishedRevision === target.revision && target.publication.githubSha === current.sha && ['current', 'published'].includes(target.publication.status)) return { status: 'unchanged', revision: target.revision, githubSha: current.sha };
             // Covers push acceptance with a lost response, failed deploy dispatch,
@@ -274,12 +289,12 @@ export function createSupabasePublisher(options = {}) {
           }
           const nextManifest = expected;
           nextManifest.masterSync.supabasePublication = { version: 1, source: endpoint, sourceSha: target.sourceSha,
-            revision: target.revision, manifestDigest: expectedDigest, assetDigest: assetDigest(source.entries) };
+            revision: target.revision, manifestDigest: expectedDigest, assetDigest: assetDigest(projected.entries) };
           const manifestBytes = new TextEncoder().encode(JSON.stringify(nextManifest));
           if (manifestBytes.length > 4 * 1024 * 1024) throw failure('MASTER_TOO_LARGE');
           let plaintext, encrypted;
           try {
-            plaintext = codec.createZip([...source.entries].map(([name, bytes]) => ({ name, data: name === 'portfolio.json' ? manifestBytes : bytes })));
+            plaintext = codec.createZip([...projected.entries].map(([name, bytes]) => ({ name, data: name === 'portfolio.json' ? manifestBytes : bytes })));
             encrypted = await codec.encrypt(plaintext, packageKey);
           } finally { plaintext?.fill(0); manifestBytes.fill(0); }
           const proposedSha = blobSha(encrypted);
@@ -313,12 +328,17 @@ export function createSupabasePublisher(options = {}) {
             await acknowledge(target.revision, proposedSha);
             return { status: 'published', revision: target.revision, githubSha: proposedSha };
           } finally { encrypted.fill(0); }
-        } finally { for (const bytes of source.entries.values()) bytes.fill(0); current.bytes.fill(0); }
+        } finally {
+          for (const bytes of projected?.entries?.values() || []) bytes.fill(0);
+          for (const bytes of ownerUnlocked?.entries?.values() || []) bytes.fill(0);
+          ownerPackage?.bytes?.fill(0);
+          for (const bytes of source.entries.values()) bytes.fill(0); current.bytes.fill(0);
+        }
       }
       throw failure('PACKAGE_CHANGED_RETRY');
     } catch (error) {
       await notifyFailure(error, desiredRevision);
-      throw error instanceof PublisherError ? error : failure('PUBLICATION_FAILED');
+      throw error instanceof PublisherError ? error : failure(/^OWNER_[A-Z_]+$/.test(error?.code || '') ? error.code : 'PUBLICATION_FAILED');
     }
   }
   return Object.freeze({ bootstrap, publish });
@@ -329,7 +349,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const publisher = createSupabasePublisher({ endpoint: process.env.PPC_MASTER_ENDPOINT,
       publisherSecret: process.env.PPC_PUBLISHER_SECRET, packageKey: process.env.PPC_PACKAGE_KEY,
       githubToken: process.env.GITHUB_TOKEN, owner: process.env.PPC_GITHUB_OWNER, repo: process.env.PPC_GITHUB_REPO,
-      branch: process.env.PPC_GITHUB_BRANCH });
+      branch: process.env.PPC_GITHUB_BRANCH, imagesCommit: process.env.PPC_IMAGES_COMMIT });
+    if (process.argv.includes('--bootstrap') && process.env.PPC_IMAGES_COMMIT) throw failure('OWNER_IMAGES_WITH_BOOTSTRAP');
     const result = process.argv.includes('--bootstrap') ? await publisher.bootstrap() : await publisher.publish();
     console.log(process.argv.includes('--bootstrap') ? 'Shared master initialized or its existing seed verified.'
       : `GitHub master publication ${result.status}; revision ${result.revision}.`);

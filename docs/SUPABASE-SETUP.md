@@ -86,6 +86,20 @@ Keep the browser and Edge model copies aligned with `node scripts/build-supabase
 
 An unexpected replacement of `master_ppc.pkg` should be reconciled deliberately with the accepted shared master; the publisher will not silently import or overwrite it. Do not reset or replace the seeded database to clear a publication warning. For a new project or a restored backup, follow a reviewed migration/restore procedure.
 
+### Publish a reviewed owner image layer
+
+The existing serialized **Publish encrypted shared master** workflow accepts an optional `images_commit` input. It must be the full immutable 40-character commit SHA in this same repository, containing an encrypted candidate at the fixed path `public/data/master_ppc.pkg`. Branch names, arbitrary paths, URLs and other repositories are refused. Leave the input empty for ordinary canonical publication. Do not combine it with bootstrap.
+
+Prepare the candidate privately with `scripts/build-owner-image-candidate.mjs`. Supply `--owner-package`, `--plan`, `--base-package`, `--key-file`, `--output`, `--recovery-audit` and `--final-audit`. The builder requires the exact audited private recovery package, its matching final205-slot/582-date audit and independent archive audit, the accepted205-assignment plan, and an existing encrypted master. It reads the existing key into the local process without printing it, adds a scoped `owner-image-input.json` inside the encrypted candidate, and writes a new output file without replacing any input. Keep its plaintext inputs, audit report and key outside the public repository. Commit only the resulting encrypted candidate on a separate branch; provide that immutable commit to the workflow after review.
+
+The descriptor binds the original shared-master seed, each stable product/category/SKU or approved family identity, the exact colorway identity, one coherent default choice per product, each image's bytes, and the previous image state for those slots. A changed shared date, specification or name is taken from a fresh consistent shared export. Candidate business fields and layouts are ignored. A foreign seed, stale image base, changed SKU/color binding, duplicate slot, unexpected descriptor metadata or changed image bytes prevents publication.
+
+The publisher authenticates the current package marker before applying the descriptor, preserves every existing archive entry, and adds only the required image metadata and pixels. Identical pixels reuse an existing or content-addressed image path. The encrypted master records the authenticated owner image layer under `masterSync.ownerImages`; subsequent ordinary publications project it onto current live matching slots, so new canonical saves cannot revert the images. A deleted product or changed/deleted colorway is not resurrected. Existing image metadata and archived pixels are retained for historical records.
+
+An explicit owner update may publish a new encrypted blob at the same shared storage revision. The existing acknowledgement operation records its new GitHub SHA; no SQL migration, backend endpoint, secret, permission or schedule change is needed. Immutable-input retries, archive/manifest digests, expected package SHA, monotonic revisions, lost upload responses, deployment recovery and acknowledgements retain their normal checks. The application's freshness UI can compare the loaded encrypted package's actual Git blob SHA with `publication.githubSha`; a canonical record refresh alone does not load new image binaries.
+
+Run `node scripts/checks/owner-image-publisher.mjs` for isolated owner publication, future canonical saves, same-revision acknowledgement, byte deduplication, source/stale/binding rejection, partial defaults, deletion, races and lost-response recovery. These tests use synthetic keys and a fake transport and make no live requests.
+
 If an unlock key or publisher secret is rotated, update both sides privately and test the connection before reopening team saving. The database password is separate from the package unlock key and is not used by teammates or this publisher.
 
 ### PLC/date-evidence deployment status
