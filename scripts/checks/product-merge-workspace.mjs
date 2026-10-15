@@ -148,17 +148,71 @@ assert.equal(hydrated.run('localCopy.variantGroups.flatMap((group) => group.item
 assert.equal(hydrated.run('Object.hasOwn(localCopy, "categoryId")'), false);
 assert.equal(hydrated.run('JSON.stringify(completeShared) === sharedBefore'), true, "hydrating complete metadata never mutates the incoming shared record");
 hydrated.run('var legacyMetadataValues = PortfolioMasterModel.values(completeShared); delete legacyMetadataValues.cardPlacement; PortfolioMasterAdapter.applyPatches([{productId: "keeper", values: legacyMetadataValues, fullProduct: completeShared}]);');
-assert.equal(hydrated.product("keeper").imageAssetId, "local-main");
+assert.equal(hydrated.product("keeper").imageAssetId, "", "hydrating an existing keeper preserves its explicit empty main image");
+assert.equal(hydrated.product("keeper").variantGroups[0].items[0].imageAssetId, "image-black", "an existing variant keeps its local image");
 assert.equal(hydrated.product("keeper").variantGroups.flatMap((group) => group.items).find((row) => row.id === "source-color").imageAssetId, "local-two-tone");
 assert.equal(hydrated.product("keeper").custom.sourceDetail, "Filled");
 assert.equal(hydrated.product("keeper").ascm.records.length, 2);
 assert.equal(hydrated.product("keeper").order, 0); assert.equal(hydrated.product("keeper").laneId, "wired", "receiving legacy complete metadata without shared placement preserves local placement");
-const serialized = clone(hydrated.adapter.serializeNewProduct(hydrated.product("keeper")));
+const serialized = clone(hydrated.adapter.serializeNewProduct(hydrated.run("localCopy")));
 assert.equal(serialized.imageAssetId, "image-main");
 assert.equal(serialized.variantGroups.flatMap((group) => group.items).find((row) => row.id === "source-color").imageAssetId, "image-two-tone", "new local records serialize asset aliases back to accepted IDs");
 hydrated.run('completeShared.id = "hydrated-new"; PortfolioMasterAdapter.applyPatches([{kind: "create", productId: "hydrated-new", categoryId: "pc", laneId: "wired", values: legacyMetadataValues, fullProduct: completeShared}]);');
 assert.equal(hydrated.product("hydrated-new").imageAssetId, "local-main");
 assert.equal(hydrated.product("hydrated-new").specs.find((row) => row.label === "Battery").rawNote, "Source metadata", "creation from a full record retains fields outside shared facts");
+
+for (const mainImage of ["reviewed-local-main", ""]) {
+  const localImages = harness();
+  localImages.run(`var incomingComplete = JSON.parse(JSON.stringify(findPortfolioProductLocation(portfolio, "keeper").product));
+    incomingComplete.imageAssetId = "image-main"; incomingComplete.imageUrl = "https://incoming.example/old.png";
+    incomingComplete.featuredVariantId = "remote-new"; incomingComplete.variantColor = "#333333";
+    incomingComplete.highlightEnabled = true; incomingComplete.highlightColor = "#444444";
+    incomingComplete.custom.acceptedNewDetail = "New accepted metadata";
+    incomingComplete.variantGroups[0].items[0].imageAssetId = "image-main";
+    incomingComplete.variantGroups[0].items.push({id:"remote-new",code:"NEW",colorName:"Silver",imageAssetId:"image-two-tone"});
+    var original = findPortfolioProductLocation(portfolio, "keeper").product;
+    original.imageAssetId = ${JSON.stringify(mainImage)}; original.imageUrl = ""; original.featuredVariantId = "";
+    original.variantColor = "#112233"; original.highlightEnabled = false; original.highlightColor = "#223344";
+    original.manualPosition = {x:123,y:45}; original.variantGroups[0].items[0].imageAssetId = "";
+    var localBefore = JSON.stringify(original), incomingBefore = JSON.stringify(incomingComplete);
+    var authoritativeValues = PortfolioMasterModel.values(incomingComplete); authoritativeValues.name = "Accepted refreshed name";
+    authoritativeValues.specs[0].value = "Updated shared specification";
+    PortfolioMasterAdapter.applyPatches([{productId:"keeper",values:authoritativeValues,fullProduct:incomingComplete}]);`);
+  const result = localImages.product("keeper");
+  assert.equal(result.imageAssetId, mainImage); assert.equal(result.imageUrl, ""); assert.equal(result.featuredVariantId, "");
+  assert.equal(result.variantColor, "#112233"); assert.equal(result.highlightEnabled, false); assert.equal(result.highlightColor, "#223344");
+  assert.deepEqual(result.manualPosition, {x:123,y:45});
+  assert.equal(result.variantGroups[0].items.find(row=>row.id==="keeper-black").imageAssetId, "", "intentional variant image clearing survives hydration");
+  assert.equal(result.variantGroups[0].items.find(row=>row.id==="remote-new").imageAssetId, "image-two-tone", "a genuinely new donor variant still receives its incoming image");
+  assert.equal(result.name, "Accepted refreshed name"); assert.equal(result.specs[0].value, "Updated shared specification");
+  assert.equal(result.custom.acceptedNewDetail, "New accepted metadata", "the overlay does not spread the full stale local product over accepted metadata");
+  assert.equal(localImages.run('JSON.stringify(incomingComplete) === incomingBefore'), true);
+}
+const crossGroupImages = harness();
+crossGroupImages.run('var incomingComplete = JSON.parse(JSON.stringify(findPortfolioProductLocation(portfolio, "keeper").product)); incomingComplete.variantGroups[0].id = "different-group"; incomingComplete.variantGroups[0].items[0].imageAssetId = "image-main"; PortfolioMasterAdapter.applyPatches([{productId:"keeper",values:PortfolioMasterModel.values(incomingComplete),fullProduct:incomingComplete}]);');
+assert.equal(crossGroupImages.product("keeper").variantGroups[0].items[0].imageAssetId, "image-main", "row IDs are scoped by group identity rather than array position or unrelated same-named rows");
+assert.throws(() => crossGroupImages.run('localizeSharedProduct({id:"different-product"},findPortfolioProductLocation(portfolio,"keeper").product)'), /no longer matches/);
+
+const reorderedImages = harness();
+reorderedImages.run('var original = findPortfolioProductLocation(portfolio,"keeper").product; original.variantGroups[0].items.push({id:"removed-local",code:"DEL",imageAssetId:"local-removed"}); original.variantGroups[0].items[0].imageAssetId="latest-local-image"; var incomingComplete=JSON.parse(JSON.stringify(original)); incomingComplete.variantGroups[0].items=[]; var reorderedValues=PortfolioMasterModel.values(original); reorderedValues.variantGroups[0].items=[{id:"new-canonical-row",code:"NEW"},reorderedValues.variantGroups[0].items.find(row=>row.id==="keeper-black")]; PortfolioMasterAdapter.applyPatches([{productId:"keeper",values:reorderedValues,fullProduct:incomingComplete}]);');
+assert.deepEqual(reorderedImages.product("keeper").variantGroups[0].items.map(row=>row.id), ["new-canonical-row","keeper-black"]);
+assert.equal(reorderedImages.product("keeper").variantGroups[0].items[1].imageAssetId, "latest-local-image", "local image preservation runs after canonical row additions, removals and reorder");
+assert.equal(reorderedImages.product("keeper").variantGroups[0].items.some(row=>row.id==="removed-local"), false);
+
+const changedPlacement = harness();
+changedPlacement.run('var original=findPortfolioProductLocation(portfolio,"keeper").product; original.manualPosition={x:123,y:45}; var incomingComplete=JSON.parse(JSON.stringify(original)); var acceptedPlacement=PortfolioMasterModel.values(original); acceptedPlacement.cardPlacement.order=8; PortfolioMasterAdapter.applyPatches([{productId:"keeper",values:acceptedPlacement,fullProduct:incomingComplete}]);');
+assert.equal(changedPlacement.product("keeper").order, 8);
+assert.equal(Object.hasOwn(changedPlacement.product("keeper"), "manualPosition"), false, "the local overlay cannot restore coordinates discarded by an authoritative shared placement change");
+
+for (const [removeFeatured, clearFeaturedImage] of [[false,false],[true,false],[false,true]]) {
+  const selectedHero = harness();
+  selectedHero.run(`var original=findPortfolioProductLocation(portfolio,"keeper").product; original.featuredVariantId="keeper-black";
+    ${clearFeaturedImage?'original.variantGroups[0].items[0].imageAssetId="";':''}
+    var incomingComplete=JSON.parse(JSON.stringify(original)); var acceptedValues=PortfolioMasterModel.values(incomingComplete);
+    ${removeFeatured?'acceptedValues.variantGroups[0].items=[];':''}
+    PortfolioMasterAdapter.applyPatches([{productId:"keeper",values:acceptedValues,fullProduct:incomingComplete}]);`);
+  assert.equal(selectedHero.product("keeper").featuredVariantId, removeFeatured||clearFeaturedImage?"":"keeper-black", "a valid local default is kept exactly, but a removed or imageless colorway falls back to the main image");
+}
 
 const reviewNotice = harness(); reviewNotice.merge();
 reviewNotice.adapter.onMergeReviewRequired({ code: "MERGE_REVIEW_REQUIRED", message: "GitHub archivedProduct publisherSecret private-file-location", conflicts: [{ kind: "merge", productId: "keeper" }] });
@@ -245,4 +299,33 @@ removedReview.setReview(sourceRemoved); const beforeRemovedReview = removedRevie
 assert.deepEqual(removedReview.portfolio, beforeRemovedReview, "an accepted deletion keeps the existing merge draft until the user explicitly discards it");
 assert.match(removedReview.calls.workspaceNotices[0], /One of these products was removed/);
 assert.equal(removedReview.calls.rebases.length, 0); assert.equal(removedReview.calls.mergeDialogs.length, 0);
+// The real client can consider a keeper shared-clean even after local image
+// changes. Exercise its historical review/hydration path against a fake fetch.
+const automaticHydration = harness(); automaticHydration.merge();
+automaticHydration.run('portfolio.masterLocalMerges=[]; portfolio.masterLocalBaseline=PortfolioMasterModel.snapshot(portfolio).products;');
+const historicRemote = automaticHydration.portfolio;
+automaticHydration.run('var localKeeper=findPortfolioProductLocation(portfolio,"keeper").product; localKeeper.imageAssetId="reviewed-local-main"; localKeeper.featuredVariantId=""; localKeeper.variantGroups[0].items[0].imageAssetId="reviewed-local-color"; localKeeper.highlightEnabled=false; localKeeper.highlightColor="#334455";');
+const localPresentationBefore = automaticHydration.product("keeper");
+Object.assign(automaticHydration.sandbox,{URL,AbortController,TextDecoder,setTimeout,clearTimeout});
+new vm.Script(await readFile(new URL("../../public/js/master-client.js", import.meta.url), "utf8")).runInContext(automaticHydration.sandbox);
+const historicSnapshot = clone(automaticHydration.sandbox.PortfolioMasterModel.snapshot(historicRemote));
+historicSnapshot.tombstones=[{productId:"source",categoryId:"pc",laneId:"wired",mergedIntoProductId:"keeper",mergeChoices:{},revisions:{"@product":1}}];
+const fakeCalls=[];
+const actualClient = automaticHydration.sandbox.PortfolioMasterClient.createSession({endpoint:"https://synthetic.example/api/master",adapter:automaticHydration.adapter,fetchImpl:async(url)=>{
+  fakeCalls.push(url);
+  if(url.endsWith('/latest'))return Response.json({snapshot:historicSnapshot});
+  assert(url.endsWith('/review'), 'this regression must never make a save or other request');
+  const product=historicRemote.categories[0].board.products.find(row=>row.id==='keeper');
+  return Response.json({snapshot:historicSnapshot,products:[{product,categoryId:'pc',laneId:'wired'}]});
+}});
+await actualClient.connect('synthetic-key');
+assert(fakeCalls.some(url=>url.endsWith('/review')), 'the actual client must execute historical full-record hydration');
+assert.equal(actualClient.track().length,0,'image-only choices remain outside shared fact drafts');
+const refreshedPresentation = automaticHydration.product('keeper');
+for(const field of ['imageAssetId','featuredVariantId','highlightEnabled','highlightColor'])assert.deepEqual(refreshedPresentation[field],localPresentationBefore[field]);
+assert.equal(refreshedPresentation.variantGroups[0].items[0].imageAssetId,'reviewed-local-color');
+assert.equal(refreshedPresentation.custom.sourceDetail,'Filled');
+await actualClient.refresh();
+assert.equal(automaticHydration.product('keeper').imageAssetId,'reviewed-local-main','a later ordinary refresh also retains the local selection');
+
 console.log("Product merge workspace checks passed: guards, complete metadata/assets, safe merge/discard Undo, atomic updates, alias hydration, private notices, rereview supplemental additions, explicit shared/image/metadata choices, exact cancellation preservation and unavailable/removed-product safety.");
