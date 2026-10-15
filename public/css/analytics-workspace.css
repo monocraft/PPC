@@ -19,12 +19,14 @@
 .analysis-panel .so-sidebar nav{margin-right:auto}
 .blueprint-pane{max-width:2000px;margin:0 auto}
 .analysis-contextbar{padding:9px 28px;display:flex;align-items:center;justify-content:space-between;gap:18px;min-height:52px}
+.blueprint-title{flex:1 1 auto;min-width:0;margin:0;color:var(--color-text,#d5d7dc);font:inherit;font-size:23px;font-weight:500;line-height:1.25;letter-spacing:-.35px;white-space:normal;overflow-wrap:anywhere}
 #blueprintViews{display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+#blueprintViews[hidden]{display:none!important}
 #blueprintViews button,.analysis-source-actions button{font:inherit;font-size:11px;cursor:pointer;border:0;border-radius:6px;background:transparent;color:var(--color-text-secondary,#a0a1a7);padding:7px 10px;white-space:nowrap;min-height:32px}
 #blueprintViews button[aria-current=page]{color:var(--color-text,#d5d7dc);background:var(--color-header,#333538)}
 #blueprintViews button:hover,.analysis-source-actions button:hover{background:var(--color-surface,#242527);color:var(--color-text,#d5d7dc)}
-.analysis-source-actions{display:flex;align-items:center;gap:10px;margin-left:auto}
-.analysis-source-actions button{background:var(--color-surface,#242527);color:var(--color-text,#d5d7dc)}
+.analysis-source-actions{display:flex;align-items:center;gap:10px;min-width:0;margin-left:auto}
+.analysis-source-actions button{flex-shrink:0;background:var(--color-surface,#242527);color:var(--color-text,#d5d7dc)}
 .analysis-source-label{font-size:10px;color:var(--color-text-secondary,#a0a1a7);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .analysis-frame{width:100%;height:750px;display:block;border:0;background:var(--color-background,#1a1b1c);color-scheme:dark}
 .analysis-frame[hidden]{display:none}

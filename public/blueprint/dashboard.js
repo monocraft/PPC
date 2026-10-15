@@ -459,7 +459,7 @@
       const legacy=state.view;
       if(legacy!=='performance'&&legacy!=='overview')state.overlay=({products:'decisions',investment:'decisions',scenarios:'scenarios',source:'source'})[legacy]||state.overlay;
       state.view='performance';
-      $('#portfolio-explorer').hidden=false;$('#page-title').textContent='Portfolio analysis';$('#page-description').textContent='Compare performance, test assumptions, and inspect the evidence in one canvas.';$('#breadcrumb-view').textContent='Analysis canvas';
+      $('#portfolio-explorer').hidden=false;$('#page-title').textContent='Portfolio Blueprint';$('#page-description').textContent='Compare performance, test assumptions, and inspect the evidence in one canvas.';$('#breadcrumb-view').textContent='Portfolio Blueprint';
       if(!workspaceControl)workspaceControl=window.HX_UNIFIED_WORKSPACE.create({state,data,engine,drill:()=>activeDrill,format:fmt,scopeLabel,renderProducts:renderDrillExplorer,renderCategories:syncExplorerControls,selectPeriod,selectScope:selectDrillScope,redraw:draw,notify:notifyParent,openDialog,evidence,economics:drillEconomics,sourceContent:source,toast,dialogState:open=>{if(embedded&&window.parent!==window)window.parent.postMessage({type:'ppc:blueprint:dialog',open},location.origin);}});
       workspaceControl.update();
       $('#context-strip').innerHTML=`<span>${escape(sourceKind(state.period))} · ${escape(activeDrill?.summary?.basis||'Source snapshot')}</span><span class="spacer"></span><button type="button" class="text-link" data-analysis-tool="source">${issues().length} source findings</button>`;

@@ -14,9 +14,11 @@ body.unified-analysis {
 .unified-analysis #portfolio-explorer { position:relative; min-width:0; margin:0; padding:4px 0 8px; border:0; border-radius:0; background:transparent; box-shadow:none; overflow:visible; }
 .unified-analysis #portfolio-explorer[hidden] { display:none; }
 .unified-analysis .explorer-pane-header { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px 14px; margin:0 0 9px; }
-.unified-analysis .explorer-pane-header h2 { margin:0; font-size:15px; font-weight:500; }
+.unified-analysis .explorer-pane-header h2 { margin:0; font-size:23px; line-height:1.25; font-weight:500; letter-spacing:-.35px; }
+html[data-embedded="true"] .unified-analysis .explorer-pane-header > div:first-child { display:none; }
+html[data-embedded="true"] .unified-analysis .explorer-pane-selection { flex:1 1 100%; max-width:100%; text-align:left; }
 .unified-analysis .explorer-pane-kicker { display:none; }
-.unified-analysis .explorer-pane-selection { color:var(--workspace-scope-color,#b9c1ce); font-size:12px; }
+.unified-analysis .explorer-pane-selection { margin-left:auto; color:var(--workspace-scope-color,#b9c1ce); font-size:12px; }
 .unified-analysis .analysis-actions { margin-left:0; }
 .unified-analysis .analysis-tool-strip { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:6px 20px; min-width:0; padding:6px 0; }
 .unified-analysis #analysis-chart-controls { min-width:0; margin-left:auto; }

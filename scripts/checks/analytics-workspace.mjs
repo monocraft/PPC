@@ -16,6 +16,7 @@ const blueprintHtml = await read("public/blueprint/index.html");
 const unifiedSource = await read("public/blueprint/unified-workspace.js");
 const dashboardSource = await read("public/blueprint/dashboard.js");
 const analysisStyle = await read('public/blueprint/analysis-workspace.css');
+const hubStyle = await read('public/css/analytics-workspace.css');
 const workflow = await read(".github/workflows/deploy.yml");
 const versionSource = await read("scripts/configure-site-version.mjs");
 
@@ -57,9 +58,18 @@ assert.ok(frame, "Portfolio plan has one retained frame.");
 assert.equal(frame.get("data-src"), "blueprint/index.html?embedded=1");
 assert.ok(!frame.has("src") || ["", "about:blank"].includes(frame.get("src")), "Blueprint loads only when requested.");
 assert.ok(frame.get("title"), "The embedded analysis has an accessible title.");
-assert.ok(tagById(html, "blueprintViews"), "Blueprint views remain contextual within Analytics.");
+const retainedViewNavigation = tagById(html, 'blueprintViews');
+assert.ok(retainedViewNavigation, 'Blueprint keeps its internal view navigation for compatible routes.');
+assert.match(retainedViewNavigation.tag, /\bhidden(?:\s|>|=)/, 'Analysis canvas and Data & quality are hidden from the top navigation.');
+assert.match(hubStyle, /#blueprintViews\[hidden\]\s*\{[^}]*display:\s*none\b/, 'The retained navigation stays hidden despite its desktop and mobile flex styles.');
+assert.equal((html.match(/<h2\b[^>]*class="blueprint-title"[^>]*>Portfolio Blueprint<\/h2>/g) || []).length, 1, 'The host has one visible Portfolio Blueprint heading.');
+assert.ok(Number(/\.blueprint-title\s*\{[^}]*font-size:\s*([\d.]+)px/.exec(hubStyle)?.[1]) >= 22, 'The Portfolio Blueprint heading is distinct from small navigation text.');
+assert.match(blueprintHtml, /class="explorer-pane-header"[\s\S]*?<h2>Portfolio Blueprint<\/h2>/, 'Standalone analysis retains the same product title.');
+assert.match(analysisStyle, /html\[data-embedded="true"\] \.unified-analysis \.explorer-pane-header > div:first-child\s*\{[^}]*display:\s*none\b/, 'The embedded title is hidden so the host and chart do not repeat visible headings.');
+assert.match(analysisStyle, /\.unified-analysis \.page-heading\s*\{[^}]*clip-path:\s*inset\(50%\)/, 'The retained page heading stays accessible without adding a second visible title.');
+assert.ok(tagById(blueprintHtml, 'explorer-selection'), 'Hiding the inner title retains the current scope readout.');
 const exposedViews = [...html.matchAll(/<button\b[^>]*data-blueprint-view\s*=\s*["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
-assert.deepEqual(exposedViews, ['performance', 'source'], 'The shell exposes one analysis canvas and its data utility, without six competing analysis pages.');
+assert.deepEqual(exposedViews, ['performance', 'source'], 'The hidden shell controls retain analysis and data routes without adding visible page buttons.');
 const standaloneViews = [...blueprintHtml.matchAll(/<button\b[^>]*data-view\s*=\s*["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
 assert.deepEqual(standaloneViews, ['performance', 'source'], 'Standalone and embedded navigation expose the same small workspace.');
 assert.equal([...blueprintHtml.matchAll(/id="analysis-chart"/g)].length, 1, 'One main graph owns the analysis pane.');
@@ -249,14 +259,14 @@ function workspaceFixture(url = "https://example.test/PPC/analytics.html") {
     };
   }
   const retail = element(), blueprint = element(), frame = element({ src: "blueprint/index.html?embedded=1" });
-  const loading = element(), source = element(), importButton = element();
+  const loading = element(), source = element(), importButton = element(), viewNavigation = element(); viewNavigation.hidden = true;
   const tabs = [element({ analysisModule: "retail" }), element({ analysisModule: "blueprint" })];
   const views = exposedViews.map(view => element({ blueprintView: view }));
   const posts = [], lifecycle = [], history = [], listeners = new Map();
   let loads = 0;
   frame.contentWindow = { postMessage(message, origin) { posts.push({ message: structuredClone(message), origin }); } };
   Object.defineProperty(frame, "src", { get() { return frame.attrs.get("src") || ""; }, set(value) { loads++; frame.attrs.set("src", String(value)); } });
-  const nodes = new Map([["selloutApp", retail], ["blueprintPane", blueprint], ["blueprintFrame", frame], ["blueprintLoading", loading], ["blueprintSource", source], ["blueprintImport", importButton]]);
+  const nodes = new Map([["selloutApp", retail], ["blueprintPane", blueprint], ["blueprintFrame", frame], ["blueprintLoading", loading], ["blueprintSource", source], ["blueprintImport", importButton], ['blueprintViews', viewNavigation]]);
   const document = {
     getElementById: id => nodes.get(id), currentScript: { src: "https://example.test/PPC/js/analytics-workspace.js?v=fixture-release" },
     querySelectorAll: selector => selector === "[data-analysis-module]" ? tabs : selector === "[data-blueprint-view]" ? views : [],
@@ -271,7 +281,7 @@ function workspaceFixture(url = "https://example.test/PPC/analytics.html") {
     },
   };
   vm.runInNewContext(hubSource, { document, globalThis: window, URL, URLSearchParams, console }, { filename: "analytics-workspace.js" });
-  return { window, retail, blueprint, frame, loading, source, importButton, tabs, views, posts, lifecycle, history, get loads() { return loads; },
+  return { window, retail, blueprint, frame, loading, source, importButton, viewNavigation, tabs, views, posts, lifecycle, history, get loads() { return loads; },
     emit(name, event) { for (const callback of listeners.get(name) || []) callback(event); },
     message(data, { origin = window.location.origin, sender = frame.contentWindow } = {}) { this.emit("message", { origin, source: sender, data }); },
   };
@@ -328,6 +338,7 @@ assert.equal(workspace.posts.at(-1).message.view, "scenarios");
 assert.equal(workspace.window.location.searchParams.get("revenue"), "-1.5", "Module changes preserve scenario assumptions.");
 workspace.importButton.emit("click");
 assert.equal(workspace.posts.at(-1).message.type, "ppc:blueprint:import");
+assert.equal(workspace.viewNavigation.hidden, true, 'Programmatic view changes and workbook import preserve hidden top navigation.');
 assert.ok(workspace.posts.every(post => post.origin === workspace.window.location.origin), "Commands always name the expected origin; wildcard delivery is forbidden.");
 assert.ok(workspace.posts.every(post => Object.keys(post.message).every(key => ["type", "view", "preferences"].includes(key))), "Parent commands contain only navigation preferences, with no source payload or pricing capability.");
 assert.ok(workspace.posts.every(post => Object.keys(post.message.preferences || {}).every(key => ['year','category','revenue','margin','spend','scale','groupId','projectId','skuId','compare','workspace'].includes(key))));
