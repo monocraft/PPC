@@ -298,5 +298,168 @@
 
   function radial(anchor, options = {}) { return radialLayout(options.total, { ...options, anchor }); }
 
-  root.PortfolioHashoutLayout = Object.freeze({ project, layout, compositeKey, radialLayout, radial });
+  // These are shared planning-calendar guides, not retailer eligibility or
+  // official product dates. Source milestones remain the only product timing.
+  function seasonalWindows(range, options = {}) {
+    if (!validRange(range) || range.start < 1900 * 12 || range.end > 9999 * 12 + 11) return Object.freeze([]);
+    const displayStart = Math.max(range.start, finite(options.viewportStart, range.start));
+    const displayEnd = Math.min(range.end + 1, finite(options.viewportEnd, range.end + 1));
+    if (displayEnd <= displayStart) return Object.freeze([]);
+    const schedule = [{ season: "spring", type: "ffs", month: 1, label: "Spring FFS" },
+      { season: "fall", type: "ffs", month: 6, label: "Fall FFS" }];
+    if (options.context) schedule.push({ season: "spring", type: "on-shelf", month: 4, label: "Spring on-shelf" },
+      { season: "fall", type: "on-shelf", month: 9, label: "Fall on-shelf" });
+    schedule.sort((a, b) => a.month - b.month);
+    const windows = [];
+    for (let year = Math.floor(displayStart / 12); year <= Math.floor((displayEnd - 1e-9) / 12); year++) {
+      for (const item of schedule) {
+        const startMonth = year * 12 + item.month, endMonth = startMonth + 1;
+        if (endMonth <= displayStart || startMonth >= displayEnd) continue;
+        const month = String(item.month + 1).padStart(2, "0"), lastDay = new Date(Date.UTC(year, item.month + 1, 0)).getUTCDate();
+        windows.push(Object.freeze({ key: `${year}-${item.season}-${item.type}`, season: item.season, type: item.type, year, label: item.label,
+          startMonth, endMonth, start: `${year}-${month}-01`, end: `${year}-${month}-${lastDay}`,
+          onShelfMonth: year * 12 + (item.season === "spring" ? 4 : 9), onShelfLabel: `${item.season === "spring" ? "May" : "Oct"} ${year}`,
+          displayStart: Math.max(startMonth, displayStart), displayEnd: Math.min(endMonth, displayEnd) }));
+      }
+    }
+    return Object.freeze(windows);
+  }
+
+  function windowMatches(period, windows) {
+    const parse = value => {
+      const match = typeof value === "string" && /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+      if (!match) return null;
+      const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      return year >= 1900 && year <= 9999 && month >= 1 && month <= 12 && day >= 1 && day <= lastDay ? { year, month, day, lastDay } : null;
+    };
+    const start = parse(period?.start), end = parse(period?.end);
+    if (!start || !end || period.start > period.end || !["day", "month", "quarter", "half-year", "year", "range"].includes(period.precision)) return Object.freeze([]);
+    const precise = period.precision === "day" && period.start === period.end
+      || period.precision === "month" && start.year === end.year && start.month === end.month && start.day === 1 && end.day === end.lastDay;
+    const matches = [];
+    for (const window of Array.isArray(windows) ? windows : []) {
+      // An FFS in May/October does not establish an on-shelf date. The context
+      // month describes the ideal target paired with its February/July FFS.
+      if (window?.type !== "ffs" || !parse(window.start) || !parse(window.end) || window.start > window.end || period.end < window.start || period.start > window.end) continue;
+      matches.push(Object.freeze({ ...window, match: precise ? "within" : "overlap",
+        overlapStart: period.start > window.start ? period.start : window.start, overlapEnd: period.end < window.end ? period.end : window.end }));
+    }
+    return Object.freeze(matches);
+  }
+
+  // Labels are a view-only annotation. Their measured rectangles may move near a
+  // marker, but neither the marker nor its FFS geometry participates in packing.
+  function labels(map, measuredCandidates, options = {}) {
+    const mode = options.mode === "on" || options.mode === "off" ? options.mode : "default";
+    const gap = Math.max(0, finite(options.gap, 6)), padding = Math.max(0, finite(options.padding, 4));
+    const markerGap = Math.max(0, finite(options.markerGap, 5));
+    const sourceLanes = Array.isArray(map?.lanes) ? map.lanes : [];
+    const candidatesByLane = new Map(sourceLanes.map(lane => [lane.categoryId, []])), seen = new Set();
+    for (const candidate of Array.isArray(measuredCandidates) ? measuredCandidates : []) {
+      if (!candidate?.key || seen.has(candidate.key) || !candidatesByLane.has(candidate.categoryId)) continue;
+      const entry = map.entriesByKey?.get(candidate.key);
+      if (map.entriesByKey && (!entry || entry.categoryId !== candidate.categoryId)) continue;
+      seen.add(candidate.key); candidatesByLane.get(candidate.categoryId).push(candidate);
+    }
+    const overlaps = (a, b, distance = 0) => a.x < b.x + b.width + distance && a.x + a.width + distance > b.x
+      && a.y < b.y + b.height + distance && a.y + a.height + distance > b.y;
+    const output = [], lanes = [];
+    for (const lane of sourceLanes) {
+      const candidates = candidatesByLane.get(lane.categoryId);
+      const bounds = { left: finite(map.leftWidth, 0) + padding, right: finite(map.width, 0) - padding,
+        top: lane.y + padding, bottom: lane.y + lane.height - padding };
+      const obstacles = [], markerRadii = new Map();
+      for (const glyph of lane.glyphs || []) {
+        const clearance = glyph.type === "group" ? finite(glyph.badgeRadius, 9) + 2 : glyph.type === "window"
+          ? Math.max(5, finite(glyph.radius, 4.5) * .68 + 2) : finite(glyph.radius, 4.5) + 4;
+        for (const key of glyph.memberKeys || []) markerRadii.set(key, clearance);
+        if (glyph.type === "group") {
+          const radius = finite(glyph.badgeRadius, 9) + 2;
+          obstacles.push({ x: finite(glyph.countLabelX, glyph.centerX) - radius, y: glyph.centerY - radius, width: radius * 2, height: radius * 2 });
+          obstacles.push({ x: glyph.x - 1, y: glyph.centerY - 5, width: glyph.width + 2, height: 10 });
+        } else if (glyph.type === "window") {
+          const halfHeight = Math.max(5, finite(glyph.radius, 4.5) * .68 + 2);
+          obstacles.push({ x: glyph.x - 2, y: glyph.centerY - halfHeight, width: glyph.width + 4, height: halfHeight * 2 });
+        } else {
+          const radius = finite(glyph.radius, 4.5) + 4;
+          obstacles.push({ x: glyph.centerX - radius, y: glyph.centerY - radius, width: radius * 2, height: radius * 2 });
+        }
+      }
+      const choices = new Map(), fallbackChoices = new Map();
+      for (const candidate of candidates) {
+        const { anchorX, anchorY, width, height } = candidate;
+        if (![anchorX, anchorY, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+          choices.set(candidate.key, []); fallbackChoices.set(candidate.key, []); continue;
+        }
+        const radius = Math.max(0, finite(candidate.markerRadius, 9), markerRadii.get(candidate.key) || 0), horizontal = radius + markerGap + 1e-6;
+        const rows = [anchorY - height / 2, anchorY - horizontal - height, anchorY + horizontal,
+          anchorY - horizontal - height * 2 - gap, anchorY + horizontal + height + gap];
+        const proposals = [], fallbacks = [], coordinates = new Set();
+        // Adjacent positions first; a few nearby rows handle small coincident
+        // groups without spreading names across the map or moving their dates.
+        for (const [row, requestedY] of rows.entries()) {
+          // Two-track markers can sit fractionally too close to a lane edge for
+          // a centered text block. Keep adjacent text inside its lane while the
+          // following obstacle test still protects every actual marker.
+          const y = Math.max(bounds.top, Math.min(bounds.bottom - height, requestedY));
+          const starts = row === 0 ? [anchorX + horizontal, anchorX - horizontal - width]
+            : [anchorX - width / 2, anchorX + horizontal, anchorX - horizontal - width];
+          for (const x of starts) {
+            const signature = `${x}:${y}`;
+            if (coordinates.has(signature)) continue;
+            coordinates.add(signature);
+            const rectangle = { x, y, width, height };
+            if (x < bounds.left || x + width > bounds.right || y < bounds.top || y + height > bounds.bottom) continue;
+            const proposal = { ...rectangle, placement: row === 0 ? x > anchorX ? "right" : "left" : y < anchorY ? "above" : "below",
+              cost: Math.hypot(x + width / 2 - anchorX, y + height / 2 - anchorY) };
+            fallbacks.push(proposal);
+            if (!obstacles.some(obstacle => overlaps(rectangle, obstacle, markerGap))) proposals.push(proposal);
+          }
+        }
+        proposals.sort((a, b) => a.cost - b.cost || a.y - b.y || a.x - b.x);
+        choices.set(candidate.key, proposals);
+        // Explicit On is an override: preserve every measured label even when a
+        // very short/narrow viewport cannot offer a collision-free position.
+        if (!fallbacks.length) fallbacks.push({ x: Math.max(bounds.left, Math.min(bounds.right - width, anchorX - width / 2)),
+          y: Math.max(bounds.top, Math.min(bounds.bottom - height, anchorY - horizontal - height)), width, height, placement: "above", cost: 0 });
+        fallbackChoices.set(candidate.key, fallbacks);
+      }
+      const byPosition = (a, b) => finite(a.anchorX, 0) - finite(b.anchorX, 0) || finite(a.anchorY, 0) - finite(b.anchorY, 0) || String(a.key).localeCompare(String(b.key));
+      const ordered = [...candidates].sort(byPosition);
+      const orders = [ordered, [...ordered].reverse(), [...ordered].sort((a, b) => choices.get(a.key).length - choices.get(b.key).length || b.width - a.width || byPosition(a, b))];
+      let packed = [], bestCost = Infinity;
+      if (mode !== "off") for (const order of orders) {
+        const placed = []; let cost = 0;
+        for (const candidate of order) {
+          const position = choices.get(candidate.key).find(proposal => !placed.some(other => overlaps(proposal, other, gap)));
+          if (position) { placed.push({ ...candidate, ...position }); cost += position.cost; }
+        }
+        if (placed.length > packed.length || placed.length === packed.length && cost < bestCost) { packed = placed; bestCost = cost; }
+        if (packed.length === candidates.length) break;
+      }
+      const fitCount = packed.length, complete = fitCount === candidates.length;
+      if (mode === "on" && !complete) {
+        const placedKeys = new Set(packed.map(candidate => candidate.key));
+        const intersection = (a, b, distance) => Math.max(0, Math.min(a.x + a.width + distance / 2, b.x + b.width + distance / 2) - Math.max(a.x - distance / 2, b.x - distance / 2))
+          * Math.max(0, Math.min(a.y + a.height + distance / 2, b.y + b.height + distance / 2) - Math.max(a.y - distance / 2, b.y - distance / 2));
+        for (const candidate of ordered) {
+          if (placedKeys.has(candidate.key)) continue;
+          const scored = fallbackChoices.get(candidate.key).map(position => ({ position,
+            score: packed.reduce((sum, other) => sum + intersection(position, other, gap), 0)
+              + obstacles.reduce((sum, obstacle) => sum + intersection(position, obstacle, markerGap), 0) }));
+          scored.sort((a, b) => a.score - b.score || a.position.cost - b.position.cost || a.position.y - b.position.y || a.position.x - b.position.x);
+          if (scored.length) packed.push({ ...candidate, ...scored[0].position, forced: true });
+        }
+      }
+      const visible = mode === "off" || mode === "default" && !complete ? [] : packed;
+      visible.sort(byPosition); output.push(...visible);
+      lanes.push({ categoryId: lane.categoryId, enabled: visible.length > 0, complete, total: candidates.length,
+        placed: visible.length, hiddenCount: candidates.length - visible.length, fitCount,
+        forcedCount: visible.filter(candidate => candidate.forced).length });
+    }
+    return { mode, labels: output, lanes, hiddenCount: lanes.reduce((sum, lane) => sum + lane.hiddenCount, 0) };
+  }
+
+  root.PortfolioHashoutLayout = Object.freeze({ project, layout, compositeKey, radialLayout, radial, labels, seasonalWindows, windowMatches });
 })(globalThis);

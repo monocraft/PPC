@@ -106,4 +106,35 @@ assert.ok(exported.years.every((record) => record.y === 31 && record.clip.top ==
 assert.equal(paint({ width: 180 }).years.length, 0, "A viewport narrower than the fixed rail has no visible calendar titles.");
 assert.equal(paint({ left: 4000 }).years.length, 0, "Clipped-off years are not drawn beyond the timeline.");
 
-console.log("Roadmap header checks passed: stable two-axis year anchors, fractional offsets and zoom levels, clipped partial years, smooth boundary handoff, unchanged month/quarter alignment, narrow viewports, and complete exports.");
+// Exercise the real Today drawing block independently of wall-clock date.
+const todayStart = source.indexOf("  // Today marker over the timeline body.");
+const todayEnd = source.indexOf("  // Sticky family rail.", todayStart);
+assert.ok(todayStart >= 0 && todayEnd > todayStart);
+const fixedDate = new Date(2026, 9, 14, 12);
+class TodayDate extends Date { constructor(...args) { super(...(args.length ? args : [fixedDate.getTime()])); } }
+const todaySandbox = {
+  Date: TodayDate, Math, ROADMAP_HEADER_HEIGHT: 88, roadmapMonthWidth: 82,
+  UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
+  monthIndex: value => Number(value.slice(0, 4)) * 12 + Number(value.slice(5, 7)) - 1,
+  monthStringFromDate: () => "2026-10",
+};
+vm.createContext(todaySandbox);
+vm.runInContext(`function drawToday(context, range, height) { const timelineX = 190; ${source.slice(todayStart, todayEnd)} }`, todaySandbox);
+const todayStrokes = [], todayPath = [];
+const todayContext = {
+  strokeStyle: "", lineWidth: 1,
+  beginPath() { todayPath.length = 0; },
+  moveTo(x, y) { todayPath.push([x, y]); },
+  lineTo(x, y) { todayPath.push([x, y]); },
+  stroke() { todayStrokes.push({ color: this.strokeStyle, width: this.lineWidth, path: todayPath.map(point => [...point]) }); },
+};
+todaySandbox.drawToday(todayContext, range(month(2026), month(2026, 12)), 500);
+assert.equal(todayStrokes.length, 1);
+assert.equal(todayStrokes[0].color, globalThis.PortfolioTheme.colors.alert, "Today uses the shared alert color without muting it.");
+assert.equal(todayStrokes[0].width, 1.8, "Today remains visible on the timeline.");
+near(todayStrokes[0].path[0][0], 190 + (9 + 13 / 31) * 82, "The stronger marker keeps the actual day position");
+assert.deepEqual(todayStrokes[0].path.map(point => point[1]), [80, 500]);
+todaySandbox.drawToday(todayContext, range(month(2027), month(2027, 12)), 500);
+assert.equal(todayStrokes.length, 1, "An outside-range Today marker stays absent.");
+
+console.log("Roadmap header checks passed: stable two-axis year anchors, clipped partial years, smooth boundary handoff, unchanged calendar alignment, narrow viewports, complete exports, and an alert-colored Today line at the actual day.");

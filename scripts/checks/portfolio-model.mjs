@@ -177,8 +177,8 @@ const startupPortfolio = (first = "audio", activeCategoryId = "mice", version = 
   categories: [first, ...["audio", "mice", "console"].filter(id => id !== first)].map(id => ({ id, name: id,
     board: { lanes: [{ id: `${id}-lane` }], products: [{ id: `${id}-product`, name: `${id} product`, ffsDate: "2028-04-01", roadmap: { startMonth: "2028-07", endMonth: "2030-12" } }] } })),
 });
-function bootHarness({ saved = null, prior = null, legacy = null, database = null, failDatabase = false, denyLegacy = false, holdRead = false, defaultFirst = 'audio' } = {}) {
-  const activation = [], stored = new Map(), baselineReads = [], writes = [], notices = [], events = [], features = [];
+function bootHarness({ saved = null, prior = null, legacy = null, database = null, failDatabase = false, denyLegacy = false, holdRead = false, defaultFirst = 'audio', navigation = null } = {}) {
+  const activation = [], stored = new Map(), baselineReads = [], writes = [], notices = [], events = [], features = [], views = [], navigationReads = [];
   if (saved != null) stored.set("current", typeof saved === "string" ? saved : JSON.stringify(saved));
   if (prior != null) stored.set("previous", typeof prior === "string" ? prior : JSON.stringify(prior));
   if (legacy != null) stored.set("legacy", typeof legacy === "string" ? legacy : JSON.stringify(legacy));
@@ -187,7 +187,8 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
   const boot = {
     portfolio: null, activeCategoryId: null, localDateBaseline: null, workspaceOpening: true, workspaceRecovery: null, workspaceRecoveryPlan: null,
     hashoutViewController: { destroy() {} }, hashoutSelectedKey: "previous-product", hashoutViewportState: { start: 1, end: 2 },
-    pendingLegacyImageBlobs: [], workspaceValidationPending: false,
+    pendingLegacyImageBlobs: [], workspaceValidationPending: false, roadmapDetailsOpen: true,
+    workspaceNavigation: { get() { navigationReads.push(true); return navigation && { ...navigation }; } },
     STORAGE_KEY: "current", PREVIOUS_STORAGE_KEY: "previous", LEGACY_STORAGE_KEY: "legacy",
     localStorage: { getItem(key) { if (denyLegacy) throw new Error("Synthetic denied legacy storage"); return stored.get(key) ?? null; } },
     workspaceStorage: {
@@ -202,17 +203,18 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
     categoryDefinition: id => ({ id }), ensureBoardSchema: value => structuredClone(value), migrateLegacyProductImages() {},
     PLCImporter: { snapshotDateValues(value) { baselineReads.push(structuredClone(value.categories)); return { unchanged: true }; } },
     activateCategory(categoryId, options) { const category = boot.portfolio.categories.find(item => item.id === categoryId) || boot.portfolio.categories[0]; boot.activeCategoryId = category.id; boot.portfolio.activeCategoryId = category.id; activation.push({ id: category.id, options: { ...options } }); },
-    syncControls() {}, renderInspector() {}, setView() {}, initializeWorkspaceFeatures() { features.push(true); },
+    syncControls() {}, renderInspector() {}, setView(view) { views.push(view); }, initializeWorkspaceFeatures() { features.push(true); },
     packageCodec: () => ({ normalizePackageInfo: value => value || null }),
   };
   Object.assign(boot, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(boot); vm.runInContext(`${loadDefinition}\n${importDefinition}\n${resetHashoutDefinition}\n${initializeDefinition}\n${startDefinition}`, boot);
-  return { boot, activation, stored, baselineReads, writes, notices, events, features, shell, retry, release: value => release(value), get durable() { return durable; } };
+  return { boot, activation, stored, baselineReads, writes, notices, events, features, views, navigationReads, shell, retry, release: value => release(value), get durable() { return durable; } };
 }
 for (const [label, saved, prior, expected] of [
-  ["saved last category", startupPortfolio(), null, "audio"],
-  ["reordered category list", startupPortfolio("console"), null, "console"],
-  ["previous workspace version", null, startupPortfolio("console", "mice", 3), "console"],
+  ["saved last category", startupPortfolio(), null, "mice"],
+  ["reordered category list", startupPortfolio("console"), null, "mice"],
+  ["previous workspace version", null, startupPortfolio("console", "mice", 3), "mice"],
+  ["removed saved category", startupPortfolio("console", "removed"), null, "console"],
   ["first browser opening", null, null, "audio"],
 ]) {
   const { boot, activation, stored, baselineReads, writes, events } = bootHarness({ saved, prior });
@@ -220,17 +222,37 @@ for (const [label, saved, prior, expected] of [
   assert.equal(boot.hashoutViewController, null, "A freshly opened workspace must hydrate its own map preferences.");
   assert.equal(boot.hashoutSelectedKey, null);
   assert.equal(boot.hashoutViewportState, null);
-  assert.equal(boot.activeCategoryId, expected, `${label}: app initialization starts at the first listed category.`);
+  assert.equal(boot.activeCategoryId, expected, `${label}: initialization restores a valid saved category with a safe fallback.`);
   assert.equal(activation.length, 1); assert.equal(activation[0].options.render, false); assert.equal(activation[0].options.fitVertical, true);
   assert.deepEqual(structuredClone(boot.portfolio.categories), baselineReads[0], "Startup navigation preserves every product, date, and roadmap record.");
   assert.equal(writes.length, 1, "migration/default data must commit before startup activation"); assert.deepEqual(events, ['portfolio:workspace-ready']);
-  if (saved && typeof saved !== "string") assert.equal(JSON.parse(stored.get("current")).activeCategoryId, "mice", "Loading does not rewrite the remembered selection before startup activation.");
+  if (saved && typeof saved !== "string") assert.equal(JSON.parse(stored.get("current")).activeCategoryId, saved.activeCategoryId, "Loading does not rewrite the remembered selection before startup activation.");
   boot.activateCategory("mice", { render: true }); assert.equal(boot.activeCategoryId, "mice", "Normal navigation can still change categories in the same session.");
   const imported = boot.normalizeImportedPortfolio(startupPortfolio("audio", "console"));
   assert.equal(imported.activeCategoryId, "console", "Import normalization keeps the imported workspace's saved category.");
   const preserved = boot.loadPortfolio();
-  if (saved && typeof saved !== "string" || prior) assert.equal(preserved.activeCategoryId, "mice", "Schema loading remains independent of the fresh-opening category policy.");
+  if (saved && typeof saved !== "string" || prior) assert.equal(preserved.activeCategoryId, (saved || prior).activeCategoryId, "Schema loading preserves the saved category independently of view restoration.");
 }
+for (const navigation of [
+  { view: "roadmap", basis: "ffs", detailsOpen: false },
+  { view: "roadmap", basis: "lifecycle", detailsOpen: true },
+  { view: "products", basis: "ffs", detailsOpen: false },
+]) {
+  const fixture = startupPortfolio(), before = structuredClone(fixture.categories);
+  const loaded = bootHarness({ saved: fixture, navigation });
+  await loaded.boot.startWorkspace();
+  assert.deepEqual(loaded.views, [navigation.view], "Actual workspace opening restores the remembered view.");
+  assert.equal(loaded.boot.portfolio.settings.roadmapBasis, navigation.basis);
+  assert.equal(loaded.boot.roadmapDetailsOpen, navigation.detailsOpen);
+  assert.deepEqual(structuredClone(loaded.boot.portfolio.categories), before, "Restoring navigation preserves every product and date.");
+}
+const legacyHashout = startupPortfolio(); legacyHashout.settings.roadmapBasis = "ffs";
+const legacyHashoutBoot = bootHarness({ saved: legacyHashout });
+await legacyHashoutBoot.boot.startWorkspace();
+assert.deepEqual(legacyHashoutBoot.views, ["roadmap"], "An existing Hashout workspace survives the first refresh after upgrading.");
+const badNavigationWorkspace = bootHarness({ database: "broken json", navigation: { view: "roadmap", basis: "ffs", detailsOpen: false } });
+await assert.rejects(badNavigationWorkspace.boot.startWorkspace());
+assert.equal(badNavigationWorkspace.navigationReads.length, 0, "Navigation preferences cannot bypass saved-workspace validation.");
 for (const [label, options] of [
   ['corrupt current legacy JSON', { saved: 'broken json' }],
   ['wrong-shape current legacy JSON', { saved: '{}' }],
@@ -255,7 +277,7 @@ for (const [label, options] of [
   assert.deepEqual(structuredClone(h.boot.portfolio.categories[0].board), legacy, 'the supported v1 board migration retains all original product/source rows'); assert.equal(h.writes.length, 1);
 }
 {
-  const database = startupPortfolio('console'), h = bootHarness({ saved: startupPortfolio('audio'), database, holdRead: true });
+  const database = startupPortfolio('console', 'console'), h = bootHarness({ saved: startupPortfolio('audio', 'audio'), database, holdRead: true });
   const loading = h.boot.startWorkspace(); assert.equal(h.activation.length, 0); assert.equal(h.writes.length, 0); assert.equal(h.shell.inert, true);
   await new Promise(setImmediate); // Font readiness precedes the durable database read.
   h.release(JSON.stringify(database)); await loading;
@@ -838,4 +860,4 @@ assert.deepEqual(normalizedViewLanes, ["audio", "accessories"], "Reset layout no
 assert.equal(viewSandbox.roadmapMonthWidth, retainedTimelineWidth, "all product view actions preserve the shared timeline scale");
 assert.ok(viewRenderCalls.includes("roadmap") && viewRenderCalls.includes("split") && viewRenderCalls.includes("products"), "view controls render the active Products, Roadmap, and details surfaces");
 
-console.log("Portfolio model checks passed: first-listed startup category with preserved session/import navigation, explicit lifecycle date/month synchronization without initial migration, global timeline actions, preserved specs/SKU colors, shared prices/stage tones, non-overlapping inline details, and independent view zoom/Fit/reset actions.");
+console.log("Portfolio model checks passed: saved startup view/category with safe fallback and validated recovery, explicit lifecycle date/month synchronization without initial migration, global timeline actions, preserved specs/SKU colors, shared prices/stage tones, non-overlapping inline details, and independent view zoom/Fit/reset actions.");

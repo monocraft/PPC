@@ -48,6 +48,45 @@
     });
   }
 
+  function navigation({ key, storage } = {}) {
+    let loaded = false, current = null;
+    const validKey = typeof key === "string" && key.length > 0 && key.length <= 200;
+    const clean = value => value && typeof value === "object" && !Array.isArray(value)
+      && ["products", "roadmap"].includes(value.view) && ["lifecycle", "ffs"].includes(value.basis) && typeof value.detailsOpen === "boolean"
+      ? { view: value.view, basis: value.basis, detailsOpen: value.detailsOpen } : null;
+    const bounded = raw => {
+      if (typeof raw !== "string" || !raw || raw.length > 4096) return false;
+      let bytes = 0;
+      for (const character of raw) {
+        const code = character.codePointAt(0);
+        bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+        if (bytes > 4096) return false;
+      }
+      return true;
+    };
+    const store = () => typeof storage === "function" ? storage() : storage;
+    return Object.freeze({
+      get() {
+        if (!loaded) {
+          loaded = true;
+          try {
+            const raw = validKey && store()?.getItem(key);
+            if (bounded(raw)) { const parsed = JSON.parse(raw); if (parsed?.version === 1) current = clean(parsed); }
+          } catch (_) { /* Navigation preferences cannot prevent opening working data. */ }
+        }
+        return current ? { ...current } : null;
+      },
+      set(value) {
+        const next = clean(value);
+        if (!validKey || !next) return false;
+        loaded = true; current = next;
+        // A refresh immediately after a view switch must not wait for data-save debounce.
+        try { store()?.setItem(key, JSON.stringify({ version: 1, ...next })); } catch (_) {}
+        return true;
+      },
+    });
+  }
+
   const layouts = new WeakMap();
   const panels = new WeakMap();
   const panelCache = Object.freeze({
@@ -118,5 +157,5 @@
     return Object.freeze({ sync, clear });
   }
 
-  root.PortfolioViewRuntime = Object.freeze({ frameTask, preferences, layoutCache, panelCache, stickyHeader, cardHover });
+  root.PortfolioViewRuntime = Object.freeze({ frameTask, preferences, navigation, layoutCache, panelCache, stickyHeader, cardHover });
 })(globalThis);
