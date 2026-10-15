@@ -57,13 +57,11 @@
         <div class="toolbar-actions">
           <a class="settings-trigger" href="analytics.html" aria-label="Open Analytics">Analytics</a>
           <button id="loadDataButton" type="button" class="settings-trigger">Load data</button>
-          <button id="savedViewsButton" type="button" class="settings-trigger" aria-haspopup="dialog">Saved views</button>
           <button id="workflowReviewButton" type="button" class="settings-trigger">Needs review</button>
           <button id="saveSharedChanges" class="shared-data-trigger master-save-trigger" hidden>Save changes</button>
           <button id="pullLatestData" class="shared-data-trigger" title="Check team records and complete package status">Updates</button>
           <button id="exportPptx" class="primary-button" title="Export Product Portfolio, Roadmap, or both to PowerPoint">Export PPTX</button>
           <button id="workspaceSettingsButton" class="settings-trigger" aria-haspopup="dialog" aria-controls="workspaceSettingsDialog" aria-expanded="false"><span aria-hidden="true">⚙</span> Settings</button>
-          <details id="workflowMore" class="workflow-more"><summary>More</summary><div><span id="workflowSettingsSlot"></span></div></details>
           <button id="dataMenuButton" class="hidden" tabindex="-1" aria-hidden="true">Data</button>
           <button id="productMenuButton" class="hidden" tabindex="-1" aria-hidden="true">Display</button>
           <button id="roadmapMenuButton" class="hidden" tabindex="-1" aria-hidden="true">Timeline</button>
@@ -77,6 +75,7 @@
           <div id="productReorderActions" class="card-reorder-actions hidden" role="group" aria-label="Product reordering"><span role="status" title="Drag products to reorder; use Alt and arrow keys on a selected product for keyboard moves">Drag products to reorder</span><button id="productReorderDone" class="compact-button" type="button" title="Finish reordering and keep these changes">Done</button><button id="productReorderCancel" class="compact-button" type="button" title="Undo the product moves from this session">Cancel</button></div>
           <div class="view-tools-shell"><div class="view-tools" role="group" aria-label="Product view controls">
             <div class="zoom-control" role="group" aria-label="Product zoom"><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset" class="zoom-reset" aria-label="Reset zoom to 100%" title="Reset product zoom to 100%">100%</button><button id="zoomIn" aria-label="Zoom in">+</button></div>
+            <button id="savedViewsButton" type="button" class="view-tool" aria-haspopup="dialog">Saved views</button>
             <button id="fitProducts" class="view-tool" title="Fit products to the available width while keeping cards readable">Fit</button>
           </div></div>
           <button id="resetLayout" class="quiet-button workspace-direct-tool" type="button" title="Restore automatic lane layout and 100% zoom while keeping the current product order">Reset layout</button>

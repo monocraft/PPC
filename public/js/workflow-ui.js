@@ -103,7 +103,6 @@
   function portfolioFeatures() {
     const adapter = root.PortfolioWorkflowAdapter; if (!adapter) return;
     doc.documentElement.classList.add('workflow-enhanced');
-    const settings = doc.getElementById('workspaceSettingsButton'); if (settings) doc.getElementById('workflowSettingsSlot')?.append(settings);
     planning = root.PortfolioPlanningIntakeUI?.create({ getPortfolio: adapter.getPortfolio, applyPlanning: adapter.applyPlanning, openProduct: adapter.openProduct, onStateChange: () => root.dispatchEvent(new CustomEvent('portfolio:planning-review')) });
     const review = dialog('Needs review', 'workflowReviewDialog'), protection = dialog('Date evidence and protection', 'workflowProtectionDialog');
     const reviewSearch = node('input'); reviewSearch.type = 'search'; reviewSearch.placeholder = 'Find a product or issue'; reviewSearch.setAttribute('aria-label', 'Filter review items');
@@ -250,7 +249,7 @@
     function positionToolMenu(menu) { if(root.innerWidth<=700)menu.style.setProperty('--workflow-menu-top',`${Math.max(12,Math.min(root.innerHeight-160,Math.ceil(menu.getBoundingClientRect().bottom)))}px`); }
     function arrangeTools() {
       const controls=doc.getElementById('roadmapControls');
-      groupTools(controls,controls?[...controls.children].filter(child=>child.matches('.roadmap-interaction-mode,.roadmap-edit-controls,#toggleRoadmapDetails')).concat([...controls.querySelectorAll('.zoom-control')]):[],'workflowRoadmapOptions');
+      groupTools(controls,controls?[...controls.children].filter(child=>child.matches('.roadmap-interaction-mode,.roadmap-edit-controls,#toggleRoadmapDetails')):[],'workflowRoadmapOptions');
       const hashout=doc.querySelector('.hashout-toolbar');groupTools(hashout,hashout?[...hashout.querySelectorAll('.hashout-label-control,.hashout-windows-control')]:[],'workflowHashoutOptions');
       for(const group of [...groups]) {
         if(!group.container.isConnected){groups.splice(groups.indexOf(group),1);continue;}
@@ -260,9 +259,15 @@
         if(!narrow)group.menu.open=false;
         else if(group.menu.open)positionToolMenu(group.menu);
       }
+      const savedViews=doc.getElementById('savedViewsButton'),zoom=doc.querySelector('.view-controls:not(.hidden) .view-tools .zoom-control');
+      if(savedViews&&zoom&&savedViews.previousElementSibling!==zoom)zoom.after(savedViews);
       if(controls&&!doc.getElementById('workflowRangeActions')) {
         const range=node('div','workflow-range-actions');range.id='workflowRangeActions';
-        for(const [mode,label] of [['next','Next 24 months'],['selected','Selected product'],['all','Full range']])range.append(button(label,()=>{try{adapter.rangePreset(mode);}catch(error){announce(error.message);}}));
+        for(const [mode,label] of [['next','Next 24 months'],['selected','Zoom to selected product'],['all','Full range']]){
+          const action=button(label,()=>{try{adapter.rangePreset(mode);}catch(error){announce(error.message);}});
+          if(mode==='selected')action.title='Fit the timeline to the selected product’s dates.';
+          range.append(action);
+        }
         controls.append(range);
       }
       const range=doc.getElementById('workflowRangeActions'),menu=doc.getElementById('workflowRoadmapOptions');
