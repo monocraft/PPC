@@ -274,6 +274,7 @@ let initialVerticalFitPending = true;
 let productLayoutEditing = false;
 let productReorderSession = null;
 const categoryZoomPreferences = globalThis.PortfolioViewRuntime?.preferences({ key: `${STORAGE_KEY}-view-state-v1`, storage: () => localStorage });
+const workspaceNavigation = globalThis.PortfolioViewRuntime?.navigation?.({ key: `${STORAGE_KEY}-navigation-v1`, storage: () => localStorage });
 const queueImageViewRender = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && !pptxExportInProgress) renderActiveView(); });
 const queueBoardScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && activeView === "products" && !pptxExportInProgress) renderBoard(); });
 const queuedRoadmapRenders = new Map();
@@ -1372,6 +1373,8 @@ function ensurePortfolioSchema(target) {
   };
   normalized.settings.showRoadmapMsrp = normalized.settings.showRoadmapMsrp === true;
   normalized.settings.roadmapBasis = normalized.settings.roadmapBasis === "ffs" ? "ffs" : "lifecycle";
+  normalized.settings.hashoutLabelMode = ["on", "off"].includes(normalized.settings.hashoutLabelMode) ? normalized.settings.hashoutLabelMode : "default";
+  normalized.settings.hashoutWindowsVisible = normalized.settings.hashoutWindowsVisible !== false;
   normalized.ascmSnapshot = normalizeAscmSnapshot(normalized.ascmSnapshot);
   normalized.packageInfo = packageCodec().normalizePackageInfo(normalized.packageInfo);
   normalized.categories = Array.isArray(normalized.categories) ? normalized.categories.filter((category) => CATEGORY_DEFINITIONS.some((definition) => definition.id === category.id)) : [];
@@ -1497,6 +1500,7 @@ function activateCategory(categoryId, { render = true, fitVertical = true } = {}
   board = ensureBoardSchema(category.board, categoryDefinition(category.id));
   category.board = board;
   PortfolioModel.syncTimelineSettings(portfolio);
+  if (typeof workspaceNavigation !== "undefined") workspaceNavigation?.set({ view: activeView === "products" ? "products" : "roadmap", basis: portfolio.settings?.roadmapBasis === "ffs" ? "ffs" : "lifecycle", detailsOpen: roadmapDetailsOpen });
   selectedId = board.products[0]?.id ?? null;
   searchQuery = "";
   roadmapSearchQuery = "";
@@ -2722,6 +2726,16 @@ function ensureHashoutView() {
       getScope: hashoutCategoryScope,
       getViewport: () => portfolio.settings?.hashoutViewport || null,
       getSelectedKey: () => hashoutSelectionEntry()?.key || null,
+      getLabelMode: () => portfolio.settings?.hashoutLabelMode || "default",
+      onLabelModeChange: mode => {
+        portfolio.settings.hashoutLabelMode = ["on", "off"].includes(mode) ? mode : "default";
+        scheduleSave();
+      },
+      getWindows: () => portfolio.settings?.hashoutWindowsVisible !== false,
+      onWindowsChange: visible => {
+        portfolio.settings.hashoutWindowsVisible = visible !== false;
+        scheduleSave();
+      },
       onScopeChange: ids => {
         portfolio.settings.hashoutCategoryIds = ids;
         scheduleSave();
@@ -2805,6 +2819,7 @@ function setRoadmapBasis(value) {
   roadmapDraft = null;
   roadmapInteractionMode = "pan";
   portfolio.settings.roadmapBasis = value;
+  if (typeof workspaceNavigation !== "undefined") workspaceNavigation?.set({ view: activeView === "products" ? "products" : "roadmap", basis: value, detailsOpen: roadmapDetailsOpen });
   roadmapLaneHovers.forEach(hover => hover.clear({ immediate: true }));
   scheduleSave();
   renderRoadmaps();
@@ -3178,8 +3193,8 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     const today = new Date();
     const fraction = Math.min(.98, Math.max(.02, (today.getDate() - 1) / new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()));
     const x = timelineX + (todayIndex - range.start + fraction) * roadmapMonthWidth;
-    context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .72);
-    context.lineWidth = 1;
+    context.strokeStyle = UI_PALETTE.amaranth;
+    context.lineWidth = 1.8;
     context.beginPath();
     context.moveTo(x, ROADMAP_HEADER_HEIGHT - 8);
     context.lineTo(x, height);
@@ -4314,6 +4329,7 @@ function setView(view, { focusSelected = false } = {}) {
   roadmapInteractionMode = "pan";
   if (view === "split") roadmapDetailsOpen = true;
   activeView = view === "products" ? "products" : ["roadmap", "split"].includes(view) ? (roadmapDetailsOpen ? "split" : "roadmap") : "products";
+  if (typeof workspaceNavigation !== "undefined") workspaceNavigation?.set({ view: activeView === "products" ? "products" : "roadmap", basis: portfolio.settings?.roadmapBasis === "ffs" ? "ffs" : "lifecycle", detailsOpen: roadmapDetailsOpen });
   if (activeView === "products") stopRoadmapSlotEditing();
   else finishProductReorder({ render: false });
   productView.classList.toggle("hidden", activeView !== "products");
@@ -8689,9 +8705,15 @@ async function initializeWorkspace() {
     resetHashoutView();
     portfolio = loaded;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
+    const rememberedView = typeof workspaceNavigation === "undefined" ? null : workspaceNavigation?.get();
+    if (rememberedView) {
+      portfolio.settings.roadmapBasis = rememberedView.basis;
+      roadmapDetailsOpen = rememberedView.detailsOpen;
+    }
+    const openingView = rememberedView?.view || (portfolio.settings.roadmapBasis === "ffs" ? "roadmap" : "products");
     workspaceOpening = false;
-    activateCategory(portfolio.categories[0]?.id, { render: false, fitVertical: true });
-    syncControls(); renderInspector(); setView("products");
+    activateCategory(portfolio.activeCategoryId, { render: false, fitVertical: true });
+    syncControls(); renderInspector(); setView(openingView);
     initializeWorkspaceFeatures();
     globalThis.PortfolioNotifications?.resolve("workspace-open-failure");
     if (shell) { shell.inert = false; shell.removeAttribute("aria-busy"); }

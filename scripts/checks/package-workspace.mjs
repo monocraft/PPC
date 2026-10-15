@@ -298,6 +298,8 @@ assert.equal(exportedManifest.categories[0].board.products[0].name, "Updated");
 assert.equal(exportedEntries.size, exportedManifest.imageAssets.length + 1);
 
 const stampedManifest = portfolioFixture("Stamped package");
+stampedManifest.settings.hashoutLabelMode = "on";
+stampedManifest.settings.hashoutWindowsVisible = false;
 stampedManifest.packageInfo = { version: 1, updatedAt: "2025-08-19T12:30:00.000Z", comments: "Updated the launch plan.\nChecked pricing." };
 const stamped = harness();
 const stampedResult = await stamped.sandbox.importProjectPackage(new Blob([await codec.encrypt(packageBytes(stampedManifest), key)]), { key, requireEncrypted: true });
@@ -307,6 +309,24 @@ assert.deepEqual(JSON.parse(stamped.stored.get(storageKey)).packageInfo, stamped
 const reloaded = harness(JSON.parse(stamped.stored.get(storageKey)));
 reloaded.sandbox.portfolio = reloaded.sandbox.ensurePortfolioSchema(reloaded.sandbox.portfolio);
 assert.deepEqual(reloaded.sandbox.getCurrentPackageInfo(), stampedManifest.packageInfo, "normal workspace loading must preserve imported metadata");
+assert.equal(reloaded.sandbox.portfolio.settings.hashoutLabelMode, "on", "The label override survives encrypted import, storage and schema reload.");
+assert.equal(reloaded.sandbox.portfolio.settings.hashoutWindowsVisible, false, "The seasonal overlay choice survives encrypted import, storage and schema reload.");
+const normalizedLabelFixture = reloaded.sandbox.ensurePortfolioSchema(clone(stampedManifest));
+const labelFixtureProducts = JSON.stringify(normalizedLabelFixture.categories.map(category => category.board.products));
+for (const [supplied, expected] of [[undefined, "default"], ["default", "default"], ["on", "on"], ["off", "off"], ["auto", "default"], [true, "default"]]) {
+  const draft = clone(normalizedLabelFixture);
+  draft.settings.hashoutLabelMode = supplied;
+  const normalized = reloaded.sandbox.ensurePortfolioSchema(draft);
+  assert.equal(normalized.settings.hashoutLabelMode, expected);
+  assert.equal(JSON.stringify(normalized.categories.map(category => category.board.products)), labelFixtureProducts, "Label settings do not change product records or FFS dates.");
+}
+for (const [supplied, expected] of [[undefined, true], [true, true], [false, false], ["off", true]]) {
+  const draft = clone(normalizedLabelFixture);
+  draft.settings.hashoutWindowsVisible = supplied;
+  const normalized = reloaded.sandbox.ensurePortfolioSchema(draft);
+  assert.equal(normalized.settings.hashoutWindowsVisible, expected);
+  assert.equal(JSON.stringify(normalized.categories.map(category => category.board.products)), labelFixtureProducts, "Seasonal targets do not change product records or FFS dates.");
+}
 const automaticSummaryManifest = clone(stampedManifest);
 automaticSummaryManifest.packageInfo.comments = "Accepted product names:\n" + "Complete accepted product name\n".repeat(100);
 const automaticSummaryWorkspace = harness();

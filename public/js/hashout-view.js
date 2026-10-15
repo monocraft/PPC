@@ -5,6 +5,8 @@
   const STAGES = Object.freeze({ launched: "Released", "in-development": "In development", "in-planning": "In planning", embargo: "Embargo", "end-of-life": "End of life", unknown: "Stage unverified" });
   const RING_STAGGER_MS = 32, RING_MOTION_MS = 240;
   const HASHOUT_SELECTION = "#2DD4BF";
+  const LABEL_MODES = Object.freeze(["default", "on", "off"]);
+  const normalizeLabelMode = (value) => LABEL_MODES.includes(value) ? value : "default";
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const monthIndex = (value) => { const parts = /^(\d{4})-(\d{2})/.exec(String(value || "")); return parts ? Number(parts[1]) * 12 + Number(parts[2]) - 1 : null; };
   const monthText = (index, long = false) => new Intl.DateTimeFormat("en", { month: long ? "long" : "short", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(Math.floor(index / 12), Math.floor(index % 12), 1)));
@@ -48,12 +50,38 @@
     searchShell.append(searchIcon, search, results);
     const scopeCount = node("span", "hashout-scope-count");
     const back = node("button", "hashout-back-view", "Back to previous view"); back.type = "button"; back.hidden = true;
-    toolbar.append(picker, searchShell, back, scopeCount);
+    const labelControl = node("div", "hashout-label-control");
+    const labelTitle = node("span", "hashout-label-title", "Labels");
+    const labelOptions = node("div", "hashout-label-options");
+    labelOptions.setAttribute("role", "radiogroup"); labelOptions.setAttribute("aria-label", "Product name and date labels");
+    for (const mode of LABEL_MODES) {
+      const button = node("button", "", mode === "default" ? "Default" : mode === "on" ? "On" : "Off");
+      button.type = "button"; button.dataset.labelMode = mode; button.setAttribute("role", "radio");
+      button.title = mode === "default" ? "Show labels when the category lane has room" : mode === "on" ? "Show product name and date labels" : "Hide product labels";
+      labelOptions.append(button);
+    }
+    labelControl.append(labelTitle, labelOptions);
+    const windowsControl = node("div", "hashout-windows-control");
+    const windowsToggle = node("button", "hashout-windows-toggle", "Windows"); windowsToggle.type = "button"; windowsToggle.setAttribute("aria-label", "Show seasonal FFS target windows");
+    const windowsKey = node("details", "hashout-windows-key");
+    const windowsSummary = node("summary", "", "?"); windowsSummary.setAttribute("aria-label", "About seasonal planning windows");
+    const windowsPanel = node("div", "hashout-windows-panel");
+    windowsPanel.append(node("strong", "hashout-windows-heading", "Seasonal planning windows"));
+    for (const [season, title, months] of [["spring", "Spring", "FFS Feb → On shelf May"], ["fall", "Fall", "FFS Jul → On shelf Oct"]]) {
+      const row = node("div", `hashout-windows-key-row is-${season}`); row.append(node("span", "hashout-windows-swatch"), node("span", "", title), node("strong", "", months)); windowsPanel.append(row);
+    }
+    windowsPanel.append(node("p", "", "The shaded FFS months are ideal planning targets for the later on-shelf windows. Product positions use their own FFS estimates."), node("p", "", "A quarter or broader estimate may overlap a target; that overlap does not confirm readiness."), node("p", "hashout-windows-exceptions", "Retailer-specific exceptions apply. Amazon and Micro Center use flexible timing. Walmart fall and Target spring are special-case launches."));
+    windowsKey.append(windowsSummary, windowsPanel); windowsControl.append(windowsToggle, windowsKey);
+    toolbar.append(picker, searchShell, labelControl, windowsControl, back, scopeCount);
     const stage = node("div", "hashout-stage");
     const canvas = node("canvas", "hashout-canvas");
     canvas.tabIndex = 0;
     canvas.setAttribute("role", "img");
     canvas.setAttribute("aria-label", "Hashout category map. Hover a product to see its name and timing. Click a numbered group to expand its product circles on the roadmap. Arrow keys browse products; Enter expands a group or opens a product. Escape collapses the group. Drag to pan and use the zoom controls to change scale.");
+    const laneHoverClip = node("div", "hashout-lane-hover-clip"); laneHoverClip.setAttribute("aria-hidden", "true");
+    const laneHover = node("div", "hashout-lane-hover-frame"); laneHoverClip.append(laneHover);
+    const selectionEffects = node("div", "hashout-selection-effects"); selectionEffects.setAttribute("aria-hidden", "true");
+    const selectionWave = node("div", "hashout-selection-wave"); selectionWave.hidden = true; selectionEffects.append(selectionWave);
     const rail = node("div", "hashout-lane-rail");
     rail.setAttribute("aria-label", "Category lanes");
     const empty = node("div", "hashout-empty");
@@ -65,24 +93,67 @@
     const ring = node("section", "hashout-ring-overlay"); ring.hidden = true; ring.tabIndex = -1; ring.setAttribute("role", "group"); ring.setAttribute("aria-label", "Expanded roadmap products");
     const live = node("span", "visually-hidden");
     live.setAttribute("role", "status");
-    stage.append(canvas, rail, empty, card, ring);
+    stage.append(canvas, laneHoverClip, selectionEffects, rail, empty, card, ring);
     shell.append(toolbar, stage, live);
     host.append(shell);
 
     let scope = options.getScope?.() ?? null;
+    let labelMode = normalizeLabelMode(options.getLabelMode?.()), labelLayout = { mode: labelMode, labels: [], lanes: [] };
+    let windowsVisible = options.getWindows?.() !== false, seasonalWindows = [], seasonalSignature = "";
     let entries = [], allCategories = [], layout = null, horizon = null, viewport = null;
     let width = 0, height = 0, leftWidth = 166, renderFrame = 0, animationFrame = 0, destroyed = false;
     let selectedKey = options.getSelectedKey?.() || null, hovered = null, hoverMemberKey = null, pinned = false, cardAnchor = null, cardEntries = [], hideTimer = 0, keyboardIndex = -1, drag = null, suppressClick = false;
     let railSignature = "", pickerSignature = "", searchSignature = "", viewportSignature = "";
+    let labelSignature = "";
+    let hoveredCategoryId = null, lanePointer = null, laneHoverFrame = 0;
     let ringState = null, ringCloseTimer = 0, previousViewport = null;
     let coarseInput = Boolean(root.matchMedia?.("(pointer: coarse)")?.matches), revealGeneration = 0, revealTimers = [], revealFrames = [];
     const listen = (element, event, handler, config = {}) => element.addEventListener(event, handler, { ...config, signal: abort.signal });
     const theme = () => root.PortfolioTheme?.colors || { page: "#1A1B1C", surface: "#242527", header: "#333538", input: "#4D5054", text: "#D5D7DC", label: "#BBBCC0", alert: "#FF2525", borderStrong: "#676A70" };
     const alpha = (color, opacity) => root.PortfolioTheme?.alpha?.(color, opacity) || color;
     const font = () => root.PortfolioTheme?.fontFace || "Jost";
+    const seasonColor = (season) => season === "spring" ? root.PortfolioTheme?.chartPalette?.indigo?.[40] || "#879DF1" : root.PortfolioTheme?.chartPalette?.yellow?.[40] || "#FFD569";
+    shell.style.setProperty("--hashout-spring", seasonColor("spring")); shell.style.setProperty("--hashout-fall", seasonColor("fall"));
+    const targetMatches = (period) => windowsVisible && root.PortfolioHashoutLayout.windowMatches ? root.PortfolioHashoutLayout.windowMatches(period, seasonalWindows.filter((window) => window.type === "ffs")) : [];
+    const productWindowTone = (entry) => { const matches = targetMatches(entry?.period).filter((match) => match.match === "within"); return matches.length === 1 ? seasonColor(matches[0].season) : null; };
+    const syncWindowsControl = () => windowsToggle.setAttribute("aria-pressed", String(windowsVisible));
+    const appendWindowDetail = (parent, entry) => {
+      const matches = targetMatches(entry?.period); if (!matches.length) return;
+      const seasons = [...new Set(matches.map((match) => match.season))];
+      const text = matches.length === 1 ? `${matches[0].match === "overlap" ? "Overlaps " : ""}${matches[0].season === "spring" ? "Spring" : "Fall"} ${matches[0].year} FFS target → ${matches[0].onShelfLabel} on shelf`
+        : `Overlaps ${seasons.map((season) => season === "spring" ? "Spring (Feb → May)" : "Fall (Jul → Oct)").join(" and ")} FFS targets`;
+      const detail = node("p", "hashout-card-window", text); detail.dataset.seasons = [...new Set(matches.map((match) => match.season))].join(" "); parent.append(detail);
+    };
+    listen(windowsToggle, "click", () => { windowsVisible = !windowsVisible; syncWindowsControl(); options.onWindowsChange?.(windowsVisible); closeCard(); closeRing(); requestRender(); });
+    listen(windowsKey, "toggle", () => {
+      if (!windowsKey.open) return;
+      const bounds = windowsSummary.getBoundingClientRect(), viewportWidth = document.documentElement.clientWidth, viewportHeight = root.innerHeight;
+      const panelWidth = Math.min(360, viewportWidth - 24), below = viewportHeight - bounds.bottom - 16, above = bounds.top - 16, useBelow = below >= Math.min(180, above);
+      windowsPanel.style.width = `${panelWidth}px`; windowsPanel.style.maxHeight = `${Math.min(400, viewportHeight * .6, Math.max(40, useBelow ? below : above))}px`;
+      windowsPanel.style.left = `${clamp(bounds.right - panelWidth, 12, Math.max(12, viewportWidth - panelWidth - 12))}px`;
+      windowsPanel.style.top = `${useBelow ? bounds.bottom + 8 : Math.max(8, bounds.top - windowsPanel.getBoundingClientRect().height - 8)}px`;
+    });
+    listen(windowsKey, "keydown", (event) => { if (event.key === "Escape") { windowsKey.open = false; windowsSummary.focus(); event.preventDefault(); } });
+    syncWindowsControl();
     const getEntry = (key) => entries.find((item) => item.key === key);
     const sameGlyph = (a, b) => Boolean(a && b && a.categoryId === b.categoryId && a.memberKeys.length === b.memberKeys.length && a.memberKeys.every((key, index) => key === b.memberKeys[index]));
     const scopeIds = () => scope === null ? allCategories.map((item) => item.id) : scope;
+    const syncLabelControl = () => {
+      for (const button of labelOptions.children) { const active = button.dataset.labelMode === labelMode; button.setAttribute("aria-checked", String(active)); button.tabIndex = active ? 0 : -1; }
+    };
+    const chooseLabelMode = (value) => {
+      const next = normalizeLabelMode(value); if (next === labelMode) return;
+      labelMode = next; syncLabelControl(); options.onLabelModeChange?.(labelMode); requestRender();
+    };
+    for (const button of labelOptions.children) {
+      listen(button, "click", () => chooseLabelMode(button.dataset.labelMode));
+      listen(button, "keydown", (event) => {
+        const index = LABEL_MODES.indexOf(button.dataset.labelMode);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? LABEL_MODES.length - 1 : ["ArrowRight", "ArrowDown"].includes(event.key) ? (index + 1) % LABEL_MODES.length : ["ArrowLeft", "ArrowUp"].includes(event.key) ? (index + LABEL_MODES.length - 1) % LABEL_MODES.length : -1;
+        if (next < 0) return; event.preventDefault(); chooseLabelMode(LABEL_MODES[next]); labelOptions.children[next].focus();
+      });
+    }
+    syncLabelControl();
     const notifyViewport = () => {
       if (!viewport || !horizon) return;
       const signature = `${viewport.start}:${viewport.end}:${horizon.start}:${horizon.end}`;
@@ -135,6 +206,7 @@
       options.onScopeChange?.(scope === null ? null : [...scope]);
       closeCard();
       closeRing();
+      clearLaneHover();
       refreshData();
       requestRender();
     }
@@ -156,6 +228,8 @@
         viewport = wasFit ? { start: horizon.start, end: horizon.end + 1 } : boundViewport(viewport);
       }
       if (options.getSelectedKey) selectedKey = options.getSelectedKey() || selectedKey;
+      const nextSeasonalSignature = `${horizon.start}:${horizon.end}`;
+      if (nextSeasonalSignature !== seasonalSignature) { seasonalSignature = nextSeasonalSignature; seasonalWindows = root.PortfolioHashoutLayout.seasonalWindows?.(horizon, { context: true }) || []; }
       if (selectedKey && !getEntry(selectedKey)) { hovered = null; if (pinned) closeCard(); }
       updatePicker();
       updateSearch();
@@ -252,9 +326,13 @@
 
     function dimensions() {
       const rectangle = stage.getBoundingClientRect();
-      width = Math.max(1, Math.round(rectangle.width)); height = Math.max(1, Math.round(rectangle.height));
+      const nextWidth = Math.max(1, Math.round(rectangle.width)), nextHeight = Math.max(1, Math.round(rectangle.height));
+      if (width !== nextWidth || height !== nextHeight) { clearLaneHover(); windowsKey.open = false; }
+      width = nextWidth; height = nextHeight;
       if (ringState && (ringState.width !== width || ringState.height !== height)) { closeRing(); closeCard(); clearTimeout(ringCloseTimer); ring.hidden = true; ring.replaceChildren(); ring.classList.remove("is-closing"); }
       leftWidth = width < 520 ? 112 : width < 800 ? 142 : 166;
+      shell.style.setProperty("--hashout-plot-left", `${leftWidth}px`);
+      selectionEffects.style.left = `${leftWidth}px`;
       const ratio = Math.min(root.devicePixelRatio || 1, 3);
       const pixelWidth = Math.round(width * ratio), pixelHeight = Math.round(height * ratio);
       if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) { canvas.width = pixelWidth; canvas.height = pixelHeight; }
@@ -292,9 +370,25 @@
           context.fillStyle = colors.label; context.font = `10px ${font()}`; context.textAlign = "center"; context.fillText(`Q${Math.floor(month % 12 / 3) + 1}`, xAt(month + 1.5), 35);
         }
       }
+      if (windowsVisible) {
+        for (const window of seasonalWindows.filter((item) => item.type === "ffs")) {
+          const color = seasonColor(window.season), x = xAt(window.startMonth), right = xAt(window.endMonth);
+          if (right > leftWidth && x < width) {
+            context.fillStyle = alpha(color, .04); context.fillRect(Math.max(leftWidth, x), 46, Math.min(width, right) - Math.max(leftWidth, x), Math.max(0, height - 46));
+            context.strokeStyle = alpha(color, .2); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, 46); context.lineTo(x + .5, height); context.moveTo(right + .5, 46); context.lineTo(right + .5, height); context.stroke();
+          }
+          const from = xAt(window.startMonth + .5), to = xAt(window.onShelfMonth + .5);
+          if (to < leftWidth || from > width) continue;
+          context.strokeStyle = alpha(color, .55); context.lineWidth = 1.2; context.beginPath(); context.moveTo(from, 39); context.lineTo(from, 44); context.moveTo(from, 42.5); context.lineTo(to, 42.5); context.moveTo(to - 2.5, 40); context.lineTo(to, 42.5); context.lineTo(to - 2.5, 45); context.stroke();
+        }
+        for (const window of seasonalWindows.filter((item) => item.type === "on-shelf")) {
+          const x = xAt(window.startMonth + .5); if (x < leftWidth || x > width) continue;
+          context.strokeStyle = alpha(seasonColor(window.season), .55); context.lineWidth = 1.2; context.beginPath(); context.moveTo(x, 40); context.lineTo(x, 45); context.stroke();
+        }
+      }
       const now = new Date(), today = now.getFullYear() * 12 + now.getMonth() + (now.getDate() - 1) / new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
       if (today >= viewport.start && today < viewport.end) {
-        const x = xAt(today); context.strokeStyle = alpha(colors.text, .5); context.setLineDash([2, 4]); context.beginPath(); context.moveTo(x, 46); context.lineTo(x, height); context.stroke(); context.setLineDash([]);
+        const x = xAt(today); context.strokeStyle = colors.alert; context.lineWidth = 1.8; context.beginPath(); context.moveTo(x, 46); context.lineTo(x, height); context.stroke();
       }
       context.restore();
       context.fillStyle = colors.surface; context.fillRect(0, 0, leftWidth, 46);
@@ -306,7 +400,8 @@
       const colors = theme(), radius = glyph.radius || Math.min(5, Math.max(2.5, glyph.height / 2));
       const glyphLane = layout?.lanes.find((lane) => lane.categoryId === glyph.categoryId);
       const stageColor = root.PortfolioModel?.lifecycleTone?.(glyph.stage) || colors.input;
-      const stroke = selected ? HASHOUT_SELECTION : glyph.stage === "embargo" ? colors.alert : highlighted ? colors.text : alpha(colors.label, .86);
+      const windowTone = glyph.entries?.length === 1 ? productWindowTone(glyph.entries[0]) : null;
+      const stroke = selected ? HASHOUT_SELECTION : glyph.stage === "embargo" ? colors.alert : highlighted ? colors.text : windowTone || alpha(colors.label, .86);
       context.save(); context.lineWidth = selected || highlighted ? 2.3 : 1.65;
       if (glyphLane) { context.beginPath(); context.rect(leftWidth, glyphLane.y, width - leftWidth, glyphLane.height); context.clip(); }
       if (glyph.type === "window") {
@@ -351,6 +446,86 @@
       return new Set(cardEntries.map((entry) => entry.key));
     }
 
+    function fitLabelText(context, value, available) {
+      const text = String(value || ""); if (context.measureText(text).width <= available) return text;
+      const characters = Array.from(text); let low = 0, high = characters.length;
+      while (low < high) {
+        const count = Math.ceil((low + high) / 2), prefix = Math.ceil(count * .7), suffix = count - prefix;
+        const candidate = characters.slice(0, prefix).join("") + "…" + (suffix ? characters.slice(-suffix).join("") : "");
+        if (context.measureText(candidate).width <= available) low = count; else high = count - 1;
+      }
+      const prefix = Math.ceil(low * .7), suffix = low - prefix;
+      return characters.slice(0, prefix).join("") + "…" + (suffix ? characters.slice(-suffix).join("") : "");
+    }
+
+    function updateLabels(context) {
+      const signature = JSON.stringify([labelMode, width, height, leftWidth, viewport, font(), layout.glyphs.map((glyph) => [glyph.categoryId, glyph.x, glyph.width, glyph.centerY, glyph.memberKeys]), entries.map((entry) => [entry.key, entry.product?.name, entry.period?.label, entry.stage])]);
+      if (signature === labelSignature) return;
+      labelSignature = signature;
+      const candidates = [], seen = new Set(), maximumWidth = Math.min(226, Math.max(0, width - leftWidth - 12));
+      for (const glyph of layout.glyphs) for (const entry of glyph.entries) {
+        if (seen.has(entry.key) || !entry.period || maximumWidth < 26) continue;
+        const source = glyph.type === "group" ? selectedOverlay(entry, glyph) : glyph;
+        if (!source || source.centerX < leftWidth || source.centerX > width) continue;
+        seen.add(entry.key);
+        const name = entry.product?.name || "Unnamed product", date = entry.period.label;
+        context.font = `600 11px ${font()}`; const nameWidth = context.measureText(name).width;
+        context.font = `10px ${font()}`; const dateWidth = context.measureText(date).width;
+        const labelWidth = Math.min(maximumWidth, Math.max(34, nameWidth, dateWidth) + 8);
+        context.font = `600 11px ${font()}`; const nameText = fitLabelText(context, name, labelWidth - 8);
+        context.font = `10px ${font()}`; const dateText = fitLabelText(context, date, labelWidth - 8);
+        candidates.push({ key: entry.key, categoryId: entry.categoryId, anchorX: source.centerX, anchorY: source.centerY, width: labelWidth, height: 28, markerRadius: source.radius || 5, name, date, nameText, dateText, entry, glyph: source });
+      }
+      labelLayout = typeof root.PortfolioHashoutLayout.labels === "function" ? root.PortfolioHashoutLayout.labels(layout, candidates, { mode: labelMode, gap: 6, padding: 4, markerGap: 5 }) : { mode: labelMode, labels: [], lanes: [] };
+    }
+
+    function drawLabels(context, focused, neutral) {
+      updateLabels(context);
+      for (const label of labelLayout.labels) {
+        context.save(); if (focused && !focused.has(label.key)) context.globalAlpha = .33;
+        const lane = layout.lanes.find((item) => item.categoryId === label.categoryId);
+        if (lane) { context.beginPath(); context.rect(leftWidth, lane.y, width - leftWidth, lane.height); context.clip(); }
+        const active = label.key === selectedKey || !neutral && label.key === hoverMemberKey;
+        context.fillStyle = alpha(theme().page, .9); context.beginPath(); context.roundRect(label.x, label.y, label.width, label.height, 3); context.fill();
+        context.textAlign = "left"; context.textBaseline = "top";
+        context.font = `600 11px ${font()}`; context.fillStyle = active ? HASHOUT_SELECTION : theme().text; context.fillText(label.nameText, label.x + 4, label.y + 2);
+        context.font = `10px ${font()}`; context.fillStyle = theme().label; context.fillText(label.dateText, label.x + 4, label.y + 16);
+        context.restore();
+      }
+    }
+
+    function updateSelectionWave() {
+      const visibleInOrbit = ringState?.geometry?.positions.some((slot) => ringState.entries[slot.index]?.key === selectedKey);
+      const glyph = selectedKey && layout.glyphs.find((item) => item.memberKeys.includes(selectedKey));
+      const source = glyph?.type === "group" ? selectedOverlay(getEntry(selectedKey), glyph) : glyph;
+      const visible = Boolean(source && !visibleInOrbit && source.centerX >= leftWidth && source.centerX <= width && source.centerY >= 46 && source.centerY <= height);
+      selectionWave.hidden = !visible;
+      if (!visible) { selectionWave.classList.remove("is-active"); return; }
+      const changed = selectionWave.dataset.productKey !== selectedKey;
+      selectionWave.dataset.productKey = selectedKey;
+      selectionWave.style.left = `${source.centerX - leftWidth}px`; selectionWave.style.top = `${source.centerY - 46}px`;
+      if (changed) { selectionWave.classList.remove("is-active"); void selectionWave.offsetWidth; }
+      selectionWave.classList.add("is-active");
+    }
+
+    function clearLaneHover() {
+      lanePointer = null; hoveredCategoryId = null; laneHover.style.opacity = "0"; laneHover.dataset.categoryId = "";
+    }
+
+    function syncLaneHover(immediate = false) {
+      if (!lanePointer || !layout || drag || pinned || ringState) { clearLaneHover(); return; }
+      const lane = layout.lanes.find((item) => lanePointer.y >= item.y && lanePointer.y < item.y + item.height);
+      if (!lane || lanePointer.x < 0 || lanePointer.x > width || lanePointer.y < 46) { clearLaneHover(); return; }
+      const entering = !hoveredCategoryId;
+      if (immediate || entering) {
+        cancelAnimationFrame(laneHoverFrame); laneHover.classList.add("is-immediate");
+        laneHoverFrame = requestAnimationFrame(() => { laneHoverFrame = 0; laneHover.classList.remove("is-immediate"); });
+      }
+      laneHover.style.transform = `translateY(${lane.y - 46 + 1}px)`; laneHover.style.height = `${Math.max(0, lane.height - 2)}px`;
+      if (immediate || entering) void laneHover.offsetHeight;
+      laneHover.style.opacity = "1"; hoveredCategoryId = lane.categoryId; laneHover.dataset.categoryId = lane.categoryId;
+    }
+
     function draw(neutral = false) {
       if (destroyed || !horizon) return;
       const ratio = dimensions();
@@ -364,6 +539,9 @@
       for (const [index, lane] of layout.lanes.entries()) {
         if (index % 2 === 0) { context.fillStyle = alpha(colors.label, .026); context.fillRect(leftWidth, lane.y, width - leftWidth, lane.height); }
         context.strokeStyle = alpha(colors.label, .065); context.beginPath(); context.moveTo(leftWidth, lane.y + lane.height - .5); context.lineTo(width, lane.y + lane.height - .5); context.stroke();
+      }
+      drawLabels(context, focused, neutral);
+      for (const lane of layout.lanes) {
         for (const glyph of lane.glyphs) {
           context.save(); if (focused && !glyph.memberKeys.some((key) => focused.has(key))) context.globalAlpha = .33;
           const activeGroup = !neutral && ringState && glyph.type === "group" && glyph.memberKeys.some((key) => ringState.entries.some((entry) => entry.key === key));
@@ -384,6 +562,8 @@
       if (!neutral) for (const label of rail.children) label.classList.toggle("is-dimmed", Boolean(focusedCategories && !focusedCategories.has(label.dataset.categoryId)));
       canvas.dataset.glyphCount = String(layout.glyphs.length); canvas.dataset.productCount = String(entries.length); canvas.dataset.categoryCount = String(layout.lanes.length);
       canvas.dataset.viewportStart = String(viewport.start); canvas.dataset.viewportEnd = String(viewport.end);
+      canvas.dataset.labelMode = labelMode; canvas.dataset.labelCount = String(labelLayout.labels.length);
+      updateSelectionWave(); syncLaneHover();
       empty.hidden = layout.lanes.length > 0;
       empty.textContent = allCategories.length ? "Choose categories to map your products." : "Add products to build your Hashout roadmap.";
       if (!card.hidden && cardAnchor) positionCard();
@@ -398,6 +578,20 @@
     function point(event) { const rectangle = canvas.getBoundingClientRect(); return { x: event.clientX - rectangle.left, y: event.clientY - rectangle.top }; }
     function hit(position) {
       if (!layout || position.x < leftWidth || position.y < 46) return null;
+      // Explicit On can overlap text at extreme density; the original marker
+      // and group controls stay on top and retain their own hit targets.
+      const direct = layout.glyphs.find((glyph) => {
+        const x = glyph.type === "group" ? glyph.countLabelX ?? glyph.centerX : glyph.centerX;
+        const radius = glyph.type === "group" ? glyph.badgeRadius ?? 9 : glyph.radius || 5;
+        return glyph.type === "window" ? position.x >= glyph.x - 2 && position.x <= glyph.x + glyph.width + 2 && Math.abs(position.y - glyph.centerY) <= 7
+          : Math.hypot(position.x - x, position.y - glyph.centerY) <= radius + 3;
+      });
+      if (direct) return direct;
+      for (let index = labelLayout.labels.length - 1; index >= 0; index--) {
+        const label = labelLayout.labels[index];
+        const lane = layout.lanes.find((item) => item.categoryId === label.categoryId);
+        if (lane && position.y >= lane.y && position.y < lane.y + lane.height && position.x >= label.x && position.x <= label.x + label.width && position.y >= label.y && position.y <= label.y + label.height) return { ...label.glyph, entries: [label.entry], memberKeys: [label.key], labelKey: label.key };
+      }
       let nearest = null, best = Infinity;
       for (const glyph of layout.glyphs) {
         const shapeDistance = glyph.type === "point" ? Math.abs(position.x - glyph.centerX) : position.x < glyph.x ? glyph.x - position.x : position.x > glyph.x + glyph.width ? position.x - glyph.x - glyph.width : 0;
@@ -453,7 +647,7 @@
       const scroll = list.scrollTop;
       card.querySelector(".hashout-member-focus")?.remove();
       const focus = node("div", "hashout-member-focus");
-      focus.append(node("strong", "", entry.product?.name || "Unnamed product"), node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD"), entryActions(entry));
+      focus.append(node("strong", "", entry.product?.name || "Unnamed product"), node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); appendWindowDetail(focus, entry); focus.append(entryActions(entry));
       card.insertBefore(focus, list);
       card.style.setProperty("--hashout-member-list-height", `${Math.max(60, height - 240)}px`);
       list.scrollTop = scroll;
@@ -533,7 +727,7 @@
       ringState.activeKey = entry.key;
       const detail = ring.querySelector(".hashout-ring-detail"); if (!detail) return;
       detail.style.width = `${Math.min(320, Math.max(40, width - leftWidth - 12))}px`;
-      detail.replaceChildren(); detail.append(node("strong", "", entry.product?.name || "Unnamed product"), node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); detail.hidden = false;
+      detail.replaceChildren(); detail.append(node("strong", "", entry.product?.name || "Unnamed product"), node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD")); appendWindowDetail(detail, entry); detail.hidden = false;
       const geometry = ringState.geometry, rectangle = detail.getBoundingClientRect(), w = rectangle.width, h = rectangle.height, half = geometry.targetSize / 2;
       const slots = geometry.positions, minY = Math.min(geometry.center.y - half, ...slots.map((slot) => slot.y - half)), maxY = Math.max(geometry.center.y + half, ...slots.map((slot) => slot.y + half));
       const slot = slots.find((item) => ringState.entries[item.index]?.key === entry.key) || geometry.center;
@@ -570,6 +764,7 @@
       for (const [index, slot] of geometry.positions.entries()) {
         const entry = state.entries[slot.index], count = geometry.positions.length;
         const button = node("button", "hashout-orbit-product"); button.type = "button"; button.dataset.productKey = entry.key;
+        const windowTone = productWindowTone(entry); if (windowTone) button.style.setProperty("--hashout-product-tone", windowTone);
         button.style.left = `${state.anchor.x - half}px`; button.style.top = `${state.anchor.y - half}px`; button.style.setProperty("--ring-x", `${slot.x - state.anchor.x}px`); button.style.setProperty("--ring-y", `${slot.y - state.anchor.y}px`); button.style.setProperty("--ring-delay", `${index * RING_STAGGER_MS}ms`);
         button.setAttribute("aria-label", `${entry.product?.name || "Unnamed product"}, FFS ${entry.period?.label || "TBD"}`); button.setAttribute("aria-pressed", String(entry.key === state.selectedKey)); button.disabled = true; button.tabIndex = -1; button.classList.toggle("is-selected", entry.key === state.selectedKey);
         const focusEntry = () => { if (!ringState) return; hoverMemberKey = entry.key; ringDetail(entry); requestRender(); };
@@ -608,6 +803,7 @@
 
     function openRing(glyph, keyboard = false) {
       closeCard(); clearTimeout(ringCloseTimer);
+      clearLaneHover();
       ringState = { entries: glyph.entries, anchor: { x: glyph.countLabelX ?? glyph.centerX, y: glyph.centerY }, page: 0, pageSize: 0, radius: 0, width, height, selectedKey: glyph.memberKeys.includes(selectedKey) ? selectedKey : null, activeKey: null, geometry: null };
       ring.removeAttribute("style"); ring.classList.remove("is-open"); renderRingPage(keyboard ? 0 : null); requestRender();
     }
@@ -644,6 +840,7 @@
       if (items.length === 1 && !heading) {
         const entry = items[0];
         card.append(node("p", "hashout-card-time", entry.period ? `FFS ${entry.period.label}` : "FFS TBD"), node("p", "hashout-card-stage", `${STAGES[entry.stage] || STAGES.unknown} · ${entry.categoryName}`));
+        appendWindowDetail(card, entry);
         card.setAttribute("aria-label", `${entry.product?.name || "Unnamed product"}. Working product name and planning timing.`);
         if (pin) card.append(entryActions(entry));
       } else {
@@ -697,13 +894,18 @@
       if (event.key === "ArrowDown" || event.key === "ArrowUp") { buttons[clamp(index + (event.key === "ArrowDown" ? 1 : -1), 0, buttons.length - 1)]?.focus(); event.preventDefault(); }
       if (event.key === "Escape") { results.hidden = true; search.setAttribute("aria-expanded", "false"); search.focus(); }
     });
-    listen(document, "pointerdown", (event) => { if (event.pointerType === "touch") coarseInput = true; else if (event.pointerType === "mouse" && !root.matchMedia?.("(pointer: coarse)")?.matches) coarseInput = false; if (!picker.contains(event.target)) picker.open = false; if (!searchShell.contains(event.target)) { results.hidden = true; search.setAttribute("aria-expanded", "false"); } if (ringState && !ring.contains(event.target) && !card.contains(event.target)) { closeRing(); closeCard(); } if (pinned && !card.contains(event.target) && !stage.contains(event.target)) closeCard(); });
+    listen(document, "pointerdown", (event) => { if (event.pointerType === "touch") coarseInput = true; else if (event.pointerType === "mouse" && !root.matchMedia?.("(pointer: coarse)")?.matches) coarseInput = false; if (!picker.contains(event.target)) picker.open = false; if (!windowsControl.contains(event.target)) windowsKey.open = false; if (!searchShell.contains(event.target)) { results.hidden = true; search.setAttribute("aria-expanded", "false"); } if (ringState && !ring.contains(event.target) && !card.contains(event.target)) { closeRing(); closeCard(); } if (pinned && !card.contains(event.target) && !stage.contains(event.target)) closeCard(); });
     listen(card, "pointerenter", () => clearTimeout(hideTimer));
     listen(card, "pointerleave", () => { if (!pinned) hideTimer = setTimeout(() => closeCard(), 160); });
     listen(card, "click", (event) => { if (!pinned && !event.target.closest("button")) { if (cardEntries.length > 1) openRing({ entries: cardEntries, memberKeys: cardEntries.map((entry) => entry.key), countLabelX: cardAnchor.x, centerX: cardAnchor.x, centerY: cardAnchor.y }); else showEntries(cardEntries, cardAnchor, true); } });
     listen(card, "keydown", (event) => { if (event.key === "Escape") { closeCard(true); closeRing(); event.preventDefault(); } });
     listen(ring, "keydown", (event) => { if (event.key === "Escape") { closeRing(true); closeCard(); event.preventDefault(); } });
     listen(ring, "pointerenter", () => clearTimeout(hideTimer));
+    listen(stage, "pointermove", (event) => {
+      if (event.pointerType === "touch" || event.isPrimary === false || event.target.closest(".hashout-product-card, .hashout-ring-overlay")) { clearLaneHover(); return; }
+      const bounds = stage.getBoundingClientRect(); lanePointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top }; syncLaneHover();
+    });
+    listen(stage, "pointerleave", clearLaneHover); listen(stage, "pointerdown", clearLaneHover); listen(root, "blur", clearLaneHover);
     listen(canvas, "pointermove", (event) => {
       const position = point(event);
       if (drag) {
@@ -712,8 +914,8 @@
         return;
       }
       if (pinned || ringState || event.pointerType === "touch") return;
-      const glyph = hit(position); canvas.style.cursor = glyph ? "pointer" : "grab";
-      if (sameGlyph(glyph, hovered)) { hovered = glyph; clearTimeout(hideTimer); return; }
+      const previousMemberKey = hoverMemberKey, glyph = hit(position); canvas.style.cursor = glyph ? "pointer" : "grab"; hoverMemberKey = glyph?.labelKey || null;
+      if (sameGlyph(glyph, hovered)) { hovered = glyph; clearTimeout(hideTimer); if (previousMemberKey !== hoverMemberKey) requestRender(); return; }
       hovered = glyph; requestRender();
       if (!glyph) { hideTimer = setTimeout(() => { if (!pinned) closeCard(); }, 160); return; }
       showEntries(glyph.entries, { x: glyph.type === "group" ? glyph.countLabelX ?? glyph.centerX : glyph.centerX, y: glyph.centerY });
@@ -759,7 +961,7 @@
     function zoomScale(factor, anchor = .5, animate = true) { if (!viewport || !Number.isFinite(Number(factor)) || Number(factor) <= 0) return; const span = viewport.end - viewport.start, nextSpan = clamp(span / Number(factor), Math.min(Math.max(3, horizon.count / 20), horizon.count), horizon.count), date = viewport.start + span * anchor; closeCard(); setViewport({ start: date - nextSpan * anchor, end: date + nextSpan * (1 - anchor) }, animate); }
     function zoomBy(direction) { closeRing(); zoomScale(Number(direction) > 0 ? 1.3 : 1 / 1.3); }
     function today() { if (!viewport) return; const now = new Date(), center = now.getFullYear() * 12 + now.getMonth() + .5, span = viewport.end - viewport.start; closeCard(); closeRing(); setViewport({ start: center - span / 2, end: center + span / 2 }, true); }
-    function render(config = {}) { if (destroyed) return; if (Object.hasOwn(config, "selectedKey")) selectedKey = config.selectedKey; const nextScope = options.getScope?.(); if (nextScope !== undefined) scope = nextScope === null ? null : [...nextScope]; refreshData(); requestRender(); }
+    function render(config = {}) { if (destroyed) return; if (Object.hasOwn(config, "selectedKey")) selectedKey = config.selectedKey; const nextScope = options.getScope?.(); if (nextScope !== undefined) scope = nextScope === null ? null : [...nextScope]; if (options.getLabelMode) { labelMode = normalizeLabelMode(options.getLabelMode()); syncLabelControl(); } if (options.getWindows) { windowsVisible = options.getWindows() !== false; syncWindowsControl(); } refreshData(); requestRender(); }
     async function exportPng() {
       draw(true);
       const image = document.createElement("canvas"); image.width = canvas.width; image.height = canvas.height;
@@ -774,19 +976,22 @@
       return new Promise((resolve, reject) => image.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not create the Hashout image.")), "image/png"));
     }
     const resize = new ResizeObserver(() => { if (!destroyed) requestRender(); }); resize.observe(stage);
+    const refreshFontMeasurements = () => { if (!destroyed) { labelSignature = ""; requestRender(); } };
+    if (document.fonts?.ready) void document.fonts.ready.then(refreshFontMeasurements);
+    if (document.fonts?.addEventListener) listen(document.fonts, "loadingdone", refreshFontMeasurements);
     refreshData(); requestRender();
     return Object.freeze({
       render, fit, zoomBy, today, focusProduct, exportPng,
-      closeOverlay() { closeCard(); closeRing(); },
+      closeOverlay() { closeCard(); closeRing(); clearLaneHover(); },
       getViewport() { return viewport ? { ...viewport, zoom: horizon.count / (viewport.end - viewport.start) } : null; },
       setSearch(value) { search.value = String(value || ""); searchSignature = ""; updateSearch(); },
       getState() {
         const focused = focusKeys();
         return { scope: scope === null ? null : [...scope], selectedKey, viewport: viewport ? { ...viewport } : null, zoom: horizon && viewport ? horizon.count / (viewport.end - viewport.start) : 1,
-          counts: layout?.counts || {}, entries, layout, focusKeys: focused ? [...focused] : null, previousViewport: previousViewport ? { ...previousViewport } : null,
+          counts: layout?.counts || {}, entries, layout, labelMode, labelLayout, windowsVisible, seasonalWindows, windowMatches: Object.fromEntries(entries.map((entry) => [entry.key, targetMatches(entry.period)])), hoveredCategoryId, sourcePulseKey: selectionWave.hidden ? null : selectionWave.dataset.productKey, focusKeys: focused ? [...focused] : null, previousViewport: previousViewport ? { ...previousViewport } : null,
           ring: ringState ? { ...ringState.geometry, open: true, page: ringState.page, pageSize: ringState.pageSize, radius: ringState.radius, activeKey: ringState.activeKey, selectedKey: ringState.selectedKey, animationDuration: ringState.animationDuration, staggerMs: RING_STAGGER_MS, motionMs: RING_MOTION_MS, memberKeys: ringState.entries.map((entry) => entry.key) } : { open: false } };
       },
-      destroy() { destroyed = true; clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); resize.disconnect(); abort.abort(); shell.remove(); },
+      destroy() { destroyed = true; clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); abort.abort(); shell.remove(); },
     });
   }
 

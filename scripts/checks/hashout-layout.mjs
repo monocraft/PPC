@@ -156,6 +156,155 @@ assert.equal(duplicates.length, 2, 'Duplicate category/product identities are co
 assert.equal(duplicates.duplicates.length, 1, 'Duplicate identity evidence remains available for review.');
 assert.equal(model.layout(duplicates, horizon, options).counts.identityIssues, 1, 'A source row lacking ID remains visible with an identity review flag.');
 
+function measuredLabels(map, dimensions = {}) {
+  return map.lanes.flatMap(lane => lane.glyphs.flatMap(glyph => glyph.members.map(member => ({ key: member.key,
+    categoryId: lane.categoryId, anchorX: member.type === 'point' ? member.centerX : member.x + member.width / 2,
+    anchorY: glyph.centerY, width: dimensions.width ?? 156, height: dimensions.height ?? 27,
+    markerRadius: glyph.type === 'group' ? glyph.badgeRadius : glyph.radius }))));
+}
+function labelAccounting(map, result) {
+  assert.equal(result.hiddenCount + result.labels.length, result.lanes.reduce((sum, lane) => sum + lane.total, 0));
+  for (const label of result.labels) {
+    const lane = map.lanes.find(item => item.categoryId === label.categoryId);
+    assert.ok(map.entriesByKey.has(label.key), 'Every overlay label retains a real source identity.');
+    assert.ok(label.x >= map.leftWidth + 4 - 1e-7 && label.x + label.width <= map.width - 4 + 1e-7, 'Labels fit the current plot width.');
+    assert.ok(label.y >= lane.y + 4 - 1e-7 && label.y + label.height <= lane.y + lane.height - 4 + 1e-7, 'Labels stay within their category lane.');
+  }
+  if (result.mode === 'default') for (let i = 0; i < result.labels.length; i++) for (let j = i + 1; j < result.labels.length; j++) {
+    const a = result.labels[i], b = result.labels[j];
+    assert.ok(a.x + a.width + 6 <= b.x + 1e-7 || b.x + b.width + 6 <= a.x + 1e-7 || a.y + a.height + 6 <= b.y + 1e-7 || b.y + b.height + 6 <= a.y + 1e-7,
+      'Automatic overlay rectangles never collide, including their reading gap.');
+  }
+}
+const sparseLabels = measuredLabels(individual);
+const sparseOverlay = model.labels(individual, sparseLabels);
+assert.equal(sparseOverlay.mode, 'default');
+assert.equal(sparseOverlay.labels.length, 3, 'Sparse point and quarter labels appear automatically, including horizon edges.');
+labelAccounting(individual, sparseOverlay);
+assert.deepEqual(model.labels(individual, [...sparseLabels].reverse()), sparseOverlay, 'Automatic placement is stable independently of incoming label order.');
+assert.equal(model.labels(individual, sparseLabels, { mode: 'off' }).labels.length, 0, 'Off hides every name/date overlay even when there is abundant space.');
+assert.equal(model.labels(individual, sparseLabels, { mode: 'on' }).labels.length, 3);
+
+const spaciousGrouped = model.layout(model.project(mixed), horizon, { ...options, maxLaneHeight: 550 });
+assert.equal(spaciousGrouped.glyphs.length, 1, 'Label placement keeps the existing compact count grouping.');
+const beforeGroupedLabels = JSON.stringify(spaciousGrouped.glyphs), beforeMeasurements = measuredLabels(spaciousGrouped);
+const groupedOverlay = model.labels(spaciousGrouped, beforeMeasurements);
+assert.equal(groupedOverlay.labels.length, 3, 'A few grouped products can each have their own name/date label when the selected category has room.');
+assert.deepEqual(new Set(groupedOverlay.labels.map(label => label.key)), new Set(spaciousGrouped.glyphs[0].memberKeys));
+labelAccounting(spaciousGrouped, groupedOverlay);
+for (const label of groupedOverlay.labels) {
+  const originalLabel = beforeMeasurements.find(candidate => candidate.key === label.key);
+  same(label.anchorX, originalLabel.anchorX, 'Annotating a grouped member retains its exact FFS anchor');
+  same(label.anchorY, originalLabel.anchorY, 'Annotating a grouped member retains its lane position');
+}
+assert.equal(JSON.stringify(spaciousGrouped.glyphs), beforeGroupedLabels, 'Labels cannot change FFS points, windows, brackets, counts, or ring origins.');
+
+const denseLabels = measuredLabels(dense);
+assert.equal(model.labels(dense, denseLabels).labels.length, 0, 'Default suppresses the entire dense lane when any product label cannot fit.');
+const forcedDense = model.labels(dense, denseLabels, { mode: 'on' });
+assert.equal(forcedDense.labels.length, 100, 'Explicit On overrides automatic suppression and includes every coincident product.');
+assert.ok(forcedDense.lanes[0].forcedCount > 0, 'Unavoidable overlap is limited to the explicit On override.');
+assert.equal(forcedDense.hiddenCount, 0);
+labelAccounting(dense, forcedDense);
+const independentPortfolio = { categories: [category('spacious', [product('one', '2027-06-15')]), ...densePortfolio.categories] };
+const independentMap = model.layout(model.project(independentPortfolio), horizon, { ...options, maxLaneHeight: 550 });
+const independentOverlay = model.labels(independentMap, measuredLabels(independentMap));
+assert.deepEqual(independentOverlay.labels.map(label => independentMap.entriesByKey.get(label.key).categoryId), ['spacious'],
+  'Automatic density decisions are independent for each category.');
+assert.equal(independentOverlay.lanes.find(lane => lane.categoryId === 'dense').enabled, false);
+labelAccounting(independentMap, independentOverlay);
+const shortLabelMap = model.layout(model.project(separated), horizon, { ...options, height: 62, headerHeight: 42 });
+assert.equal(model.labels(shortLabelMap, measuredLabels(shortLabelMap)).labels.length, 0, 'A short category never clips or squeezes automatic labels.');
+const sparseFiftyMap = model.layout(model.project({ categories: [category('fifty', [product('first', '2028-01-15'), product('last', '2033-06-12')])] }), horizon,
+  { width: 651, height: 96, leftWidth: 112, headerHeight: 46, maxLaneHeight: 50 });
+const sparseFiftyLabels = measuredLabels(sparseFiftyMap, { width: 100 });
+assert.ok(sparseFiftyMap.glyphs.every(glyph => glyph.radius === 4.5), 'This regression exercises normal point marker clearance.');
+const sparseFiftyOverlay = model.labels(sparseFiftyMap, sparseFiftyLabels);
+assert.equal(sparseFiftyOverlay.labels.length, 2, 'A sparse 50px category supports full-height adjacent labels even when track centers sit near its top edge.');
+labelAccounting(sparseFiftyMap, sparseFiftyOverlay);
+for (const label of sparseFiftyOverlay.labels) {
+  const marker = sparseFiftyMap.glyphs.find(glyph => glyph.memberKeys.includes(label.key));
+  assert.ok(label.x >= marker.centerX + marker.radius + 4 + 5 || label.x + label.width <= marker.centerX - marker.radius - 4 - 5,
+    'The small vertical correction never compromises the full marker halo and label clearance.');
+  same(label.anchorY, marker.centerY, 'Only the annotation moves inside the lane; its marker anchor remains exact');
+}
+const narrowLabelMap = model.layout(model.project(separated), horizon, { width: 390, height: 350, leftWidth: 112, headerHeight: 42, maxLaneHeight: 350 });
+const narrowOverlay = model.labels(narrowLabelMap, measuredLabels(narrowLabelMap, { width: 112 }));
+labelAccounting(narrowLabelMap, narrowOverlay);
+const narrowImpossible = model.labels(narrowLabelMap, measuredLabels(narrowLabelMap, { width: 500 }));
+assert.equal(narrowImpossible.labels.length, 0, 'Measured labels wider than the viewport cannot leak into adjacent columns in Default.');
+const invalidLabels = [...sparseLabels, { ...sparseLabels[0] }, { ...sparseLabels[0], key: 'not-a-source-product' }];
+assert.equal(model.labels(individual, invalidLabels).labels.length, 3, 'Duplicate measurements or unknown identities cannot create phantom products.');
+assert.equal(model.labels(individual, []).labels.length, 0);
+assert.equal(JSON.stringify(portfolio), original, 'All overlay modes leave the source working names and FFS evidence unchanged.');
+
+const annualWindows = model.seasonalWindows(horizon);
+assert.equal(annualWindows.length, 20, 'The ten-year horizon repeats both shared FFS planning months each year.');
+assert.deepEqual(annualWindows.slice(0, 2).map(window => [window.season, window.type, window.startMonth, window.endMonth]),
+  [['spring', 'ffs', 2026 * 12 + 1, 2026 * 12 + 2], ['fall', 'ffs', 2026 * 12 + 6, 2026 * 12 + 7]],
+  'Spring and Fall FFS guides are exactly February and July, using an exclusive month end.');
+assert.equal(annualWindows.find(window => window.year === 2028 && window.season === 'spring').end, '2028-02-29', 'February guides retain leap day.');
+assert.equal(annualWindows[0].end, '2026-02-28');
+assert.ok(Object.isFrozen(annualWindows) && annualWindows.every(Object.isFrozen), 'Calendar guides are immutable view data.');
+assert.deepEqual(model.seasonalWindows(horizon), annualWindows, 'Annual planning guides are deterministic.');
+const contextualWindows = model.seasonalWindows(horizon, { context: true });
+assert.equal(contextualWindows.length, 40);
+assert.deepEqual(contextualWindows.slice(0, 4).map(window => [window.season, window.type, window.start.slice(5, 7)]),
+  [['spring', 'ffs', '02'], ['spring', 'on-shelf', '05'], ['fall', 'ffs', '07'], ['fall', 'on-shelf', '10']],
+  'Optional May/October on-shelf context is distinct from the FFS placement months.');
+assert.equal(contextualWindows[0].onShelfMonth, 2026 * 12 + 4, 'A February FFS guide points to the ideal May on-shelf month in the same year.');
+assert.equal(contextualWindows[0].onShelfLabel, 'May 2026');
+assert.equal(contextualWindows[2].onShelfMonth, 2026 * 12 + 9, 'A July FFS guide points to the ideal October on-shelf month in the same year.');
+assert.equal(contextualWindows[2].onShelfLabel, 'Oct 2026');
+assert.ok(contextualWindows.filter(window => window.type === 'ffs').every(window => window.onShelfMonth - window.startMonth === 3),
+  'Every shared FFS guide keeps its three-month seasonal planning relationship without declaring product readiness.');
+const crossingYear = { start: 2027 * 12 + 11, end: 2028 * 12 + 1, count: 3 };
+const crossYearWindows = model.seasonalWindows(crossingYear, { context: true });
+assert.equal(crossYearWindows.length, 1, 'A December-through-February horizon does not invent a December season or leak neighboring years.');
+assert.equal(crossYearWindows[0].start, '2028-02-01');
+assert.equal(crossYearWindows[0].end, '2028-02-29');
+const clippedSeason = model.seasonalWindows(horizon, { viewportStart: 2028 * 12 + 1.25, viewportEnd: 2028 * 12 + 1.75 });
+assert.equal(clippedSeason.length, 1);
+same(clippedSeason[0].displayStart, 2028 * 12 + 1.25, 'A partially visible month begins at the actual fractional viewport bound');
+same(clippedSeason[0].displayEnd, 2028 * 12 + 1.75, 'A partially visible month ends at the actual fractional viewport bound');
+assert.equal(clippedSeason[0].start, '2028-02-01', 'Visual clipping cannot narrow the calendar window used for matching.');
+assert.equal(clippedSeason[0].end, '2028-02-29');
+assert.equal(model.seasonalWindows({ start: horizon.start, end: horizon.end, count: 2 }).length, 0, 'Malformed horizons have no planning guides.');
+assert.equal(model.seasonalWindows(horizon, { viewportStart: horizon.end + 1, viewportEnd: horizon.end + 2 }).length, 0);
+assert.equal(model.seasonalWindows(horizon, { viewportStart: 10, viewportEnd: 5 }).length, 0);
+
+const leapMatch = model.windowMatches(ffs.period(product('leap', '2028-02-29')), annualWindows);
+assert.equal(leapMatch.length, 1);
+assert.equal(leapMatch[0].match, 'within', 'A day-precision FFS can be identified as falling within the key month.');
+assert.equal(leapMatch[0].overlapStart, '2028-02-29');
+assert.equal(leapMatch[0].overlapEnd, '2028-02-29');
+assert.equal(model.windowMatches(ffs.period(product('next-day', '2028-03-01')), annualWindows).length, 0, 'An adjacent month never matches a February guide.');
+const exactMonthMatch = model.windowMatches({ start: '2028-07-01', end: '2028-07-31', precision: 'month' }, annualWindows);
+assert.equal(exactMonthMatch[0].season, 'fall');
+assert.equal(exactMonthMatch[0].match, 'within');
+const broadQuarter = model.windowMatches(ffs.period(quarter('q1', 'Q1 2028')), annualWindows);
+assert.equal(broadQuarter.length, 1);
+assert.equal(broadQuarter[0].match, 'overlap', 'Quarter precision reports possible overlap, never a firm February commitment.');
+assert.equal(broadQuarter[0].overlapStart, '2028-02-01');
+assert.equal(broadQuarter[0].overlapEnd, '2028-02-29');
+const broadYear = model.windowMatches({ start: '2028-01-01', end: '2028-12-31', precision: 'year' }, contextualWindows);
+assert.equal(broadYear.length, 2);
+assert.ok(broadYear.every(match => match.match === 'overlap' && match.type === 'ffs'), 'Year precision only overlaps FFS guides and never claims an on-shelf date.');
+assert.equal(model.windowMatches(ffs.period(product('may', '2028-05-15')), annualWindows).length, 0, 'On-shelf months do not become FFS windows.');
+assert.equal(model.windowMatches(ffs.period(product('may', '2028-05-15')), contextualWindows).length, 0,
+  'A May FFS cannot match the ideal Spring on-shelf context or imply that product will be on shelves in May.');
+assert.equal(model.windowMatches(ffs.period(product('october', '2028-10-15')), contextualWindows).length, 0,
+  'An October FFS cannot match the ideal Fall on-shelf context.');
+assert.equal(model.windowMatches({ generalAvailabilityDate: '2028-02-12', endOfManufacturingDate: '2028-07-01' }, annualWindows).length, 0,
+  'Calendar matching cannot substitute GA or EM for missing FFS evidence.');
+assert.equal(model.windowMatches(null, annualWindows).length, 0);
+assert.equal(model.windowMatches({ start: '2027-02-29', end: '2027-02-29', precision: 'day' }, annualWindows).length, 0, 'Invalid calendar days cannot match a guide.');
+assert.equal(model.windowMatches({ start: '2028-07-01', end: '2028-02-01', precision: 'range' }, annualWindows).length, 0);
+const matchingPeriod = Object.freeze(ffs.period(quarter('immutable-q1', 'Q1 2028')));
+const beforeSeasonMatch = JSON.stringify({ horizon, annualWindows, matchingPeriod });
+assert.equal(model.windowMatches(matchingPeriod, annualWindows)[0].match, 'overlap');
+assert.equal(JSON.stringify({ horizon, annualWindows, matchingPeriod }), beforeSeasonMatch, 'Matching never mutates source periods, calendar guides, or horizon settings.');
+
 function radialAccounting(result, dimensions) {
   assert.deepEqual(result.center, result.anchor, 'Every expansion remains at the exact original cluster origin.');
   assert.equal(result.connector, null, 'An anchored expansion never adds lines or a relocated center.');
@@ -245,4 +394,4 @@ assert.equal(model.radialLayout(0, radialDimensions).capacity, 0);
 assert.deepEqual(model.radial({ x: 730, y: 325 }, { ...radialDimensions, total: 100 }).positions, centeredOrbit.positions, 'Both agreed renderer entry points use identical geometry.');
 assert.equal(JSON.stringify(full.glyphs), unchangedDateGlyphs, 'An in-place radial picker cannot move map dates, brackets, or members.');
 
-console.log('Hashout category layout checks passed (240 products, exact FFS, one-page lanes, exact-origin compact rings, bounded sectors, paging and identity accounting).');
+console.log('Hashout category layout checks passed (240 products, exact FFS, collision-aware name/date overlays, explicit On/Off, exact-origin compact rings, paging and identity accounting).');

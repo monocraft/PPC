@@ -68,6 +68,41 @@ const blocked = runtime.preferences({ key: "blocked", storage() { throw new Erro
 assert.equal(blocked.set("audio", { productZoom: .8, roadmapZoom: .5 }), true);
 assert.equal(blocked.get("audio").productZoom, .8);
 
+// Top-level navigation is synchronous so refreshing before the portfolio save
+// debounce preserves Hashout/Lifecycle/Products without storing working data.
+const navKey = "test-navigation", nav = runtime.navigation({ key: navKey, storage: () => store });
+assert.equal(nav.get(), null, "A fresh browser retains the app's normal initial view.");
+for (const choice of [
+  { view: "roadmap", basis: "ffs", detailsOpen: false },
+  { view: "roadmap", basis: "lifecycle", detailsOpen: true },
+  { view: "products", basis: "ffs", detailsOpen: false },
+]) {
+  assert.equal(nav.set({ ...choice, products: [{ name: "Private working product" }], selectedId: "private-id" }), true);
+  assert.deepEqual(plain(JSON.parse(storage.get(navKey))), { version: 1, ...choice }, "A view switch writes only small validated navigation fields immediately.");
+  assert.deepEqual(plain(runtime.navigation({ key: navKey, storage: () => store }).get()), choice, "Reload restores the exact selected view and roadmap basis.");
+}
+assert.ok(storage.get(navKey).length < 128);
+const navSnapshot = nav.get(); navSnapshot.view = "roadmap";
+assert.equal(nav.get().view, "products", "Consumers cannot mutate the stored preference through get().");
+const savedNav = storage.get(navKey);
+for (const invalid of [null, [], {}, { view: "split", basis: "ffs", detailsOpen: false }, { view: "roadmap", basis: "unknown", detailsOpen: false },
+  { view: "roadmap", basis: "ffs", detailsOpen: "false" }, { view: "roadmap", basis: "ffs" }]) {
+  assert.equal(nav.set(invalid), false); assert.equal(storage.get(navKey), savedNav, "Invalid navigation cannot overwrite the last valid preference.");
+}
+for (const raw of ["{", "x".repeat(4097), JSON.stringify({ version: 2, view: "roadmap", basis: "ffs", detailsOpen: false }),
+  JSON.stringify({ version: 1, view: "roadmap", basis: "bad", detailsOpen: false }),
+  JSON.stringify({ version: 1, view: "roadmap", basis: "ffs", detailsOpen: "true" }),
+  JSON.stringify({ version: 1, view: "roadmap", basis: "ffs", detailsOpen: false, extra: "é".repeat(2100) })]) {
+  assert.equal(runtime.navigation({ key: "bad-nav", storage: () => ({ getItem: () => raw }) }).get(), null, "Corrupt, oversized, and unsupported navigation is ignored.");
+}
+const blockedNav = runtime.navigation({ key: "blocked-nav", storage() { throw new Error("storage denied"); } });
+assert.equal(blockedNav.get(), null);
+assert.equal(blockedNav.set({ view: "roadmap", basis: "ffs", detailsOpen: false }), true);
+assert.deepEqual(plain(blockedNav.get()), { view: "roadmap", basis: "ffs", detailsOpen: false }, "Blocked browser storage does not interrupt ordinary view navigation.");
+const failingNav = runtime.navigation({ key: "failing-nav", storage: { getItem() { throw new Error("read denied"); }, setItem() { throw new Error("quota"); } } });
+assert.equal(failingNav.get(), null); assert.equal(failingNav.set({ view: "products", basis: "lifecycle", detailsOpen: true }), true);
+assert.equal(runtime.navigation().get(), null); assert.equal(runtime.navigation().set({ view: "products", basis: "lifecycle", detailsOpen: true }), false);
+
 // Real app activation restores each independent category scale before deciding Fit.
 const categories = ["audio", "mics", "new"].map(id => ({ id, board: { products: [{ id: `${id}-one` }], lanes: [] } }));
 const categoryData = { categories, activeCategoryId: "audio", metadata: { preserve: true } };
