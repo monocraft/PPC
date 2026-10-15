@@ -11,13 +11,26 @@
   if (!tabs.length || !retail || !blueprint || !frame) return;
   const views = new Set(['overview','performance','products','investment','scenarios','source']);
   const scopeKeys = ['groupId','projectId','skuId'];
-  const privatePreferences = [...scopeKeys,'compare'];
+  const privatePreferences = [...scopeKeys,'compare','workspace'];
   const preferences = ['year','category','revenue','margin','spend','scale',...privatePreferences];
   const validScopeId = value => typeof value === 'string' && value.length <= 240 && !/[\u0000-\u001f\u007f]/.test(value);
   function comparisonPreference(value) {
     if (typeof value !== 'string' || value.length > 12000) return null;
     try { const ids = JSON.parse(value); return Array.isArray(ids) && ids.length <= 50 && ids.every(id => validScopeId(id) && id.length > 0) ? JSON.stringify([...new Set(ids)]) : null; }
     catch (_) { return null; }
+  }
+  function workspacePreference(value){
+    if(typeof value!=='string'||value.length>2000)return null;
+    try{const input=JSON.parse(value),result={};if(!input||typeof input!=='object'||Array.isArray(input))return null;
+      if(Array.isArray(input.metrics)&&input.metrics.length&&input.metrics.length<=4&&input.metrics.every(key=>['revenue','units','grossProfit','budget'].includes(key)))result.metrics=[...new Set(input.metrics)];
+      if(Array.isArray(input.connectivity)&&input.connectivity.length&&input.connectivity.length<=5&&input.connectivity.every(key=>['all','wired','wireless','both','unclassified'].includes(key)))result.connectivity=[...new Set(input.connectivity)];
+      if(['name','connectivity','revenue','grossProfit','grossMargin','units','budget'].includes(input.productSort))result.productSort=input.productSort;
+      if(['asc','desc'].includes(input.sortDirection))result.sortDirection=input.sortDirection;
+      if([null,'insights','decisions','scenarios','evidence','source'].includes(input.overlay))result.overlay=input.overlay;
+      if(typeof input.scenarioEnabled==='boolean')result.scenarioEnabled=input.scenarioEnabled;
+      if(/^\d{4}$/.test(String(input.scenarioStart)))result.scenarioStart=String(input.scenarioStart);
+      return JSON.stringify(result);
+    }catch(_){return null;}
   }
   const bounds = { revenue: [-30,30], margin: [-10,10], spend: [-30,30] };
   const blueprintState = { view: 'overview' };
@@ -38,6 +51,7 @@
       if (key === 'category' && value.length <= 1200 && !/[\u0000-\u001f\u007f]/.test(value)) blueprintState[key] = value;
       else if (scopeKeys.includes(key) && validScopeId(value)) blueprintState[key] = value;
       else if (key === 'compare' && comparisonPreference(value) !== null) blueprintState.compare = comparisonPreference(value);
+      else if (key === 'workspace' && workspacePreference(value) !== null) blueprintState.workspace = workspacePreference(value);
       else if (key === 'scale' && ['trend','values'].includes(value)) blueprintState.scale = value;
       else if (key === 'year' && /^\d{4}$/.test(value)) blueprintState[key] = value;
       else if (bounds[key] && Number.isFinite(Number(value))) blueprintState[key] = String(Math.max(bounds[key][0], Math.min(bounds[key][1], Number(value))));
@@ -105,6 +119,7 @@
   }
   function showBlueprintView(view, push = true) {
     if (!views.has(view)) return;
+    if(view==='performance'&&blueprintState.workspace){try{blueprintState.workspace=JSON.stringify({...JSON.parse(blueprintState.workspace),overlay:null});}catch(_){}}
     blueprintState.view = view;
     if (currentModule !== 'blueprint') switchModule('blueprint', false);
     post(navigationMessage(view));
@@ -133,6 +148,7 @@
     }
     const comparison = comparisonPreference(state.compare);
     if (comparison !== null) blueprintState.compare = comparison;
+    const workspace=workspacePreference(state.workspace);if(workspace!==null)blueprintState.workspace=workspace;
     for (const key of Object.keys(bounds)) {
       const value = state[key];
       if (typeof value === 'number' && Number.isFinite(value) && value >= bounds[key][0] && value <= bounds[key][1]) blueprintState[key] = String(value);

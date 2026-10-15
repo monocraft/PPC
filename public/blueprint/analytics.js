@@ -40,7 +40,7 @@
     const productSourceRows=rows('Cat_View');
     const periods=[...new Set(Object.keys(productSourceRows[0]||{}).map(k=>k.match(/^(\d{4}) Rev$/)?.[1]).filter(Boolean).map(Number))].sort((a,b)=>a-b);
     const products = productSourceRows.filter(r => r.GroupName && r.Category !== 'Total').map((r, index) => {
-      const p = { id:'product-'+r._row, name:r.GroupName, groupName:r.GroupName, family:r.Family, category:canonical(r.Category), subcategory:r.Subcategory, codeName:r.CodeName, segment:r.Segment, connectivity:r.Connectivity, launchYear:r.LaunchYear, eolYear:r.EOLYear, status:null, revenueByYear:{}, gmByYear:{}, unitsByYear:{}, sourceByYear:{}, source:[source('Cat_View','D'+r._row)] };
+      const p = { id:'product-'+r._row, name:r.GroupName, groupName:r.GroupName, family:r.Family, category:canonical(r.Category), subcategory:r.Subcategory, codeName:r.CodeName, segment:r.Segment, connectivity:r.Connectivity, connectivitySource:[r._sources.Connectivity], launchYear:r.LaunchYear, eolYear:r.EOLYear, status:null, revenueByYear:{}, gmByYear:{}, unitsByYear:{}, sourceByYear:{}, source:[source('Cat_View','D'+r._row)] };
       for (const year of periods) {
         p.revenueByYear[year] = r[year+' Rev']; p.gmByYear[year] = r[year+' GM$']; p.unitsByYear[year] = r[year+' units'];
         p.sourceByYear[year] = { revenue:[r._sources[year+' Rev']], grossProfit:[r._sources[year+' GM$']], units:[r._sources[year+' units']], grossMargin:[r._sources[year+' GM%']] };
@@ -61,7 +61,7 @@
       for (const [measure, col] of Object.entries(block)) { record[measure]=value('Dashboard',col+row); record.source[measure]=[source('Dashboard',col+row)]; }
       published.push(record);
     }
-    const investments = rows('Budget_UnPivot').filter(r => r.Budget_Key).map(r => ({ id:'spend-'+r._row, productId:r.Budget_Key, name:r.GroupName, codeName:r.CodeName, category:canonical(r.Category), subcategory:r.Subcategory, period:r.FY, quarter:r.FQ, amount:r['Spend$'], type:r.SpendType, group:r.SpendGroup, source:[r._sources['Spend$'],r._sources.SpendQ] }));
+    const investments = rows('Budget_UnPivot').filter(r => r.Budget_Key).map(r => ({ id:'spend-'+r._row, productId:r.Budget_Key, name:r.GroupName, codeName:r.CodeName, category:canonical(r.Category), subcategory:r.Subcategory, connectivity:r.Connectivity, connectivitySource:[r._sources.Connectivity], period:r.FY, quarter:r.FQ, amount:r['Spend$'], type:r.SpendType, group:r.SpendGroup, source:[r._sources['Spend$'],r._sources.SpendQ] }));
     const projects=context.filter(r=>r.Budget_Key).map(r=>({id:String(r.Budget_Key),name:r.GroupName,category:canonical(r.Category),codeName:r.CodeName,launchYear:r['Launch Year'],status:r.Status,productName:r.ProductName,source:[r._sources.Budget_Key,r._sources.GroupName,r._sources.Category]}));
     const npiSkuRecords=rows('NPI_Tracker_All').filter(r=>r.Budget_Key_Base&&r['Part Number']).map(r=>({id:'npi-source-'+r._row,projectId:String(r.Budget_Key_Base),skuId:String(r['Part Number']),name:r['Product Name']||String(r['Part Number']),groupName:r['Group Name'],category:canonical(r.Category),codeName:r.CodeName,launchYear:r.LaunchYear,period:r.FY,quarter:Number(String(r.FQ||'').match(/Q([1-4])/i)?.[1])||null,revenue:r.NetRev,grossProfit:r['GM$'],units:r.Units,cost:r.TotalCOS,basis:'Unclassified source tracker record',source:[r._sources.NetRev],sourceByMetric:{revenue:[r._sources.NetRev],grossProfit:[r._sources['GM$']],units:[r._sources.Units],cost:[r._sources.TotalCOS]}}));
     const prelaunchCases=rows('RND_PreLaunch_All').filter(r=>r.Budget_key).map(r=>({id:String(r.Budget_key),projectId:String(r.Budget_key),name:r.GroupName,category:canonical(r.SubCategory),launchYear:r.LaunchYear,revenue:r.Rev_12M,grossProfit:r['GM$_12M'],units:r.Units_12M,launchYearRevenue:r['LaunchYear Rev'],launchYearGrossProfit:r['LaunchYear GM$'],launchYearUnits:r['LaunchYear Units'],basis:'Current 12-month source plan; no locked estimate vintage',source:[r._sources.Budget_key,r._sources.Rev_12M,r._sources['GM$_12M'],r._sources.Units_12M],sourceByMetric:{revenue:[r._sources['LaunchYear Rev']],grossProfit:[r._sources['LaunchYear GM$']],units:[r._sources['LaunchYear Units']]}}));
@@ -113,15 +113,20 @@
   };
   const periodOf=(options={})=>Number(options.period||2026);
   const identity=value=>String(value??'').replace(/\u00a0/g,' ').trim().toLowerCase();
-  function drilldown(options={}) {
-    const d=data()||{},period=periodOf(options),category=categoryOf(options),products=d.products||[];
-    const needsReimport=d.sourceGrainVersion!==2||!Array.isArray(d.projects)||!Array.isArray(d.npiSkuRecords);
-    const groupKey=record=>canonical(record.category)+'|'+identity(record.name||record.groupName);
-    const groupIndex=new Map(),projectIndex=new Map();
-    for(const p of products){const key=groupKey(p);if(!groupIndex.has(key))groupIndex.set(key,[]);groupIndex.get(key).push(p);}
-    for(const p of d.projects||[]){const key=identity(p.id);if(!key)continue;if(!projectIndex.has(key))projectIndex.set(key,[]);projectIndex.get(key).push(p);}
-    const recordIndex=new Map();
-    for(const r of d.npiSkuRecords||[]){const key=identity(r.projectId);if(!key)continue;if(!recordIndex.has(key))recordIndex.set(key,[]);recordIndex.get(key).push(r);}
+  const drillCaches=new WeakMap();
+  const drillArrays=['products','projects','npiSkuRecords','investments','prelaunchCases','npiValues'];
+  const groupKey=record=>canonical(record.category)+'|'+identity(record.name||record.groupName);
+  function drillIndex(d) {
+    const previous=drillCaches.get(d);
+    if(previous&&drillArrays.every((key,index)=>previous.refs[index]===d[key]&&previous.lengths[index]===(d[key]?.length||0)))return previous;
+    const groupIndex=new Map(),projectIndex=new Map(),recordIndex=new Map(),investmentIndex=new Map(),planIndex=new Map(),caseIndex=new Map();
+    const append=(map,key,record)=>{if(!key)return;if(!map.has(key))map.set(key,[]);map.get(key).push(record);};
+    for(const p of d.products||[])append(groupIndex,groupKey(p),p);
+    for(const p of d.projects||[])append(projectIndex,identity(p.id),p);
+    for(const r of d.npiSkuRecords||[])append(recordIndex,identity(r.projectId),r);
+    for(const r of d.investments||[])append(investmentIndex,identity(r.productId),r);
+    for(const r of d.prelaunchCases||[])append(planIndex,identity(r.projectId||r.id),r);
+    for(const r of d.npiValues||[])append(caseIndex,identity(r.id),r);
     const nodes=[...new Set([...projectIndex.keys(),...recordIndex.keys()])].map(key=>{
       const definitions=projectIndex.get(key)||[],records=recordIndex.get(key)||[],first=definitions[0];
       const signatures=new Set(definitions.map(p=>[groupKey(p),identity(p.codeName),String(p.launchYear??'')].join('|')));
@@ -130,8 +135,21 @@
       const ambiguous=signatures.size>1||groups.length>1||Boolean(recordConflict),mapped=definitions.length>0&&!ambiguous&&groups.length===1;
       return {key,id:first?.id||records[0]?.projectId,name:first?.name||records[0]?.groupName||records[0]?.projectId,category:canonical(first?.category||records[0]?.category),groupId:mapped?groups[0].id:'source-unmapped',mapped,ambiguous,records,definitions};
     });
+    const nodeIndex=new Map(nodes.map(node=>[node.key,node])),groupInvestments=new Map();
+    // Preserve the source row order, including signed values and evidence order.
+    for(const record of d.investments||[]){const node=nodeIndex.get(identity(record.productId));if(node?.mapped)append(groupInvestments,node.groupId,record);}
+    const cached={refs:drillArrays.map(key=>d[key]),lengths:drillArrays.map(key=>d[key]?.length||0),nodes,nodeIndex,investmentIndex,groupInvestments,planIndex,caseIndex};
+    drillCaches.set(d,cached);return cached;
+  }
+  // Imported snapshots are immutable. Call this after intentional in-place
+  // metadata edits; snapshot/array replacement and row-count changes self-reset.
+  function invalidateCache(snapshot=data()) { if(snapshot&&typeof snapshot==='object')drillCaches.delete(snapshot); }
+  function drilldown(options={}) {
+    const d=data()||{},period=periodOf(options),category=categoryOf(options),products=d.products||[];
+    const needsReimport=d.sourceGrainVersion!==2||!Array.isArray(d.projects)||!Array.isArray(d.npiSkuRecords);
+    const index=drillIndex(d),nodes=index.nodes;
     const inScope=node=>selected([node],category).length>0;
-    const requestedProject=options.projectId?nodes.find(node=>node.key===identity(options.projectId)):null;
+    const requestedProject=options.projectId?index.nodeIndex.get(identity(options.projectId)):null;
     let groupId=options.groupId||requestedProject?.groupId||null,projectId=requestedProject?.id||options.projectId||null,skuId=options.skuId===undefined||options.skuId===null?null:String(options.skuId);
     const group=products.find(p=>p.id===groupId),unmapped=groupId==='source-unmapped';
     const invalidScope=Boolean((options.projectId&&!requestedProject)||(skuId&&!projectId)||(skuId&&requestedProject&&!needsReimport&&!requestedProject.records.some(r=>r.skuId===skuId))||(groupId&&!unmapped&&!group)||(requestedProject&&(!inScope(requestedProject)||(options.groupId&&requestedProject.groupId!==options.groupId)))||(group&&!selected([group],category).length));
@@ -141,25 +159,30 @@
     const records=scopedNodes.flatMap(node=>node?.records||[]).filter(r=>!skuId||r.skuId===skuId);
     if(skuId&&!records.length&&!needsReimport)groupId=groupId||'source-unmapped';
     const safeKeys=new Set(scopedNodes.filter(node=>node?.mapped).map(node=>node.key));
-    const spending=skuId?[]:(d.investments||[]).filter(r=>safeKeys.has(identity(r.productId)));
+    const spending=invalidScope||skuId?[]:projectId?(requestedProject?.mapped?index.investmentIndex.get(requestedProject.key)||[]:[]):groupId?index.groupInvestments.get(groupId)||[]:(d.investments||[]).filter(r=>safeKeys.has(identity(r.productId)));
     const validPeriod=r=>Number.isInteger(Number(r.period))&&Number(r.period)>=1900&&Number(r.period)<=2200;
     const annualRecords=records.filter(validPeriod),basis=level==='category'?'Saved portfolio/category annual source':group&&!unmapped&&!projectId?'Annual product-group source; project/SKU tracker coverage is a separate population':'Annual sum of unclassified source tracker records; no verified actual/plan flag';
+    const annualByYear=new Map(),spendingByYear=new Map(),categorySummaries=new Map();
+    for(const record of annualRecords){const year=Number(record.period);if(!annualByYear.has(year))annualByYear.set(year,[]);annualByYear.get(year).push(record);}
+    for(const record of spending){const year=Number(record.period);if(!spendingByYear.has(year))spendingByYear.set(year,[]);spendingByYear.get(year).push(record);}
+    const annualFor=year=>annualByYear.get(Number(year))||[],spendingFor=year=>Number.isNaN(Number(year))?[]:spendingByYear.get(Number(year))||[];
+    const categorySummary=year=>{const key=Number(year);if(!categorySummaries.has(key))categorySummaries.set(key,summarize({period:key,category}));return categorySummaries.get(key);};
     const sourceFor=(metric,year)=>{
       if(invalidScope)return [];
-      if(level==='category')return summarize({period:year,category}).source?.[metric]||[];
-      if(metric==='budget')return spending.filter(r=>Number(r.period)===Number(year)).flatMap(r=>r.source||[]);
+      if(level==='category')return [...(categorySummary(year).source?.[metric]||[])];
+      if(metric==='budget')return spendingFor(year).flatMap(r=>r.source||[]);
       if(metric==='grossMargin')return [...sourceFor('grossProfit',year),...sourceFor('revenue',year)];
-      return group&&!unmapped&&!projectId?scopedProducts.flatMap(p=>p.sourceByYear?.[year]?.[metric]||[]):annualRecords.filter(r=>Number(r.period)===Number(year)).flatMap(r=>r.sourceByMetric?.[metric]||r.source||[]);
+      return group&&!unmapped&&!projectId?scopedProducts.flatMap(p=>p.sourceByYear?.[year]?.[metric]||[]):annualFor(year).flatMap(r=>r.sourceByMetric?.[metric]||r.source||[]);
     };
     const valueFor=(metric,year)=>{
       if(invalidScope)return null;
-      if(level==='category')return summarize({period:year,category})[metric]??null;
+      if(level==='category')return categorySummary(year)[metric]??null;
       if(metric==='grossMargin')return ratio(valueFor('grossProfit',year),valueFor('revenue',year));
-      if(metric==='budget')return skuId?null:sum(spending.filter(r=>Number(r.period)===Number(year)).map(r=>r.amount));
+      if(metric==='budget')return skuId?null:sum(spendingFor(year).map(r=>r.amount));
       if(group&&!unmapped&&!projectId){const field={revenue:'revenueByYear',grossProfit:'gmByYear',units:'unitsByYear'}[metric];return sum(scopedProducts.map(p=>p[field]?.[year]));}
-      return sum(annualRecords.filter(r=>Number(r.period)===Number(year)).map(r=>r[metric]));
+      return sum(annualFor(year).map(r=>r[metric]));
     };
-    const planRecords=projectId&&!skuId&&requestedProject?.mapped?(d.prelaunchCases||[]).filter(r=>identity(r.projectId||r.id)===identity(projectId)&&canonical(r.category)===requestedProject.category&&identity(r.name)===identity(requestedProject.name)):[];
+    const planRecords=projectId&&!skuId&&requestedProject?.mapped?(index.planIndex.get(requestedProject.key)||[]).filter(r=>canonical(r.category)===requestedProject.category&&identity(r.name)===identity(requestedProject.name)):[];
     const plan=planRecords.length===1?planRecords[0]:null;
     const periods=[...new Set([...(d.periods||[]),...annualRecords.map(r=>Number(r.period)),...spending.filter(validPeriod).map(r=>Number(r.period)),...(plan&&Number.isInteger(Number(plan.launchYear))&&Number(plan.launchYear)>=1900&&Number(plan.launchYear)<=2200?[Number(plan.launchYear)]:[])])].sort((a,b)=>Number(a)-Number(b));
     const pointKind=year=>level==='category'||(group&&!unmapped&&!projectId)?kind(year):'unclassified';
@@ -171,17 +194,17 @@
     const reported={revenue:sum(annualRecords.map(r=>r.revenue)),grossProfit:sum(annualRecords.map(r=>r.grossProfit)),units:sum(annualRecords.map(r=>r.units)),throughPeriod:annualRecords.length?Math.max(...annualRecords.map(r=>Number(r.period))):null,basis:'Available unclassified tracker records; cumulative source coverage'};
     const sourceInvestment=skuId?null:sum(spending.map(r=>r.amount));
     const plan12M=plan?{revenue:plan.revenue??null,grossProfit:plan.grossProfit??null,units:plan.units??null,grossMargin:ratio(plan.grossProfit,plan.revenue),basis:plan.basis||'Current 12-month source plan; no locked estimate vintage',source:plan.source||[]}:null;
-    const cachedCases=projectId&&!skuId&&requestedProject?.mapped?(d.npiValues||[]).filter(r=>identity(r.id)===identity(projectId)):[];
+    const cachedCases=projectId&&!skuId&&requestedProject?.mapped?index.caseIndex.get(requestedProject.key)||[]:[];
     const sourceCase=cachedCases.length===1?cachedCases[0]:null;
     const coverage={needsReimport,sourceGrainVersion:d.sourceGrainVersion||1,sourceRows:records.length,reportedRowCount:numericRecords.length,missingPeriodRows:records.length-annualRecords.length,skuCount:new Set(records.map(r=>r.skuId)).size,matchedProjectCount:scopedNodes.filter(n=>n?.mapped).length,unmappedProjectCount:scopedNodes.filter(n=>!n?.mapped).length,ambiguousProjectCount:scopedNodes.filter(n=>n?.ambiguous).length,estimateAvailable:Boolean(plan12M),comparableEstimate:false,investmentAllocatedToSku:false,invalidScope};
     const reason=skuId?'The source has no SKU-level investment or estimate allocation.':plan12M&&numericRecords.length?'The current plan has no locked estimate vintage or verified matching actual horizon.':plan12M?'No numeric reported tracker results are available for this planned project.':'No matching project estimate is supplied for these reported records.';
-    const economics={sourceInvestment,periodInvestment:valueFor('budget',period),investmentBasis:'Source PD investment across source years; archive/manual/estimated schedule, not verified actual cash spend',investmentSource:spending.flatMap(r=>r.source||[]),reportedRevenue:reported.revenue,reportedGrossProfit:reported.grossProfit,sourceReturnMultiple:finite(sourceCase?.roi)?sourceCase.roi:null,returnBasis:'Saved source annualized 12-month gross profit / source PD investment; source Actuals status is unverified',sourceReturnSource:sourceCase?.source||[],sourceCase,plan12M,reported,availability:{reported:numericRecords.length>0,estimate:Boolean(plan12M),comparable:false,reason},parentProjectInvestment:skuId&&requestedProject?.mapped?sum((d.investments||[]).filter(r=>identity(r.productId)===requestedProject.key).map(r=>r.amount)):null};
-    const parentPlans=skuId&&requestedProject?.mapped?(d.prelaunchCases||[]).filter(r=>identity(r.projectId||r.id)===identity(projectId)&&canonical(r.category)===requestedProject.category&&identity(r.name)===identity(requestedProject.name)):[];
+    const economics={sourceInvestment,periodInvestment:valueFor('budget',period),investmentBasis:'Source PD investment across source years; archive/manual/estimated schedule, not verified actual cash spend',investmentSource:spending.flatMap(r=>r.source||[]),reportedRevenue:reported.revenue,reportedGrossProfit:reported.grossProfit,sourceReturnMultiple:finite(sourceCase?.roi)?sourceCase.roi:null,returnBasis:'Saved source annualized 12-month gross profit / source PD investment; source Actuals status is unverified',sourceReturnSource:sourceCase?.source||[],sourceCase,plan12M,reported,availability:{reported:numericRecords.length>0,estimate:Boolean(plan12M),comparable:false,reason},parentProjectInvestment:skuId&&requestedProject?.mapped?sum((index.investmentIndex.get(requestedProject.key)||[]).map(r=>r.amount)):null};
+    const parentPlans=skuId&&requestedProject?.mapped?(index.planIndex.get(requestedProject.key)||[]).filter(r=>canonical(r.category)===requestedProject.category&&identity(r.name)===identity(requestedProject.name)):[];
     economics.parentProjectPlan12M=parentPlans.length===1?{revenue:parentPlans[0].revenue??null,grossProfit:parentPlans[0].grossProfit??null,units:parentPlans[0].units??null,basis:'Parent project current 12-month source plan; not allocated to this SKU',source:parentPlans[0].source||[]}:null;
     const summary={period,category,kind:pointKind(period),basis,source:Object.fromEntries(['revenue','grossProfit','grossMargin','units','budget'].map(metric=>[metric,sourceFor(metric,period)])),coverage};
     for(const metric of ['revenue','grossProfit','grossMargin','units','budget'])summary[metric]=valueFor(metric,period);
-    Object.assign(summary,{rawMargin:ratio(summary.grossProfit,summary.revenue),publishedMargin:null,marginBasis:level==='category'?summarize({period,category}).marginBasis:'Scoped gross-profit dollars / scoped revenue',revenueTarget:null,target:null,tam:null,npi:sum(annualRecords.filter(r=>Number(r.period)===period).map(r=>r.revenue)),productCount:scopedProducts.length,npiCount:new Set(annualRecords.map(r=>r.projectId)).size});
-    if(level==='category')Object.assign(summary,summarize({period,category}),{basis,coverage});
+    Object.assign(summary,{rawMargin:ratio(summary.grossProfit,summary.revenue),publishedMargin:null,marginBasis:level==='category'?categorySummary(period).marginBasis:'Scoped gross-profit dollars / scoped revenue',revenueTarget:null,target:null,tam:null,npi:sum(annualFor(period).map(r=>r.revenue)),productCount:scopedProducts.length,npiCount:new Set(annualRecords.map(r=>r.projectId)).size});
+    if(level==='category')Object.assign(summary,categorySummary(period),{basis,coverage});
     const title=skuId?records[0]?.name||skuId:projectId?requestedProject?.name||String(projectId):unmapped?'Unmapped source projects':group?.name||group?.groupName||(Array.isArray(category)?category.join(' + '):category==='All'?'All categories':category);
     const scope={level,title,groupId,projectId,skuId,category};
     const breadcrumbs=[{label:Array.isArray(category)?category.join(' + '):category==='All'?'All categories':category,category,groupId:null,projectId:null,skuId:null}];
@@ -308,5 +331,5 @@
     const cancelled=options.action==='cancel';
     return data().periods.filter(y=>y>=2026).map(period=>{const baseline=product.revenueByYear[period],previous=product.revenueByYear[period-1];const value=finite(baseline)?cancelled?0:baseline*(1-fraction)+(period>2026&&finite(previous)?previous*fraction:0):null;return {period,baseline,value,delta:finite(value)&&finite(baseline)?value-baseline:null,kind:'scenario',method:'Approximate annual shift with uniform monthly allocation; no workbook fiscal timing or cost rescheduling parity'};});
   }
-  root.HX_ANALYTICS={normalizeWorkbook,summarize,series,compareSeries,compareDrillSeries,drilldown,productRows,scenario,forecast,projectScenario,canonical,sum,ratio};
+  root.HX_ANALYTICS={normalizeWorkbook,summarize,series,compareSeries,compareDrillSeries,drilldown,invalidateCache,productRows,scenario,forecast,projectScenario,canonical,sum,ratio};
 })(typeof window!=='undefined'?window:globalThis);

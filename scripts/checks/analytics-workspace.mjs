@@ -13,6 +13,9 @@ const html = await read("public/analytics.html");
 const index = await read("public/index.html");
 const hubSource = await read("public/js/analytics-workspace.js");
 const blueprintHtml = await read("public/blueprint/index.html");
+const unifiedSource = await read("public/blueprint/unified-workspace.js");
+const dashboardSource = await read("public/blueprint/dashboard.js");
+const analysisStyle = await read('public/blueprint/analysis-workspace.css');
 const workflow = await read(".github/workflows/deploy.yml");
 const versionSource = await read("scripts/configure-site-version.mjs");
 
@@ -55,6 +58,96 @@ assert.equal(frame.get("data-src"), "blueprint/index.html?embedded=1");
 assert.ok(!frame.has("src") || ["", "about:blank"].includes(frame.get("src")), "Blueprint loads only when requested.");
 assert.ok(frame.get("title"), "The embedded analysis has an accessible title.");
 assert.ok(tagById(html, "blueprintViews"), "Blueprint views remain contextual within Analytics.");
+const exposedViews = [...html.matchAll(/<button\b[^>]*data-blueprint-view\s*=\s*["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
+assert.deepEqual(exposedViews, ['performance', 'source'], 'The shell exposes one analysis canvas and its data utility, without six competing analysis pages.');
+const standaloneViews = [...blueprintHtml.matchAll(/<button\b[^>]*data-view\s*=\s*["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
+assert.deepEqual(standaloneViews, ['performance', 'source'], 'Standalone and embedded navigation expose the same small workspace.');
+assert.equal([...blueprintHtml.matchAll(/id="analysis-chart"/g)].length, 1, 'One main graph owns the analysis pane.');
+assert.ok(blueprintHtml.indexOf('id="scope-breadcrumb"') < blueprintHtml.indexOf('id="analysis-chart"'));
+assert.ok(blueprintHtml.indexOf('id="analysis-summary"') < blueprintHtml.indexOf('id="analysis-chart"'), 'Selected-year financial values stay above the graph.');
+const controlStrip = blueprintHtml.slice(blueprintHtml.indexOf('class="analysis-control-strip"'), blueprintHtml.indexOf('id="analysis-summary"'));
+assert.ok(controlStrip.includes('id="analysis-toolbar"') && controlStrip.includes('id="analysis-connectivity"'), 'Measures and connectivity share one compact control region.');
+assert.ok(blueprintHtml.indexOf('id="analysis-chart"') < blueprintHtml.indexOf('id="scope-explorer"'), 'Product choices remain below the shared graph.');
+const visibleTools = [...blueprintHtml.matchAll(/<button\b[^>]*>/gi)].map(match => attributes(match[0])).filter(attrs => attrs.has('data-analysis-tool'));
+assert.deepEqual(visibleTools.map(attrs => attrs.get('data-analysis-tool')), ['insights', 'scenarios', 'evidence'], 'The workspace exposes Insights, Scenario and Evidence without a separate Decisions destination.');
+assert.match(blueprintHtml, /<button\b[^>]*data-analysis-tool="insights"[^>]*>Insights<\/button>/, 'The visible analytical tool is named Insights.');
+for (const tool of ['insights', 'scenarios', 'evidence']) {
+  const button = [...blueprintHtml.matchAll(/<button\b[^>]*>/gi)].map(match => attributes(match[0])).find(attrs => attrs.get('data-analysis-tool') === tool);
+  assert.equal(button?.get('aria-controls'), 'analysis-overlay', `${tool} uses the same analysis overlay rather than a new page.`);
+}
+const chartDock = tagById(blueprintHtml, 'analysis-overlay');
+assert.ok(chartDock?.attrs.get('aria-labelledby'), 'Inline chart tools retain an accessible heading.');
+assert.ok(/^<aside\b/.test(chartDock.tag), 'Contextual tools are an inline chart dock rather than a dialog.');
+assert.match(chartDock.tag, /\bhidden(?:\s|>|=)/, 'The inline dock begins closed without an empty panel.');
+const graphShell = blueprintHtml.slice(blueprintHtml.indexOf('id="analysis-graph-shell"'), blueprintHtml.indexOf('id="planning-timeline"'));
+assert.ok(graphShell.includes('id="analysis-chart"') && graphShell.includes('id="analysis-overlay"'), 'The contextual tools belong to the same graph shell.');
+assert.ok(graphShell.indexOf('id="analysis-chart"') < graphShell.indexOf('id="analysis-overlay"'), 'The tool pane follows the complete chart, including its year rail.');
+assert.ok(graphShell.indexOf('id="analysis-chart"') < graphShell.indexOf('id="analysis-tool-strip"') && graphShell.indexOf('id="analysis-tool-strip"') < graphShell.indexOf('id="analysis-overlay"'), 'Insights, Scenario and Evidence sit below the chart rather than above it');
+const toolStrip = graphShell.slice(graphShell.indexOf('id="analysis-tool-strip"'), graphShell.indexOf('id="analysis-overlay"'));
+assert.equal((toolStrip.match(/data-analysis-tool=/g) || []).length, 3, 'The below-chart strip contains the three existing analysis tools exactly once');
+assert.ok(tagById(blueprintHtml, 'analysis-chart-controls') && toolStrip.includes('id="analysis-chart-controls"'), 'Pan and zoom controls have one shared mount beside the analysis tools');
+assert.doesNotMatch(blueprintHtml.slice(0, blueprintHtml.indexOf('id="analysis-chart"')), /data-analysis-tool=/, 'The top heading does not repeat the below-chart tool navigation');
+assert.ok(blueprintHtml.indexOf('id="analysis-overlay"') < blueprintHtml.indexOf('id="scope-explorer"'), 'All contextual tools open before the product choices in the same workspace flow.');
+assert.doesNotMatch(blueprintHtml, /<dialog\b[^>]*id="analysis-overlay"/, 'Analysis tools cannot revert to a floating modal workspace.');
+assert.match(blueprintHtml, /<button[^>]*id="analysis-overlay-close"[^>]*>Close<\/button>/, 'The attached analysis tools use a plain, readable close action.');
+const layoutRules = [...analysisStyle.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selectors, body]) => ({
+  selectors: selectors.split(',').map(selector => selector.trim()),
+  properties: new Map([...body.matchAll(/(?:^|;)\s*([\w-]+)\s*:\s*([^;]+)/g)].map(([, name, value]) => [name, value.trim()]))
+}));
+const shellRules = layoutRules.filter(rule => rule.selectors.some(selector => /^\.unified-analysis \.analysis-graph-shell(?:\.has-analysis-dock)?$/.test(selector)));
+assert.ok(shellRules.some(rule => rule.properties.get('position') === 'relative'), 'The graph and tools share one workspace container.');
+const closedShellRules = shellRules.filter(rule => rule.selectors.includes('.unified-analysis .analysis-graph-shell'));
+const openShellRules = shellRules.filter(rule => rule.selectors.includes('.unified-analysis .analysis-graph-shell.has-analysis-dock'));
+assert.ok(closedShellRules.some(rule => ['minmax(0,1fr)', '1fr'].includes((rule.properties.get('grid-template-columns') || '').replace(/\s+/g, ''))), 'The closed workspace keeps a single full-width graph.');
+assert.ok(openShellRules.some(rule => ['minmax(0,1fr)', '1fr'].includes((rule.properties.get('grid-template-columns') || '').replace(/\s+/g, ''))), 'Opening a tool keeps the full-width graph above a full-width bottom pane.');
+for (const rule of shellRules) {
+  const columns = rule.properties.get('grid-template-columns');
+  if (columns) assert.ok(['minmax(0,1fr)', '1fr'].includes(columns.replace(/\s+/g, '')), 'Desktop, tablet and mobile tools cannot narrow the graph with a second grid column.');
+}
+const mobileStart = analysisStyle.search(/@media\s*\(max-width:\s*720px\)/);
+assert.ok(mobileStart >= 0);
+const nextMedia = analysisStyle.indexOf('@media', mobileStart + 7), mobileStyle = analysisStyle.slice(mobileStart, nextMedia < 0 ? undefined : nextMedia);
+assert.match(mobileStyle, /\.analysis-graph-shell\.has-analysis-dock\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/, 'Small widths preserve the same full-width bottom tool arrangement.');
+assert.match(mobileStyle, /#analysis-overlay\s*\{[^}]*grid-column:\s*1\s*;/, 'The mobile tool cannot create an implicit second grid column.');
+const overlayRules = layoutRules.filter(rule => rule.selectors.includes('.unified-analysis #analysis-overlay'));
+assert.ok(overlayRules.some(rule => rule.properties.get('position') === 'relative'), 'Contextual tools expand in the workspace flow rather than floating over the graph.');
+assert.ok(overlayRules.every(rule => !rule.properties.has('position') || rule.properties.get('position') === 'relative'), 'Responsive tools stay attached and cannot become a popup.');
+assert.ok(overlayRules.some(rule => rule.properties.get('grid-column') === '1' && rule.properties.get('width') === '100%'), 'The bottom pane occupies the complete graph column.');
+assert.ok(overlayRules.some(rule => rule.properties.get('height') === 'auto' && rule.properties.get('max-height') === 'none'), 'The bottom pane grows for its tool content rather than clipping to plot height.');
+for (const rule of overlayRules) for (const [name, value] of rule.properties) {
+  assert.doesNotMatch(value, /--analysis-plot-(?:top|height)/, `${name} cannot retain a side-panel plot offset or height constraint.`);
+}
+assert.doesNotMatch(unifiedSource, /class="analysis-overlay-tabs"/, 'The three top tools are not duplicated by a second tool navigation inside the bottom pane.');
+assert.doesNotMatch(unifiedSource, /analysis-decision-(?:question|owner|notes)|data-analysis-export-brief|function exportBrief\(/, 'Insights does not retain the removed decision form or its export control.');
+const mediumInsights = /\.unified-analysis \.analysis-insights-decisions\s*\{([^}]+)\}/.exec(analysisStyle)?.[1] || '';
+assert.equal((mediumInsights.match(/minmax\(/g) || []).length, 2, 'Medium-width Insights gives contributors and economics two columns');
+assert.match(mediumInsights, /grid-template-areas:\s*"contributors movement"\s*"economics movement"/, 'At medium widths contributors lead, movement occupies the right column, and economics sits below contributors');
+assert.match(analysisStyle, /@media\s*\(min-width:\s*800px\)\s*\{[\s\S]*?\.analysis-insights-decisions\s*\{[^}]*grid-template-areas:\s*"contributors movement economics"/, 'The three full Insights sections appear in the requested order across a wide pane');
+for (const rule of layoutRules.filter(rule => rule.selectors.includes('.unified-analysis .analysis-movement-grid'))) if (rule.properties.has('grid-template-columns')) assert.equal(rule.properties.get('grid-template-columns').replace(/\s+/g, ''), 'minmax(0,1fr)', 'All four movement items stay in a single vertical list at every width');
+assert.match(analysisStyle, /\.analysis-movement-grid\s*\{[^}]*gap:\s*0\s*;/, 'Compact movement rows share one ledger without card-sized gaps');
+assert.match(analysisStyle, /\.analysis-movement-periods\s*\{[^}]*display:\s*contents\s*;/, 'Prior and current values align with the shared ledger columns');
+assert.match(analysisStyle, /@container movement\s*\(min-width:\s*520px\)\s*\{[\s\S]*?\.analysis-movement-header,\.unified-analysis \.analysis-movement-item\s*\{[^}]*grid-template-columns:\s*minmax\(76px,\.8fr\) repeat\(3,minmax\(0,1fr\)\)/, 'A wide movement ledger aligns its metric, prior, current and change columns');
+assert.match(analysisStyle, /\.analysis-movement-change > span\s*\{[^}]*display:\s*none\s*;/, 'The repeated Change word stays out of each compact row while accessible direction remains in the markup');
+assert.match(mobileStyle, /\.analysis-insights-decisions\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/, 'Mobile Insights stacks all three analysis sections in one column');
+assert.match(mobileStyle, /\.analysis-insights-decisions\s*\{[^}]*grid-template-areas:\s*"contributors"\s*"movement"\s*"economics"/, 'Mobile preserves the same contributors, movement, economics reading order');
+assert.match(analysisStyle, /\.analysis-movement-change\.is-positive strong\s*\{[^}]*color:\s*#84d6a4/, 'Positive raw changes use the calm green direction color');
+assert.match(analysisStyle, /\.analysis-movement-change\.is-negative strong\s*\{[^}]*color:\s*#f08b8d/, 'Negative raw changes use the red direction color');
+assert.match(analysisStyle, /\.analysis-movement-change strong\s*\{[^}]*color:\s*#d0d8e3/, 'Zero and unavailable changes retain a neutral value color');
+const sharedValueSize = Number(/--analysis-value-size:\s*([\d.]+)px/.exec(analysisStyle)?.[1]);
+assert.equal(sharedValueSize, 15, 'Secondary financial figures share one consistent 15px type scale');
+for (const selector of ['.analysis-controls .hx-category-tile-value', '.analysis-controls .hx-category-tile-share', '.analysis-overlay-body .detail-field strong', '.analysis-overlay-body [data-inline-point-value]', '.analysis-overlay-body .drill-economic strong', '.analysis-overlay-body input.analysis-exact-input', '.analysis-overlay-body .scenario-comparison strong', '.analysis-evidence-table td', '.analysis-economics-column .scenario-comparison strong', '.analysis-movement-value', '.analysis-movement-change strong', '.analysis-unavailable', '.drill-metric-value', '.drill-metric-value.is-unavailable']) {
+  const font = layoutRules.filter(rule => rule.selectors.includes('.unified-analysis ' + selector) && rule.properties.has('font-size')).at(-1)?.properties.get('font-size');
+  assert.equal(font, 'var(--analysis-value-size)', `${selector} uses the shared secondary value size rather than a competing numerical hierarchy.`);
+}
+const mainTotalSizes = layoutRules.filter(rule => rule.selectors.includes('.unified-analysis .analysis-summary-value') && rule.properties.has('font-size')).map(rule => Number.parseFloat(rule.properties.get('font-size')));
+assert.ok(mainTotalSizes.length > 0 && mainTotalSizes.every(size => size > sharedValueSize), 'Only the selected main totals retain a larger numerical size at every responsive breakpoint');
+assert.ok(layoutRules.some(rule => rule.selectors.includes('.unified-analysis .analysis-controls .hx-category-tile-metrics') && rule.properties.get('flex-wrap') === 'wrap'), 'Category values and contribution percentages can wrap rather than overlap on narrow screens');
+assert.match(analysisStyle, /\.analysis-contributor-list \.scenario-comparison\s*\{[^}]*grid-template-columns:\s*minmax\(0,1fr\) max-content;[^}]*gap:\s*14px;/, 'Contributor values reserve their exact width while names remain close beside them');
+assert.match(analysisStyle, /\.analysis-contributor-list \.scenario-comparison > span\s*\{[^}]*text-align:\s*right;/, 'Contributor names align toward their values rather than the outside edge');
+assert.match(analysisStyle, /\.analysis-contributor-list \.scenario-comparison strong\s*\{[^}]*justify-self:\s*start;/, 'Contributor amounts align beside names at the center gap');
+assert.match(analysisStyle, /\.analysis-contributor-list \.scenario-comparison strong\s*\{[^}]*color:\s*var\(--contributor-ink/, 'Contributor value brightness follows its source-revenue shade');
+assert.match(dashboardSource, /state\.overlay=\(\{products:'(?:decisions|insights)',investment:'(?:decisions|insights)',scenarios:'scenarios',source:'source'\}\)\[view\]/, 'Existing links retain compatible routes into the contextual tools.');
+assert.match(unifiedSource, /HX_ANALYSIS_CANVAS\.create\(\$\('#analysis-chart'\)/, 'The workspace sends all selected metrics into one chart instance.');
 
 // Retail remains the same independent workspace, with its current encryption controls.
 for (const id of ["workbookFile", "importDialog", "applyImport", "sourceDialog", "privateDialog", "privateKey", "timelineTrack", "timelinePlay", "categoryFilter", "detailTable"]) {
@@ -158,7 +251,7 @@ function workspaceFixture(url = "https://example.test/PPC/analytics.html") {
   const retail = element(), blueprint = element(), frame = element({ src: "blueprint/index.html?embedded=1" });
   const loading = element(), source = element(), importButton = element();
   const tabs = [element({ analysisModule: "retail" }), element({ analysisModule: "blueprint" })];
-  const views = ["overview", "performance", "products", "investment", "scenarios", "source"].map(view => element({ blueprintView: view }));
+  const views = exposedViews.map(view => element({ blueprintView: view }));
   const posts = [], lifecycle = [], history = [], listeners = new Map();
   let loads = 0;
   frame.contentWindow = { postMessage(message, origin) { posts.push({ message: structuredClone(message), origin }); } };
@@ -199,10 +292,13 @@ const retainedFrameSource = workspace.frame.src;
 assert.equal(new URL(retainedFrameSource).origin, workspace.window.location.origin);
 assert.equal(new URL(retainedFrameSource).searchParams.get("v"), "fixture-release", "The lazy page follows the shell release version.");
 workspace.frame.emit("load");
-workspace.views.find(view => view.dataset.blueprintView === "scenarios").emit("click");
+workspace.views.find(view => view.dataset.blueprintView === "performance").emit("click");
+assert.equal(workspace.window.location.hash, '#blueprint/performance');
+assert.equal(workspace.views.find(view => view.dataset.blueprintView === 'performance').getAttribute('aria-current'), 'page');
+// Historical links stay accepted while the child maps them to an overlay.
+workspace.window.PPCAnalyticsWorkspace.showBlueprintView('scenarios');
 assert.equal(workspace.window.location.hash, "#blueprint/scenarios");
 assert.equal(workspace.posts.at(-1).message.view, "scenarios");
-assert.equal(workspace.views.find(view => view.dataset.blueprintView === "scenarios").getAttribute("aria-current"), "page");
 workspace.message({ type: "ppc:blueprint:state", state: { view: "scenarios", year: 2023, category: "Headsets", revenue: -1.5, margin: 0, spend: 0, rows: [{ secret: "EXCLUDED SOURCE FIXTURE" }], privateKey: "EXCLUDED KEY FIXTURE" }, sourceLabel: "Synthetic source" });
 assert.equal(workspace.window.location.searchParams.get("year"), "2023");
 assert.equal(workspace.window.location.searchParams.get("category"), "Headsets");
@@ -221,7 +317,7 @@ workspace.importButton.emit("click");
 assert.equal(workspace.posts.at(-1).message.type, "ppc:blueprint:import");
 assert.ok(workspace.posts.every(post => post.origin === workspace.window.location.origin), "Commands always name the expected origin; wildcard delivery is forbidden.");
 assert.ok(workspace.posts.every(post => Object.keys(post.message).every(key => ["type", "view", "preferences"].includes(key))), "Parent commands contain only navigation preferences, with no source payload or pricing capability.");
-assert.ok(workspace.posts.every(post => Object.keys(post.message.preferences || {}).every(key => ['year','category','revenue','margin','spend','scale','groupId','projectId','skuId','compare'].includes(key))));
+assert.ok(workspace.posts.every(post => Object.keys(post.message.preferences || {}).every(key => ['year','category','revenue','margin','spend','scale','groupId','projectId','skuId','compare','workspace'].includes(key))));
 
 const validMaliciousState = { type: "ppc:blueprint:state", state: { view: "investment", year: 2029, category: "Other", revenue: 30, margin: 10, spend: 30 }, sourceLabel: "Spoofed source" };
 const trustedState = { url: workspace.window.location.href, source: workspace.source.textContent, height: workspace.frame.style.height };
@@ -297,6 +393,12 @@ comparisonLink.frame.emit('load');
 comparisonLink.window.location = new URL('https://example.test/PPC/analytics.html?analysis=blueprint#blueprint/performance'); comparisonLink.emit('popstate');
 assert.equal(comparisonLink.posts.at(-1).message.preferences.compare, '[]', 'History clears a comparison when the route returns to an unselected scope.');
 assert.equal(scopeParams(comparisonLink.window.location).has('compare'), false);
+const workspaceSelection = { metrics: ['revenue', 'units', 'grossProfit', 'budget'], connectivity: ['wired', 'wireless'], overlay: 'scenarios', productSort: 'grossProfit', sortDirection: 'desc', scenarioEnabled: true, scenarioStart: '2026', rows: [{ secret: 'EXCLUDED FINANCIAL ROW' }], privateKey: 'EXCLUDED PRIVATE KEY' };
+comparisonLink.message({ type: 'ppc:blueprint:state', state: { view: 'performance', workspace: JSON.stringify(workspaceSelection) } });
+assert.equal(comparisonLink.window.location.searchParams.has('workspace'), false, 'Workspace and connection selections stay outside request-visible query parameters.');
+const routedWorkspace = JSON.parse(scopeParams(comparisonLink.window.location).get('workspace'));
+assert.deepEqual(routedWorkspace.metrics, workspaceSelection.metrics); assert.deepEqual(routedWorkspace.connectivity, ['wired', 'wireless']); assert.equal(routedWorkspace.overlay, 'scenarios');
+assert.ok(!JSON.stringify(routedWorkspace).includes('EXCLUDED'), 'The host accepts only explicit workspace preferences, without financial rows or credentials.');
 const capability = "a".repeat(64), pricingLink = workspaceFixture(`https://example.test/PPC/analytics.html#ppc-link=${capability}`);
 assert.equal(pricingLink.window.location.hash, `#ppc-link=${capability}`, "The existing pricing bridge consumes its own temporary capability.");
 pricingLink.tabs[1].emit("click");

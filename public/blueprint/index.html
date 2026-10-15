@@ -12,6 +12,8 @@
   <link rel="stylesheet" href="category-strip.css">
   <link rel="stylesheet" href="explorer-pane.css">
   <link rel="stylesheet" href="embed.css">
+  <link rel="stylesheet" href="analysis-canvas.css">
+  <link rel="stylesheet" href="analysis-workspace.css">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to dashboard</a>
@@ -20,11 +22,7 @@
       <a class="brand" href="#overview" aria-label="HX Blueprint overview"><span class="brand-mark">HX<span></span></span><span class="brand-text">BLUEPRINT<small>Portfolio intelligence</small></span></a>
       <div class="sidebar-kicker">WORKSPACE</div>
       <nav id="navigation">
-        <button data-view="overview" class="nav-item active"><span class="nav-icon" data-icon="overview"></span>Overview</button>
-        <button data-view="performance" class="nav-item"><span class="nav-icon" data-icon="performance"></span>Performance</button>
-        <button data-view="products" class="nav-item"><span class="nav-icon" data-icon="products"></span>Products &amp; NPI</button>
-        <button data-view="investment" class="nav-item"><span class="nav-icon" data-icon="investment"></span>Investment</button>
-        <button data-view="scenarios" class="nav-item"><span class="nav-icon" data-icon="scenarios"></span>Scenarios</button>
+        <button data-view="performance" class="nav-item active"><span class="nav-icon" data-icon="performance"></span>Analysis canvas</button>
         <button data-view="source" class="nav-item"><span class="nav-icon" data-icon="source"></span>Source &amp; quality</button>
       </nav>
       <div class="sidebar-bottom">
@@ -47,11 +45,27 @@
         </section>
         <section id="portfolio-explorer" class="portfolio-explorer" aria-label="Portfolio selection">
           <header class="explorer-pane-header">
-            <div><span class="explorer-pane-kicker">PORTFOLIO EXPLORER</span><h2>Explore performance through time</h2></div>
+            <div><h2>Portfolio analysis</h2></div>
             <div id="explorer-selection" class="explorer-pane-selection" aria-live="polite"></div>
           </header>
-          <div id="category-explorer" aria-label="Choose a portfolio category"></div>
+          <div id="category-explorer" class="analysis-controls" aria-label="Choose a portfolio category"></div>
           <nav id="scope-breadcrumb" class="drill-breadcrumbs" aria-label="Selected portfolio scope" hidden></nav>
+          <div class="analysis-control-strip">
+            <div id="analysis-toolbar" class="analysis-toolbar"></div>
+            <div id="analysis-connectivity" class="analysis-controls"></div>
+          </div>
+          <div id="analysis-summary" class="analysis-summary" aria-label="Selected-period financial values"></div>
+          <div id="analysis-graph-shell" class="analysis-graph-shell">
+            <div id="analysis-chart"></div>
+            <div class="analysis-tool-strip" id="analysis-tool-strip">
+              <nav class="analysis-actions" aria-label="Analysis tools"><button type="button" data-analysis-tool="insights" aria-controls="analysis-overlay" aria-expanded="false">Insights</button><button type="button" data-analysis-tool="scenarios" aria-controls="analysis-overlay" aria-expanded="false">Scenario</button><button type="button" data-analysis-tool="evidence" aria-controls="analysis-overlay" aria-expanded="false">Evidence</button></nav>
+              <div id="analysis-chart-controls"></div>
+            </div>
+            <aside id="analysis-overlay" class="analysis-chart-dock" aria-labelledby="analysis-overlay-title" hidden>
+              <header class="analysis-overlay-header"><h2 id="analysis-overlay-title">Analysis</h2><button type="button" id="analysis-overlay-close" aria-label="Close chart tools">Close</button></header>
+              <div id="analysis-overlay-body" class="analysis-overlay-body"></div>
+            </aside>
+          </div>
           <div id="planning-timeline" class="planning-timeline" aria-label="Explore the planning years"></div>
           <section id="scope-explorer" class="scope-explorer" aria-label="Choose product groups, projects, and SKUs to compare" hidden></section>
           <div id="context-strip" class="context-strip"></div>
@@ -70,6 +84,10 @@
   <script src="importer.js"></script>
   <script src="timeline.js"></script>
   <script src="category-strip.js"></script>
+  <script src="product-connectivity.js"></script>
+  <script src="workspace-model.js"></script>
+  <script src="analysis-canvas.js"></script>
+  <script src="unified-workspace.js"></script>
   <script src="dashboard.js?v=unified-explorer-1"></script>
 </body>
 </html>

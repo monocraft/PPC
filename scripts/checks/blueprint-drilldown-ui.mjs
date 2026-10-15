@@ -32,18 +32,28 @@ const filtersSource = region(dashboard, '  function loadFilters(', '  function s
 const explorerSource = region(dashboard, '  function syncExplorerControls(', '  async function importFile(');
 const scopeIdSource = dashboard.match(/^  const scopeId = .+$/m)?.[0];
 const scopeFragmentSource = dashboard.match(/^  function scopeFragment\(.+$/m)?.[0];
+const workspacePreferenceSource = dashboard.match(/^  const workspacePreference=.+$/m)?.[0];
 const colorsSource = dashboard.match(/^  const colors = .+$/m)?.[0];
 assert.ok(scopeIdSource && colorsSource);
 function create(data = structuredClone(fixture), search = '?year=2026&category=Headsets') {
-  const state = { view: 'overview', period: 2026, category: ['Headsets'], groupId: null, projectId: null, skuId: null, drillQuery: '', comparisonScale: 'trend', metric: 'revenue', revenueGrowth: 0, marginChange: 0, budgetChange: 0 };
+  const state = { view: 'performance', period: 2026, category: ['Headsets'], groupId: null, projectId: null, skuId: null, drillQuery: '', comparisonScale: 'trend', metric: 'revenue', metrics: ['revenue', 'grossProfit'], connectivity: ['all'], productSort: 'revenue', sortDirection: 'desc', overlay: null, scenarioEnabled: false, scenarioStart: null, revenueGrowth: 0, marginChange: 0, budgetChange: 0 };
   const nodes = new Map(), dialogs = [], rendered = { count: 0 }, controls = {};
-  const node = selector => { if (!nodes.has(selector)) nodes.set(selector, { innerHTML: '', textContent: '', hidden: false, title: '', scrollIntoView() {} }); return nodes.get(selector); };
+  const element = () => {
+    const item = { innerHTML: '', textContent: '', hidden: false, title: '', children: [], attrs: {}, className: '', setAttribute(name, value) { this.attrs[name] = String(value); }, removeAttribute(name) { delete this.attrs[name]; }, getAttribute(name) { return this.attrs[name]; }, appendChild(child) { this.children.push(child); }, scrollIntoView() {} };
+    item.classList = {
+      contains(name) { return item.className.split(/\s+/).includes(name); },
+      add(...names) { item.className = [...new Set([...item.className.split(/\s+/).filter(Boolean), ...names])].join(' '); },
+      remove(...names) { item.className = item.className.split(/\s+/).filter(name => name && !names.includes(name)).join(' '); },
+      toggle(name, force) { const enabled = force === undefined ? !this.contains(name) : Boolean(force); this[enabled ? 'add' : 'remove'](name); return enabled; }
+    }; return item;
+  };
+  const node = (selector, owner) => { if (owner && selector === '.drill-toolbar' && !owner.innerHTML.includes('class="drill-toolbar"')) return null; if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); };
   const window = { HX_DATA: data, innerWidth: 1000, HX_TIMELINE: { mount(_node, config) { controls.timeline = config; return { update(config) { controls.timeline = config; }, stop() {} }; } }, HX_CATEGORY_STRIP: { mount(_node, config) { controls.categories = config; return { update(config) { controls.categories = config; } }; } } };
-  const context = { window, testState: state, URLSearchParams, location: { hash: '' }, console, nodes, controls, rendered,
+  const context = { window, document: { createElement: element }, testState: state, URLSearchParams, location: { hash: '' }, console, nodes, controls, rendered,
     initialPreferences: new URLSearchParams(search), $: node, openDialog: (title, content) => dialogs.push({ title, content }) };
   vm.createContext(context); vm.runInContext(analytics, context, { filename: 'blueprint/analytics.js' });
-  vm.runInContext(`const state = testState; ${colorsSource} ${scopeIdSource} ${scopeFragmentSource}
-    let activeDrill = null, timelineControl = null, categoryControl = null;
+  vm.runInContext(`const state = testState; ${colorsSource} ${scopeIdSource} ${workspacePreferenceSource} ${scopeFragmentSource}
+    let activeDrill = null, timelineControl = null, categoryControl = null, workspaceControl = null;
     const hasSource = () => Boolean(window.HX_DATA?.products?.length && window.HX_DATA?.periods?.length);
     function icon() { return ''; }
     function draw() { refreshDrillScope(true); rendered.count++; }
@@ -105,6 +115,20 @@ assert.match(saved.nodes.get('#scope-explorer').innerHTML, /data-import-workbook
 assert.equal(saved.api.summary().revenue, 10000, 'Older browser sources keep their annual values while detail requires reimport');
 assert.equal(JSON.stringify(data), before, 'Drilling, rendering and source inspection preserve the imported dataset');
 
+const signedCards = create();
+signedCards.state.period = 2027;
+signedCards.api.selectDrillScope({ category: 'Headsets', groupId: 'group-a', projectId: 'PROJECT A' });
+signedCards.api.renderDrillExplorer();
+const signedCardHtml = [...signedCards.nodes.get('#drill-results').innerHTML.matchAll(/<li class="drill-card\b[\s\S]*?<\/li>/g)].map(match => match[0]);
+assert.equal(signedCardHtml.length, 2);
+const signedSkuCard = signedCardHtml.find(card => /SKU\/001/.test(card));
+for (const metric of ['revenue', 'units', 'grossProfit', 'budget']) assert.ok(signedSkuCard.includes(`data-product-metric="${metric}"`), 'Scoped SKU cards retain all four measures');
+assert.match(signedSkuCard, /data-product-metric="revenue" data-product-value="-5"/, 'A signed tracker amount is preserved in the card’s precise raw value');
+assert.match(signedSkuCard, /data-product-metric="grossProfit" data-product-value="-1"/);
+assert.match(signedSkuCard, /data-product-metric="budget" data-product-value=""[^>]*title="PD investment: Unavailable"/, 'SKU investment remains visibly unavailable on signed-value cards');
+const missingSkuCard = signedCardHtml.find(card => /SKU\/002/.test(card));
+assert.match(missingSkuCard, /data-product-metric="revenue" data-product-value=""/, 'A missing sibling remains missing rather than appearing as a zero');
+
 const kindSource = region(timeline, '    function kindFor(', '    const position');
 const kindContext = { config: { labels: { 2026: 'FY26' } } };
 vm.createContext(kindContext); vm.runInContext(`${kindSource}\nglobalThis.kindFor = kindFor;`, kindContext);
@@ -120,7 +144,7 @@ const routeContext = { location: routeLocation, URLSearchParams, state: routeSta
   history: { replaceState(_state, _title, value) { routeLocation.href = new URL(value, routeLocation).href; } },
   window: { HX_DATA: fixture, parent: { postMessage(message, origin) { posts.push({ message, origin }); } } } };
 vm.createContext(routeContext);
-vm.runInContext(`${scopeFragmentSource}\n${preferencesSource}\n${notifySource}\nglobalThis.route = { locationPreferences, notifyParent };`, routeContext);
+vm.runInContext(`${workspacePreferenceSource}\n${scopeFragmentSource}\n${preferencesSource}\n${notifySource}\nglobalThis.route = { locationPreferences, notifyParent };`, routeContext);
 const parsed = routeContext.route.locationPreferences();
 assert.equal(parsed.get('groupId'), 'group-a'); assert.equal(parsed.get('projectId'), 'PROJECT A'); assert.equal(parsed.get('skuId'), 'SKU/001');
 routeContext.route.notifyParent();
@@ -131,5 +155,39 @@ assert.equal(posts.at(-1).origin, routeLocation.origin, 'Scoped state is deliver
 assert.ok(!JSON.stringify(posts).includes('PRIVATE'), 'The host bridge emits filter identifiers and bounded selections, never source rows or credentials');
 assert.equal(routeLocation.searchParams.get('embedded'), '1');
 assert.equal(routeLocation.searchParams.get('revenue'), '0', 'Ordinary scenario preferences survive moving private scope identifiers to the fragment');
+assert.deepEqual(JSON.parse(routedScope.get('workspace')).metrics, ['revenue', 'grossProfit'], 'Visible measures are preserved with private workspace preferences');
+
+// Replay the real retained-frame receiver. A performance route carrying a
+// saved workspace must restore its contextual tool rather than clear it.
+const applyWorkspaceSource = region(dashboard, '  function applyWorkspace(value)', '  const workspacePreference');
+const applyPreferencesSource = region(dashboard, '  function applyPreferences(', '  function selectPeriod(');
+const messageSource = region(dashboard, "  window.addEventListener('message', event => {", '  if (embedded && window.parent !== window) {');
+const setViewSource = dashboard.match(/^  function setView\(.+$/m)?.[0];
+const parseCompareSource = dashboard.match(/^  function parseCompare\(.+$/m)?.[0];
+assert.ok(setViewSource && parseCompareSource);
+const restored = { view: 'performance', metrics: ['revenue'], connectivity: ['all'], productSort: 'revenue', sortDirection: 'desc', overlay: null, scenarioEnabled: false, scenarioStart: null, category: ['all'], compareIds: [] };
+const parentWindow = {}, received = new Map(), draws = [], legacyUpdates = [];
+const restoredWindow = { parent: parentWindow, addEventListener(type, callback) { received.set(type, callback); } };
+const restoreContext = {
+  window: restoredWindow, state: restored, URLSearchParams, embedded: true, location: { origin: 'https://example.test' },
+  views: { performance: [], overview: [], products: [], investment: [], scenarios: [], source: [] },
+  timelineControl: { stop() {} }, workspaceControl: { update() { legacyUpdates.push(restored.overlay); } },
+  hasSource: () => false, draw: () => draws.push(JSON.parse(JSON.stringify(restored))), notifyParent() {}
+};
+vm.createContext(restoreContext);
+vm.runInContext(`${scopeIdSource}\n${parseCompareSource}\n${applyWorkspaceSource}\n${applyPreferencesSource}\n${setViewSource}\n${messageSource}`, restoreContext);
+const restorePreferences = { year: '2027', category: 'Headsets', scale: 'values', groupId: 'group-a', projectId: 'PROJECT A', skuId: '', compare: JSON.stringify(['SKU/001']), workspace: JSON.stringify({ metrics: ['units', 'grossProfit'], connectivity: ['wired', 'wireless'], overlay: 'scenarios', scenarioEnabled: true, scenarioStart: '2027' }) };
+received.get('message')({ source: parentWindow, origin: 'https://example.test', data: { type: 'ppc:blueprint:navigate', view: 'performance', preferences: restorePreferences } });
+assert.equal(restored.overlay, 'scenarios', 'Restoring a saved performance workspace retains the Scenario overlay');
+assert.equal(restored.view, 'performance'); assert.equal(restored.scenarioEnabled, true); assert.equal(restored.scenarioStart, '2027');
+assert.deepEqual(Array.from(restored.metrics), ['units', 'grossProfit']); assert.deepEqual(Array.from(restored.connectivity), ['wired', 'wireless']);
+assert.deepEqual(Array.from(restored.compareIds), ['SKU/001']); assert.equal(restored.projectId, 'PROJECT A'); assert.equal(restored.period, '2027');
+assert.equal(draws.length, 1); assert.equal(legacyUpdates.length, 0, 'Preference restoration redraws the current pane without applying a second navigation reset');
+received.get('message')({ source: parentWindow, origin: 'https://other.test', data: { type: 'ppc:blueprint:navigate', view: 'source' } });
+assert.equal(restored.overlay, 'scenarios', 'A foreign origin cannot change the restored contextual tool');
+received.get('message')({ source: parentWindow, origin: 'https://example.test', data: { type: 'ppc:blueprint:navigate', view: 'performance' } });
+assert.equal(restored.overlay, null, 'An explicit canvas navigation still closes contextual tools');
+received.get('message')({ source: parentWindow, origin: 'https://example.test', data: { type: 'ppc:blueprint:navigate', view: 'scenarios', preferences: { workspace: JSON.stringify({ overlay: 'insights' }) } } });
+assert.equal(restored.overlay, 'scenarios', 'A legacy Scenario destination continues to open its requested contextual tool');
 
 console.log('Blueprint drilldown UI checks passed: actual scoped chart/helpers, product→project→SKU source grain, exact point provenance, safe identifiers, category reset, legacy reimport, unclassified timeline basis, and unavailable SKU investment.');

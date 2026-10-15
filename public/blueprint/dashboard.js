@@ -4,14 +4,29 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const colors = ['#895EF6', '#6984ED', '#4DA1F7', '#20CBDD', '#7AE3A9', '#FFC63B'];
   const state = { view: 'overview', period: null, category: ['all'], groupId: null, projectId: null, skuId: null, compareIds: [], drillQuery: '', metric: 'revenue', query: '', sheetQuery: '', sort: 'revenue', revenueGrowth: 0, marginChange: 0, budgetChange: 0, forecast: false, decisionAction:'all' };
-  let timelineControl, categoryControl, sourceWasLoaded = false, startupComplete = false, importBusy = false, pendingImport = false, activeDrill = null, comparisonModels = new Map();
+  let timelineControl, categoryControl, workspaceControl, sourceWasLoaded = false, startupComplete = false, importBusy = false, pendingImport = false, activeDrill = null, comparisonModels = new Map();
+  Object.assign(state, {metrics:['revenue','grossProfit'],connectivity:['all'],productSort:'revenue',sortDirection:'desc',overlay:null,scenarioEnabled:false,scenarioStart:null});
+  function applyWorkspace(value) {
+    try {
+      const next=typeof value==='string'?JSON.parse(value):value;if(!next||typeof next!=='object')return;
+      if(Array.isArray(next.metrics)&&next.metrics.length&&next.metrics.every(key=>['revenue','units','grossProfit','budget'].includes(key)))state.metrics=[...new Set(next.metrics)];
+      if(Array.isArray(next.connectivity)&&next.connectivity.length&&next.connectivity.every(key=>['all','wired','wireless','both','unclassified'].includes(key)))state.connectivity=[...new Set(next.connectivity)];
+      if(['name','connectivity','revenue','grossProfit','grossMargin','units','budget'].includes(next.productSort))state.productSort=next.productSort;
+      if(['asc','desc'].includes(next.sortDirection))state.sortDirection=next.sortDirection;
+      if([null,'insights','decisions','scenarios','evidence','source'].includes(next.overlay))state.overlay=next.overlay;
+      if(typeof next.scenarioEnabled==='boolean')state.scenarioEnabled=next.scenarioEnabled;
+      if(/^\d{4}$/.test(String(next.scenarioStart)))state.scenarioStart=String(next.scenarioStart);
+    }catch(_){}
+  }
+  const workspacePreference=()=>JSON.stringify({metrics:state.metrics,connectivity:state.connectivity,productSort:state.productSort,sortDirection:state.sortDirection,overlay:state.overlay,scenarioEnabled:state.scenarioEnabled,scenarioStart:state.scenarioStart});
   function locationPreferences() {
     const preferences = new URLSearchParams(location.search), fragment = new URLSearchParams(location.hash.split('?').slice(1).join('?'));
-    for (const key of ['groupId', 'projectId', 'skuId', 'compare']) { if (fragment.has(key)) preferences.set(key, fragment.get(key)); else if (!preferences.has(key)) preferences.set(key, ''); }
+    for (const key of ['groupId', 'projectId', 'skuId', 'compare','workspace']) { if (fragment.has(key)) preferences.set(key, fragment.get(key)); else if (!preferences.has(key)) preferences.set(key, ''); }
     return preferences;
   }
   const fragmentView = () => location.hash.slice(1).split('?')[0];
   const initialPreferences = locationPreferences();
+  applyWorkspace(initialPreferences.get('workspace'));
   state.comparisonScale = initialPreferences.get('scale') === 'values' ? 'values' : 'trend';
   const embedded = initialPreferences.get('embedded') === '1';
   state.period = initialPreferences.get('year') || null;
@@ -20,7 +35,7 @@
   function parseCompare(value) { try { const ids = typeof value === 'string' ? value ? JSON.parse(value) : [] : value; return Array.isArray(ids) && ids.length <= 50 && ids.every(id => scopeId(id)) ? [...new Set(ids)] : []; } catch (_) { return []; } }
   for (const key of ['groupId', 'projectId', 'skuId']) state[key] = scopeId(initialPreferences.get(key));
   state.compareIds = parseCompare(initialPreferences.get('compare'));
-  function scopeFragment(view = state.view) { const scope = new URLSearchParams(); for (const key of ['groupId', 'projectId', 'skuId']) if (state[key]) scope.set(key, state[key]); if (state.compareIds?.length) scope.set('compare', JSON.stringify(state.compareIds)); return `${view}${scope.size ? '?' + scope : ''}`; }
+  function scopeFragment(view = state.view) { const scope = new URLSearchParams(); for (const key of ['groupId', 'projectId', 'skuId']) if (state[key]) scope.set(key, state[key]); if (state.compareIds?.length) scope.set('compare', JSON.stringify(state.compareIds)); scope.set('workspace',workspacePreference()); return `${view}${scope.size ? '?' + scope : ''}`; }
   for (const [parameter, key, min, max] of [['revenue', 'revenueGrowth', -30, 30], ['margin', 'marginChange', -10, 10], ['spend', 'budgetChange', -30, 30]]) {
     const raw = initialPreferences.get(parameter), value = Number(raw);
     if (raw !== null && Number.isFinite(value)) state[key] = Math.max(min, Math.min(max, value));
@@ -28,12 +43,12 @@
   const hasSource = () => Boolean(window.HX_DATA?.products?.length && window.HX_DATA?.periods?.length);
   function notifyParent() {
     const query = new URLSearchParams(location.search);
-    for (const key of ['groupId', 'projectId', 'skuId', 'compare']) query.delete(key);
+    for (const key of ['groupId', 'projectId', 'skuId', 'compare','workspace']) query.delete(key);
     for (const [key, value] of Object.entries({ year: state.period, category: state.category.join(','), scale: state.comparisonScale, revenue: state.revenueGrowth, margin: state.marginChange, spend: state.budgetChange })) {
       if (value === null) query.delete(key); else query.set(key, String(value));
     }
     history.replaceState(null, '', `${location.pathname}?${query}#${scopeFragment()}`);
-    if (embedded && window.parent !== window) window.parent.postMessage({ type: 'ppc:blueprint:state', state: { view: state.view, year: state.period, category: state.category.join(','), scale: state.comparisonScale, groupId: state.groupId || '', projectId: state.projectId || '', skuId: state.skuId || '', compare: JSON.stringify(state.compareIds || []), revenue: state.revenueGrowth, margin: state.marginChange, spend: state.budgetChange }, sourceLabel: window.HX_DATA?.source?.name || 'No workbook loaded' }, location.origin);
+    if (embedded && window.parent !== window) window.parent.postMessage({ type: 'ppc:blueprint:state', state: { view: state.view, year: state.period, category: state.category.join(','), scale: state.comparisonScale, groupId: state.groupId || '', projectId: state.projectId || '', skuId: state.skuId || '', compare: JSON.stringify(state.compareIds || []),workspace:workspacePreference(), revenue: state.revenueGrowth, margin: state.marginChange, spend: state.budgetChange }, sourceLabel: window.HX_DATA?.source?.name || 'No workbook loaded' }, location.origin);
   }
   function requestImport() {
     if (!startupComplete) { pendingImport = true; return; }
@@ -76,6 +91,11 @@
   function fmt(value, unit = 'currency', precise = false) {
     const n = num(value); if (n === null) return '—';
     if (unit === 'percent' || unit === '%') return `${(n * 100).toFixed(precise ? 2 : 1)}%`;
+    if (n !== 0 && Math.abs(n) < 1) {
+      const numeric = unit === 'number' || unit === 'count' || unit === 'units';
+      const shown = new Intl.NumberFormat('en-US', { maximumSignificantDigits: precise ? 8 : 3, notation: Math.abs(n) < 1e-6 ? 'scientific' : 'standard' }).format(numeric ? n : Math.abs(n));
+      return numeric ? shown : `${n < 0 ? '−' : ''}$${shown}`;
+    }
     if (unit === 'number' || unit === 'count' || unit === 'units') return new Intl.NumberFormat('en-US', { maximumFractionDigits: precise ? 2 : 0 }).format(n);
     if (precise) return `${n < 0 ? '−' : ''}$${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Math.abs(n))}`;
     const a = Math.abs(n), prefix = n < 0 ? '−$' : '$';
@@ -117,6 +137,8 @@
   }
   function toggleCompare(id) {
     if (!(activeDrill?.children || []).some(child => child.id === id)) return;
+    if(id==='source-unmapped')return toast('Unmapped tracker records have a separate source population. Use Explore details to inspect their projects.');
+    if((id==='source-unmapped'&&state.compareIds.length&&!state.compareIds.includes(id))||(id!=='source-unmapped'&&state.compareIds.includes('source-unmapped')))return toast('Unmapped tracker records have a different population. Clear this selection before comparing product-group finance.');
     const scrollTop = $('#drill-results')?.scrollTop || 0;
     const selected = Array.isArray(state.compareIds) ? state.compareIds : [];
     if (!selected.includes(id) && selected.length >= 50) { toast('Compare up to 50 products at once. Clear a selection before adding another.'); return; }
@@ -141,7 +163,7 @@
       const category = activeDrill.scope.category;
       if (hasDrill() && typeof category === 'string' && getCategories().includes(category)) state.category = [category];
     }
-    if (validate && isProductComparison()) { const children = new Set((activeDrill?.children || []).map(child => child.id)); state.compareIds = parseCompare(state.compareIds).filter(id => children.has(id)); }
+    if (validate && isProductComparison()) { const children = new Set((activeDrill?.children || []).map(child => child.id)); state.compareIds = window.HX_WORKSPACE_MODEL ? parseCompare(state.compareIds) : parseCompare(state.compareIds).filter(id => children.has(id)); }
   }
   function resetDrill() { state.groupId = null; state.projectId = null; state.skuId = null; state.compareIds = []; state.drillQuery = ''; state.drillNotice = ''; }
   function selectDrillScope(scope) {
@@ -150,9 +172,10 @@
     for (const key of ['groupId', 'projectId', 'skuId']) state[key] = scopeId(scope[key]);
     if (typeof scope.category === 'string' && getCategories().includes(scope.category)) state.category = [scope.category];
     else if (!hasDrill()) state.category = ['all'];
+    state.connectivity=['all'];
     state.compareIds = []; state.drillQuery = ''; state.drillNotice = ''; state.metric = 'revenue'; state.view = 'performance'; location.hash = scopeFragment('performance');
     draw();
-    $('#planning-timeline')?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    $('#analysis-chart')?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
   }
   function scopeAttributes(scope = state) { return `data-chart-group="${escape(scope.groupId || '')}" data-chart-project="${escape(scope.projectId || '')}" data-chart-sku="${escape(scope.skuId || '')}"`; }
   function pointBasis(point) {
@@ -160,12 +183,22 @@
   }
   function drillResults() {
     const children = activeDrill?.children || [], query = state.drillQuery.trim().toLowerCase();
-    return children.map((child, index) => ({ child, index })).filter(({ child }) => !query || [child.name, child.id, child.category, child.projectId, child.skuId].filter(Boolean).join(' ').toLowerCase().includes(query));
+    const catalog=workspaceControl?.model?.catalog||children, filtered=window.HX_CONNECTIVITY?.filter(catalog,state.connectivity,data())||catalog;
+    const sorted=window.HX_CONNECTIVITY?.sorting(filtered,{metric:state.productSort,direction:state.sortDirection,period:state.period},data())||filtered;
+    return sorted.map(child=>({child,index:children.findIndex(record=>record.id===child.id)})).filter(({child})=>!query||[child.name,child.id,child.category,child.projectId,child.skuId].filter(Boolean).join(' ').toLowerCase().includes(query));
   }
   function renderDrillResults() {
     const list = $('#drill-results'), count = $('#drill-result-count'); if (!list || !count) return;
-    const results = drillResults(), selected = state.compareIds || [], palette = comparisonColors(); count.textContent = `${results.length} of ${activeDrill?.children?.length || 0} ${activeDrill?.scope?.level === 'group' ? 'projects' : activeDrill?.scope?.level === 'project' ? 'SKUs' : 'product groups'} · ${selected.length} selected`;
-    list.innerHTML = results.length ? results.map(({ child, index }) => `<li class="drill-card${selected.includes(child.id) ? ' is-selected' : ''}" style="--product-color:${palette.get(child.id) || categoryColor(child.category)}"><button type="button" class="drill-choice" data-drill-compare="${index}" aria-pressed="${selected.includes(child.id)}" title="${escape((child.name || child.id) + ' · ' + (child.skuId || child.projectId || child.id))}" aria-label="${escape((child.name || child.id) + ' · ' + (child.skuId || child.projectId || child.id))} · ${selected.includes(child.id) ? 'Remove from comparison' : 'Add to comparison'}"><span class="drill-choice-name">${escape(child.name || child.id)}<small>${escape(child.skuId || child.projectId || child.category || '')}</small></span><span class="drill-choice-value">${fmt(child.revenue)}<small>${escape(typeof child.basis === 'string' ? child.basis : child.hasFinancials ? periodLabel(state.period) : 'Revenue unavailable')}</small></span><span class="drill-compare-check" aria-hidden="true">${selected.includes(child.id) ? '✓' : '+'}</span></button><button type="button" class="drill-explore-action" data-drill-child="${index}" aria-label="Explore ${escape(child.name || child.id)}">Explore details →</button></li>`).join('') : '<li class="drill-empty">No matching records. Try a product name, project key, or part number.</li>';
+    const results = drillResults(), selected = state.compareIds || [], palette = new Map(results.map(({child})=>[child.id,window.HX_WORKSPACE_MODEL?.selectionColor(workspaceControl?.model,{entityId:child.id})||'#969eac'])); count.textContent = `${results.length} of ${activeDrill?.children?.length || 0} ${activeDrill?.scope?.level === 'group' ? 'projects' : activeDrill?.scope?.level === 'project' ? 'SKUs' : 'product groups'} · ${selected.length} selected`;
+    const nameKey = child => String(child.name || child.id || '').replace(/\u00a0/g, ' ').trim().toLowerCase(), nameCounts = new Map();
+    for (const child of workspaceControl?.model?.catalog || activeDrill?.children || []) { const key = nameKey(child); nameCounts.set(key, (nameCounts.get(key) || 0) + 1); }
+    const fullIdentity = child => [...new Set([child.name || child.id, child.category, child.skuId || child.projectId || child.id].filter(Boolean))].join(' · ');
+    const exactCurrency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 20 }), exactUnits = new Intl.NumberFormat('en-US', { maximumFractionDigits: 20 });
+    const cardMetrics = child => [['revenue', 'Revenue', 'currency'], ['units', 'Units', 'units'], ['grossProfit', 'Gross profit', 'currency'], ['budget', 'PD investment', 'currency']].map(([metric, label, unit]) => {
+      const value = child[metric], available = typeof value === 'number' && Number.isFinite(value), exact = available ? (unit === 'units' ? exactUnits : exactCurrency).format(value) : 'Unavailable';
+      return `<span class="drill-choice-metric" data-product-metric="${metric}" data-product-value="${available ? escape(String(value)) : ''}" title="${escape(label + ': ' + exact)}"><small class="drill-metric-label">${label}</small><strong class="drill-metric-value${available ? '' : ' is-unavailable'}">${available ? fmt(value, unit) : 'Unavailable'}</strong></span>`;
+    }).join('');
+    list.innerHTML = results.length ? results.map(({ child, index }) => `<li class="drill-card${selected.includes(child.id) ? ' is-selected' : ''}" style="--product-color:${palette.get(child.id) || '#969eac'}"><button type="button" class="drill-choice" data-drill-compare="${index}" aria-pressed="${selected.includes(child.id)}" title="${escape(fullIdentity(child))}" aria-label="${escape(fullIdentity(child))} · ${selected.includes(child.id) ? 'Remove from comparison' : 'Add to comparison'}"><span class="drill-choice-name">${escape(child.name || child.id)}${nameCounts.get(nameKey(child)) > 1 ? `<small class="drill-choice-identity">${escape(child.skuId || child.projectId || child.id)}</small>` : ''}</span><span class="drill-choice-metrics">${cardMetrics(child)}</span><small class="drill-choice-meta">${escape((window.HX_CONNECTIVITY?.profile(data(),child)?.label||'Unclassified')+' · '+periodLabel(state.period))}</small></button></li>`).join('') : '<li class="drill-empty">No matching records. Try a product name, project key, or part number.</li>';
   }
   function renderDrillExplorer() {
     const element = $('#scope-explorer'), breadcrumb = $('#scope-breadcrumb'); if (!element) return;
@@ -176,6 +209,8 @@
     const crumbText = crumb => `<span>${escape(crumb.label)}</span><small>${escape(crumb.skuId ? `SKU · ${crumb.skuId}` : crumb.projectId ? `Project · ${crumb.projectId}` : crumb.groupId ? 'Product group' : 'Category scope')}</small>`;
     if (breadcrumb) { breadcrumb.hidden = false; breadcrumb.innerHTML = `${crumbs.map((crumb, index) => `${index ? '<span aria-hidden="true">›</span>' : ''}${index === crumbs.length - 1 ? `<strong aria-current="location">${crumbText(crumb)}</strong>` : `<button type="button" data-drill-crumb="${index}">${crumbText(crumb)}</button>`}`).join('')}`; }
     element.innerHTML = `${state.drillNotice ? `<p class="drill-leaf" role="status">${escape(state.drillNotice)}</p>` : ''}${activeDrill.coverage?.needsReimport ? '<div class="drill-reimport">This saved source predates project and SKU detail. Reimport the workbook to restore the original part-number records.<button type="button" class="text-link" data-import-workbook>Reimport workbook →</button></div>' : ''}${children.length ? `<div class="drill-toolbar"><label for="drill-search">${nextLabel}</label><input id="drill-search" type="search" class="search-input" value="${escape(state.drillQuery)}" placeholder="Search names or source IDs…" aria-controls="drill-results" autocomplete="off"><span id="drill-result-count" role="status" aria-live="polite"></span><button type="button" id="drill-clear-compare" class="text-link" ${state.compareIds?.length ? '' : 'disabled'}>Clear selection</button></div><ul id="drill-results" class="drill-results" aria-label="${nextLabel}"></ul>` : `<p class="drill-leaf">${level === 'sku' ? 'SKU detail selected. Use the breadcrumb to return to its project or product group.' : 'No further linked source records in this scope.'}</p>`}`;
+    const toolbar=$('.drill-toolbar',element);
+    if(toolbar){const sort=document.createElement('label');sort.className='analysis-sort-label';sort.innerHTML=`Sort by <select id="drill-sort" aria-label="Sort products">${[['revenue','Revenue'],['units','Units'],['grossProfit','Gross profit'],['grossMargin','Gross margin'],['budget','PD investment'],['name','Name'],['connectivity','Connectivity']].map(([key,label])=>`<option value="${key}" ${state.productSort===key?'selected':''}>${label}</option>`).join('')}</select>`;toolbar.appendChild(sort);const direction=document.createElement('button');direction.type='button';direction.id='drill-sort-direction';direction.className='button button-quiet';direction.textContent=state.productSort==='name'||state.productSort==='connectivity'?(state.sortDirection==='asc'?'A → Z':'Z → A'):(state.sortDirection==='desc'?'High → low':'Low → high');toolbar.appendChild(direction);toolbar.classList.add('analysis-product-toolbar');}
     renderDrillResults();
   }
   function drillEconomics() {
@@ -419,6 +454,18 @@
   }
   function draw() {
     if (hasSource()) refreshDrillScope(true);
+    document.body.classList.toggle('unified-analysis',hasSource());
+    if(hasSource()&&window.HX_UNIFIED_WORKSPACE&&window.HX_ANALYSIS_CANVAS){
+      const legacy=state.view;
+      if(legacy!=='performance'&&legacy!=='overview')state.overlay=({products:'decisions',investment:'decisions',scenarios:'scenarios',source:'source'})[legacy]||state.overlay;
+      state.view='performance';
+      $('#portfolio-explorer').hidden=false;$('#page-title').textContent='Portfolio analysis';$('#page-description').textContent='Compare performance, test assumptions, and inspect the evidence in one canvas.';$('#breadcrumb-view').textContent='Analysis canvas';
+      if(!workspaceControl)workspaceControl=window.HX_UNIFIED_WORKSPACE.create({state,data,engine,drill:()=>activeDrill,format:fmt,scopeLabel,renderProducts:renderDrillExplorer,renderCategories:syncExplorerControls,selectPeriod,selectScope:selectDrillScope,redraw:draw,notify:notifyParent,openDialog,evidence,economics:drillEconomics,sourceContent:source,toast,dialogState:open=>{if(embedded&&window.parent!==window)window.parent.postMessage({type:'ppc:blueprint:dialog',open},location.origin);}});
+      workspaceControl.update();
+      $('#context-strip').innerHTML=`<span>${escape(sourceKind(state.period))} · ${escape(activeDrill?.summary?.basis||'Source snapshot')}</span><span class="spacer"></span><button type="button" class="text-link" data-analysis-tool="source">${issues().length} source findings</button>`;
+      $('#footer-source').textContent=data().source?.name||'Workbook source';$('#source-badge').textContent='Local workbook snapshot';
+      fillIcons();notifyParent();return;
+    }
     const previousComparisonScale=$('.category-comparison')?.dataset.comparisonScale;
     const previousPaths = new Map($$('[data-chart-series]').map(path => [path.dataset.chartSeries,path.getAttribute('points')]));
     const [eyebrow, title, description] = views[state.view] || views.overview;
@@ -445,9 +492,9 @@
     notifyParent();
   }
   function fillIcons() { $$('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); }); }
-  function setView(view) { if (!views[view]) return; timelineControl?.stop(); state.view = view; $('#navigation').closest('.sidebar').classList.remove('open'); $('#menu-button').setAttribute('aria-expanded', 'false'); location.hash = scopeFragment(view); draw(); window.scrollTo({ top: 0, behavior: 'auto' }); }
+  function setView(view) { if (!views[view]) return; timelineControl?.stop();if(workspaceControl){state.view='performance';state.overlay=({products:'decisions',investment:'decisions',scenarios:'scenarios',source:'source'})[view]||null;if(view==='scenarios')state.scenarioEnabled=true;workspaceControl.update();notifyParent();return;} state.view = view; $('#navigation').closest('.sidebar').classList.remove('open'); $('#menu-button').setAttribute('aria-expanded', 'false'); location.hash = scopeFragment(view); draw(); window.scrollTo({ top: 0, behavior: 'auto' }); }
   function evidence(refs) { if (!refs.length) return '<p class="formula-note">Cell-level source references were not supplied for this measure. Review the workbook inventory and mapping before treating this value as verified.</p>'; return refs.slice(0, 100).map(ref => { if (typeof ref === 'string') return `<div class="source-evidence">${escape(ref)}</div>`; return `<div class="source-evidence"><div class="source-ref"><strong>${escape(ref.sheet || ref.sheetName || 'Workbook')}!${escape(ref.cell || ref.address || ref.range || '')}</strong><span>${escape(ref.label || ref.role || '')}</span></div>${ref.formula ? `<pre class="source-formula">${escape(ref.formula)}</pre>` : ''}<p>Saved value: <strong>${escape(ref.value ?? ref.cached ?? ref.cachedValue ?? ref.result ?? 'Unavailable')}</strong></p>${ref.note ? `<p>${escape(ref.note)}</p>` : ''}</div>`; }).join(''); }
-  function openDialog(title, content, eyebrow = 'SOURCE DETAIL') { $('#dialog-title').textContent = title; $('#dialog-eyebrow').textContent = eyebrow; $('#dialog-content').innerHTML = content; fillIcons(); const dialog = $('#detail-dialog'); if (dialog.open) return; if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', ''); if(embedded&&window.parent!==window)window.parent.postMessage({type:'ppc:blueprint:dialog',open:true},location.origin); }
+  function openDialog(title, content, eyebrow = 'SOURCE DETAIL') { if(workspaceControl&&document.body.classList.contains('unified-analysis')){workspaceControl.showDetail(title,content,eyebrow);fillIcons();return;} $('#dialog-title').textContent = title; $('#dialog-eyebrow').textContent = eyebrow; $('#dialog-content').innerHTML = content; fillIcons(); const dialog = $('#detail-dialog'); if (dialog.open) return; if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', ''); if(embedded&&window.parent!==window)window.parent.postMessage({type:'ppc:blueprint:dialog',open:true},location.origin); }
   function metricDetail(key, period = state.period, category = null, scope = {}) {
     const labels = { revenueEstimate: 'Current launch-year source plan', grossProfit: 'Source gross profit', units: 'Source units', revenue: 'Revenue', grossMargin: 'Published GM · adjusted', rawMargin: 'Raw product gross margin', revenueTarget: 'Revenue target', tam: 'Market opportunity · TAM', npi: 'NPI cohort · imported source revenue', budget: 'Source PD spend', rnd: 'Other PD spend · NRE / IUR', tooling: 'Tooling investment', productCount: 'Product count', npiCount: 'Products marked NPI' };
     const aggregate = isProductComparison() && !Object.keys(scope).length && !category, model = aggregate ? productComparison(key, period) : null;
@@ -496,6 +543,7 @@
     if (has('scale')) state.comparisonScale = get('scale') === 'values' ? 'values' : 'trend';
     for (const key of ['groupId', 'projectId', 'skuId']) if (has(key)) state[key] = scopeId(get(key));
     if (has('compare')) state.compareIds = parseCompare(get('compare'));
+    if (has('workspace')) applyWorkspace(get('workspace'));
     for (const [parameter, key, min, max] of [['revenue', 'revenueGrowth', -30, 30], ['margin', 'marginChange', -10, 10], ['spend', 'budgetChange', -30, 30]]) if (has(parameter) && get(parameter) !== null && Number.isFinite(Number(get(parameter)))) state[key] = Math.max(min, Math.min(max, Number(get(parameter))));
     state.drillQuery = '';
     if (hasSource()) loadFilters(true);
@@ -508,6 +556,7 @@
   }
   function syncExplorerControls() {
     renderDrillExplorer();
+    if(!workspaceControl){
     $('#explorer-selection').textContent=`${!isProductComparison()&&selectedCategories().length>2?selectedCategories().length+' categories':scopeLabel()} · ${periodLabel(state.period)}`;
     $('#explorer-selection').title=scopeLabel();
     const comparisonModel=isProductComparison()?productComparison('revenue'):isComparison()?engine().compareSeries('revenue',{...opts(),mode:state.comparisonScale}):null;
@@ -517,6 +566,7 @@
     const timelineConfig={itemSingular,itemPlural,periods:getPeriods(),selected:state.period,series:allSeries('revenue'),comparisonSeries,comparisonModel,comparisonScale:state.comparisonScale,onScaleChange:mode=>{timelineControl?.stop();state.comparisonScale=mode;draw();},labels:Object.fromEntries(getPeriods().map(period=>{const point=allSeries('revenue').find(record=>String(record.period)===String(period));return [period,{kind:point?.kind||'unclassified',label:hasDrill()||isProductComparison()?pointBasis(point):sourceKind(period)}];})),onChange:selectPeriod};
     if(!timelineControl)timelineControl=window.HX_TIMELINE.mount($('#planning-timeline'),timelineConfig);
     else timelineControl.update(timelineConfig);
+    }
     const total=engine().summarize({period:state.period,category:'All'});
     const items=[{category:'all',revenue:total.revenue,share:finite(total.revenue)&&total.revenue!==0?1:null,productCount:total.productCount},...getCategories().map(category=>{
       const value=engine().summarize({period:state.period,category});
@@ -552,6 +602,7 @@
     if (event.target.closest('[data-import-workbook]')) return requestImport();
     const compare = event.target.closest('[data-drill-compare]'); if (compare) return toggleCompare(activeDrill?.children?.[Number(compare.dataset.drillCompare)]?.id);
     if (event.target.closest('#drill-clear-compare')) return clearComparison();
+    if(event.target.closest('#drill-sort-direction')){state.sortDirection=state.sortDirection==='desc'?'asc':'desc';draw();return;}
     const child = event.target.closest('[data-drill-child]'); if (child) return selectDrillScope(activeDrill?.children?.[Number(child.dataset.drillChild)]);
     const crumb = event.target.closest('[data-drill-crumb]'); if (crumb) return selectDrillScope(activeDrill?.breadcrumbs?.[Number(crumb.dataset.drillCrumb)]);
     const drillProduct = event.target.closest('[data-drill-product]'); if (drillProduct) { const product = (data().products || []).find(record => String(record.id) === drillProduct.dataset.drillProduct); if (product) return selectDrillScope({ category: product.category, groupId: product.id }); }
@@ -571,6 +622,7 @@
     if (event.target.closest('#source-info-button')) sourceInfo();
   });
   document.addEventListener('keydown', event => { if (event.target.closest('button,input,select,textarea,a')) return; const row = event.target.closest('.data-row,.chart-point'); if (row && ['Enter', ' '].includes(event.key)) { event.preventDefault(); row.dispatchEvent(new MouseEvent('click', { bubbles: true })); } });
+  document.addEventListener('change',event=>{if(event.target.id==='drill-sort'){state.productSort=event.target.value;if(['name','connectivity'].includes(state.productSort))state.sortDirection='asc';draw();}});
   document.addEventListener('input', event => {
     if (event.target.id === 'drill-search') { state.drillQuery = event.target.value; renderDrillResults(); }
     if (event.target.id === 'product-search') { state.query = event.target.value; $('#product-table').innerHTML = productTable(filteredProducts()); $('#product-count').textContent = `${filteredProducts().length} products · sorted by revenue`; }
@@ -580,18 +632,19 @@
   $('#source-button').addEventListener('click', () => setView('source'));
   $('#menu-button').addEventListener('click', () => { const open = $('.sidebar').classList.toggle('open'); $('#menu-button').setAttribute('aria-expanded', String(open)); });
   $('#close-dialog').addEventListener('click', () => $('#detail-dialog').close());
-  $('#detail-dialog').addEventListener('close',()=>{if(embedded&&window.parent!==window)window.parent.postMessage({type:'ppc:blueprint:dialog',open:false},location.origin);});
+  $('#detail-dialog').addEventListener('close',()=>{if(embedded&&window.parent!==window)window.parent.postMessage({type:'ppc:blueprint:dialog',open:Boolean($('#analysis-overlay')?.open)},location.origin);});
   $('#detail-dialog').addEventListener('click', event => { if (event.target === $('#detail-dialog')) { const rect = event.target.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.target.close(); } });
   $('#import-button').addEventListener('click', requestImport);
   $('#import-file').addEventListener('change', event => { if (event.target.files?.[0]) importFile(event.target.files[0]); });
   window.addEventListener('hx-data-updated', () => { loadFilters(sourceWasLoaded); sourceWasLoaded = true; draw(); });
   window.addEventListener('message', event => {
     if (!embedded || event.source !== window.parent || event.origin !== location.origin || !event.data || typeof event.data !== 'object') return;
-    if (event.data.type === 'ppc:blueprint:navigate' && Object.hasOwn(views, event.data.view)) { if (event.data.preferences && typeof event.data.preferences === 'object') applyPreferences(event.data.preferences); setView(event.data.view); }
+    if (event.data.type === 'ppc:blueprint:navigate' && Object.hasOwn(views, event.data.view)) { if (event.data.preferences && typeof event.data.preferences === 'object') applyPreferences(event.data.preferences); if(event.data.preferences?.workspace&&['performance','overview'].includes(event.data.view)){state.view='performance';draw();}else setView(event.data.view); }
     else if (event.data.type === 'ppc:blueprint:import') requestImport();
-    else if (event.data.type === 'ppc:blueprint:suspend') { timelineControl?.stop(); if($('#detail-dialog').open)$('#detail-dialog').close(); }
+    else if (event.data.type === 'ppc:blueprint:suspend') { timelineControl?.stop();workspaceControl?.close(); if($('#detail-dialog').open)$('#detail-dialog').close(); }
     else if (event.data.type === 'ppc:blueprint:viewport' && Number.isFinite(event.data.top) && event.data.top>=0 && Number.isFinite(event.data.height) && event.data.height>=100 && event.data.height<=3000) {
       const dialog=$('#detail-dialog');dialog.classList.add('is-host-positioned');dialog.style.setProperty('--host-dialog-top',event.data.top+'px');dialog.style.setProperty('--host-dialog-height',event.data.height+'px');
+      const overlay=$('#analysis-overlay');if(overlay){overlay.style.setProperty('--analysis-overlay-top',event.data.top+'px');overlay.style.setProperty('--analysis-overlay-height',event.data.height+'px');}
     }
   });
   if (embedded && window.parent !== window) {
