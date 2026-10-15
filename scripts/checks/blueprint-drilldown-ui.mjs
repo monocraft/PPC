@@ -31,6 +31,23 @@ const detailSource = region(dashboard, '  function metricDetail(', '  function p
 const filtersSource = region(dashboard, '  function loadFilters(', '  function selectPeriod(');
 const explorerSource = region(dashboard, '  function syncExplorerControls(', '  async function importFile(');
 const scopeIdSource = dashboard.match(/^  const scopeId = .+$/m)?.[0];
+const startupSource = region(dashboard, '  const state = {', '  const embedded =');
+const startupState = (search = '', hash = '#performance') => {
+  const startup = { location: { search, hash }, URLSearchParams };
+  vm.runInNewContext(`${startupSource}\nglobalThis.initialState = state;`, startup);
+  return startup.initialState;
+};
+assert.deepEqual(Array.from(startupState().metrics), ['revenue'], 'A first load opens only Revenue to keep the initial chart readable');
+const savedMetricWorkspace = new URLSearchParams({ workspace: JSON.stringify({ metrics: ['units', 'grossProfit', 'budget'] }) });
+assert.deepEqual(Array.from(startupState('', `#performance?${savedMetricWorkspace}`).metrics), ['units', 'grossProfit', 'budget'], 'An explicitly saved multi-measure workspace restores every selected measure rather than applying the first-load default');
+assert.deepEqual(Array.from(startupState('?workspace=' + encodeURIComponent(JSON.stringify({ metrics: ['revenue', 'grossProfit'] }))).metrics), ['revenue', 'grossProfit'], 'Compatible existing workspace links retain their explicit multi-measure selection');
+const scaleInitialization = dashboard.match(/^  state\.comparisonScale = .+$/m)?.[0];
+assert.ok(scaleInitialization);
+for (const [search, expected] of [['', 'values'], ['scale=values', 'values'], ['scale=trend', 'trend'], ['scale=invalid', 'values']]) {
+  const initialState = {};
+  vm.runInNewContext(scaleInitialization, { state: initialState, initialPreferences: new URLSearchParams(search) });
+  assert.equal(initialState.comparisonScale, expected, 'Only an explicit Indexed trend preference overrides the Values default');
+}
 const scopeFragmentSource = dashboard.match(/^  function scopeFragment\(.+$/m)?.[0];
 const workspacePreferenceSource = dashboard.match(/^  const workspacePreference=.+$/m)?.[0];
 const colorsSource = dashboard.match(/^  const colors = .+$/m)?.[0];
@@ -182,6 +199,11 @@ assert.equal(restored.overlay, 'scenarios', 'Restoring a saved performance works
 assert.equal(restored.view, 'performance'); assert.equal(restored.scenarioEnabled, true); assert.equal(restored.scenarioStart, '2027');
 assert.deepEqual(Array.from(restored.metrics), ['units', 'grossProfit']); assert.deepEqual(Array.from(restored.connectivity), ['wired', 'wireless']);
 assert.deepEqual(Array.from(restored.compareIds), ['SKU/001']); assert.equal(restored.projectId, 'PROJECT A'); assert.equal(restored.period, '2027');
+assert.equal(restored.comparisonScale, 'values');
+vm.runInContext("applyPreferences({ scale: 'trend' })", restoreContext); assert.equal(restored.comparisonScale, 'trend', 'The retained child accepts an explicit saved trend scale');
+vm.runInContext('applyPreferences({ year: 2028 })', restoreContext); assert.equal(restored.comparisonScale, 'trend', 'Year-only navigation preserves an explicitly selected trend scale');
+vm.runInContext("applyPreferences({ scale: '' })", restoreContext); assert.equal(restored.comparisonScale, 'values', 'A cleared scale preference returns to Values');
+vm.runInContext("applyPreferences({ scale: 'invalid' })", restoreContext); assert.equal(restored.comparisonScale, 'values', 'An invalid incoming scale cannot silently opt into indexing');
 assert.equal(draws.length, 1); assert.equal(legacyUpdates.length, 0, 'Preference restoration redraws the current pane without applying a second navigation reset');
 received.get('message')({ source: parentWindow, origin: 'https://other.test', data: { type: 'ppc:blueprint:navigate', view: 'source' } });
 assert.equal(restored.overlay, 'scenarios', 'A foreign origin cannot change the restored contextual tool');

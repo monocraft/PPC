@@ -14,7 +14,7 @@ assert.equal(typeof prepare, 'function'); assert.equal(typeof create, 'function'
 const periods = [2025, 2026, 2027];
 const trace = (id, metric, values, extra = {}) => ({ id, name: id, metric, color: '#20CBDD', unit: metric === 'units' ? 'units' : 'currency', points: periods.map((period, index) => ({ period, value: values[index], kind: period === 2025 ? 'actual' : period === 2026 ? 'unclassified' : 'projection', source: [{ sheet: 'Synthetic source', cell: `${id}-${period}`, value: values[index] }], basis: 'Explicit synthetic source basis' })), ...extra });
 const alpha = { entityId: 'Alpha', name: 'Alpha' };
-const input = { periods, period: 2026, series: [trace('Alpha revenue', 'revenue', [100, 200, null], alpha), trace('Alpha gross profit', 'grossProfit', [20, -10, 30], alpha), trace('Alpha investment', 'budget', [50, 100, 25], alpha), trace('Alpha units', 'units', [10, 30, 40], alpha)] };
+const input = { periods, period: 2026, scale: 'trend', series: [trace('Alpha revenue', 'revenue', [100, 200, null], alpha), trace('Alpha gross profit', 'grossProfit', [20, -10, 30], alpha), trace('Alpha investment', 'budget', [50, 100, 25], alpha), trace('Alpha units', 'units', [10, 30, 40], alpha)] };
 const before = JSON.stringify(input), indexed = prepare(input);
 assert.equal(JSON.stringify(input), before, 'Preparing a chart never modifies source data');
 assert.equal(indexed.indexed, true); assert.equal(indexed.basePeriod, 2025);
@@ -31,6 +31,14 @@ assert.equal(new Set(indexed.series.map(series => series.style.dash)).size, 4, '
 assert.ok(indexed.series.every(series => series.color === '#20CBDD'));
 
 const values = prepare({ ...input, scale: 'values' });
+const defaultValues = prepare({ ...input, scale: undefined });
+assert.equal(defaultValues.scale, 'values'); assert.equal(defaultValues.indexed, false); assert.equal(defaultValues.basePeriod, null, 'An analysis without a saved scale opens in raw Values rather than an implicit index');
+assert.deepEqual(Array.from(defaultValues.axes, axis => axis.id), ['currency', 'units'], 'Default mixed-measure analysis keeps currency and quantity on separate axes');
+for (let index = 0; index < input.series.length; index++) {
+  assert.deepEqual(Array.from(defaultValues.series[index].points, point => point.value), Array.from(input.series[index].points, point => point.value), 'Default Values keeps signed, zero and missing source observations unchanged');
+}
+assert.deepEqual(Array.from(defaultValues.series, series => series.points[1].value), [200, -10, 100, 30], 'Default revenue, gross profit, investment and units remain exact source numbers');
+assert.equal(prepare({ ...input, scale: 'invalid' }).scale, 'values', 'An unsupported scale preference falls back to Values');
 assert.equal(values.axes.length, 2, 'Currency metrics share one axis and units use one other axis');
 assert.equal(values.axes.find(axis => axis.id === 'currency').side, 'left');
 assert.equal(values.axes.find(axis => axis.id === 'units').side, 'right');
@@ -38,22 +46,22 @@ assert.equal(new Set(values.series.filter(series => series.unit === 'currency').
 assert.ok(values.axes.find(axis => axis.id === 'currency').min <= -10);
 assert.equal(values.series[1].points[1].value, -10);
 
-const fallback = prepare({ periods, series: [trace('A', 'revenue', [100, null, null]), trace('B', 'units', [null, 4, 5])] });
+const fallback = prepare({ periods, scale: 'trend', series: [trace('A', 'revenue', [100, null, null]), trace('B', 'units', [null, 4, 5])] });
 assert.equal(fallback.indexed, false); assert.equal(fallback.scale, 'values'); assert.equal(fallback.basePeriod, null);
 assert.match(fallback.reason, /No common fiscal year/); assert.equal(fallback.axes.length, 2);
 assert.deepEqual(Array.from(fallback.series[0].points, point => point.rawValue), [100, null, null]);
-const laterBase = prepare({ periods, series: [trace('A', 'revenue', [0, 10, 20]), trace('B', 'units', [0, 2, 6])] });
+const laterBase = prepare({ periods, scale: 'trend', series: [trace('A', 'revenue', [0, 10, 20]), trace('B', 'units', [0, 2, 6])] });
 assert.equal(laterBase.basePeriod, 2026); assert.equal(laterBase.series[0].points[0].value, 0, 'Genuine zero is retained before the baseline');
 assert.equal(laterBase.series[1].points[2].value, 300);
-const allZero = prepare({ periods, series: [trace('A', 'revenue', [0, 0, 0])] });
+const allZero = prepare({ periods, scale: 'trend', series: [trace('A', 'revenue', [0, 0, 0])] });
 assert.equal(allZero.scale, 'values'); assert.deepEqual(Array.from(allZero.series[0].points, point => point.value), [0, 0, 0]);
-const raw = prepare({ periods, series: [trace('A', 'revenue', [100, 200, 300], { points: [{ period: 2025, value: 100, rawValue: 20 }, { period: 2026, value: 200, rawValue: 30 }] })] });
+const raw = prepare({ periods, scale: 'trend', series: [trace('A', 'revenue', [100, 200, 300], { points: [{ period: 2025, value: 100, rawValue: 20 }, { period: 2026, value: 200, rawValue: 30 }] })] });
 assert.equal(raw.series[0].points[1].rawValue, 30); assert.equal(raw.series[0].points[1].value, 150, 'Previously indexed adapter values are never normalized twice');
 const duplicate = prepare({ periods, series: [trace('A', 'revenue', [], { points: [{ period: 2025, value: 2 }, { period: 2025, value: 3 }, { period: 2026, value: 4 }] })] });
 assert.equal(duplicate.series[0].points[0].value, null); assert.match(duplicate.warnings.join(' '), /repeated periods/);
 const incompatible = prepare({ periods, series: [trace('A', 'revenue', [null, 1, null]), trace('B', 'units', [1, null, null]), trace('C', 'ratio', [null, null, 1], { unit: '%' })] });
 assert.equal(incompatible.supported, false); assert.equal(incompatible.axes.length, 0); assert.match(incompatible.reason, /cannot share a Values axis/);
-const scenario = prepare({ periods, series: [trace('Scenario', 'revenue', [100, 120, 130], { scenario: true })] });
+const scenario = prepare({ periods, scale: 'trend', series: [trace('Scenario', 'revenue', [100, 120, 130], { scenario: true })] });
 assert.equal(scenario.series[0].points[2].status, 'Scenario');
 assert.equal(scenario.indexed, false, 'A scenario without its source trace never chooses its own normalization baseline');
 assert.match(scenario.reason, /matching source baseline/);
@@ -66,7 +74,7 @@ const scenarioModel = { periods, series: scenarioSources, allSeries: scenarioSou
 const scenarioAssumptions = { period: 2026, scenarioStart: 2026, revenueGrowth: 10, marginChange: 2, budgetChange: 0 };
 const modeled = context.window.HX_WORKSPACE_MODEL.scenarioSeries(scenarioModel, scenarioAssumptions);
 const sourceBefore = JSON.stringify(scenarioSources), modeledBefore = JSON.stringify(modeled);
-const scenarioTrend = prepare({ periods, series: [...scenarioSources, ...modeled] });
+const scenarioTrend = prepare({ periods, scale: 'trend', series: [...scenarioSources, ...modeled] });
 assert.equal(scenarioTrend.basePeriod, 2025, 'Scenario gaps in verified history cannot move the source baseline to a future year');
 const indexedRevenue = scenarioTrend.series.find(item => item.id === 'Source revenue');
 const indexedScenario = scenarioTrend.series.find(item => item.id === 'Source revenue:scenario');
@@ -80,24 +88,24 @@ const indexedGP = scenarioTrend.series.find(item => item.id === 'Source GP:scena
 assert.equal(indexedGP.baseValue, 20, 'Each scenario measure inherits its own matching source measure baseline');
 assert.ok(Math.abs(indexedGP.points[1].value - 297) < 1e-10, 'Revenue and margin changes use the same source GP base');
 assert.equal(JSON.stringify(scenarioSources), sourceBefore); assert.equal(JSON.stringify(modeled), modeledBefore);
-const signedScenario = prepare({ periods, series: [scenarioSources[0], trace('Signed scenario', 'revenue', [null, 0, -20], { entityId: 'entity-1', scenario: true })] });
+const signedScenario = prepare({ periods, scale: 'trend', series: [scenarioSources[0], trace('Signed scenario', 'revenue', [null, 0, -20], { entityId: 'entity-1', scenario: true })] });
 assert.equal(signedScenario.indexed, true); assert.equal(signedScenario.series[1].points[1].value, 0); assert.equal(signedScenario.series[1].points[2].value, -20, 'Zero and negative outcomes can be compared to the positive source base');
-const unpairedScenario = prepare({ periods, series: [scenarioSources[0], trace('Wrong scope', 'revenue', [null, 220, 330], { entityId: 'different-entity', scenario: true })] });
+const unpairedScenario = prepare({ periods, scale: 'trend', series: [scenarioSources[0], trace('Wrong scope', 'revenue', [null, 220, 330], { entityId: 'different-entity', scenario: true })] });
 assert.equal(unpairedScenario.indexed, false); assert.match(unpairedScenario.reason, /matching source baseline/); assert.equal(unpairedScenario.series[1].points[1].value, 220);
-const ambiguousScenario = prepare({ periods, series: [scenarioSources[0], { ...scenarioSources[0], id: 'Duplicate source population' }, ...modeled.filter(item => item.metric === 'revenue')] });
+const ambiguousScenario = prepare({ periods, scale: 'trend', series: [scenarioSources[0], { ...scenarioSources[0], id: 'Duplicate source population' }, ...modeled.filter(item => item.metric === 'revenue')] });
 assert.equal(ambiguousScenario.indexed, false, 'Ambiguous source populations are never assigned arbitrarily to a scenario');
-const noPositiveSource = prepare({ periods, series: [trace('No positive source', 'revenue', [0, -20, -30], { entityId: 'entity-1' }), trace('Positive scenario', 'revenue', [1, 2, 3], { entityId: 'entity-1', scenario: true })] });
+const noPositiveSource = prepare({ periods, scale: 'trend', series: [trace('No positive source', 'revenue', [0, -20, -30], { entityId: 'entity-1' }), trace('Positive scenario', 'revenue', [1, 2, 3], { entityId: 'entity-1', scenario: true })] });
 assert.equal(noPositiveSource.indexed, false, 'A positive scenario cannot supply a missing positive source baseline'); assert.equal(noPositiveSource.series[1].points[0].value, 1);
 const launchPlan = trace('Launch-year annual plan', 'revenue', [null, 180, null], { entityId: 'entity-1:launch-plan', reportedEntityId: 'entity-1', estimate: true });
-const planComparison = prepare({ periods, series: [scenarioSources[0], launchPlan] });
+const planComparison = prepare({ periods, scale: 'trend', series: [scenarioSources[0], launchPlan] });
 assert.equal(planComparison.indexed, true); assert.equal(planComparison.basePeriod, 2025, 'A one-year plan cannot move the reported-source baseline to its launch year');
 assert.equal(planComparison.series[1].baseValue, 100); assert.equal(planComparison.series[1].points[1].value, 180, 'A plan keeps its gap to reported revenue on the same source index');
 assert.equal(planComparison.series[0].points[1].value, 200); assert.equal(planComparison.series[1].points[0].value, null); assert.equal(planComparison.series[1].points[2].value, null);
-const planOnly = prepare({ periods, series: [launchPlan] });
+const planOnly = prepare({ periods, scale: 'trend', series: [launchPlan] });
 assert.equal(planOnly.indexed, false); assert.equal(planOnly.series[0].points[1].value, 180, 'A plan-only project retains its exact annual source value without self-indexing'); assert.match(planOnly.reason, /matching source baseline/);
-const missingReportedPlan = prepare({ periods, series: [scenarioSources[0], { ...launchPlan, reportedEntityId: 'other-project' }] });
+const missingReportedPlan = prepare({ periods, scale: 'trend', series: [scenarioSources[0], { ...launchPlan, reportedEntityId: 'other-project' }] });
 assert.equal(missingReportedPlan.indexed, false, 'A plan never borrows another project source denominator');
-const nonPositiveReportedPlan = prepare({ periods, series: [trace('Reported losses', 'revenue', [0, -20, -30], { entityId: 'entity-1' }), launchPlan] });
+const nonPositiveReportedPlan = prepare({ periods, scale: 'trend', series: [trace('Reported losses', 'revenue', [0, -20, -30], { entityId: 'entity-1' }), launchPlan] });
 assert.equal(nonPositiveReportedPlan.indexed, false, 'A positive annual plan does not manufacture a positive reported baseline'); assert.equal(nonPositiveReportedPlan.series[1].points[1].value, 180);
 
 // SKU investment is unavailable rather than zero. Its empty source/scenario
@@ -105,7 +113,7 @@ assert.equal(nonPositiveReportedPlan.indexed, false, 'A positive annual plan doe
 const skuSources = [...scenarioSources, trace('SKU investment', 'budget', [null, null, null], { entityId: 'entity-1' })];
 const skuModel = { periods, series: skuSources, allSeries: skuSources };
 const skuSensitivity = context.window.HX_WORKSPACE_MODEL.scenarioSeries(skuModel, scenarioAssumptions);
-const skuTrend = prepare({ periods, series: [...skuSources, ...skuSensitivity] });
+const skuTrend = prepare({ periods, scale: 'trend', series: [...skuSources, ...skuSensitivity] });
 assert.equal(skuTrend.indexed, true); assert.equal(skuTrend.basePeriod, 2025, 'An entirely unavailable SKU measure cannot constrain the common source base');
 assert.equal(skuTrend.series.length, 7, 'Unavailable source and scenario investment traces remain in the model and legend');
 assert.match(skuTrend.warnings.join(' '), /entirely unavailable source series remains.*Unavailable.*PD investment.*Missing values are not zero/);
@@ -116,13 +124,13 @@ for (const emptyBudget of skuTrend.series.filter(item => item.metric === 'budget
 }
 assert.ok(Math.abs(skuTrend.series.find(item => item.id === 'Source revenue:scenario').points[1].value - 220) < 1e-10);
 for (const values of [[null, 0, null], [null, -10, null]]) {
-  const observedInvestment = prepare({ periods, series: [...scenarioSources, trace('Observed investment', 'budget', values, { entityId: 'entity-1' })] });
+  const observedInvestment = prepare({ periods, scale: 'trend', series: [...scenarioSources, trace('Observed investment', 'budget', values, { entityId: 'entity-1' })] });
   assert.equal(observedInvestment.indexed, false, 'Any reported zero or negative observation still constrains the common baseline');
   assert.match(observedInvestment.reason, /No common fiscal year/);
 }
-const sharedLaterInvestment = prepare({ periods, series: [...scenarioSources, trace('Later positive investment', 'budget', [null, 0, 50], { entityId: 'entity-1' })] });
+const sharedLaterInvestment = prepare({ periods, scale: 'trend', series: [...scenarioSources, trace('Later positive investment', 'budget', [null, 0, 50], { entityId: 'entity-1' })] });
 assert.equal(sharedLaterInvestment.basePeriod, 2027); assert.ok(sharedLaterInvestment.series.every(item => item.points[2].value === 100), 'An observed investment chooses the same later positive year for every measure');
-const unavailablePlanDenominator = prepare({ periods, series: [scenarioSources[0], trace('Unavailable GP', 'grossProfit', [null, null, null], { entityId: 'entity-1' }), trace('Annual GP plan', 'grossProfit', [null, 180, null], { entityId: 'entity-1:launch-plan', reportedEntityId: 'entity-1', estimate: true })] });
+const unavailablePlanDenominator = prepare({ periods, scale: 'trend', series: [scenarioSources[0], trace('Unavailable GP', 'grossProfit', [null, null, null], { entityId: 'entity-1' }), trace('Annual GP plan', 'grossProfit', [null, 180, null], { entityId: 'entity-1:launch-plan', reportedEntityId: 'entity-1', estimate: true })] });
 assert.equal(unavailablePlanDenominator.indexed, false, 'A numeric annual plan cannot index against an unavailable source measure even when another measure has a base');
 assert.match(unavailablePlanDenominator.reason, /positive matching source baseline/);
 assert.equal(unavailablePlanDenominator.series[2].points[1].value, 180);
@@ -319,7 +327,7 @@ assert.deepEqual(root.querySelectorAll('.hac-legend-value').map(value => value.t
 assert.equal(root.querySelectorAll('.hac-plan-disclosure')[0].open === true, false, 'Auxiliary annual plans do not expand the default readout');
 const beforePlanLayout = layouts.length; root.querySelectorAll('.hac-plan-disclosure')[0].dispatch('toggle'); assert.equal(layouts.length, beforePlanLayout + 1);
 const cohortPlan = { ...launchPlan, displayEntityId: 'connection-wired', displayName: 'Wired' };
-const cohortPlanModel = chart.update({ periods, period: 2026, series: [cohortTraces[0], cohortPlan] });
+const cohortPlanModel = chart.update({ periods, period: 2026, scale: 'trend', series: [cohortTraces[0], cohortPlan] });
 assert.equal(root.querySelectorAll('.hac-entity-group').length, 1); assert.equal(root.querySelectorAll('.hac-entity-name')[0].textContent, 'Wired');
 assert.equal(cohortPlanModel.indexed, false, 'Display linkage does not let a project plan borrow a cohort baseline');
 assert.deepEqual(root.querySelectorAll('.hac-legend-value').map(value => value.textContent), ['$200.00', '$180.00'], 'A linked cohort plan remains separate, never added to reported revenue');
@@ -332,7 +340,7 @@ stage.dispatch('pointermove', { clientX: 956, pointerId: 11 });
 assert.equal(magnitudeValue.textContent, '-$25.25'); assert.equal(magnitudeValue.className.split(/\s+/).includes('is-long'), false, 'The same readout node handles short, large and signed values');
 stage.dispatch('pointerleave');
 const crowdedSources = Array.from({ length: 40 }, (_, index) => trace(`Crowded ${index}`, 'revenue', [.5, 1000, 2000], { entityId: `crowded-${index}` }));
-chart.update({ periods, period: 2026, series: crowdedSources });
+chart.update({ periods, period: 2026, scale: 'trend', series: crowdedSources });
 const inspectedBeforeCrowding = inspected.length; root.querySelectorAll('.hac-legend-row')[0].dispatch('click');
 assert.equal(inspected.length, inspectedBeforeCrowding, 'A crowded point selection still does not open source evidence automatically');
 assert.equal(primaryValues().length, 1); assert.equal(primaryValues()[0].getAttribute('data-series-id'), 'Crowded 0', 'Crowding never discards the primary selected point label');
@@ -363,7 +371,7 @@ const comparisonYears = [2025, 2026, 2027, 2028];
 const sourceForComparison = (id, metric, values, entityId, extra = {}) => trace(id, metric, [], { entityId, name: 'Same family', points: comparisonYears.map((period, index) => ({ period, value: values[index], kind: period === 2025 ? 'actual' : 'unclassified', source: [{ sheet: 'Synthetic readout comparisons', cell: `${id}-${period}`, value: values[index] }] })), ...extra });
 const comparisonSources = [sourceForComparison('A:revenue', 'revenue', [100, 200, 0, 0], 'A'), sourceForComparison('A:units', 'units', [10, 10, 0, null], 'A'), sourceForComparison('A:profit', 'grossProfit', [20, 40, 0, 0], 'A'), sourceForComparison('A:investment', 'budget', [5, 10, 0, 0], 'A'), sourceForComparison('B:revenue', 'revenue', [200, 100, -5, -10], 'B'), sourceForComparison('B:units', 'units', [20, 20, 5, 5], 'B'), sourceForComparison('B:profit', 'grossProfit', [40, 20, -1, -2], 'B'), sourceForComparison('B:investment', 'budget', [10, 5, null, null], 'B')];
 const comparisonEntities = ['A', 'B'].map(id => ({ id, name: 'Same family', revenuePoints: comparisonSources.find(item => item.id === id + ':revenue').points, unitsPoints: comparisonSources.find(item => item.id === id + ':units').points }));
-const comparisonModel = { periods: comparisonYears, period: 2026, series: [...comparisonSources, sourceForComparison('A:scenario', 'revenue', [null, 500, null, null], 'A', { scenario: true }), sourceForComparison('B:annual-plan', 'revenue', [null, 1000, null, null], 'B:plan', { estimate: true, reportedEntityId: 'B' })], comparison: { entities: comparisonEntities } };
+const comparisonModel = { periods: comparisonYears, period: 2026, scale: 'trend', series: [...comparisonSources, sourceForComparison('A:scenario', 'revenue', [null, 500, null, null], 'A', { scenario: true }), sourceForComparison('B:annual-plan', 'revenue', [null, 1000, null, null], 'B:plan', { estimate: true, reportedEntityId: 'B' })], comparison: { entities: comparisonEntities } };
 const comparisonBefore = JSON.stringify(comparisonModel), comparisonContainer = new Element('div', doc), comparisonPeriods = [], comparisonChart = create(comparisonContainer, { onPeriod: period => comparisonPeriods.push(period) });
 const comparisonPrepared = comparisonChart.update(comparisonModel), comparisonRoot = comparisonContainer.children[0], comparisonStage = comparisonRoot.querySelectorAll('.hac-stage')[0], comparisonRange = comparisonRoot.querySelectorAll('.hac-year-range')[0], comparisonContext = comparisonRoot.querySelectorAll('.hac-comparison-context')[0];
 const comparisonRow = id => comparisonRoot.querySelectorAll('.hac-legend-row').find(row => row.getAttribute('data-series-id') === id);

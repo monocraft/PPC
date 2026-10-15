@@ -277,6 +277,19 @@ function workspaceFixture(url = "https://example.test/PPC/analytics.html") {
   };
 }
 const workspace = workspaceFixture();
+const defaultScaleWorkspace = workspaceFixture('https://example.test/PPC/analytics.html#blueprint/performance');
+assert.equal(new URL(defaultScaleWorkspace.frame.src).searchParams.get('scale'), 'values', 'A newly opened Portfolio plan starts with Values in the retained frame');
+assert.equal(defaultScaleWorkspace.window.PPCAnalyticsWorkspace.captureView().scale, 'values');
+const explicitTrendWorkspace = workspaceFixture('https://example.test/PPC/analytics.html?scale=trend#blueprint/performance');
+assert.equal(new URL(explicitTrendWorkspace.frame.src).searchParams.get('scale'), 'trend', 'An explicitly requested trend URL remains indexed');
+explicitTrendWorkspace.frame.emit('load');
+explicitTrendWorkspace.window.PPCSavedViews = { sanitizePreferences(kind, value) { assert.equal(kind, 'blueprint'); return structuredClone(value); } };
+await explicitTrendWorkspace.window.PPCAnalyticsWorkspace.applyView({ view: 'performance', scale: 'trend', year: '2027' }, 'blueprint');
+assert.equal(explicitTrendWorkspace.posts.at(-1).message.preferences.scale, 'trend', 'A saved view retains its explicit Indexed trend preference');
+assert.equal(explicitTrendWorkspace.window.PPCAnalyticsWorkspace.captureView().scale, 'trend');
+await explicitTrendWorkspace.window.PPCAnalyticsWorkspace.applyView({ view: 'performance', year: '2026' }, 'blueprint');
+assert.equal(explicitTrendWorkspace.posts.at(-1).message.preferences.scale, 'values', 'A saved view without a scale uses Values instead of inheriting the previous view’s trend');
+assert.equal(explicitTrendWorkspace.window.PPCAnalyticsWorkspace.captureView().scale, 'values');
 assert.equal(workspace.window.PPCAnalyticsWorkspace.currentModule, "retail");
 assert.equal(workspace.loads, 0, "Starting Retail does not instantiate another source workspace.");
 assert.equal(workspace.retail.hidden, false); assert.equal(workspace.blueprint.hidden, true);

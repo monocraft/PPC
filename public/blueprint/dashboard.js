@@ -5,7 +5,7 @@
   const colors = ['#895EF6', '#6984ED', '#4DA1F7', '#20CBDD', '#7AE3A9', '#FFC63B'];
   const state = { view: 'overview', period: null, category: ['all'], groupId: null, projectId: null, skuId: null, compareIds: [], drillQuery: '', metric: 'revenue', query: '', sheetQuery: '', sort: 'revenue', revenueGrowth: 0, marginChange: 0, budgetChange: 0, forecast: false, decisionAction:'all' };
   let timelineControl, categoryControl, workspaceControl, sourceWasLoaded = false, startupComplete = false, importBusy = false, pendingImport = false, activeDrill = null, comparisonModels = new Map();
-  Object.assign(state, {metrics:['revenue','grossProfit'],connectivity:['all'],productSort:'revenue',sortDirection:'desc',overlay:null,scenarioEnabled:false,scenarioStart:null});
+  Object.assign(state, {metrics:['revenue'],connectivity:['all'],productSort:'revenue',sortDirection:'desc',overlay:null,scenarioEnabled:false,scenarioStart:null});
   function applyWorkspace(value) {
     try {
       const next=typeof value==='string'?JSON.parse(value):value;if(!next||typeof next!=='object')return;
@@ -27,7 +27,7 @@
   const fragmentView = () => location.hash.slice(1).split('?')[0];
   const initialPreferences = locationPreferences();
   applyWorkspace(initialPreferences.get('workspace'));
-  state.comparisonScale = initialPreferences.get('scale') === 'values' ? 'values' : 'trend';
+  state.comparisonScale = initialPreferences.get('scale') === 'trend' ? 'trend' : 'values';
   const embedded = initialPreferences.get('embedded') === '1';
   state.period = initialPreferences.get('year') || null;
   state.category = (initialPreferences.get('category') || 'all').split(',').map(value => value.trim()).filter(Boolean);
@@ -540,7 +540,7 @@
     const has = key => preferences instanceof URLSearchParams ? preferences.has(key) : Object.hasOwn(preferences, key);
     if (has('year') && (typeof get('year') === 'string' || typeof get('year') === 'number')) state.period = String(get('year')).slice(0, 20);
     if (has('category') && typeof get('category') === 'string' && get('category').length <= 1200 && !/[\u0000-\u001f\u007f]/.test(get('category'))) state.category = get('category').split(',').map(value => value.trim()).filter(Boolean);
-    if (has('scale')) state.comparisonScale = get('scale') === 'values' ? 'values' : 'trend';
+    if (has('scale')) state.comparisonScale = get('scale') === 'trend' ? 'trend' : 'values';
     for (const key of ['groupId', 'projectId', 'skuId']) if (has(key)) state[key] = scopeId(get(key));
     if (has('compare')) state.compareIds = parseCompare(get('compare'));
     if (has('workspace')) applyWorkspace(get('workspace'));

@@ -15,7 +15,7 @@
     const valueText = (value, metric, precise = true) => finite(value) ? format(value, metric, precise) : 'Unavailable';
     const basisLabel = point => ({actual:'Actual',history:'History',projection:'Plan',plan:'Plan',scenario:'Scenario',unclassified:'Unclassified'}[point?.kind] || 'Unclassified');
     const coverageLabel = point => point?.coverage && !point.coverage.complete ? `${finite(point.value)?'Known subtotal · ':''}${point.coverage.availableCount}/${point.coverage.selectedCount} reported` : '';
-    $('#analysis-toolbar').innerHTML = `<div class="analysis-metrics" role="group" aria-label="Measures to overlay">${Object.entries(metricSpec).map(([key, metric]) => `<button type="button" data-analysis-metric="${key}" aria-pressed="false" style="--metric-color:${metric.color}">${metric.label}</button>`).join('')}</div><div class="analysis-scale" role="group" aria-label="Chart scale"><button type="button" data-analysis-scale="trend">Indexed trend</button><button type="button" data-analysis-scale="values">Values</button></div>`;
+    $('#analysis-toolbar').innerHTML = `<div class="analysis-metrics" role="group" aria-label="Measures to overlay">${Object.entries(metricSpec).map(([key, metric]) => `<button type="button" data-analysis-metric="${key}" aria-pressed="false" style="--metric-color:${metric.color}">${metric.label}</button>`).join('')}</div><div class="analysis-scale" role="group" aria-label="Chart scale"><button type="button" data-analysis-scale="values">Values</button><button type="button" data-analysis-scale="trend">Indexed trend</button></div>`;
     $('#analysis-connectivity').innerHTML = `<div class="analysis-connectivity" role="group" aria-label="Connectivity scope">${[['all','All connections'],['wired','Wired'],['wireless','Wireless'],['both','Hybrid'],['unclassified','Unclassified']].map(([value,label]) => `<button type="button" data-analysis-connection="${value}" aria-pressed="false">${label}<span data-connection-count="${value}"></span></button>`).join('')}<button type="button" data-compare-connectivity>Compare wired / wireless</button></div><p class="analysis-connection-note" id="analysis-connection-note"></p>`;
     function currentScopeLabel() { return model.selected.length ? `${model.selected.length} selected ${hooks.drill()?.scope?.level === 'project' ? 'SKUs' : hooks.drill()?.scope?.level === 'group' ? 'projects' : 'products'}` : (state.connectivity || []).includes('all') ? hooks.scopeLabel() : (state.connectivity || []).join(' + '); }
     function scenarioCurrent(metric) {
@@ -42,7 +42,9 @@
       if (!chart) chart = root.HX_ANALYSIS_CANVAS.create($('#analysis-chart'), { viewControlsContainer:$('#analysis-chart-controls'),onPeriod: hooks.selectPeriod, onPoint: showPoint, onEntity(entity) { const matches=model.catalog.filter(child=>child.id===entity.id);if(matches.length!==1)return false;hooks.selectScope(matches[0]);return true; } });
       const chartSeries=series.map(trace=>{const id=trace.displayEntityId??(trace.estimate?trace.reportedEntityId:trace.entityId),matches=model.catalog.filter(child=>child.id===id);return {...trace,entityDetailLevel:matches.length===1?matches[0].level||'product':null};});
       const comparison=model.selected.length>=2?{entities:model.selected.map(child=>({id:child.id,name:child.name||child.id,revenuePoints:model.allSeries.find(trace=>trace.entityId===child.id&&trace.metric==='revenue'&&!trace.scenario&&!trace.estimate)?.points||[],unitsPoints:model.allSeries.find(trace=>trace.entityId===child.id&&trace.metric==='units'&&!trace.scenario&&!trace.estimate)?.points||[]}))}:null;
-      chart.update({ periods: model.periods, period: state.period, series:chartSeries,comparison,scale: state.comparisonScale, title: `${currentScopeLabel()} · financial performance` });
+      const rendered = chart.update({ periods: model.periods, period: state.period, series:chartSeries,comparison,scale: state.comparisonScale, title: `${currentScopeLabel()} · financial performance` });
+      const effectiveScale = rendered?.scale || state.comparisonScale || 'values';
+      for (const button of document.querySelectorAll('[data-analysis-scale]')) button.setAttribute('aria-pressed',String(effectiveScale===button.dataset.analysisScale));
       renderSummary();
     }
     function renderSelectionColors() {
@@ -124,7 +126,6 @@
       renderSelectionColors();
       $('#explorer-selection').textContent = `${currentScopeLabel()} · ${year(state.period)}`;
       for (const button of document.querySelectorAll('[data-analysis-metric]')) button.setAttribute('aria-pressed',String(state.metrics.includes(button.dataset.analysisMetric)));
-      for (const button of document.querySelectorAll('[data-analysis-scale]')) button.setAttribute('aria-pressed',String(state.comparisonScale===button.dataset.analysisScale));
       const options = root.HX_CONNECTIVITY?.options(hooks.data(),model.catalog) || [];
       for (const button of document.querySelectorAll('[data-analysis-connection]')) button.setAttribute('aria-pressed',String(state.connectivity.includes(button.dataset.analysisConnection)));
       for (const option of options) { const count = document.querySelector(`[data-connection-count="${option.value}"]`); if (count) count.textContent = ` ${option.count}`; }

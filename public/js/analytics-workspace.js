@@ -33,7 +33,7 @@
     }catch(_){return null;}
   }
   const bounds = { revenue: [-30,30], margin: [-10,10], spend: [-30,30] };
-  const blueprintState = { view: 'overview' };
+  const blueprintState = { view: 'overview', scale: 'values' };
   const assetVersion = new URL(document.currentScript?.src || root.location.href).searchParams.get('v');
   let currentModule = 'retail', frameLoaded = false, blueprintDialogOpen = false;
 
@@ -196,7 +196,7 @@
     }
     // A named view replaces presentation preferences, while the retained frame keeps its source.
     for (const key of preferences) delete blueprintState[key];
-    Object.assign(blueprintState, { year: '2026', category: 'all', scale: 'trend', revenue: '0', margin: '0', spend: '0', groupId: '', projectId: '', skuId: '', compare: '[]' }, saved);
+    Object.assign(blueprintState, { year: '2026', category: 'all', scale: 'values', revenue: '0', margin: '0', spend: '0', groupId: '', projectId: '', skuId: '', compare: '[]' }, saved);
     blueprintState.view = views.has(saved.view) ? saved.view : 'overview';
     switchModule('blueprint');
     return { message: 'Portfolio plan view opened. Selections use the current workbook; unavailable source identities are checked by the plan.' };

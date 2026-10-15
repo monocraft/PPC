@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 
-const [dashboard, analytics, styleParts, html, workspaceModel, unifiedWorkspace, connectivity] = await Promise.all([
+const [dashboard, analytics, styleParts, html, workspaceModel, unifiedWorkspace, connectivity, canvasSource] = await Promise.all([
   readFile(new URL('../../public/blueprint/dashboard.js', import.meta.url), 'utf8'),
   readFile(new URL('../../public/blueprint/analytics.js', import.meta.url), 'utf8'),
   Promise.all(['embed.css', 'explorer-pane.css', 'dashboard.css', 'analysis-workspace.css'].map(file => readFile(new URL('../../public/blueprint/' + file, import.meta.url), 'utf8'))),
@@ -11,6 +11,7 @@ const [dashboard, analytics, styleParts, html, workspaceModel, unifiedWorkspace,
   readFile(new URL('../../public/blueprint/workspace-model.js', import.meta.url), 'utf8'),
   readFile(new URL('../../public/blueprint/unified-workspace.js', import.meta.url), 'utf8'),
   readFile(new URL('../../public/blueprint/product-connectivity.js', import.meta.url), 'utf8'),
+  readFile(new URL('../../public/blueprint/analysis-canvas.js', import.meta.url), 'utf8'),
 ]);
 const stylesheet = styleParts.join('\n');
 const periods = [2025, 2026, 2027], ref = (cell, value) => ({ sheet: 'Synthetic sibling source', cell, value });
@@ -141,9 +142,10 @@ state.drillQuery = '';
 // Exercise the actual single-canvas adapter and source callbacks, not only the
 // retained legacy chart helpers used above for provenance regressions.
 const documentEvents = new Map();
+const scaleButtons = ['values', 'trend'].map(scale => Object.assign(element(), { dataset: { analysisScale: scale } }));
 Object.assign(context.document, {
   querySelector: node,
-  querySelectorAll: () => [],
+  querySelectorAll: selector => selector === '[data-analysis-scale]' ? scaleButtons : [],
   addEventListener(type, callback) { if (!documentEvents.has(type)) documentEvents.set(type, new Set()); documentEvents.get(type).add(callback); },
   removeEventListener(type, callback) { documentEvents.get(type)?.delete(callback); }
 });
@@ -151,7 +153,9 @@ const storedCases = new Map(), sourceDigests = [];
 Object.assign(context, { crypto: { subtle: { digest(...args) { const promise = webcrypto.subtle.digest(...args); sourceDigests.push(promise); return promise; } } }, TextEncoder, localStorage: { getItem(key) { return storedCases.get(key) || null; }, setItem(key, value) { storedCases.set(key, String(value)); } } });
 const identityReady = async () => { await Promise.all(sourceDigests); await Promise.resolve(); };
 let graphCreates = 0, graphDestroys = 0;
-window.HX_ANALYSIS_CANVAS = { create(_node, callbacks) { graphCreates++; controls.mainCallbacks = callbacks; return { update(config) { controls.main = config; }, destroy() { graphDestroys++; } }; } };
+vm.runInContext(canvasSource, context);
+const prepareCanvas = window.HX_ANALYSIS_CANVAS.prepare;
+window.HX_ANALYSIS_CANVAS = { create(_node, callbacks) { graphCreates++; controls.mainCallbacks = callbacks; return { update(config) { controls.main = config; return controls.rendered = prepareCanvas(config); }, destroy() { graphDestroys++; } }; } };
 vm.runInContext(connectivity, context); vm.runInContext(workspaceModel, context); vm.runInContext(unifiedWorkspace, context);
 const { comparisonBaseline, comparisonPercent } = window.HX_WORKSPACE_MODEL;
 assert.equal(typeof comparisonBaseline, 'function'); assert.equal(typeof comparisonPercent, 'function');
@@ -184,6 +188,9 @@ const inputAssumption = (key, value, min, max) => {
   for (const callback of documentEvents.get('input') || []) callback({ target });
 };
 unified.update();
+assert.deepEqual([...node('#analysis-toolbar').innerHTML.matchAll(/data-analysis-scale="([^"]+)"/g)].map(([, scale]) => scale), ['values', 'trend'], 'Values appears before the optional Indexed trend control');
+assert.equal(controls.rendered.scale, 'trend');
+assert.equal(scaleButtons.find(button => button.dataset.analysisScale === 'trend').attrs['aria-pressed'], 'true', 'An eligible explicit trend preference highlights the actual indexed graph');
 const financialCards = cardMetrics(nodes.get('#drill-results').innerHTML);
 assert.equal(financialCards.get('0').get('revenue'), '200'); assert.equal(financialCards.get('0').get('units'), '20'); assert.equal(financialCards.get('0').get('grossProfit'), '40'); assert.equal(financialCards.get('0').get('budget'), '150');
 assert.doesNotMatch(node('#drill-results').innerHTML, /drill-metric-difference|data-product-difference|drill-comparison-baseline/, 'Product cards keep source values while percentage comparisons belong to the Inspect readout');
@@ -313,7 +320,12 @@ assertMovementDirection('revenue', 'negative', 'Decrease: −$20');
 state.compareIds = ['g5']; ui.refreshDrillScope(true); unified.update();
 assert.deepEqual(movementFigures('revenue'), { values: ['$25', '$25'], change: '$0' }, 'A genuine zero movement stays zero rather than becoming missing or gaining a false positive sign');
 assertMovementDirection('revenue', 'neutral', 'No change: $0');
-state.compareIds = ['g6']; ui.refreshDrillScope(true); unified.update();
+const metricsBeforeMissingBaseline = state.metrics;
+state.metrics = ['revenue']; state.compareIds = ['g6']; ui.refreshDrillScope(true); unified.update();
+assert.equal(state.comparisonScale, 'trend', 'A temporary missing baseline does not overwrite the user’s explicit trend preference');
+assert.equal(controls.rendered.scale, 'values');
+assert.equal(scaleButtons.find(button => button.dataset.analysisScale === 'values').attrs['aria-pressed'], 'true');
+assert.equal(scaleButtons.find(button => button.dataset.analysisScale === 'trend').attrs['aria-pressed'], 'false', 'When indexing is unavailable, the highlighted control matches the actual Values fallback');
 assert.deepEqual(movementFigures('revenue'), { values: ['—', '—'], change: '—' }, 'Missing source values use compact missing markers rather than fabricated zero movement');
 assert.match(movementItems().get('revenue'), /aria-label="Revenue, FY25, Unavailable"/); assert.match(movementItems().get('revenue'), /aria-label="Revenue, FY26, Unavailable,/);
 assertMovementDirection('revenue', 'unavailable', 'Unavailable: Unavailable');
@@ -326,7 +338,8 @@ assert.ok(node('#analysis-summary').innerHTML.includes(`${missingCoverage.availa
 clickWorkspace({ analysisSummary: 'revenue' });
 assert.match(inlineContent(), /data-inline-point-value[^>]*>Unavailable/); assert.doesNotMatch(visibleText(inlineContent()), /Reporting basis|\bScope\b|\d+\s*\/\s*\d+\s+reported/, 'Point evidence keeps the entity and value without restoring removed visible field labels');
 assert.match(inlineContent(), /analysis-point-metadata hac-sr-only/, 'Point reporting metadata remains accessible when its visible label is removed');
-window.HX_DATA = insightSource; state.compareIds = ['g1', 'g2']; ui.refreshDrillScope(true); unified.update(); unified.open('insights');
+window.HX_DATA = insightSource; state.metrics = metricsBeforeMissingBaseline; state.compareIds = ['g1', 'g2']; ui.refreshDrillScope(true); unified.update(); unified.open('insights');
+assert.equal(controls.rendered.scale, 'trend'); assert.equal(scaleButtons.find(button => button.dataset.analysisScale === 'trend').attrs['aria-pressed'], 'true', 'The explicit trend preference resumes when the source baseline becomes valid again');
 assert.equal(unified.model.summary.revenue.value, 240, 'Synthetic display regressions do not change the original selected financial baseline');
 assert.equal(node('#analysis-graph-shell').style.getPropertyValue('--analysis-plot-top'), '');
 assert.equal(node('#analysis-graph-shell').style.getPropertyValue('--analysis-plot-height'), '', 'Bottom tools never write obsolete plot-height constraints');

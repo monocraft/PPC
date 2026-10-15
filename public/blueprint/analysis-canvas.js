@@ -94,7 +94,7 @@
         })
       };
     });
-    const requestedScale = model.scale === 'values' ? 'values' : 'trend';
+    const requestedScale = model.scale === 'trend' ? 'trend' : 'values';
     // Modeled outcomes and annual plans are overlays of reported source series.
     // They neither choose the base period nor normalize against their own value.
     const sources = series.filter(trace => !trace.scenario && !trace.estimate), overlaySources = new Map();
