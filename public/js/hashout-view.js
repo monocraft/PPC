@@ -729,7 +729,7 @@
       const extraHeight = capsuleExpanded ? naturalExtra : 0;
       let above = Boolean(label && source.y > label.y + label.height);
       let y = label ? label.y + (above ? label.height - headingHeight : source.y >= label.y && source.y <= label.y + label.height ? (label.height - headingHeight) / 2 : 0) : source.y + 15;
-      const sideLabel = label && (source.x < x - 6 || source.x > x + w + 6);
+      const sideLabel = label && source.y >= label.y && source.y <= label.y + label.height && (source.x < x - 6 || source.x > x + w + 6);
       const coversSource = !sideLabel && source.y >= y - 12 && source.y <= y + headingHeight + 12;
       if (!label || coversSource) {
         let aboveAnchor = source.y - 15 - headingHeight, belowAnchor = source.y + 15;
