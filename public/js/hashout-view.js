@@ -678,7 +678,7 @@
           card.classList.toggle("opens-up", above);
           if (extra) { extra.style.maxHeight = `${Math.max(26, above ? label.y - headerHeight() - 4 : height - label.y - 38)}px`; extra.style.overflowY = "auto"; }
           const h = card.offsetHeight;
-          card.style.left = `${x}px`; card.style.top = `${clamp(above ? label.y - (h - 30) : label.y, 8, Math.max(8, height - h - 8))}px`;
+          card.style.left = `${x}px`; card.style.top = `${clamp(above ? label.y - (h - 30) : label.y, 0, Math.max(0, height - h))}px`;
           return;
         }
         const entry = cardEntries[0], anchor = cardAnchor;
