@@ -95,9 +95,10 @@
     catch (error) { if (generation !== loadGeneration) return; selectedFile = null; result.textContent = error.message; renderChoices(); }
   });
   load.body.append(description, fileInput, result, choices, privacy); renderChoices();
+  function openLoad() { root.PortfolioWorkspaceUI?.closeSettings?.(); load.open(); }
   const loadButton = doc.getElementById('loadDataButton') || doc.getElementById('analyticsLoadData');
-  loadButton?.addEventListener('click', () => { load.open(); });
-  doc.getElementById('emptyLoadData')?.addEventListener('click',()=>load.open());
+  loadButton?.addEventListener('click', openLoad);
+  doc.getElementById('emptyLoadData')?.addEventListener('click',openLoad);
   let planning = null;
 
   function portfolioFeatures() {
@@ -239,6 +240,8 @@
       if(recovery.el.open&&!recoveryBusy&&recoveryFailureCode!==(adapter.getLocalSaveFailure()?.code||''))void showLocalRecovery(state.localError?'':'Saved on this device.').catch(error=>announce(error.message));
     }
     const groups=[];
+    const selection=doc.querySelector('.workspace-controls > .selection-bar'),selectionHome=selection?doc.createComment('workflow-selection-position'):null;
+    if(selectionHome)selection.before(selectionHome);
     function groupTools(container,targets,id) {
       if(!container||!targets.length||groups.some(group=>group.container===container))return;
       const menu=node('details','workflow-tool-options');menu.id=id;menu.append(node('summary','','View options'));const content=node('div');menu.append(content);
@@ -249,7 +252,13 @@
     function positionToolMenu(menu) { if(root.innerWidth<=700)menu.style.setProperty('--workflow-menu-top',`${Math.max(12,Math.min(root.innerHeight-160,Math.ceil(menu.getBoundingClientRect().bottom)))}px`); }
     function arrangeTools() {
       const controls=doc.getElementById('roadmapControls');
-      groupTools(controls,controls?[...controls.children].filter(child=>child.matches('.roadmap-interaction-mode,.roadmap-edit-controls,#toggleRoadmapDetails')):[],'workflowRoadmapOptions');
+      const editing=doc.getElementById('roadmapEditingTools')||controls,navigation=doc.getElementById('roadmapNavigationTools')||controls;
+      if(selection&&selectionHome?.isConnected&&editing){
+        const roadmapActive=controls&&!controls.classList.contains('hidden');
+        if(roadmapActive&&selection.parentElement!==editing){const moves=editing.querySelector('.roadmap-edit-controls');if(moves)editing.insertBefore(selection,moves);else editing.append(selection);}
+        else if(!roadmapActive&&selection.previousSibling!==selectionHome)selectionHome.after(selection);
+      }
+      groupTools(navigation,editing?[...editing.children].filter(child=>child.matches('.roadmap-interaction-mode,.roadmap-edit-controls,#toggleRoadmapDetails')):[],'workflowRoadmapOptions');
       const hashout=doc.querySelector('.hashout-toolbar');groupTools(hashout,hashout?[...hashout.querySelectorAll('.hashout-label-control,.hashout-windows-control')]:[],'workflowHashoutOptions');
       for(const group of [...groups]) {
         if(!group.container.isConnected){groups.splice(groups.indexOf(group),1);continue;}
@@ -268,10 +277,10 @@
           if(mode==='selected')action.title='Fit the timeline to the selected product’s dates.';
           range.append(action);
         }
-        controls.append(range);
+        navigation.append(range);
       }
       const range=doc.getElementById('workflowRangeActions'),menu=doc.getElementById('workflowRoadmapOptions');
-      if(range&&controls){const destination=root.innerWidth<=700&&menu?menu.lastElementChild:controls;if(range.parentElement!==destination)destination.append(range);}
+      if(range&&navigation){const destination=root.innerWidth<=700&&menu?menu.lastElementChild:navigation;if(range.parentElement!==destination)destination.append(range);}
     }
     root.addEventListener('resize',arrangeTools);root.addEventListener('portfolio:render',arrangeTools);arrangeTools();
     for(const type of ['portfolio:render','portfolio:master-status','portfolio:local-status','portfolio:protection-change','portfolio:planning-review']) root.addEventListener(type,updateStatus);
@@ -279,7 +288,7 @@
     root.PortfolioNotifications?.subscribe(()=>{if(notificationRefreshQueued)return;notificationRefreshQueued=true;Promise.resolve().then(()=>{notificationRefreshQueued=false;updateStatus();});});
     for(const action of doc.querySelectorAll('[data-workflow-range]')) action.addEventListener('click',()=>{try{adapter.rangePreset(action.dataset.workflowRange);}catch(error){announce(error.message);}});
     updateStatus();
-    root.PortfolioWorkflowUI = Object.freeze({ openLoad:()=>load.open(),openReview,openLocalRecovery,openProtection,planning,getReviewItems:items,refresh:updateStatus });
+    root.PortfolioWorkflowUI = Object.freeze({ openLoad,openReview,openLocalRecovery,openProtection,planning,getReviewItems:items,refresh:updateStatus });
   }
   if(root.PortfolioWorkflowAdapter) void Promise.resolve(root.PortfolioWorkspaceReady).then(portfolioFeatures).catch(()=>{});
   const request = new URL(root.location.href).searchParams.get('loadRequest');

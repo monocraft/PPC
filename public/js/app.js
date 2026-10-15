@@ -2855,23 +2855,6 @@ function syncFfsRoadmapControls() {
   document.querySelectorAll("[data-roadmap-basis]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.roadmapBasis === (ffs ? "ffs" : "lifecycle"))));
   roadmapControls?.classList.toggle("is-ffs-map", ffs);
   document.querySelector(".app-shell")?.classList.toggle("is-hashout-roadmap", ffs && activeView !== "products");
-  const description = $("#roadmapBasisDescription");
-  if (description) {
-    description.textContent = ffs ? "" : "Lifecycle: GA to EM. Edit Mode adjusts dates and row order.";
-    description.title = description.textContent;
-  }
-  const counts = $("#ffsRoadmapCounts");
-  if (ffs && counts) {
-    const range = roadmapRange(), products = visibleRoadmapProducts();
-    let dated = 0, tbd = 0, outside = 0;
-    for (const product of products) {
-      const period = globalThis.PortfolioFfsRoadmap.period(product);
-      if (!period) tbd += 1;
-      else if (monthIndex(period.end.slice(0, 7)) < range.start || monthIndex(period.start.slice(0, 7)) > range.end) outside += 1;
-      else dated += 1;
-    }
-    counts.textContent = `${dated} in view · ${tbd} FFS TBD · ${outside} outside range`;
-  } else if (counts) counts.textContent = "";
   for (const target of [roadmapCanvas, splitRoadmapCanvas]) {
     if (target) target.title = "";
     if (ffs) target?.setAttribute("aria-label", "Hashout roadmap. Products are plotted only by FFS dates or estimate windows. Products with no FFS remain visible as FFS TBD. Drag to browse, select a row, or double-click for product details.");
