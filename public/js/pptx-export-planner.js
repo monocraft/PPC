@@ -19,17 +19,29 @@
   const monthLabel = index => `${MONTH_NAMES[index % 12]} ${Math.floor(index / 12)}`;
   const hex = (value, fallback) => /^#[a-f\d]{6}$/i.test(String(value || "")) ? value.slice(1).toUpperCase() : fallback;
 
-  function measureName(text, fontFace, fontSize = FONT_SIZE) {
+  // FFS windows use calendar days within a month. Their right edge includes
+  // the stated final day; a day estimate remains one point at its stated day.
+  function ffsDatePosition(value, inclusiveEnd = false) {
+    const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(String(value || ""));
+    if (!match) return null;
+    const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+    if (year < 1900) return null;
+    const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    if (day > days) return null;
+    return year * 12 + month - 1 + (day - (inclusiveEnd ? 0 : 1)) / days;
+  }
+
+  function measureName(text, fontFace, fontSize = FONT_SIZE, bold = false) {
     if (globalObject.document?.createElement) {
       const context = measuringContext ||= globalObject.document.createElement("canvas").getContext("2d");
       if (context) {
-        context.font = `${fontSize * 96 / 72}px "${fontFace}"`;
+        context.font = `${bold ? "700 " : ""}${fontSize * 96 / 72}px "${fontFace}"`;
         return context.measureText(text).width / 96;
       }
     }
     // The browser measures the loaded export font. Standalone consumers
     // without a font engine reserve conservative glyph widths at the same size.
-    return [...text].reduce((width, character) => width + (/\s/.test(character) ? .045 : /[MW@]/.test(character) ? .15 : .095), 0) * fontSize / FONT_SIZE;
+    return [...text].reduce((width, character) => width + (/\s/.test(character) ? .045 : /[MW@]/.test(character) ? .15 : .095), 0) * fontSize / FONT_SIZE * (bold ? 1.06 : 1);
   }
 
   function wrapName(value, width, measure) {
@@ -49,9 +61,9 @@
 
   function measurement(options) {
     const fontFace = options.fontFace || EXPORT_FONT_FACE, cache = new Map();
-    const measure = (text, size = FONT_SIZE) => {
-      const key = `${size}:${text}`;
-      if (!cache.has(key)) cache.set(key, typeof options.measureText === "function" ? options.measureText(text, size) : measureName(text, fontFace, size));
+    const measure = (text, size = FONT_SIZE, bold = false) => {
+      const key = `${size}:${bold}:${text}`;
+      if (!cache.has(key)) cache.set(key, typeof options.measureText === "function" ? options.measureText(text, size, bold) : measureName(text, fontFace, size, bold));
       const value = cache.get(key);
       if (!Number.isFinite(value) || value < 0) throw new Error("PowerPoint text could not be measured.");
       return value;
@@ -61,6 +73,7 @@
 
   function prepareSections(sections, range, options, compact) {
     const ids = new Set(), categoryIds = new Set(), metrics = measurement(options);
+    const ffsMode = options.timelineMode === "ffs";
     const fontSize = compact ? COMPACT_FONT_SIZE : FONT_SIZE, measure = text => metrics.measure(text, fontSize);
     const hasPrices = compact && (sections || []).some(section => (section.products || []).some(product => product.priceLabel));
     const labelWidth = compact ? COMPACT.nameWidth + COMPACT.labelPadding + (hasPrices ? COMPACT.priceWidth + COMPACT.priceGap : 0) : FRAME.labelWidth;
@@ -74,17 +87,26 @@
       for (const product of section.products || []) {
         if (!product?.id || ids.has(product.id)) throw new Error("PowerPoint products need distinct identities.");
         ids.add(product.id);
-        const start = monthIndex(product.startMonth), end = monthIndex(product.endMonth), scheduled = start != null && end != null && end >= start;
-        if (scheduled && (end < range.start || start > range.end)) { outsideRangeCount++; continue; }
+        const point = ffsMode && product.ffs?.precision === "day";
+        const start = ffsMode ? ffsDatePosition(product.ffs?.start) : monthIndex(product.startMonth);
+        const end = ffsMode ? ffsDatePosition(product.ffs?.end || product.ffs?.start) : monthIndex(product.endMonth);
+        const endExclusive = ffsMode ? ffsDatePosition(product.ffs?.end || product.ffs?.start, true) : end == null ? null : end + 1;
+        const pointPosition = point && start != null ? (start + ffsDatePosition(product.ffs?.start, true)) / 2 : null;
+        const scheduled = start != null && end != null && end >= start;
+        const outsideRange = scheduled && (ffsMode ? (point ? start < range.start || start >= range.end + 1 : endExclusive <= range.start || start >= range.end + 1) : end < range.start || start > range.end);
+        if (outsideRange) { outsideRangeCount++; if (!ffsMode) continue; }
         if (!scheduled) unscheduledCount++;
-        const lines = wrapName(product.name, compact ? COMPACT.nameWidth : FRAME.labelWidth - .22, measure);
+        const lines = wrapName(`${product.name || "Product"}${ffsMode && product.nameProvisional ? " (working name)" : ""}`, compact ? COMPACT.nameWidth : FRAME.labelWidth - .22, text => metrics.measure(text, fontSize, ffsMode));
         const priceLines = product.priceLabel ? wrapName(product.priceLabel, compact ? COMPACT.priceWidth : FRAME.labelWidth - .22, measure) : [];
         const status = statusLabel(product);
-        const dateLines = scheduled ? [] : wrapName(`Dates TBD${status ? `. ${status}` : ""}`, compact ? minimumTimelineWidth - .12 : FRAME.width - FRAME.labelWidth - .16, measure);
-        const rowHeight = compact ? Math.max(1, lines.length, priceLines.length, dateLines.length) * COMPACT_ROW_HEIGHT
-          : Math.max(.32, Math.max(lines.length + priceLines.length, dateLines.length) * .2 + .07);
+        const ffsLabel = ffsMode && scheduled ? product.ffs?.label || (point ? product.ffs.start : `${product.ffs.start} to ${product.ffs.end}`) : "TBD";
+        const dateText = ffsMode ? `${outsideRange ? start < range.start ? "Before view. " : "After view. " : ""}FFS ${ffsLabel}${scheduled && product.ffs?.estimated !== false ? " · Estimate" : ""}${status ? ` · ${status}` : ""}${scheduled && product.ffs?.reviewFlag ? " · Review timing" : ""}` : `Dates TBD${status ? `. ${status}` : ""}`;
+        const dateLines = scheduled && !ffsMode ? [] : wrapName(dateText, compact ? minimumTimelineWidth - .12 : FRAME.width - FRAME.labelWidth - .16, measure);
+        const dateLineCount = dateLines.length + (ffsMode && scheduled && !outsideRange ? 1 : 0);
+        const rowHeight = compact ? Math.max(1, lines.length, priceLines.length, dateLineCount) * COMPACT_ROW_HEIGHT
+          : Math.max(.32, Math.max(lines.length + priceLines.length, dateLineCount) * .2 + .07);
         const family = String(product.family || "").trim(), familyLines = family ? wrapName(family, compact ? COMPACT.nameWidth : FRAME.width - .16, measure) : [];
-        products.push({ ...product, start, end, scheduled, lines, priceLines, dateLines, familyLines, rowHeight });
+        products.push({ ...product, start, end, endExclusive, pointPosition, scheduled, point, outsideRange, timelineMode: ffsMode ? "ffs" : "lifecycle", lines, priceLines, dateLines, familyLines, rowHeight });
       }
       const nameLines = wrapName(section.name || section.id, compact ? COMPACT.nameWidth : FRAME.labelWidth - .22, measure);
       return { ...section, products, nameLines, headerHeight: compact ? Math.max(COMPACT.headerHeight, nameLines.length * COMPACT_ROW_HEIGHT + .04) : Math.max(FRAME.headerHeight, nameLines.length * .2 + .06) };
@@ -134,7 +156,7 @@
 
   function legendEntries(sections) {
     const legend = new Map();
-    sections.forEach(section => section.products.filter(product => product.scheduled).forEach(product => {
+    sections.forEach(section => section.products.filter(product => product.scheduled || product.timelineMode === "ffs").forEach(product => {
       const status = statusLabel(product);
       if (status) legend.set(`${status}:${product.fill}`, { status, fill: hex(product.fill, "4D5054") });
     }));
@@ -216,7 +238,7 @@
     const range = { start, end, count: end - start + 1, startMonth: monthString(start), endMonth: monthString(end) };
     const prepared = prepareSections(sections, range, options, merged), selectedProductCount = prepared.sections.reduce((count, section) => count + section.products.length, 0);
     const { measure, ...publicPrepared } = prepared;
-    const result = { ...publicPrepared, range, selectedProductCount, selectedTotal: selectedProductCount,
+    const result = { ...publicPrepared, range, timelineMode: options.timelineMode === "ffs" ? "ffs" : "lifecycle", selectedProductCount, selectedTotal: selectedProductCount,
       includedProductCount: selectedProductCount, excludedProductCount: 0, limitToFit: options.limitToFit === true, minimumFontSize: merged ? COMPACT_FONT_SIZE : FONT_SIZE,
       validRange: true, requiresDecision: false, reason: "", slides: [], canvas: STANDARD_CANVAS, exactFits: false };
     if (!merged) {
@@ -234,7 +256,7 @@
         result.requiresDecision = true; result.reason = "The full status legend needs more room. Choose fewer categories."; return result;
       }
       const frame = { ...FRAME, width: width - COMPACT.margin * 2, height: Math.min(FRAME.height, availableHeight) };
-      result.slides = detailSlides(prepared.sections, range, frame, result.canvas); result.exactFits = true;
+      result.slides = detailSlides(prepared.sections, range, frame, result.canvas).map(slide => ({ ...slide, timelineMode: result.timelineMode })); result.exactFits = true;
       if (width > STANDARD_CANVAS.width) result.reason = `Category pages use a ${width.toFixed(2)} × ${result.canvas.height.toFixed(2)} inch slide so every month remains labeled. Product names remain 12 pt.`;
       return result;
     }
@@ -264,7 +286,7 @@
     result.columnCount = layout.columns.length;
     if (result.cutoff) result.reason = `Export only the first ${result.includedProductCount} of ${selectedProductCount} products on one 16:9 slide. ${result.excludedProductCount} remaining products will be excluded by your choice. Names remain 7 pt.`;
     else if (!result.fitsStandard) result.reason = `All ${selectedProductCount} products fit beneath one shared calendar on a ${layout.canvas.width.toFixed(2)} × ${layout.canvas.height.toFixed(2)} inch 16:9 slide. Product names remain 7 pt; every month is labeled.`;
-    result.slides = [{ kind: "roadmap-merged", sections: exportPrepared.sections, ...layout, frame: layout.columns[0].frame, fontSize: COMPACT_FONT_SIZE }];
+    result.slides = [{ kind: "roadmap-merged", sections: exportPrepared.sections, ...layout, frame: layout.columns[0].frame, fontSize: COMPACT_FONT_SIZE, timelineMode: result.timelineMode }];
     return result;
   }
 
@@ -292,7 +314,7 @@
       ? `Fits: first ${plan.cutoff.includedCount} of ${plan.selectedProductCount} products. Last included: ${plan.cutoff.lastIncluded ? `${plan.cutoff.lastIncluded.categoryName} — ${plan.cutoff.lastIncluded.name}` : "none"}. Next product: ${plan.cutoff.firstExcluded.categoryName} — ${plan.cutoff.firstExcluded.name}. ${plan.cutoff.excludedCount} remaining products would be excluded if you choose the fitting range.` : "";
     const fit = form.querySelector("#pptxRoadmapFit"), coverage = form.querySelector("#pptxRoadmapCoverage");
     if (fit) fit.textContent = plan.reason || (readOptions(form).mode === "merged" ? "Every selected product fits on one slide with 7 pt names and all monthly labels." : "Products remain readable on separate category pages.");
-    if (coverage) coverage.textContent = plan.validRange ? `${plan.selectedProductCount} products selected in this period. ${plan.outsideRangeCount} outside the period. ${plan.unscheduledCount} have dates to be confirmed.${plan.cutoff && !plan.requiresDecision ? ` This export includes ${plan.includedProductCount} and excludes ${plan.excludedProductCount} by your choice.` : ""}` : "";
+    if (coverage) coverage.textContent = plan.validRange ? `${plan.selectedProductCount} products selected${plan.timelineMode === "ffs" ? "; FFS only" : " in this period"}. ${plan.outsideRangeCount} outside the period${plan.timelineMode === "ffs" ? " and retained as named rows" : ""}. ${plan.unscheduledCount} have ${plan.timelineMode === "ffs" ? "FFS TBD" : "dates to be confirmed"}.${plan.cutoff && !plan.requiresDecision ? ` This export includes ${plan.includedProductCount} and excludes ${plan.excludedProductCount} by your choice.` : ""}` : "";
   }
 
   function calendarBuckets(range, unit) {
@@ -317,9 +339,9 @@
     const text = (value, rect, extra = {}) => slide.addText(value, { ...rect, fontFace, fontSize, color: label, margin: 0, valign: "top", breakLine: false, wrap: false, paraSpaceAfter: 0, ...extra });
     const shape = (rect, fill, objectName) => slide.addShape(pptx.ShapeType.rect, { ...rect, objectName, fill: { color: fill }, line: { color: fill, width: 0, transparency: 100 } });
     const line = (x, y, w, h, transparency, width, objectName) => slide.addShape(pptx.ShapeType.line, { x, y, w, h, objectName, line: { color: muted, transparency, width, beginArrowType: "none", endArrowType: "none" } });
-    const title = options.title || (compact ? "Combined roadmap" : `${plan.categoryName || plan.categoryId} Roadmap${plan.pageIndex ? " (continued)" : ""}`);
+    const title = options.title || (compact ? plan.timelineMode === "ffs" ? "Combined Hashout roadmap" : "Combined Lifecycle roadmap" : `${plan.categoryName || plan.categoryId} ${plan.timelineMode === "ffs" ? "Hashout roadmap" : "Lifecycle roadmap"}${plan.pageIndex ? " (continued)" : ""}`);
     text(title, { x: .38 * scale, y: .16 * scale, w: canvas.width - .76 * scale, h: .34 * scale }, { fontSize: 20 * scale, bold: true });
-    text(`${monthLabel(plan.range.start)} to ${monthLabel(plan.range.end)}`, { x: .38 * scale, y: .51 * scale, w: canvas.width - .76 * scale, h: .18 * scale }, { fontSize: (compact ? 8 : 11) * scale, color: muted });
+    text(`${monthLabel(plan.range.start)} to ${monthLabel(plan.range.end)}${plan.timelineMode === "ffs" ? " · Planning estimates; working names may change" : ""}`, { x: .38 * scale, y: .51 * scale, w: canvas.width - .76 * scale, h: .18 * scale }, { fontSize: (compact ? 8 : 11) * scale, color: muted });
     const productGroups = [];
     let productIndex = 0;
     const columns = compact ? plan.columns : [{ rows: plan.rows, height: plan.height,
@@ -370,15 +392,36 @@
           const product = row.product;
           const prefix = `ppc-roadmap-${productIndex++}-part-`, labelLines = compact ? product.lines : [...product.lines, ...product.priceLines];
           const nameWidth = compact ? frame.nameWidth : frame.labelWidth / scale - .22;
-          text(labelLines.join("\n"), { x: frame.x + .06 * scale, y: y + .023 * scale, w: nameWidth * scale, h: height - .025 * scale }, { objectName: `${prefix}0`, fontSize: fontSize * scale });
+          text(labelLines.join("\n"), { x: frame.x + .06 * scale, y: y + .023 * scale, w: nameWidth * scale, h: height - .025 * scale }, { objectName: `${prefix}0`, fontSize: fontSize * scale, ...(product.timelineMode === "ffs" ? { bold: true } : {}) });
           const barHeight = (compact ? COMPACT_BAR_HEIGHT : .18) * scale;
-          if (product.scheduled) {
+          let partCount = 2;
+          if (product.timelineMode === "ffs") {
+            const visible = product.scheduled && !product.outsideRange;
+            if (visible) {
+              const fill = hex(product.fill, "4D5054"), estimated = product.ffs?.estimated !== false;
+              const markerY = y + .04 * scale, markerHeight = (compact ? .10 : .16) * scale;
+              if (product.point) {
+                // Keep boundary-day symbols legible. Their centers retain the
+                // exact FFS day; the small symbol can extend into the blank
+                // label padding or the slide's right margin.
+                const center = coordinate(product.pointPosition), markerWidth = (compact ? .10 : .16) * scale;
+                slide.addShape(pptx.ShapeType.donut, { x: center - markerWidth / 2, y: markerY, w: markerWidth, h: markerHeight,
+                  objectName: `${prefix}1`, fill: { color: fill, transparency: estimated ? 55 : 0 }, line: { color: fill, width: .8 } });
+              } else {
+                const x = coordinate(Math.max(plan.range.start, product.start)), right = coordinate(Math.min(plan.range.end + 1, product.endExclusive));
+                slide.addShape(pptx.ShapeType.rect, { x, y: markerY, w: right - x, h: markerHeight,
+                  objectName: `${prefix}1`, fill: { color: fill, transparency: estimated ? 72 : 0 }, line: { color: fill, width: .8, dashType: estimated ? "dash" : "solid" } });
+              }
+              partCount++;
+            }
+            const textOffset = visible ? (compact ? .18 : .24) * scale : .023 * scale;
+            text(product.dateLines.join("\n"), { x: timelineX + .06 * scale, y: y + textOffset, w: timelineWidth - .12 * scale, h: height - textOffset - .01 * scale }, { objectName: `${prefix}${visible ? 2 : 1}`, fontSize: fontSize * scale, color: muted });
+          } else if (product.scheduled) {
             const x = coordinate(Math.max(plan.range.start, product.start)), right = coordinate(Math.min(plan.range.end, product.end) + 1);
             shape({ x, y: y + height / 2 - barHeight / 2, w: Math.max(.015, right - x), h: barHeight }, hex(product.fill, "4D5054"), `${prefix}1`);
           } else text(product.dateLines.join("\n"), { x: timelineX + .06 * scale, y: y + .023 * scale, w: timelineWidth - .12 * scale, h: height - .025 * scale }, { objectName: `${prefix}1`, fontSize: fontSize * scale });
-          let partCount = 2;
           if (compact && product.priceLines.length) {
-            text(product.priceLines.join("\n"), { x: frame.x + .06 + frame.nameWidth + COMPACT.priceGap, y: y + .023, w: frame.priceWidth, h: height - .025 }, { objectName: `${prefix}2`, fontSize: COMPACT_FONT_SIZE, color: muted }); partCount++;
+            text(product.priceLines.join("\n"), { x: frame.x + .06 + frame.nameWidth + COMPACT.priceGap, y: y + .023, w: frame.priceWidth, h: height - .025 }, { objectName: `${prefix}${partCount}`, fontSize: COMPACT_FONT_SIZE, color: muted }); partCount++;
           }
           productGroups.push({ prefix, name: `Product: ${product.id} — ${product.name}`, x: frame.x, y, width: frame.width, height, partCount });
         }

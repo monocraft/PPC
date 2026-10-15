@@ -8,6 +8,7 @@ A browser-based workspace for organizing product portfolios and planning product
 
 - Organize products in visual portfolio boards.
 - Plan launches and lifecycle milestones on a roadmap.
+- Switch between Lifecycle roadmap and Hashout roadmap. Hashout plots working products by estimated FFS timing in category lanes, with selectable categories, compact expandable product groups, and full names and dates on hover. Working names and timing remain planning estimates.
 - View product details, specifications, and variants.
 - Share product additions, removals, dates, specifications and SKUs through one master, with explicit choices when teammates change the same detail.
 - See connected teammates' current portfolio and selected product, with optional display names.

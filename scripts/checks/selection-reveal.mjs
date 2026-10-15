@@ -35,6 +35,7 @@ function harness({ zoom = 1, cards = [], bars = [], rows = [], width = 900, heig
   });
   const before = JSON.stringify(business);
   const context = {
+    hasDedicatedHashoutView: () => false,
     selectedId: "selected", zoom, renderedCards: freeze(cards), canvasScroll: scroll,
     roadmapHitRegions: new Map([[canvas, freeze(bars)]]), roadmapRowRegions: new Map([[canvas, freeze(rows)]]),
     ROADMAP_LEFT_WIDTH: 190, ROADMAP_HEADER_HEIGHT: 88, portfolio: business,

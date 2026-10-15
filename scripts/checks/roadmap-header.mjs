@@ -14,7 +14,7 @@ const sandbox = {
 };
 Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
-vm.runInContext(`function drawHeader(context, { range, stickyX = 0, stickyY = 0, clientWidth = 800, exportMode = false, selectedGuides = null }) {
+vm.runInContext(`function drawHeader(context, { range, stickyX = 0, stickyY = 0, clientWidth = 800, exportMode = false, selectedGuides = null, ffsMode = false }) {
   const timelineX = ROADMAP_LEFT_WIDTH, timelineWidth = range.count * roadmapMonthWidth, width = timelineX + timelineWidth + 24;
   const targetScroll = { clientWidth };
   ${source.slice(start, end)}

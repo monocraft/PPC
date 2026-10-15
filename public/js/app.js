@@ -184,6 +184,10 @@ let workspaceSaveAttempt = 0;
 const productView = $("#productView");
 const roadmapView = $("#roadmapView");
 const splitView = $("#splitView");
+const hashoutView = $("#hashoutView");
+let hashoutViewController = null;
+let hashoutSelectedKey = null;
+let hashoutViewportState = null;
 const productControls = $("#productControls");
 const roadmapControls = $("#roadmapControls");
 const roadmapCanvas = $("#roadmapCanvas");
@@ -1367,6 +1371,7 @@ function ensurePortfolioSchema(target) {
     ...(normalized.settings || {}),
   };
   normalized.settings.showRoadmapMsrp = normalized.settings.showRoadmapMsrp === true;
+  normalized.settings.roadmapBasis = normalized.settings.roadmapBasis === "ffs" ? "ffs" : "lifecycle";
   normalized.ascmSnapshot = normalizeAscmSnapshot(normalized.ascmSnapshot);
   normalized.packageInfo = packageCodec().normalizePackageInfo(normalized.packageInfo);
   normalized.categories = Array.isArray(normalized.categories) ? normalized.categories.filter((category) => CATEGORY_DEFINITIONS.some((definition) => definition.id === category.id)) : [];
@@ -2678,7 +2683,132 @@ function roadmapDimensions(groupsOverride = null) {
 }
 
 function roadmapStatusColor(product) {
+  if (isFfsRoadmap()) return PortfolioModel.lifecycleTone(globalThis.PortfolioFfsRoadmap.status(product));
   return PortfolioModel.productTone(product);
+}
+
+function isFfsRoadmap() {
+  return portfolio?.settings?.roadmapBasis === "ffs";
+}
+
+function hasDedicatedHashoutView() {
+  return isFfsRoadmap() && typeof hashoutView !== "undefined" && Boolean(hashoutView && globalThis.PortfolioHashoutView);
+}
+
+function hashoutCategoryScope() {
+  const saved = portfolio?.settings?.hashoutCategoryIds;
+  return Array.isArray(saved) ? saved.filter(id => portfolio.categories.some(category => category.id === id)) : null;
+}
+
+function hashoutSelectionEntry() {
+  if (!globalThis.PortfolioHashoutLayout || !portfolio) return null;
+  const key = hashoutSelectedKey || portfolio.settings?.hashoutSelectedKey || JSON.stringify([activeCategoryId, selectedId]);
+  return globalThis.PortfolioHashoutLayout.project(portfolio).find(entry => entry.key === key) || null;
+}
+
+function resetHashoutView() {
+  hashoutViewController?.destroy();
+  hashoutViewController = null;
+  hashoutSelectedKey = null;
+  hashoutViewportState = null;
+}
+
+function ensureHashoutView() {
+  if (!hasDedicatedHashoutView()) return null;
+  if (!hashoutViewController) {
+    hashoutViewController = globalThis.PortfolioHashoutView.create(hashoutView, {
+      getPortfolio: () => portfolio,
+      getRange: () => roadmapRange(),
+      getScope: hashoutCategoryScope,
+      getViewport: () => portfolio.settings?.hashoutViewport || null,
+      getSelectedKey: () => hashoutSelectionEntry()?.key || null,
+      onScopeChange: ids => {
+        portfolio.settings.hashoutCategoryIds = ids;
+        scheduleSave();
+        renderStatus();
+      },
+      onSelect: (entry, { openDetails = false } = {}) => {
+        hashoutSelectedKey = entry?.key || null;
+        portfolio.settings.hashoutSelectedKey = hashoutSelectedKey;
+        if (entry?.categoryId === activeCategoryId) selectedId = entry.productId;
+        scheduleSave();
+        renderStatus();
+        if (entry && openDetails) {
+          activateCategory(entry.categoryId, { render: false });
+          selectedId = entry.productId;
+          setView("products", { focusSelected: true });
+          openInspector("datesSection");
+        }
+      },
+      onOpenLifecycle: entry => {
+        if (!entry) return;
+        activateCategory(entry.categoryId, { render: false });
+        selectedId = entry.productId;
+        setRoadmapBasis("lifecycle");
+        setView("roadmap", { focusSelected: true });
+      },
+      onViewportChange: viewport => {
+        hashoutViewportState = viewport;
+        portfolio.settings.hashoutViewport = viewport;
+        scheduleSave();
+        syncViewZoomControls();
+      },
+    });
+  }
+  return hashoutViewController;
+}
+
+function ffsRoadmapStageLabel(product) {
+  return { launched: "Released", "in-development": "In development", "in-planning": "In planning", concept: "In planning", embargo: "Embargo", "end-of-life": "End of life" }[globalThis.PortfolioFfsRoadmap.status(product)] || "Stage unverified";
+}
+
+function hashoutProductTooltip(product) {
+  if (!product) return "";
+  const period = globalThis.PortfolioFfsRoadmap.period(product);
+  return `${product.name}\nFFS ${period?.label || "TBD"} · ${ffsRoadmapStageLabel(product)}${period ? "\nPlanning estimate" : ""}${period?.reviewFlag ? " · Review timing" : ""}`;
+}
+
+function syncFfsRoadmapControls() {
+  const ffs = isFfsRoadmap();
+  document.querySelectorAll("[data-roadmap-basis]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.roadmapBasis === (ffs ? "ffs" : "lifecycle"))));
+  roadmapControls?.classList.toggle("is-ffs-map", ffs);
+  document.querySelector(".app-shell")?.classList.toggle("is-hashout-roadmap", ffs && activeView !== "products");
+  const description = $("#roadmapBasisDescription");
+  if (description) {
+    description.textContent = ffs ? "" : "Lifecycle: GA to EM. Edit Mode adjusts dates and row order.";
+    description.title = description.textContent;
+  }
+  const counts = $("#ffsRoadmapCounts");
+  if (ffs && counts) {
+    const range = roadmapRange(), products = visibleRoadmapProducts();
+    let dated = 0, tbd = 0, outside = 0;
+    for (const product of products) {
+      const period = globalThis.PortfolioFfsRoadmap.period(product);
+      if (!period) tbd += 1;
+      else if (monthIndex(period.end.slice(0, 7)) < range.start || monthIndex(period.start.slice(0, 7)) > range.end) outside += 1;
+      else dated += 1;
+    }
+    counts.textContent = `${dated} in view · ${tbd} FFS TBD · ${outside} outside range`;
+  } else if (counts) counts.textContent = "";
+  for (const target of [roadmapCanvas, splitRoadmapCanvas]) {
+    if (target) target.title = "";
+    if (ffs) target?.setAttribute("aria-label", "Hashout roadmap. Products are plotted only by FFS dates or estimate windows. Products with no FFS remain visible as FFS TBD. Drag to browse, select a row, or double-click for product details.");
+    else target?.setAttribute("aria-label", "Roadmap. View Mode lets you drag to browse. Select a product or double-click for details. Choose Edit Mode to adjust lifecycle dates and row order.");
+  }
+}
+
+function setRoadmapBasis(value) {
+  if (!["ffs", "lifecycle"].includes(value)) return;
+  if (typeof hashoutViewController !== "undefined") hashoutViewController?.closeOverlay?.();
+  roadmapDragState?.cancel?.();
+  roadmapPanState?.cancel?.();
+  roadmapDraft = null;
+  roadmapInteractionMode = "pan";
+  portfolio.settings.roadmapBasis = value;
+  roadmapLaneHovers.forEach(hover => hover.clear({ immediate: true }));
+  scheduleSave();
+  renderRoadmaps();
+  announceRoadmapEdit(value === "ffs" ? "Hashout roadmap" : "Lifecycle roadmap. Placement uses GA and EM.");
 }
 
 function roadmapLabel(value) {
@@ -2752,6 +2882,7 @@ function drawFixedVerticalRoadmapLabel(context, label, x, top, availableHeight) 
 }
 
 function selectedRoadmapGuides(range) {
+  if (isFfsRoadmap()) return null;
   const product = selectedProduct();
   if (!product || !visibleRoadmapProducts().some((item) => item.id === product.id)) return null;
   const roadmap = effectiveRoadmap(product);
@@ -2787,6 +2918,7 @@ function roadmapProductBarLabel(product) {
 }
 
 function roadmapProductBarRect(product, range, rowTop) {
+  if (isFfsRoadmap()) return globalThis.PortfolioFfsRoadmap.geometry(product, range, rowTop, { leftWidth: ROADMAP_LEFT_WIDTH, monthWidth: roadmapMonthWidth, rowHeight: ROADMAP_ROW_HEIGHT });
   const roadmap = effectiveRoadmap(product);
   const startIndex = monthIndex(roadmap?.startMonth);
   const endIndex = monthIndex(roadmap?.endMonth);
@@ -2804,8 +2936,90 @@ function roadmapProductBarRect(product, range, rowTop) {
   };
 }
 
+function fitHashoutLabel(context, text, width, retainSuffix = false) {
+  const value = String(text || "");
+  if (context.measureText(value).width <= width) return value;
+  const characters = Array.from(value);
+  for (let keep = characters.length - 1; keep > 0; keep -= 1) {
+    const prefix = retainSuffix ? Math.ceil(keep * .6) : keep;
+    const suffix = retainSuffix ? keep - prefix : 0;
+    const candidate = characters.slice(0, prefix).join("") + "…" + (suffix ? characters.slice(-suffix).join("") : "");
+    if (context.measureText(candidate).width <= width) return candidate;
+  }
+  return context.measureText("…").width <= width ? "…" : "";
+}
+
+function drawFfsRoadmapProduct(context, product, mark, rowTop, timelineX, timelineWidth, selected, visibleLeft, visibleRight) {
+  const period = globalThis.PortfolioFfsRoadmap.period(product);
+  const stage = ffsRoadmapStageLabel(product).replace(/^In planning$/, "Planning").replace(/^In development$/, "Development");
+  const color = roadmapStatusColor(product);
+  const name = String(product.name || "Product").trim();
+  const price = portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "";
+  const detail = `${period?.label || "FFS TBD"} · ${stage}${price ? ` · ${price}` : ""}${period?.reviewFlag ? " · Review timing" : ""}`;
+  const drawLabel = (x, width, align = "left", secondary = detail) => {
+    context.textAlign = align;
+    context.font = `600 12px ${UI_FONT_FACE}`;
+    context.fillStyle = UI_PALETTE.whiteSmoke;
+    context.fillText(fitHashoutLabel(context, name, width, true), x, rowTop + ROADMAP_ROW_HEIGHT / 2 - 7);
+    context.font = `11px ${UI_FONT_FACE}`;
+    context.fillStyle = UI_PALETTE.silver;
+    context.fillText(fitHashoutLabel(context, secondary, width), x, rowTop + ROADMAP_ROW_HEIGHT / 2 + 8);
+  };
+  context.save();
+  context.textBaseline = "middle";
+  if (!mark) {
+    const timing = period ? `${period.end < monthString(roadmapRange().start) + "-01" ? "Before range" : "After range"} · ${detail}` : detail;
+    drawLabel(visibleLeft + 12, Math.max(0, visibleRight - visibleLeft - 24), "left", timing);
+    context.restore();
+    return;
+  }
+  const centerY = mark.y + mark.height / 2;
+  const stroke = selected ? UI_PALETTE.selection : UI_PALETTE.whiteSmoke;
+  if (mark.kind === "point") {
+    context.beginPath();
+    context.arc(mark.centerX, centerY, 6, 0, Math.PI * 2);
+    context.strokeStyle = color;
+    context.lineWidth = 2.5;
+    context.stroke();
+    if (selected) {
+      context.beginPath();
+      context.arc(mark.centerX, centerY, 8, 0, Math.PI * 2);
+      context.strokeStyle = stroke;
+      context.lineWidth = 1.2;
+      context.stroke();
+    }
+  } else {
+    context.globalAlpha = .5;
+    roundRect(context, mark.x + .5, rowTop + 4, Math.max(1, mark.width - 1), ROADMAP_ROW_HEIGHT - 8, 2, color);
+    context.globalAlpha = 1;
+    context.setLineDash([4, 3]);
+    roundRect(context, mark.x + .5, rowTop + 4.5, Math.max(1, mark.width - 1), ROADMAP_ROW_HEIGHT - 9, 2, null, stroke, selected ? 1.8 : 1);
+    context.setLineDash([]);
+  }
+  if (mark.x < visibleRight && mark.x + mark.width > visibleLeft) {
+    context.font = `600 12px ${UI_FONT_FACE}`;
+    const nameWidth = context.measureText(name).width;
+    context.font = `11px ${UI_FONT_FACE}`;
+    const desired = Math.min(300, Math.max(nameWidth, context.measureText(detail).width));
+    const rightSpace = Math.max(0, visibleRight - mark.x - mark.width - 12);
+    const leftSpace = Math.max(0, mark.x - visibleLeft - 12);
+    const insideLeft = Math.max(visibleLeft, mark.x) + 7;
+    const insideRight = Math.min(visibleRight, mark.x + mark.width) - 7;
+    const insideSpace = Math.max(0, insideRight - insideLeft);
+    if (mark.kind === "window" && insideSpace > Math.max(leftSpace, rightSpace) && Math.max(leftSpace, rightSpace) < desired && insideSpace >= 45) {
+      drawLabel(insideLeft, Math.min(300, insideSpace));
+    } else {
+      const toRight = rightSpace >= desired || rightSpace >= leftSpace;
+      const available = Math.min(300, toRight ? rightSpace : leftSpace);
+      if (available >= 45) drawLabel(toRight ? mark.x + mark.width + 9 : mark.x - 9, available, toRight ? "left" : "right");
+    }
+  }
+  context.restore();
+}
+
 function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeSelection = true, exportMode = false, includeProducts = true) {
   const { width, height, range, groups } = dimensions;
+  const ffsMode = isFfsRoadmap();
   const stickyX = exportMode ? 0 : targetScroll.scrollLeft;
   const stickyY = exportMode ? 0 : targetScroll.scrollTop;
   const regions = [];
@@ -2895,7 +3109,11 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       drawYearSeamSegment(rowTop, rowTop + ROADMAP_ROW_HEIGHT, .2);
 
       const bar = includeProducts ? roadmapProductBarRect(product, range, rowTop) : null;
-      if (bar) {
+      if (ffsMode && includeProducts) {
+        const selected = includeSelection && product.id === selectedId;
+        drawFfsRoadmapProduct(context, product, bar, rowTop, timelineX, timelineWidth, selected, Math.max(timelineX, stickyX + timelineX), exportMode ? timelineX + timelineWidth : Math.min(timelineX + timelineWidth, stickyX + targetScroll.clientWidth));
+        if (bar) regions.push({ productId: product.id, x: Math.max(timelineX, bar.x - 8), y: rowTop + 2, width: Math.max(28, bar.width + 16), height: ROADMAP_ROW_HEIGHT - 4, leftHandle: null, rightHandle: null });
+      } else if (bar) {
         const { x: barX, y: barY, width: barWidth, height: barHeight } = bar;
         const selected = includeSelection && product.id === selectedId;
         const color = roadmapStatusColor(product);
@@ -3006,7 +3224,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       context.font = `700 8px ${UI_FONT_FACE}`;
       context.fillText("CONTINUED", stickyX + 61, familyHeadingY + 14);
     }
-    if (includeSelection && !exportMode && includeProducts) {
+    if (includeProducts && (ffsMode || includeSelection && !exportMode)) {
       group.products.forEach((product, index) => {
         const y = rowY + ROADMAP_GROUP_HEADER_HEIGHT + index * ROADMAP_ROW_HEIGHT;
         if (product.id === selectedId) {
@@ -3018,7 +3236,7 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         for (let column = 0; roadmapInteractionMode === "dates" && column < 2; column += 1) {
           for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 54 + column * 3.5, y + 14 + dot * 4.5, 1.4, 1.4);
         }
-        context.font = `10px ${UI_FONT_FACE}`;
+        context.font = ffsMode ? `600 11px ${UI_FONT_FACE}` : `10px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         context.textBaseline = "middle";
         context.fillStyle = activeRow ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
@@ -3174,13 +3392,15 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.textAlign = "left";
   context.fillStyle = UI_PALETTE.midGrey;
   context.font = `700 9px ${UI_FONT_FACE}`;
-  context.fillText("PORTFOLIO ROADMAP", stickyX + 14, stickyY + 20);
+  context.fillText(ffsMode ? "HASHOUT ROADMAP" : "LIFECYCLE ROADMAP", stickyX + 14, stickyY + 20);
   context.fillStyle = UI_PALETTE.starDust;
   context.font = `700 14px ${UI_FONT_FACE}`;
   context.fillText(roadmapSpanLabel(range.count), stickyX + 14, stickyY + 42);
   context.fillStyle = UI_PALETTE.greyOlive;
   context.font = `10px ${UI_FONT_FACE}`;
-  if (selectedGuides) {
+  if (ffsMode) {
+    context.fillText("Hover for full product and timing", stickyX + 14, stickyY + 66);
+  } else if (selectedGuides) {
     context.fillText(`Launch · ${roadmapLabel(selectedGuides.roadmap.startMonth)}`, stickyX + 14, stickyY + 62);
     context.fillText(`End · ${roadmapLabel(selectedGuides.roadmap.endMonth)}`, stickyX + 14, stickyY + 77);
   } else {
@@ -3222,6 +3442,13 @@ function renderRoadmaps() {
   syncRoadmapDetailsVisibility();
   syncViewZoomControls();
   updateRoadmapEditControls();
+  syncFfsRoadmapControls();
+  if (hasDedicatedHashoutView() && activeView !== "products") {
+    ensureHashoutView()?.render();
+    roadmapFilterScrollResetPending = false;
+    if (activeView !== previousView) renderStatus();
+    return;
+  }
   if (activeView === "roadmap") renderRoadmapFor(roadmapCanvas, roadmapScroll, roadmapNavigatorRefs());
   if (activeView === "split") {
     renderSplitProduct();
@@ -3252,6 +3479,11 @@ function syncRoadmapNavigator(targetScroll, refs) {
 }
 
 function scrollRoadmapSelected(targetScroll, smooth = true) {
+  if (hasDedicatedHashoutView()) {
+    // Entering the overview keeps the plot quiet; details open through hover,
+    // selection, or an explicit search result.
+    return;
+  }
   const targetCanvas = targetScroll.querySelector("canvas");
   const regions = roadmapHitRegions.get(targetCanvas) || [];
   const region = regions.find((item) => item.productId === selectedId);
@@ -3267,6 +3499,7 @@ function scrollRoadmapSelected(targetScroll, smooth = true) {
 }
 
 function scrollRoadmapToday(targetScroll) {
+  if (hasDedicatedHashoutView()) { ensureHashoutView()?.today(); return; }
   const range = roadmapRange();
   const today = monthIndex(monthStringFromDate());
   const x = ROADMAP_LEFT_WIDTH + (today - range.start + .5) * roadmapMonthWidth;
@@ -3274,12 +3507,15 @@ function scrollRoadmapToday(targetScroll) {
 }
 
 function fitRoadmapTimeline() {
+  if (hasDedicatedHashoutView()) { ensureHashoutView()?.fit(); return; }
   const targetScroll = activeView === "split" ? splitRoadmapScroll : roadmapScroll;
   const range = roadmapRange();
   const available = Math.max(1, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH - 24);
-  // Keep month labels and product bars readable; longer timelines scroll.
+  // Hashout can fit a ten-year overview with quarter labels; lifecycle keeps
+  // the established readable duration-bar scale. Switching preserves zoom.
   const fittedZoom = available / Math.max(1, range.count) / ROADMAP_DEFAULT_MONTH_WIDTH;
-  setRoadmapZoom(snappedViewZoom(fittedZoom, .4, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, 1, "down") * ROADMAP_DEFAULT_MONTH_WIDTH);
+  const minimumZoom = isFfsRoadmap() ? ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH : .4;
+  setRoadmapZoom(snappedViewZoom(fittedZoom, minimumZoom, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, 1, "down") * ROADMAP_DEFAULT_MONTH_WIDTH);
 }
 
 function clampViewZoom(value, minimum, maximum, fallback = 1) {
@@ -3313,6 +3549,12 @@ function syncViewZoomControls() {
   if ($("#roadmapZoomReset").textContent !== roadmapLabel) $("#roadmapZoomReset").textContent = roadmapLabel;
   $("#roadmapZoomOut").disabled = roadmapZoom <= roadmapMinimum;
   $("#roadmapZoomIn").disabled = roadmapZoom >= roadmapMaximum;
+  if (hasDedicatedHashoutView() && activeView !== "products") {
+    const hashoutZoom = hashoutViewportState?.zoom || portfolio.settings?.hashoutViewport?.zoom || 1;
+    $("#roadmapZoomReset").textContent = `${Math.round(hashoutZoom * 100)}%`;
+    $("#roadmapZoomOut").disabled = hashoutZoom <= 1;
+    $("#roadmapZoomIn").disabled = hashoutZoom >= 20;
+  }
 }
 
 function setRoadmapZoom(nextMonthWidth) {
@@ -3423,12 +3665,15 @@ function syncRoadmapInteractionMode() {
   const adjusting = roadmapInteractionMode === "dates";
   $("#roadmapModePan")?.setAttribute("aria-pressed", String(!adjusting));
   $("#roadmapModeDates")?.setAttribute("aria-pressed", String(adjusting));
+  const editButton = $("#roadmapModeDates");
+  if (editButton) { editButton.disabled = isFfsRoadmap(); editButton.title = isFfsRoadmap() ? "Edit FFS in product details" : "Adjust product dates and row order"; }
   for (const target of [roadmapCanvas, splitRoadmapCanvas]) target?.classList.toggle("is-adjusting-dates", adjusting);
   roadmapControls?.querySelector(".roadmap-edit-controls")?.classList.toggle("is-adjusting-dates", adjusting);
 }
 
 function setRoadmapInteractionMode(mode) {
   if (!["pan", "dates"].includes(mode)) return;
+  if (mode === "dates" && isFfsRoadmap()) return;
   roadmapDragState?.cancel?.();
   roadmapPanState?.cancel?.();
   roadmapInteractionMode = mode;
@@ -3454,7 +3699,8 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     isSuspended: () => Boolean(roadmapDragState || roadmapPanState || targetCanvas.closest(".hidden")),
     onChange: (productId) => {
       roadmapHoveredProductIds.set(targetCanvas, productId);
-      targetCanvas.title = productId ? board.products.find((product) => product.id === productId)?.name || "" : "";
+      const product = productId && board.products.find(item => item.id === productId);
+      targetCanvas.title = isFfsRoadmap() ? hashoutProductTooltip(product) : product?.name || "";
       // The viewport guide handles hover movement without repainting all rows.
       if (roadmapInteractionMode === "dates") queueScrollPaint();
     },
@@ -3606,6 +3852,11 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     const hit = hitRoadmapBar(targetCanvas, point);
     const within = (handle) => handle && point.x >= handle.x && point.x < handle.x + handle.width;
     targetCanvas.style.cursor = roadmapInteractionMode === "dates" && hit && (within(hit.leftHandle) || within(hit.rightHandle)) ? "ew-resize" : "grab";
+    if (isFfsRoadmap()) {
+      const row = hitRoadmapRow(targetCanvas, point);
+      const product = row && board.products.find(item => item.id === row.productId);
+      targetCanvas.title = hashoutProductTooltip(product);
+    }
   });
 
   function finishRoadmapPointer(event, cancelled = false) {
@@ -3657,6 +3908,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   targetCanvas.addEventListener("pointercancel", (event) => finishRoadmapPointer(event, true));
   targetCanvas.addEventListener("lostpointercapture", (event) => finishRoadmapPointer(event, true));
   targetCanvas.addEventListener("pointerleave", () => {
+    targetCanvas.title = "";
     if (roadmapDragState || roadmapPanState) return;
     laneHover.clear();
   });
@@ -4032,6 +4284,15 @@ function stopRoadmapSlotEditing() {
 }
 
 function syncRoadmapDetailsVisibility() {
+  document.querySelector(".app-shell")?.classList.toggle("is-hashout-roadmap", hasDedicatedHashoutView() && activeView !== "products");
+  if (hasDedicatedHashoutView() && activeView !== "products") {
+    roadmapView.classList.add("hidden");
+    splitView.classList.add("hidden");
+    hashoutView.classList.remove("hidden");
+    $("#toggleRoadmapDetails").classList.add("hidden");
+    return;
+  }
+  if (typeof hashoutView !== "undefined") hashoutView?.classList.add("hidden");
   const hasSelection = Boolean(selectedProduct()) && visibleRoadmapProducts().some((product) => product.id === selectedId);
   const showing = activeView !== "products" && roadmapDetailsOpen && hasSelection;
   if (activeView !== "products") activeView = showing ? "split" : "roadmap";
@@ -4046,6 +4307,7 @@ function syncRoadmapDetailsVisibility() {
 }
 
 function setView(view, { focusSelected = false } = {}) {
+  if (typeof hashoutViewController !== "undefined") hashoutViewController?.closeOverlay?.();
   closePopupMenus();
   roadmapLaneHovers.forEach((hover) => hover.clear({ immediate: true }));
   roadmapPanState?.cancel?.();
@@ -4175,10 +4437,12 @@ function renderStatus() {
 
 function publishWorkspaceState() {
   if (!portfolio || !board) return;
+  const hashout = hasDedicatedHashoutView() && activeView !== "products";
+  const hashoutEntries = hashout ? globalThis.PortfolioHashoutLayout.project(portfolio, hashoutCategoryScope()) : [];
   const detail = {
     categories: portfolio.categories.map((category) => ({ id: category.id, name: category.name, count: category.board.products.length })),
-    activeCategoryId, title: board.title, selectedName: selectedProduct()?.name || "", productCount: board.products.length,
-    visibleCount: activeView === "products" ? visibleProducts().length : visibleRoadmapProducts().length,
+    activeCategoryId, title: hashout ? "Hashout roadmap" : board.title, selectedName: hashout ? hashoutSelectionEntry()?.product.name || "" : selectedProduct()?.name || "", productCount: hashout ? portfolio.categories.reduce((total, category) => total + category.board.products.length, 0) : board.products.length,
+    visibleCount: hashout ? hashoutEntries.length : activeView === "products" ? visibleProducts().length : visibleRoadmapProducts().length,
     activeView: activeView === "products" ? "products" : "roadmap", roadmapDetailsOpen, timeline: portfolio.settings.timeline,
   };
   const signature = JSON.stringify([detail, typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision]);
@@ -5562,6 +5826,7 @@ function applySort() {
 }
 
 function syncControls() {
+  syncFfsRoadmapControls();
   $("#boardTitle").textContent = board.title;
   categorySelect.innerHTML = portfolio.categories.map((category) => `<option value="${escapeHtml(category.id)}" ${category.id === activeCategoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("");
   editSelectedButton.disabled = !selectedProduct();
@@ -6011,11 +6276,13 @@ async function commitPackageDraft(draft, expectedCurrent, stagedImages = [], { c
   await workspaceStorage.save(serialized, { images: stagedImages, isCurrent: () => JSON.stringify(portfolio) === expectedCurrent });
   try {
     if (JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the package was loading. Your newer changes have been kept.");
+    resetHashoutView();
     portfolio = draft;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     clearPackageImageCaches();
     activateCategory(portfolio.activeCategoryId, { fitVertical: true });
   } catch (error) {
+    resetHashoutView();
     portfolio = previousPortfolio;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     let restored = false;
@@ -6654,6 +6921,7 @@ function containRect(sourceWidth, sourceHeight, targetX, targetY, targetWidth, t
 }
 
 function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
+  if (scope !== "products" && isFfsRoadmap() && !globalThis.PPTXExportPlanner) throw new Error("The Hashout roadmap export module did not load. Reopen the preview and try again.");
   const previousUiFontFace = UI_FONT_FACE;
   UI_FONT_FACE = PPTXEditable.FONT_FACE;
   try {
@@ -6697,12 +6965,13 @@ function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
           const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
           const status = standardizedStatus(product.statusType);
           return { id: product.id, name: product.name, family: group.family, startMonth: roadmap?.startMonth || roadmap?.launchMonth || "", endMonth: roadmap?.endMonth || "",
+            ...(isFfsRoadmap() ? { ffs: globalThis.PortfolioFfsRoadmap.period(product), nameProvisional: product.nameProvisional === true } : {}),
             fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), status: roadmap?.status || "",
-            statusLabel: status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
+            statusLabel: isFfsRoadmap() ? ffsRoadmapStageLabel(product) : status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
         })),
       }));
       const options = roadmapOptions || { mode: "categories", startMonth: portfolio.settings.timeline.startMonth, endMonth: portfolio.settings.timeline.endMonth, overflow: "ask" };
-      const roadmapPlan = globalThis.PPTXExportPlanner.planRoadmap(sections, options);
+      const roadmapPlan = globalThis.PPTXExportPlanner.planRoadmap(sections, { ...options, timelineMode: isFfsRoadmap() ? "ffs" : "lifecycle" });
       slides.roadmapPlan = roadmapPlan;
       slides.push(...roadmapPlan.slides.map(roadmapSlide => ({ kind: roadmapSlide.kind, roadmapSlide })));
     }
@@ -6716,11 +6985,12 @@ function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
 function pptxPlanSlideTitle(planItem) {
   if (planItem.roadmapSlide) {
     const slide = planItem.roadmapSlide;
-    return slide.kind === "roadmap-merged" ? "Combined roadmap"
-      : `${slide.categoryName || slide.categoryId} — Roadmap${slide.pageIndex ? " (continued)" : ""}`;
+    const viewName = slide.timelineMode === "ffs" ? "Hashout roadmap" : "Lifecycle roadmap";
+    return slide.kind === "roadmap-merged" ? `Combined ${viewName}`
+      : `${slide.categoryName || slide.categoryId} — ${viewName}${slide.pageIndex ? " (continued)" : ""}`;
   }
   const categoryName = planItem.category.name || planItem.category.id || `Category ${planItem.categoryIndex + 1}`;
-  const viewName = planItem.kind === "products" ? "Product Portfolio" : "Roadmap";
+  const viewName = planItem.kind === "products" ? "Product Portfolio" : isFfsRoadmap() ? "Hashout roadmap" : "Lifecycle roadmap";
   const pageLabel = planItem.pageIndex > 0 ? " (continued)" : "";
   return `${categoryName} — ${viewName}${pageLabel}`;
 }
@@ -6792,6 +7062,7 @@ function openPptxExportDialog() {
   closePopupMenus();
   resetPptxRoadmapLimit();
   pptxReturnFocus = document.activeElement;
+  if (hasDedicatedHashoutView() && activeView !== "products") pptxSelectedCategoryIds = hashoutCategoryScope();
   renderPptxExportCategories();
   const start = pptxExportForm.querySelector("#pptxRoadmapStart"), end = pptxExportForm.querySelector("#pptxRoadmapEnd");
   if (start && !start.value) start.value = board.settings.roadmap.startMonth;
@@ -6879,12 +7150,17 @@ async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOpt
 
 async function exportPng() {
   stopProductCardDrag();
+  if (hasDedicatedHashoutView() && activeView !== "products") {
+    const blob = await ensureHashoutView().exportPng();
+    downloadBlob(blob, "hashout-roadmap.png");
+    return;
+  }
   const isProducts = activeView === "products";
   const dimensions = isProducts ? getCanvasDimensions({ includeViewer: false }) : roadmapDimensions();
   const scale = 2;
   const expectedCurrent = JSON.stringify(portfolio);
   const expectedCategory = activeCategoryId;
-  const renderSnapshot = () => JSON.stringify({ activeView, searchQuery, roadmapSearchQuery, roadmapMonthWidth, zoom, inspectorOpen, viewerInfoProgress, viewerInfoProductId, hoveredHeroVariant, pinnedHeroVariantByProduct: [...pinnedHeroVariantByProduct], roadmapDraft });
+  const renderSnapshot = () => JSON.stringify({ activeView, roadmapBasis: portfolio.settings.roadmapBasis, searchQuery, roadmapSearchQuery, roadmapMonthWidth, zoom, inspectorOpen, viewerInfoProgress, viewerInfoProductId, hoveredHeroVariant, pinnedHeroVariantByProduct: [...pinnedHeroVariantByProduct], roadmapDraft });
   const expectedRender = renderSnapshot();
   const unchanged = () => activeCategoryId === expectedCategory && JSON.stringify(portfolio) === expectedCurrent && renderSnapshot() === expectedRender;
   const tiles = dimensions.width * scale > 16384 || dimensions.height * scale > 16384 || dimensions.width * dimensions.height * scale * scale > 32000000;
@@ -6909,7 +7185,7 @@ async function exportPng() {
         const blob = await new Promise((resolve, reject) => outputCanvas.toBlob(value => value ? resolve(value) : reject(new Error("This browser could not prepare the PNG export.")), "image/png"));
         if (!tiles) {
           if (!unchanged()) throw new Error("The workspace changed while the PNG export was being prepared. Try again.");
-          downloadBlob(blob, safeFilename(isProducts ? "png" : "roadmap.png"));
+          downloadBlob(blob, safeFilename(isProducts ? "png" : isFfsRoadmap() ? "hashout-roadmap.png" : "lifecycle-roadmap.png"));
           return;
         }
         const name = "tile-" + String(placements.length + 1).padStart(3, "0") + ".png";
@@ -7874,10 +8150,11 @@ document.querySelectorAll("[data-roadmap-years]").forEach((button) => {
 });
 $("#roadmapToday").onclick = () => { closePopupMenus(); scrollRoadmapToday(activeView === "split" ? splitRoadmapScroll : roadmapScroll); };
 $("#roadmapFit").onclick = () => { closePopupMenus(); fitRoadmapTimeline(); };
-$("#roadmapZoomOut").onclick = () => setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, -1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
-$("#roadmapZoomReset").onclick = () => setRoadmapZoom(ROADMAP_DEFAULT_MONTH_WIDTH);
-$("#roadmapZoomIn").onclick = () => setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, 1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
+$("#roadmapZoomOut").onclick = () => hasDedicatedHashoutView() ? ensureHashoutView()?.zoomBy(-1) : setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, -1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
+$("#roadmapZoomReset").onclick = () => hasDedicatedHashoutView() ? ensureHashoutView()?.fit() : setRoadmapZoom(ROADMAP_DEFAULT_MONTH_WIDTH);
+$("#roadmapZoomIn").onclick = () => hasDedicatedHashoutView() ? ensureHashoutView()?.zoomBy(1) : setRoadmapZoom(steppedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, 1, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH);
 $("#roadmapModePan").onclick = () => setRoadmapInteractionMode("pan");
+document.querySelectorAll("[data-roadmap-basis]").forEach(button => { button.onclick = () => setRoadmapBasis(button.dataset.roadmapBasis); });
 $("#roadmapModeDates").onclick = () => setRoadmapInteractionMode("dates");
 $("#roadmapMoveUp").onclick = () => moveSelectedRoadmapRow(-1);
 $("#roadmapMoveDown").onclick = () => moveSelectedRoadmapRow(1);
@@ -8409,6 +8686,7 @@ async function initializeWorkspace() {
     pendingLegacyImageBlobs.splice(pendingStart);
     // Legacy localStorage records are retained. The committed DB record takes
     // precedence on future opens, with all operational metadata intact.
+    resetHashoutView();
     portfolio = loaded;
     localDateBaseline = globalThis.PLCImporter?.snapshotDateValues(portfolio) || null;
     workspaceOpening = false;

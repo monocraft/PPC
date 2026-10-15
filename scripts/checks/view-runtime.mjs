@@ -278,14 +278,32 @@ assert.equal(editorClears, 1); assert.equal(editorContext.editSelectedButton.dis
 
 // Geometry-only frames must not dispatch full downstream workspace refreshes;
 // a real spec/date mutation still invalidates status even with the same selection.
-let workspaceEvents = 0;
+let workspaceEvents = 0, workspaceDetail = null;
 const statusContext = { portfolio: { categories: [{ id: "audio", name: "Audio", board }], settings: { timeline: { startMonth: "2026-01" } } }, board,
   activeCategoryId: "audio", activeView: "products", roadmapDetailsOpen: true, workspaceSaveRevision: 1, lastWorkspaceRenderSignature: "",
+  hasDedicatedHashoutView: () => false,
   selectedProduct: () => board.products[0], visibleProducts: () => board.products,
-  window: { dispatchEvent() { workspaceEvents++; } }, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } } };
+  window: { dispatchEvent(event) { workspaceEvents++; workspaceDetail = event.detail; } }, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } } };
 vm.createContext(statusContext); vm.runInContext(extract("publishWorkspaceState"), statusContext);
 for (let i = 0; i < 40; i++) statusContext.publishWorkspaceState();
 assert.equal(workspaceEvents, 1); statusContext.workspaceSaveRevision++; statusContext.publishWorkspaceState(); assert.equal(workspaceEvents, 2);
+
+// Clearing a Hashout category selection must not claim that source products
+// disappeared and activate the global empty-workspace overlay.
+let scopedHashoutEntries = [];
+Object.assign(statusContext, {
+  hasDedicatedHashoutView: () => true, activeView: "roadmap",
+  PortfolioHashoutLayout: { project: () => scopedHashoutEntries },
+  hashoutCategoryScope: () => [], hashoutSelectionEntry: () => null,
+});
+statusContext.publishWorkspaceState();
+assert.equal(workspaceDetail.productCount, board.products.length);
+assert.equal(workspaceDetail.visibleCount, 0);
+assert.equal(workspaceDetail.title, "Hashout roadmap");
+scopedHashoutEntries = [{ key: "one-product" }];
+statusContext.publishWorkspaceState();
+assert.equal(workspaceDetail.productCount, board.products.length);
+assert.equal(workspaceDetail.visibleCount, 1);
 
 // Repeated redraws retain real Details DOM, focus and scroll; changed fields or
 // direct tab requests refresh it instead of silently retaining stale facts.
