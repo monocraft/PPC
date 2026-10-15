@@ -543,8 +543,9 @@
       window.HX_DATA = next;
       window.dispatchEvent(new CustomEvent('hx-data-updated'));
       toast(`${file.name} imported and saved in this browser. Source definitions and quality findings were refreshed.`);
+      return { status: 'applied' };
     }
-    catch (error) { window.HX_DATA = previous; toast(`Import was not applied: ${error.message || 'Source validation failed.'}`); }
+    catch (error) { window.HX_DATA = previous; toast(`Import was not applied: ${error.message || 'Source validation failed.'}`); return { status: 'failed', message: error.message || 'Source validation failed.' }; }
     finally { importBusy = false; $('#import-button').disabled = false; $('#source-badge').textContent = hasSource() ? 'Workbook snapshot' : 'No workbook loaded'; $('#import-file').value = ''; notifyParent(); }
   }
   document.addEventListener('click', event => {
@@ -615,7 +616,7 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(draw, 120);
   });
-  window.HX_DASHBOARD = { refresh() { timelineControl?.stop(); if (hasSource()) { loadFilters(sourceWasLoaded); sourceWasLoaded = true; } draw(); }, setView, selectDrillScope, toggleCompare, clearComparison, state };
+  window.HX_DASHBOARD = { refresh() { timelineControl?.stop(); if (hasSource()) { loadFilters(sourceWasLoaded); sourceWasLoaded = true; } draw(); }, importFile, setView, selectDrillScope, toggleCompare, clearComparison, state };
   state.view = views[fragmentView()] ? fragmentView() : 'overview';
   fillIcons(); draw();
   Promise.resolve(window.HX_SOURCE_READY).then(result => {

@@ -46,6 +46,27 @@ await assert.rejects(importer.zipEntries(arrayBuffer(oversized)), error => error
 for (const bytes of [new Uint8Array(), good.subarray(0, 18)]) await assert.rejects(importer.zipEntries(arrayBuffer(bytes)));
 for (const text of ['<!DOCTYPE workbook><workbook/>', '<!ENTITY secret "payload">', null]) assert.throws(() => importer.xml(text), /unsupported XML|missing part/);
 
+// Analytics calls the iframe's importer with a File whose arrayBuffer method belongs
+// to the parent realm. Keep the actual archive reader and its intrinsic constructors
+// inside a fresh iframe-like VM; injecting the parent's ASCMImporter masks this bug.
+const frameWindow = {};
+const frameContext = vm.createContext({ window: frameWindow, TextDecoder, TextEncoder });
+vm.runInContext(await read('public/js/ascm-import.js'), frameContext, { filename: 'frame/ascm-import.js' });
+vm.runInContext(importerSource, frameContext, { filename: 'frame/blueprint-importer.js' });
+const parentBytes = archive('<!DOCTYPE workbook><workbook/>');
+const parentBuffer = arrayBuffer(parentBytes);
+frameContext.parentBuffer = parentBuffer;
+assert.equal(vm.runInContext('parentBuffer instanceof ArrayBuffer', frameContext), false, 'This fixture must really pass a parent-realm ArrayBuffer.');
+assert.equal(vm.runInContext('new Uint8Array(parentBuffer) instanceof Uint8Array', frameContext), true);
+const frameArchiveReader = vm.runInContext('ASCMImporter.helpers.openZip', frameContext);
+await assert.rejects(frameArchiveReader(parentBuffer), error => error.code === 'INVALID_INPUT', 'The frame archive reader retains its strict input validation.');
+let parentReads = 0;
+const parentFile = { name: 'parent-workbook.xlsx', size: parentBuffer.byteLength, lastModified: 0, async arrayBuffer() { parentReads++; return parentBuffer; } };
+await assert.rejects(frameWindow.HX_IMPORT_FILE(parentFile), /unsupported XML declarations/, 'The public importer must normalize cross-realm bytes, read/verify the ZIP, and reach the next XML validation boundary.');
+assert.equal(parentReads, 1, 'A cross-window file is read once in memory.');
+const missingBookBytes = archive('inert synthetic part', 'xl/not-workbook.xml');
+await assert.rejects(frameWindow.HX_IMPORT_FILE({ name: 'missing-book.xlsx', size: missingBookBytes.byteLength, async arrayBuffer() { return arrayBuffer(missingBookBytes); } }), /not a supported Excel workbook/, 'A foreign-realm buffer is also normalized when the ZIP is valid but its workbook part is absent.');
+
 const cell = (address, value = 'fixture') => ({
   getAttribute: name => name === 'r' ? address : name === 't' ? 'inlineStr' : null,
   children: [], getElementsByTagNameNS: (_ns, name) => name === 't' ? [{ textContent: value }] : [],
@@ -94,4 +115,4 @@ for (const payload of ['=1+1', '+1+1', '@SUM(A1)', '-1+WEBSERVICE("https://examp
 assert.equal(csvCell(-12.5), '"-12.5"', 'Genuine negative numeric observations remain numeric.');
 assert.equal(csvCell(0), '"0"'); assert.equal(csvCell(null), '""');
 assert.equal(csvCell('Normal, "label"'), '"Normal, ""label"""');
-console.log('Analytics security checks passed: bounded/CRC-verified ZIP ingestion, inert XML, validated cells, sparse row normalization, and safe spreadsheet exports.');
+console.log('Analytics security checks passed: bounded/CRC-verified ZIP ingestion, real cross-realm public Blueprint import, inert XML, validated cells, sparse row normalization, and safe spreadsheet exports.');

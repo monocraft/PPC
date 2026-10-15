@@ -725,7 +725,7 @@
       if (sourceLink && !["xlsx", "csv"].includes(ext)) throw new Error("Choose the downloaded XLSX or CSV workbook. Use Choose file for other backups.");
       const sizeLimit = ext === "pkg" ? root.PortfolioPackage.MAX_PACKAGE_BYTES : 40 * 1024 * 1024;
       if (file.size > sizeLimit) throw new Error(`Choose a file of at most ${sizeLimit / 1024 / 1024} MiB.`);
-      if (ext === "pkg") { privateFile = file; openPrivate("import"); message(""); return; }
+      if (ext === "pkg") { privateFile = file; openPrivate("import"); message(""); return { status: "review", stage: "unlock" }; }
       let sheets, pending;
       if (ext === "xlsx") { sheets = await workbookMatrices(file); pending = { snapshot: sheets[0] }; }
       else if (ext === "json") { const data = JSON.parse(await file.text()); pending = root.PPCSelloutPrivate.sanitizeWorkspace(data.snapshot ? data : { snapshot: data }); sheets = [pending.snapshot]; }
@@ -946,7 +946,42 @@
     void refreshPpc();
   }
   const workspace = () => ({ snapshot: state.snapshot, prices: structuredClone(state.prices), shortlist: structuredClone(state.shortlist), ppcProjection: state.ppcProjection, pricingSource: state.pricingSource });
-  root.PPCSelloutDashboard = { analysis: null, ready: null, applySnapshot, readImport, getSnapshot: workspace, setActive, showView };
+  function captureView() {
+    if (!state.snapshot) throw new Error('Load a Retail workbook before saving its view.');
+    return { view: state.view, stores: [...state.stores], products: [...state.products], storesNone: state.storesNone, productsNone: state.productsNone,
+      category: $("categoryFilter").value, band: $("bandFilter").value, comparison: $("comparison").value, coverage: $("coverage").value,
+      preset: $("periodPreset").value, start: $("startDate").value, end: $("endDate").value, trend: $("trendMode").value };
+  }
+  function applyView(value) {
+    if (!state.snapshot) throw new Error('Load a Retail workbook before opening this view.');
+    const saved = root.PPCSavedViews?.sanitizePreferences('retail', value);
+    if (!saved) throw new Error('This Retail view is invalid.');
+    stopTimeline(); state.markerDate = null; state.hoverDate = null; state.hiddenSeries.clear();
+    const options = M.options(state.snapshot), validProducts = new Set(options.products.map(product => product.sku));
+    const requestedStores = saved.stores || [], requestedProducts = saved.products || [];
+    state.stores = requestedStores.filter(store => options.stores.includes(store));
+    state.products = requestedProducts.filter(sku => validProducts.has(sku));
+    state.storesNone = Boolean(saved.storesNone || (requestedStores.length && !state.stores.length));
+    state.productsNone = Boolean(saved.productsNone || (requestedProducts.length && !state.products.length));
+    controls();
+    $("categoryFilter").value = options.categories.includes(saved.category) ? saved.category : '';
+    $("bandFilter").value = saved.band || '';
+    $("comparison").value = saved.comparison || 'year';
+    $("coverage").value = saved.coverage || 'common';
+    $("trendMode").value = saved.trend || 'stores';
+    $("periodPreset").value = saved.preset || '13';
+    if ($("periodPreset").value === 'custom') {
+      const clamp = date => date < options.start ? options.start : date > options.end ? options.end : date;
+      const start = clamp(saved.start || options.start), end = clamp(saved.end || options.end);
+      $("startDate").value = start <= end ? start : end;
+      $("endDate").value = start <= end ? end : start;
+    }
+    update($("periodPreset").value !== 'custom');
+    showView(saved.view || 'overview');
+    const removed = requestedStores.length - state.stores.length + requestedProducts.length - state.products.length + (saved.category && !options.categories.includes(saved.category) ? 1 : 0);
+    return { message: removed ? `Retail view opened; ${removed} unavailable selections were skipped. All-missing product or retailer selections remain empty.` : 'Retail view opened using the current workbook.' };
+  }
+  root.PPCSelloutDashboard = { analysis: null, ready: null, applySnapshot, readImport, getSnapshot: workspace, setActive, showView, captureView, applyView };
   root.PPCSelloutDashboard.ready = (async () => {
     const loadWorkspace = value => applySnapshot(value.snapshot || value, value.prices, value.shortlist, value.ppcProjection || null, value.pricingSource || null);
     try { const embedded = root.PPC_RETAIL_LOCAL_SNAPSHOT, saved = await storage("readonly"); if (saved?.snapshot && M.validateSnapshot(saved.snapshot).ok) await loadWorkspace(saved); else if (embedded) await loadWorkspace(embedded); }

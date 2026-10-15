@@ -4,6 +4,11 @@ import vm from "node:vm";
 import "../../public/js/workspace-notifications.js";
 
 const notifications = globalThis.PortfolioNotifications;
+const facadeEvents=[]; const unsubscribeFacade=notifications.subscribe(event=>facadeEvents.push(event.type));
+notifications.publish({id:'facade-failure',severity:'error',title:'Local save failed'});
+assert.deepEqual(facadeEvents,['publish'],'the visible workflow status can subscribe to async failures');
+notifications.resolve('facade-failure'); assert.deepEqual(facadeEvents,['publish','resolve']);
+unsubscribeFacade();notifications.publish({id:'unsubscribed',title:'No listener'});assert.equal(facadeEvents.length,2);notifications.resolve('unsubscribed');
 let clock = 1000;
 const store = notifications.createStore({ now: () => clock, limit: 3 });
 const events = [];

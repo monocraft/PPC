@@ -1438,6 +1438,7 @@ function scheduleSave() {
   if (globalThis.PLCImporter && typeof localDateBaseline !== "undefined" && localDateBaseline) localDateBaseline = globalThis.PLCImporter.recordDateChanges(localDateBaseline, portfolio);
   workspaceSaveRevision += 1;
   workspaceSavePending = true;
+  globalThis.dispatchEvent?.(new CustomEvent("portfolio:local-status"));
   saveTimer = setTimeout(() => { void flushWorkspaceSave(); }, 120);
 }
 
@@ -1466,6 +1467,7 @@ async function flushWorkspaceSave() {
     if (revision === workspaceSaveRevision && attempt === workspaceSaveAttempt) {
       workspaceSavePending = false;
       globalThis.PortfolioNotifications?.resolve("workspace-local-save");
+      globalThis.dispatchEvent?.(new CustomEvent("portfolio:local-status"));
     }
     return true;
   } catch (error) {
@@ -7075,12 +7077,58 @@ function syncPptxExportSummary() {
   confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length || Boolean(plan.roadmapPlan?.requiresDecision);
 }
 
+function restorePptxExportPreferences() {
+  const saved = globalThis.PPCSavedViews?.readExportPreferences();
+  if (!saved || !Object.keys(saved).length) return;
+  if (saved.categoryIds !== undefined) {
+    const knownIds = new Set(PPTXPagination.selectExportCategories(portfolio?.categories).map(category => category.id));
+    pptxSelectedCategoryIds = saved.categoryIds === null ? null : saved.categoryIds.filter(categoryId => knownIds.has(categoryId));
+  }
+  for (const input of pptxExportForm.querySelectorAll('input[name="pptxExportScope"]')) if (saved.scope) input.checked = input.value === saved.scope;
+  for (const input of pptxExportForm.querySelectorAll('input[name="pptxRoadmapLayout"]')) if (saved.mode) input.checked = input.value === saved.mode;
+  if (saved.range?.start && saved.range?.end && saved.range.start <= saved.range.end) {
+    pptxExportForm.querySelector("#pptxRoadmapStart").value = saved.range.start;
+    pptxExportForm.querySelector("#pptxRoadmapEnd").value = saved.range.end;
+  }
+}
+
+function pptxReusablePreferences(scope = pptxExportScope(), categories = pptxExportCategories(), options = globalThis.PPTXExportPlanner?.readOptions(pptxExportForm)) {
+  const available = PPTXPagination.selectExportCategories(portfolio?.categories);
+  return { scope, categoryIds: categories.length === available.length ? null : categories.map(category => category.id),
+    range: { start: options?.startMonth, end: options?.endMonth }, mode: options?.mode };
+}
+
+function useCurrentViewForPptx() {
+  if (pptxExportInProgress) return;
+  const current = globalThis.PortfolioWorkflowAdapter?.captureView?.();
+  const selectedIds = hasDedicatedHashoutView() && activeView !== "products"
+    ? hashoutCategoryScope() ?? PPTXPagination.selectExportCategories(portfolio?.categories).map(category => category.id)
+    : [activeCategoryId];
+  const scope = activeView === "products" ? "products" : "roadmap";
+  for (const input of pptxExportForm.querySelectorAll('input[name="pptxExportScope"]')) input.checked = input.value === scope;
+  const range = current?.dateRange || { start: board.settings.roadmap.startMonth, end: board.settings.roadmap.endMonth };
+  pptxExportForm.querySelector("#pptxRoadmapStart").value = range.start;
+  pptxExportForm.querySelector("#pptxRoadmapEnd").value = range.end;
+  setPptxCategorySelection(selectedIds);
+}
+
+function ensurePptxCurrentViewAction() {
+  if (pptxExportForm.querySelector("#pptxUseCurrentView")) return;
+  const button = document.createElement("button"); button.id = "pptxUseCurrentView"; button.type = "button";
+  button.className = "quiet-button"; button.textContent = "Use this view";
+  button.title = "Use the current categories, view type and roadmap period";
+  button.addEventListener("click", useCurrentViewForPptx);
+  pptxExportForm.querySelector(".pptx-category-shortcuts")?.append(button);
+}
+
 function openPptxExportDialog() {
   stopProductCardDrag();
   closePopupMenus();
   resetPptxRoadmapLimit();
   pptxReturnFocus = document.activeElement;
   if (hasDedicatedHashoutView() && activeView !== "products") pptxSelectedCategoryIds = hashoutCategoryScope();
+  restorePptxExportPreferences();
+  ensurePptxCurrentViewAction();
   renderPptxExportCategories();
   const start = pptxExportForm.querySelector("#pptxRoadmapStart"), end = pptxExportForm.querySelector("#pptxRoadmapEnd");
   if (start && !start.value) start.value = board.settings.roadmap.startMonth;
@@ -7806,6 +7854,7 @@ function ascmRoadmapStatus(gaDate, emDate) {
 }
 
 function applyAscmGroupToProduct(product, group, dataset, importedAt, isNewProduct) {
+  const protectedBefore = !isNewProduct ? JSON.parse(JSON.stringify(product)) : null;
   const dates = ascmGroupDates(group);
   Object.assign(product, globalThis.ASCMImporter.mergeProductGroup(product, group, {
     datasetMetadata: dataset.metadata, importedAt, createId: id,
@@ -7825,6 +7874,22 @@ function applyAscmGroupToProduct(product, group, dataset, importedAt, isNewProdu
     status: isNewProduct ? ascmRoadmapStatus(dates.gaDate, dates.emDate) : normalizeRoadmapStatus(existingRoadmap.status),
   };
   product.ascm = normalizeAscmProductMetadata(product.ascm);
+  if (protectedBefore) {
+    const held = [];
+    for (const field of globalThis.PortfolioWorkflowModel?.fields || []) {
+      if ((product[field] || "") === (protectedBefore[field] || "")) continue;
+      const policy = globalThis.PortfolioFieldProtection?.check({ categoryId: group.categoryId, productId: product.id, field });
+      if (!policy?.protected) continue;
+      product[field] = protectedBefore[field] || ""; held.push(field);
+      if (field === "generalAvailabilityDate") for (const key of ["startMonth", "launchMonth"]) product.roadmap[key] = protectedBefore.roadmap?.[key] || product.roadmap[key];
+      if (field === "endManufacturingDate") product.roadmap.endMonth = protectedBefore.roadmap?.endMonth || product.roadmap.endMonth;
+    }
+    if (held.length && product.generalAvailabilityDate && product.endManufacturingDate && product.endManufacturingDate < product.generalAvailabilityDate) {
+      for (const field of ["generalAvailabilityDate", "endManufacturingDate"]) product[field] = protectedBefore[field] || "";
+      for (const field of ["startMonth", "launchMonth", "endMonth"]) if (protectedBefore.roadmap?.[field]) product.roadmap[field] = protectedBefore.roadmap[field];
+    }
+    if (held.length) globalThis.PortfolioNotifications?.publish({ id: "ascm-protected-dates", severity: "warning", title: "Protected dates kept", message: "ASCM source records were collected. Protected dates and any dependent lifecycle dates were kept; review their source and protection before replacing them.", toast: false });
+  }
 }
 
 function ascmProductId(group, state) {
@@ -8064,7 +8129,10 @@ pptxExportForm.addEventListener("submit", async (event) => {
   exportControls.forEach((control) => { control.disabled = true; });
   confirmPptxExportButton.textContent = "Exporting…";
   try {
-    await exportPptx(scope, categories.map((category) => category.id), globalThis.PPTXExportPlanner?.readOptions(pptxExportForm));
+    const options = globalThis.PPTXExportPlanner?.readOptions(pptxExportForm);
+    const preferences = pptxReusablePreferences(scope, categories, options);
+    await exportPptx(scope, categories.map((category) => category.id), options);
+    if (globalThis.PPCSavedViews?.saveExportPreferences(preferences) === false) globalThis.PortfolioNotifications?.publish({ id: "export-view-preferences", severity: "warning", title: "PowerPoint exported", message: "This browser could not remember your export settings. The exported file is ready.", toast: false });
     pptxExportInProgress = false;
     closePptxExportDialog();
   } catch (error) {
@@ -8389,6 +8457,108 @@ globalThis.PortfolioSearchAdapter = Object.freeze({
   getActiveCategoryId: () => activeCategoryId,
   getActiveView: () => activeView,
   openResult: openPortfolioSearchResult,
+});
+
+// Workflow modules navigate existing tools; this remains the only portfolio mutation owner.
+globalThis.PortfolioWorkflowAdapter = Object.freeze({
+  getKind: () => "portfolio",
+  getPortfolio: () => portfolio,
+  getSelectedProductId: () => selectedId,
+  getStatus: () => ({ localPending: workspaceSavePending, localError: Boolean(globalThis.PortfolioNotifications?.getState().items.some(item => item.id === "workspace-local-save")), master: globalThis.PortfolioMasterUI?.getSummary() || {} }),
+  openProduct(productId) { const entry = portfolio.categories.flatMap(category => category.board.products.filter(product => product.id === productId).map(product => ({ category, product }))); if (entry.length !== 1) throw new Error("This product is no longer available. Refresh the review list."); openProductIssue(entry[0]); },
+  openPlcReview: () => globalThis.PortfolioPlcUI?.open({ tab: "review" }),
+  async loadFile(file, kind) {
+    if (workspaceOpening || packageOperationInProgress) throw new Error("Finish opening the workspace before loading another source.");
+    if (kind === "plc") return globalThis.PortfolioPlcUI?.getController()?.loadFile(file);
+    if (kind === "ascm") return openAscmImport(file);
+    if (kind === "package") return globalThis.PortfolioPackageUI?.openImport(file);
+    if (kind === "data") {
+      const confirmed = await PortfolioDialogs.confirm(`Open ${file.name} as portfolio data? This replaces products and workspace settings on this device. Separate image files are not included. Export a complete package first if you need a backup.`, { title: "Replace workspace data", confirmText: "Replace workspace data" });
+      if (confirmed) return importJson(file);
+      return { status: "cancelled" };
+    }
+    throw new Error("Choose a supported portfolio source.");
+  },
+  captureView() {
+    return { view: activeView, basis: portfolio.settings.roadmapBasis || "lifecycle", activeCategoryId,
+      categoryIds: hashoutCategoryScope() || portfolio.categories.map(category => category.id), dateRange: { start: board.settings.roadmap.startMonth, end: board.settings.roadmap.endMonth },
+      search: hasDedicatedHashoutView() && activeView !== "products" ? document.querySelector(".hashout-search")?.value || "" : activeView === "products" ? searchQuery : roadmapSearchQuery,
+      display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus } };
+  },
+  applyView(value) {
+    if (workspaceOpening || packageOperationInProgress || pptxExportInProgress || productLayoutEditing) throw new Error("Finish the current edit or export before opening a saved view.");
+    const safe = globalThis.PPCSavedViews?.sanitizePreferences("portfolio", value); if (!safe) throw new Error("This saved view is invalid.");
+    const categoryId = portfolio.categories.some(category => category.id === safe.activeCategoryId) ? safe.activeCategoryId : activeCategoryId;
+    activateCategory(categoryId, { render: false, fitVertical: false });
+    if (safe.dateRange?.start && safe.dateRange?.end && safe.dateRange.end >= safe.dateRange.start) PortfolioModel.syncTimelineSettings(portfolio, { startMonth: safe.dateRange.start, endMonth: safe.dateRange.end });
+    if (safe.categoryIds) portfolio.settings.hashoutCategoryIds = safe.categoryIds.filter(id => portfolio.categories.some(category => category.id === id));
+    if (safe.basis) portfolio.settings.roadmapBasis = safe.basis;
+    const display = safe.display || {};
+    if (display.labelMode) portfolio.settings.hashoutLabelMode = display.labelMode;
+    if (typeof display.showSeasonalWindows === "boolean") portfolio.settings.hashoutWindowsVisible = display.showSeasonalWindows;
+    if (typeof display.showPrices === "boolean") board.settings.showPrices = display.showPrices;
+    if (typeof display.showSkus === "boolean") board.settings.showSkus = display.showSkus;
+    if (typeof display.detailsOpen === "boolean") roadmapDetailsOpen = display.detailsOpen;
+    resetHashoutView(); setView(safe.view || "products");
+    searchQuery = roadmapSearchQuery = safe.search || "";
+    const search = document.querySelector("#productControls input[type=search]"); if (search) search.value = searchQuery;
+    if ($("#roadmapSearch")) $("#roadmapSearch").value = roadmapSearchQuery;
+    if (hasDedicatedHashoutView()) ensureHashoutView()?.setSearch(safe.search || "");
+    if (Number.isFinite(display.productZoom)) setProductZoom(display.productZoom);
+    if (!hasDedicatedHashoutView() && Number.isFinite(display.roadmapZoom)) setRoadmapZoom(display.roadmapZoom * ROADMAP_DEFAULT_MONTH_WIDTH);
+    scheduleSave(); syncControls(); renderActiveView(); return { message: "View opened using the current portfolio data." };
+  },
+  rangePreset(mode) {
+    if (workspaceOpening || packageOperationInProgress) return;
+    const today = monthStringFromDate();
+    if (mode === "next") updateTimelineSettings({ startMonth: today, endMonth: addMonths(today, 23) });
+    else {
+      const products = mode === "selected" ? [hasDedicatedHashoutView() && activeView !== "products" ? hashoutSelectionEntry()?.product : selectedProduct()].filter(Boolean) : portfolio.categories.filter(category => activeView === "products" || !isFfsRoadmap() || !hashoutCategoryScope() || hashoutCategoryScope().includes(category.id)).flatMap(category => category.board.products);
+      const dates = products.flatMap(product => (isFfsRoadmap() ? [globalThis.PortfolioFfsRoadmap?.period(product)?.start, globalThis.PortfolioFfsRoadmap?.period(product)?.end, product.ffsDate] : [globalThis.PortfolioDatePrecision?.currentPeriod(product,"generalAvailabilityDate")?.start || product.generalAvailabilityDate, globalThis.PortfolioDatePrecision?.currentPeriod(product,"endManufacturingDate")?.end || product.endManufacturingDate])).filter(value => /^\d{4}-\d{2}/.test(value || "")).map(value => value.slice(0, 7)).sort();
+      if (!dates.length) throw new Error("No dated products are available in this selection.");
+      updateTimelineSettings({ startMonth: addMonths(dates[0], -1), endMonth: addMonths(dates[dates.length - 1], 1) });
+    }
+    if (hasDedicatedHashoutView()) { resetHashoutView(); ensureHashoutView()?.fit(); } else fitRoadmapTimeline();
+  },
+  async applyPlanning(result) {
+    if (workspaceOpening || packageOperationInProgress || globalThis.PortfolioMasterUI?.getSummary().busy) throw new Error("Finish the current update before applying planning decisions.");
+    if (workspaceSavePending && !await flushWorkspaceSave()) throw new Error("Save this device's changes before applying planning decisions.");
+    const before = portfolio, expected = globalThis.PortfolioPlanningIntake.baseline(portfolio);
+    if (expected !== result.expectedBaseline) throw new Error("The portfolio changed while you were reviewing. Review the current planning decisions again.");
+    const draft = JSON.parse(expected), allowed = new Set(["name", "nameProvisional", "codename", "plc", ...globalThis.PortfolioWorkflowModel.fields]);
+    for (const operation of result.operations) {
+      if (!operation || !["update", "create"].includes(operation.kind) || !operation.fields || Object.keys(operation.fields).some(field => !allowed.has(field))) throw new Error("The planning review contains an unsupported change.");
+      const category = draft.categories.find(category => category.id === operation.categoryId);
+      if (!category || !category.board.lanes.some(lane => lane.id === operation.laneId)) throw new Error("The selected planning category or lane changed. Review the workbook again.");
+      const matches = draft.categories.flatMap(category => category.board.products.filter(product => product.id === operation.productId));
+      if (operation.kind === "create" && matches.length || operation.kind === "update" && matches.length !== 1) throw new Error("A planning product identity changed. Review this decision again.");
+      for (const field of Object.keys(operation.fields).filter(field => globalThis.PortfolioWorkflowModel.fields.includes(field))) {
+        const policy = globalThis.PortfolioFieldProtection.check({ categoryId: category.id, productId: operation.productId, field });
+        if (policy.unavailable || policy.protected && !operation.overrideProtected) throw new Error("A planning date is protected on this browser. Review its explicit override before applying.");
+      }
+      if (operation.kind === "create") category.board.products.push({ id: operation.productId, laneId: operation.laneId, ...JSON.parse(JSON.stringify(operation.fields)) });
+      else Object.assign(matches[0], JSON.parse(JSON.stringify(operation.fields)));
+    }
+    if (!result.operations.length) return { summary: result.summary, message: "Reviewed choices saved. No portfolio facts changed." };
+    const normalized = ensurePortfolioSchema(draft);
+    globalThis.PLCImporter.recordDateChanges(globalThis.PLCImporter.snapshotDateValues(portfolio), normalized, { source: "planning", now: new Date() });
+    globalThis.PortfolioMasterModel.snapshot(normalized);
+    clearTimeout(saveTimer);
+    const protectionStillAllows = () => result.operations.every(operation => Object.keys(operation.fields).filter(field => globalThis.PortfolioWorkflowModel.fields.includes(field)).every(field => { const policy = globalThis.PortfolioFieldProtection.check({ categoryId: operation.categoryId, productId: operation.productId, field }); return !policy.unavailable && (!policy.protected || operation.overrideProtected); }));
+    await persistPlcDraft(normalized, { isCurrent: () => portfolio === before && JSON.stringify(portfolio) === expected && protectionStillAllows() });
+    if (portfolio !== before || JSON.stringify(portfolio) !== expected || !protectionStillAllows()) throw new Error("Newer portfolio or date protection changes were kept. Review the planning decisions again.");
+    try {
+      portfolio = normalized; localDateBaseline = globalThis.PLCImporter.snapshotDateValues(portfolio);
+      resetHashoutView(); activateCategory(activeCategoryId || portfolio.activeCategoryId, { fitVertical: false });
+    } catch (error) {
+      portfolio = before; localDateBaseline = globalThis.PLCImporter.snapshotDateValues(before);
+      try { await persistPlcDraft(before); } catch (_) { error.message += " Export your open workspace before reloading; the prior saved copy could not be restored."; }
+      try { activateCategory(before.activeCategoryId, { fitVertical: false }); } catch (_) {}
+      throw error;
+    }
+    globalThis.PortfolioMasterUI?.updateStatus(); renderInspector(); renderActiveView();
+    return { summary: result.summary, message: "Planning decisions saved on this device. Review Save changes to share the changed products." };
+  },
 });
 
 globalThis.PortfolioProductMergeAdapter = Object.freeze({
@@ -8852,8 +9022,13 @@ async function commitPlcPlan(plan, choices) {
   // Persist evidence, field clocks and exceptions together before activating it.
   // Storage failure leaves the current workspace and review untouched.
   clearTimeout(saveTimer);
-  await persistPlcDraft(draft, { isCurrent: () => portfolio === before && JSON.stringify(portfolio) === expectedCurrent });
-  if (portfolio !== before || JSON.stringify(portfolio) !== expectedCurrent) throw new Error("The workspace changed while the PLC review was being saved. Your newer changes have been kept. Review the workbook again before applying it.");
+  const protectionStillAllows = () => result.history.every(change => {
+    const category = draft.categories.find(category => category.board.products.some(product => product.id === change.productId));
+    const policy = globalThis.PortfolioFieldProtection?.check({ categoryId: category?.id, productId: change.productId, variantId: change.variantId || '', field: change.field });
+    return !policy?.unavailable && (!policy?.protected || change.reviewed === true);
+  });
+  await persistPlcDraft(draft, { isCurrent: () => portfolio === before && JSON.stringify(portfolio) === expectedCurrent && protectionStillAllows() });
+  if (portfolio !== before || JSON.stringify(portfolio) !== expectedCurrent || !protectionStillAllows()) throw new Error("The workspace changed while the PLC review was being saved, or a date protection changed. Your newer changes have been kept. Review the workbook again before applying it.");
   portfolio = draft;
   localDateBaseline = globalThis.PLCImporter.snapshotDateValues(portfolio);
   activateCategory(activeCategoryId || portfolio.activeCategoryId, { fitVertical: false });

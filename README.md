@@ -12,7 +12,9 @@ A browser-based workspace for organizing product portfolios and planning product
 - View product details, specifications, and variants.
 - Share product additions, removals, dates, specifications and SKUs through one master, with explicit choices when teammates change the same detail.
 - See connected teammates' current portfolio and selected product, with optional display names.
-- Review updates and warnings through Messages beside the shared data action.
+- Use Load data to choose a validated source, see local/team/package save status, and open actionable warnings through Needs review. See [Daily portfolio workflows](docs/WORKFLOW-UPGRADE.md).
+- Reuse named local views across Portfolio and Analytics, and restore the settings from a successful PowerPoint export.
+- Review planning candidates explicitly, preserving exact dates, calendar quarters and unknown timing; inspect milestone evidence and optionally protect dates on this browser.
 - Locate duplicate SKU assignments within a portfolio and open the field to correct them. The same name or SKU can appear in different portfolios, including PC Gaming Audio and Console Gaming Audio.
 - Import and export project packages.
 - Drop biweekly HyperX PLC workbooks into PPC to collect evidence and update reliable milestones automatically. Track independent timestamps and aging for all six dates, resolve saved exceptions when needed, and automatically share importer changes when connected with editing access. See [PLC import module](docs/PLC-IMPORT-MODULE.md).
@@ -21,7 +23,7 @@ A browser-based workspace for organizing product portfolios and planning product
 
 ## Getting started
 
-Open the app and import a saved project package, or create your portfolio through **Settings**.
+Open the app and use **Load data** to choose a saved package, catalog, milestone or planning source, or create your portfolio through **More → Settings**.
 
 Your workspace is saved in your browser. Export a project package to keep a backup or move your work to another browser or device.
 

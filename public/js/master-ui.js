@@ -433,7 +433,8 @@
     }
     const timer = root.setInterval(refreshQuietly, githubMode ? 60000 : 45000);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "hidden") refreshQuietly(); });
-    active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow, saveScoped,
+    active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow, saveScoped, openUpdates: showUpdates,
+      getSummary() { const state = session.getState(); return { pendingCount: session.track().length, busy: Boolean(state.busy || running || discarding || refreshRunning), connected: state.connected, lastCheckedAt, publicationStatus: checkedPublication?.status || state.snapshot?.publication?.status || '', error: Boolean(lastError || lastCheckError) }; },
       reviewConflicts(conflicts) { if (running || discarding || session.getState().busy || !Array.isArray(conflicts) || !conflicts.length) return null; return resolveConflicts(conflicts); },
       markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
       disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckedAt = 0; checkedPublication = null; lastCheckError = ""; updateStatus(); },
@@ -462,7 +463,7 @@
     }
     return active;
   }
-  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
+  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, getSummary() { return active?.getSummary() || {}; }, openUpdates() { return active?.openUpdates(); }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
   if (root.PortfolioMasterAdapter) {
     const openWhenReady = () => initialize({ adapter: root.PortfolioMasterAdapter });
     root.addEventListener?.("portfolio:workspace-ready", openWhenReady);

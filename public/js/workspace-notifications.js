@@ -248,6 +248,6 @@
     active = Object.freeze({ show, close: closePanel, getState: messageStore.getState, destroy() { destroyed = true; unsubscribe(); root.clearInterval(expirationTimer); removeToast(); if (panel.open) panel.close(); panel.remove(); button.remove(); polite.remove(); assertive.remove(); toasts.remove(); active = null; } });
     render(); return active;
   }
-  root.PortfolioNotifications = Object.freeze({ createStore, initialize, publish: store.publish, upsert: store.publish, resolve: store.resolve, dismiss: store.dismiss, show: (id) => (active || initialize())?.show(id), toast: (message, options = {}) => store.publish({ ...options, title: options.title || String(message), message: options.message || "", toast: true }), getState: store.getState });
+  root.PortfolioNotifications = Object.freeze({ createStore, initialize, publish: store.publish, upsert: store.publish, resolve: store.resolve, dismiss: store.dismiss, show: (id) => (active || initialize())?.show(id), toast: (message, options = {}) => store.publish({ ...options, title: options.title || String(message), message: options.message || "", toast: true }), getState: store.getState, subscribe: store.subscribe });
   if (root.document) initialize();
 })(globalThis);

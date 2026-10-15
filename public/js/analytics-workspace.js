@@ -35,7 +35,7 @@
     for (const key of preferences) {
       const value = privatePreferences.includes(key) ? scopeParams.get(key) ?? url.searchParams.get(key) : url.searchParams.get(key);
       if (value === null) continue;
-      if (key === 'category' && value.length <= 80) blueprintState[key] = value;
+      if (key === 'category' && value.length <= 1200 && !/[\u0000-\u001f\u007f]/.test(value)) blueprintState[key] = value;
       else if (scopeKeys.includes(key) && validScopeId(value)) blueprintState[key] = value;
       else if (key === 'compare' && comparisonPreference(value) !== null) blueprintState.compare = comparisonPreference(value);
       else if (key === 'scale' && ['trend','values'].includes(value)) blueprintState.scale = value;
@@ -127,7 +127,7 @@
     if (['trend','values'].includes(state.scale)) blueprintState.scale = state.scale;
     blueprintState.view = state.view;
     if (Number.isInteger(Number(state.year)) && Number(state.year) >= 2000 && Number(state.year) <= 2200) blueprintState.year = String(state.year);
-    if (typeof state.category === 'string' && state.category.length > 0 && state.category.length <= 80) blueprintState.category = state.category;
+    if (typeof state.category === 'string' && state.category.length > 0 && state.category.length <= 1200 && !/[\u0000-\u001f\u007f]/.test(state.category)) blueprintState.category = state.category;
     for (const key of scopeKeys) {
       if (validScopeId(state[key])) blueprintState[key] = state[key];
     }
@@ -164,6 +164,29 @@
   root.addEventListener('scroll',positionBlueprintDialog,{passive:true});
   root.addEventListener('resize',positionBlueprintDialog);
   root.addEventListener('popstate', () => switchModule(readRoute(), false));
-  root.PPCAnalyticsWorkspace = { switchModule, showBlueprintView, get currentModule() { return currentModule; } };
+  function captureView() {
+    if (currentModule === 'retail') return root.PPCSelloutDashboard.captureView();
+    return { ...blueprintState };
+  }
+  async function applyView(value, kind = currentModule) {
+    if (!['retail','blueprint'].includes(kind)) throw new Error('This saved view belongs to another workspace.');
+    const saved = root.PPCSavedViews?.sanitizePreferences(kind, value);
+    if (!saved) throw new Error('This saved view is invalid.');
+    if (kind === 'retail') {
+      await root.PPCSelloutDashboard.ready;
+      const result = root.PPCSelloutDashboard.applyView(saved);
+      switchModule('retail');
+      return result;
+    }
+    // A named view replaces presentation preferences, while the retained frame keeps its source.
+    for (const key of preferences) delete blueprintState[key];
+    Object.assign(blueprintState, { year: '2026', category: 'all', scale: 'trend', revenue: '0', margin: '0', spend: '0', groupId: '', projectId: '', skuId: '', compare: '[]' }, saved);
+    blueprintState.view = views.has(saved.view) ? saved.view : 'overview';
+    switchModule('blueprint');
+    return { message: 'Portfolio plan view opened. Selections use the current workbook; unavailable source identities are checked by the plan.' };
+  }
+  root.PPCAnalyticsWorkspace = { switchModule, showBlueprintView, captureView, applyView,
+    getKind: () => currentModule, supportsKind: kind => ['retail','blueprint'].includes(kind),
+    get currentModule() { return currentModule; } };
   switchModule(readRoute(), false);
 })(globalThis);
