@@ -107,8 +107,13 @@
                 if (current && (current.version !== 1 || typeof current.serialized !== "string")) throw failure("The saved workspace record needs recovery. It has not been replaced.", "WORKSPACE_INVALID");
                 // The read and comparison share the write transaction's scope lock.
                 // Another tab cannot slip a write between this check and the puts.
-                if (observedSerialized !== undefined && (current?.serialized ?? null) !== observedSerialized) throw failure("Another tab saved this workspace. Your changes remain open here. Export a backup before reloading to review the other tab's changes.", "WORKSPACE_CONFLICT");
+                const currentSerialized = current?.serialized ?? null;
+                // A second tab may already have saved these exact bytes. Confirm
+                // that no pixels need staging before accepting it without a put.
+                const alreadySaved = !imageEntries.length && currentSerialized === serialized;
+                if (observedSerialized !== undefined && currentSerialized !== observedSerialized && !alreadySaved) throw failure("Another portfolio tab in this browser saved a different local copy. Your edits remain open here. Export a backup before reloading to review the saved copy.", "WORKSPACE_CONFLICT");
                 if (isCurrent && !isCurrent()) throw failure("The workspace changed while its saved copy was being prepared. Your previous saved copy has been kept. Try again.", "WORKSPACE_CHANGED");
+                if (alreadySaved) return;
                 if (imageEntries.length) {
                   const imageStore = tx.objectStore(imageStoreName);
                   for (const entry of imageEntries) imageStore.put({ id: entry.id, blob: entry.blob, updatedAt: Date.now() });

@@ -130,6 +130,11 @@
     const toasts = create("div", "workspace-toast-region"); toasts.setAttribute("aria-label", "Recent workspace update");
     document.body.append(panel, polite, assertive, toasts);
     let returnFocus = null, toastTimer = null, actionRunning = false, toastId = "", destroyed = false;
+    let politeId = "", assertiveId = "";
+    function clearAnnouncement(id) {
+      if (politeId === id) { polite.textContent = ""; politeId = ""; }
+      if (assertiveId === id) { assertive.textContent = ""; assertiveId = ""; }
+    }
     function isModalOpen() {
       return document.querySelector('dialog[open], .modal-backdrop:not(.hidden):not([hidden])') !== null;
     }
@@ -209,10 +214,19 @@
       if (destroyed) return;
       if (panel.open && event.type === "publish") messageStore.markRead();
       render();
+      // Publishing can evict bounded informational history too. Clear every
+      // removed or acknowledged message from its live region on every event.
+      const current = new Set(messageStore.getState().items.filter((item) => !item.acknowledged).map((item) => item.id));
+      if (politeId && !current.has(politeId)) clearAnnouncement(politeId);
+      if (assertiveId && !current.has(assertiveId)) clearAnnouncement(assertiveId);
       if (event.type === "publish") {
-        const announcement = urgent(event.item) ? assertive : polite;
-        if (event.announce !== false) announcement.textContent = `${event.item.title}. ${event.item.message}`;
-        if (event.toast) showToast(event.item);
+        clearAnnouncement(event.item.id);
+        if (event.announce !== false && current.has(event.item.id)) {
+          const needsAttention = urgent(event.item), announcement = needsAttention ? assertive : polite;
+          if (needsAttention) assertiveId = event.item.id; else politeId = event.item.id;
+          announcement.textContent = `${event.item.title}. ${event.item.message}`;
+        }
+        if (event.toast && current.has(event.item.id)) showToast(event.item);
       } else if (["resolve", "dismiss", "acknowledge"].includes(event.type) && event.id === toastId) removeToast();
     });
     button.addEventListener("click", () => panel.open ? closePanel() : show());

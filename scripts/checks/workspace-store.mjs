@@ -236,4 +236,24 @@ for (const kind of ['blocked', 'error', 'throw']) {
   const restored = d.state.stores.get('workspaces').get('production'); assert.equal(restored.metadata.slots.length, 3); assert.equal(Object.keys(restored.metadata.slots).length, 0); assert(Object.is(restored.metadata.number, -0)); assert(Object.hasOwn(restored.metadata, 'absent'));
   mark('raw recovery signatures and rollback retain sparse-array length, signed zero and undefined own fields');
 }
+{
+  const d = driver(), first = create(d), second = create(d);
+  await first.save('original'); await second.read(); await first.save('same latest bytes');
+  await second.save('same latest bytes');
+  assert.equal(d.state.transactions.at(-1).operations.length, 0, 'an already saved exact snapshot completes without overwriting metadata or timestamps');
+  await second.save('next explicit second-tab change');
+  assert.equal(d.state.stores.get('workspaces').get('production').serialized, 'next explicit second-tab change', 'successful identical-byte confirmation advances only that client observation');
+  mark('identical no-image snapshots are confirmed without a false conflict or write');
+}
+{
+  const d = driver(), first = create(d), second = create(d);
+  await first.save('original'); await second.read(); await first.save('same latest bytes');
+  const savedAt = d.state.stores.get('workspaces').get('production').savedAt;
+  await assert.rejects(second.save('same latest bytes', { images: [{ id: 'unaccepted-pixels', blob: new Blob(['different pixels']) }] }), { code: 'WORKSPACE_CONFLICT' });
+  assert(!d.state.stores.get('images').has('unaccepted-pixels'));
+  assert.equal(d.state.stores.get('workspaces').get('production').savedAt, savedAt);
+  await assert.rejects(second.save('different local draft'), error => error.code === 'WORKSPACE_CONFLICT' && /in this browser.*different local copy/.test(error.message));
+  assert.equal(d.state.stores.get('workspaces').get('production').serialized, 'same latest bytes');
+  mark('identical metadata never bypasses stale-image staging or differing-draft protection');
+}
 console.log('Workspace store checks passed: ' + cases.length + ' bounded durability, quota, migration, atomic image, ordering, recovery CAS/rollback and retry cases.');
