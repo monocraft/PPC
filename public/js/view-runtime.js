@@ -48,7 +48,7 @@
     });
   }
 
-  function navigation({ key, storage } = {}) {
+  function navigation({ key, storage, fallbackStorage } = {}) {
     let loaded = false, current = null;
     const validKey = typeof key === "string" && key.length > 0 && key.length <= 200;
     const clean = value => value && typeof value === "object" && !Array.isArray(value)
@@ -70,7 +70,8 @@
         if (!loaded) {
           loaded = true;
           try {
-            const raw = validKey && store()?.getItem(key);
+            let raw = validKey && store()?.getItem(key);
+            if(!raw && fallbackStorage){const fallback=typeof fallbackStorage==='function'?fallbackStorage():fallbackStorage;raw=fallback?.getItem(key);}
             if (bounded(raw)) { const parsed = JSON.parse(raw); if (parsed?.version === 1) current = clean(parsed); }
           } catch (_) { /* Navigation preferences cannot prevent opening working data. */ }
         }

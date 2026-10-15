@@ -28,8 +28,15 @@ const analyticsLinks = [...index.matchAll(/<a\b[^>]*>/gi)].map(match => attribut
   .filter(attrs => attrs.get("href") === "analytics.html");
 assert.ok(analyticsLinks.length > 0, "PPC retains its Analytics destination.");
 for (const link of analyticsLinks) {
-  assert.equal(link.get("target"), "_blank", "Opening analysis preserves the user's current editor.");
-  assert.ok(link.get("rel")?.split(/\s+/).includes("noopener"));
+  assert.ok(!link.has("target") || link.get("target") === "_self", "Ordinary Analytics navigation reuses the current app tab.");
+  assert.ok(!/new tab/i.test(link.get("aria-label") || ""), "Navigation labels describe the destination without promising another tab.");
+}
+const portfolioLinks = [...html.matchAll(/<a\b[^>]*>/gi)].map(match => attributes(match[0]))
+  .filter(attrs => attrs.get("href") === "index.html");
+assert.ok(portfolioLinks.length > 0, "Analytics retains its Portfolio destination.");
+for (const link of portfolioLinks) {
+  assert.ok(!link.has("target") || link.get("target") === "_self", "Returning to Portfolio does not create another copy of the workspace.");
+  assert.ok(!/new tab/i.test(link.get("aria-label") || ""));
 }
 const mainHeader = index.match(/<header\b[\s\S]*?<\/header>/i)?.[0] || "";
 assert.ok(!/\b(?:href|data-view)\s*=\s*["'][^"']*blueprint/i.test(mainHeader), "Blueprint adds no independent main-toolbar destination.");

@@ -34,7 +34,7 @@ function dataset({ fingerprint = 'synthetic-biweekly-source', reportDate = '2026
 
 function harness({ initial = seed, remoteInitial = seed, failStorage = false, normalizeDraft = clone } = {}) {
   let remote = clone(remoteInitial), stored = JSON.stringify(initial), storageBlocked = failStorage, session;
-  const calls = { saves: [], writes: [], applies: 0, renders: 0, scoped: 0, notices: [], resolved: [] }, timers = new Map(), clock = { value: firstAt };
+  const calls = { saves: [], writes: [], saveAttempts: 0, applies: 0, renders: 0, scoped: 0, localRecovery: 0, notices: [], resolved: [] }, timers = new Map(), clock = { value: firstAt };
   let holdWrite = false, releaseWrite;
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [clock.value])); }
@@ -43,19 +43,21 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
   const sandbox = {
     Date: ClockDate, TextEncoder, MAX_PACKAGE_MANIFEST_BYTES: 16 * 1024 * 1024, STORAGE_KEY: 'synthetic-workspace', PREVIOUS_STORAGE_KEY: 'synthetic-previous',
     portfolio: clone(initial), localDateBaseline: importer.snapshotDateValues(initial), packageOperationInProgress: false, saveTimer: 0,
-    workspaceOpening: false, workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0,
+    workspaceOpening: false, workspaceSavePending: false, workspaceSaveRevision: 0, workspaceSaveAttempt: 0, workspaceSaveFlight: null,
     activeCategoryId: 'pc-gaming-audio', PortfolioModel: globalThis.PortfolioModel, PortfolioMasterModel: model,
     PLCImporter: { ...importer, applyPlan(...args) { calls.applies += 1; return importer.applyPlan(...args); }, recordDateChanges(before, portfolio, options = {}) { return importer.recordDateChanges(before, portfolio, { now: clock.value, ...options }); } },
     ensurePortfolioSchema: normalizeDraft, activateCategory() { calls.renders += 1; }, renderInspector() {}, renderActiveView() {},
     setTimeout(callback) { const id = timers.size + 1; timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); },
     localStorage: { setItem(key, text) { assert.equal(key, 'synthetic-workspace'); if (storageBlocked) throw new Error('Synthetic browser quota exceeded'); stored = text; calls.writes.push(JSON.parse(text)); }, removeItem() {} },
     workspaceStorage: { async save(text, { isCurrent } = {}) {
+      calls.saveAttempts += 1;
       if (holdWrite) { holdWrite = false; await new Promise(resolve => { releaseWrite = resolve; }); }
       if (isCurrent && !isCurrent()) throw Object.assign(new Error('The workspace changed before its durable write'), { code: 'WORKSPACE_CHANGED' });
       if (storageBlocked) throw new Error('Synthetic browser quota exceeded');
       stored = text; calls.writes.push(JSON.parse(text));
     } },
     PortfolioNotifications: { publish: notice => calls.notices.push(notice), resolve: id => calls.resolved.push(id) },
+    PortfolioWorkflowUI: { openLocalRecovery() { calls.localRecovery += 1; } },
     PortfolioMasterUI: {
       getSession: () => session, updateStatus() {},
       async saveScoped(options) { calls.scoped += 1; return session.saveScoped(options); },
@@ -119,14 +121,15 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
   assert.equal(h.calls.scoped, 0);
 }
 {
-  const h = harness(), before = h.stored;
+  const h = harness();
   h.sandbox.scheduleSave(); h.holdNextWrite(); const pending = h.flush();
   for (let index = 0; index < 8; index++) await Promise.resolve();
   h.sandbox.portfolio = clone(seed); currentProduct(h.workspace).name = 'Replacement workspace';
-  h.releaseWrite(); assert.equal(await pending, false);
-  assert.deepEqual(h.stored, before, 'A queued autosave cannot restore the replaced workspace');
+  h.releaseWrite(); assert.equal(await pending, true);
+  assert.equal(currentProduct(h.stored).name, 'Replacement workspace', 'A queued autosave drains the current replacement and never restores its older owner');
+  assert.equal(h.calls.writes.length, 1); assert.equal(h.calls.saveAttempts, 2, 'the obsolete snapshot is held before the sole durable current write');
   assert.equal(currentProduct(h.workspace).name, 'Replacement workspace');
-  assert.equal(h.calls.notices.at(-1).id, 'workspace-local-save');
+  assert.equal(h.calls.notices.length, 0); assert.equal(h.sandbox.workspaceSavePending, false);
 }
 {
   const h = harness(); currentProduct(h.workspace).specs[0].value = 'Retained local draft'; h.sandbox.scheduleSave(); h.blockStorage(true);
@@ -139,25 +142,30 @@ function harness({ initial = seed, remoteInitial = seed, failStorage = false, no
   const h = harness(); currentProduct(h.workspace).name = 'First edit'; h.sandbox.scheduleSave();
   h.holdNextWrite(); const obsolete = h.flush();
   for (let index = 0; index < 8; index++) await Promise.resolve();
+  const joined = h.flush(); let completed = 0; obsolete.then(() => completed++); joined.then(() => completed++);
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  assert.equal(h.calls.saveAttempts, 1, 'concurrent flush callers join the same held write'); assert.equal(completed, 0);
   currentProduct(h.workspace).name = 'Newer edit'; h.sandbox.scheduleSave();
-  h.releaseWrite(); assert.equal(await obsolete, false);
+  h.releaseWrite(); assert.deepEqual(await Promise.all([obsolete, joined]), [true, true]);
   assert.equal(h.calls.notices.length, 0, 'a prepared autosave overtaken by a newer scheduled edit is not an actionable error');
-  assert.equal(h.sandbox.workspaceSavePending, true); assert.equal(h.timers.size, 1, 'the newer edit retains its scheduled durable save');
-  assert.equal(await h.flush(), true); assert.equal(h.stored.categories[0].board.products[0].name, 'Newer edit');
-  assert.equal(h.sandbox.workspaceSavePending, false);
+  assert.equal(h.calls.saveAttempts, 2); assert.equal(h.calls.writes.length, 1, 'the stale attempt is held and the two callers produce one durable current snapshot');
+  assert.equal(h.stored.categories[0].board.products[0].name, 'Newer edit');
+  assert.equal(h.sandbox.workspaceSavePending, false); assert.equal(h.timers.size, 0, 'the joined drain settles only after consuming the newer scheduled save'); assert.equal(h.sandbox.workspaceSaveFlight, null);
 }
 {
   const h = harness();
   h.sandbox.showLocalSaveFailure(Object.assign(new Error('Old storage wording'), { code: 'WORKSPACE_CONFLICT' }));
   const notice = h.calls.notices.at(-1);
   assert.equal(notice.severity, 'warning'); assert.equal(notice.dismissible, false);
-  assert.equal(notice.title, 'Local copies need review');
-  assert.match(notice.message, /in this browser/); assert.match(notice.message, /Shared portfolio Save status is shown separately/);
-  assert.deepEqual(Array.from(notice.actions, a => a.label), ['Check local save again', 'Export data backup']);
+  assert.equal(notice.title, 'Two tabs changed this portfolio');
+  assert.match(notice.message, /open edits and the other tab's saved edits differ/); assert.match(notice.message, /keeps both originals/);
+  assert.deepEqual(Array.from(notice.actions, a => a.label), ['Resolve local save', 'Export data backup']);
   assert.equal(h.calls.writes.length, 0, 'showing the local conflict cannot overwrite data, rebase observation or retry by itself');
-  assert.equal(await notice.actions[0].onClick(), true, 'the explicit local retry still calls the guarded durable save');
+  await notice.actions[0].onClick(); assert.equal(h.calls.localRecovery, 1, 'a conflict action opens the explicit both-copy recovery review');
+  assert.equal(h.calls.writes.length, 0, 'opening recovery never blindly retries or overwrites the saved copy');
   h.sandbox.showLocalSaveFailure(Object.assign(new Error('Storage quota exceeded'), { code: 'WORKSPACE_QUOTA' }));
   assert.equal(h.calls.notices.at(-1).severity, 'error', 'actual storage failures retain error severity and retry');
+  assert.equal(h.calls.notices.at(-1).actions[0].label, 'Try saving again'); assert.equal(await h.calls.notices.at(-1).actions[0].onClick(), true, 'ordinary storage errors retain the guarded durable retry');
 }
 
 {

@@ -153,9 +153,26 @@ for (const match of versioned.matchAll(/<(?:script|link)\b[^>]*>/gi)) {
 const index = await readFile(path.join(publicRoot, "index.html"), "utf8");
 const link = [...index.matchAll(/<a\b[^>]*>/gi)].map(match => attributes(match[0])).find(attrs => attrs.get("href") === "analytics.html");
 assert.ok(link, "Portfolio must provide a visible Analytics link.");
-assert.equal(link.get("target"), "_blank", "Analytics must preserve the user's open portfolio editor.");
-assert.ok(link.get("rel")?.split(/\s+/).includes("noopener"), "Analytics must not retain access to its opener.");
+assert.ok(!link.has("target"), "Analytics uses guarded navigation in the current tab instead of multiplying portfolio editors.");
+assert.equal(link.get("aria-label"), "Open Analytics", "Analytics remains an explicitly named navigation action.");
 assert.ok(!link.has("data-view"), "Analytics is a separate module, not a portfolio canvas view.");
+{
+  const portfolioSource = await readFile(path.join(publicRoot, "js/app.js"), "utf8");
+  const navigateMethod = portfolioSource.match(/^  async navigateToAnalytics\([^]*?^  \},/m)?.[0];
+  assert.ok(navigateMethod, "Exercise the actual owner navigation guard before leaving the portfolio.");
+  const navigation = [], recovery = [], flushes = [];
+  let allowSave = true;
+  const context = vm.createContext({ URL, workspaceOpening: false, packageOperationInProgress: false, workspaceSavePending: true,
+    async flushWorkspaceSave() { flushes.push(true); return allowSave; },
+    PortfolioWorkflowUI: { openLocalRecovery() { recovery.push(true); } }, location: { href: "https://fixture.example/portfolio/", assign: href => navigation.push(href) },
+  });
+  const adapter = vm.runInContext(`({${navigateMethod}})`, context);
+  allowSave = false; assert.equal(await adapter.navigateToAnalytics(), false); assert.equal(navigation.length, 0); assert.equal(recovery.length, 1, "unsaved conflicts hold navigation and open recovery");
+  allowSave = true; assert.equal(await adapter.navigateToAnalytics(), true); assert.equal(navigation.at(-1), "https://fixture.example/portfolio/analytics.html");
+  assert.equal(flushes.length, 2, "pending edits are durably checked before current-tab navigation");
+  context.workspaceSavePending = false; assert.equal(await adapter.navigateToAnalytics("source"), true); assert.equal(navigation.at(-1), "https://fixture.example/portfolio/analytics.html?analysis=blueprint#blueprint/source"); assert.equal(flushes.length, 2);
+  for (const flag of ["workspaceOpening", "packageOperationInProgress"]) { context[flag] = true; const before = navigation.length; assert.equal(await adapter.navigateToAnalytics(), false); assert.equal(navigation.length, before, "an active file operation holds navigation"); context[flag] = false; }
+}
 
 const privateKey = [...html.matchAll(/<input\b[^>]*>/gi)].map(match => attributes(match[0])).find(attrs => attrs.get("id") === "privateKey");
 assert.ok(privateKey, "Protected analytics must provide a dedicated package key input.");

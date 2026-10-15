@@ -165,7 +165,7 @@ function harness() {
   const h = harness(); h.context.startProductReorder(); h.context.reorderProduct("a", "first", 2); const latest = h.layouts();
   const saveFlow = masterUi.match(/^    async function saveFlow\([^]*?^    \}/m)?.[0]; assert.ok(saveFlow, "Exercise the actual save entry point");
   let reviews = 0;
-  Object.assign(h.context, { running: false, discarding: false, refreshRunning: false, session: { getState: () => ({ busy: false }) }, adapter: { beforeSave: () => h.context.finishProductReorder() }, review: async () => { reviews++; assert.equal(h.context.productLayoutEditing, false, "Reordering finishes before save review starts"); return null; }, updateStatus() {} });
+  Object.assign(h.context, { running: false, discarding: false, refreshRunning: false, localBaselineGeneration: 0, session: { getState: () => ({ busy: false }) }, adapter: { beforeSave: () => h.context.finishProductReorder() }, review: async () => { reviews++; assert.equal(h.context.productLayoutEditing, false, "Reordering finishes before save review starts"); return null; }, updateStatus() {} });
   await new vm.Script(`${saveFlow}\n saveFlow();`).runInContext(h.context);
   assert.equal(reviews, 1); assert.deepEqual(h.layouts(), latest);
   h.context.startProductReorder(); h.context.running = true;

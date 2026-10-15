@@ -64,7 +64,7 @@
     dialog.setAttribute("aria-labelledby", "masterDialogTitle"); dialog.setAttribute("aria-describedby", "masterDialogDescription");
     document.body.append(dialog);
     let running = false, discarding = false, connectingGitHub = false, modalResolve = null, modalCancel = null, lastError = "", lastErrorWasSave = false, publicationDelayed = false;
-    let lastCheckedAt = 0, checkedPublication = null, lastCheckError = "", checkMessage = "";
+    let lastCheckedAt = 0, checkedPublication = null, lastCheckError = "", checkMessage = "", localBaselineGeneration = 0;
     const updates = element("dialog", "master-dialog portfolio-updates-dialog");
     updates.id = "portfolioUpdatesDialog"; updates.setAttribute("aria-labelledby", "portfolioUpdatesTitle");
     document.body.append(updates);
@@ -333,58 +333,62 @@
 
     async function connectGitHub() {
       if (!githubMode || running || dialog.open || !session.getState().hasKey) return;
+      const operationGeneration = localBaselineGeneration;
       root.PortfolioMasterPresence?.close?.();
-      const token = await getAccess("github"); if (!token) return;
+      const token = await getAccess("github"); if (!token || operationGeneration !== localBaselineGeneration) return;
       running = true; connectingGitHub = true; updateStatus(); progress();
       try {
         const account = await session.setGitHubToken(token);
+        if (operationGeneration !== localBaselineGeneration) { close(null); return; }
         lastError = "";
-        await session.refresh(); close(null); retryUntil = 0; lastRefreshAt = Date.now();
+        await session.refresh(); close(null); if (operationGeneration !== localBaselineGeneration) return; retryUntil = 0; lastRefreshAt = Date.now();
         notices?.publish({ id: "master-github-connected", severity: "success", title: "Connected", message: `Connected as ${account.name || account.login}.`, revision: String(Date.now()), toast: true });
-      } catch (error) { close(null); if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = friendlyError(error); }
+      } catch (error) { close(null); if (operationGeneration !== localBaselineGeneration) return; if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = friendlyError(error); }
       finally { running = false; connectingGitHub = false; updateStatus(); }
     }
 
     async function saveFlow() {
       if (running || discarding || refreshRunning || session.getState().busy || adapter.hasPendingPackageOperation?.()) return;
+      const operationGeneration = localBaselineGeneration;
       adapter.beforeSave?.();
       const reviewed = await review();
-      if (!reviewed) { updateStatus(); return; }
+      if (!reviewed || operationGeneration !== localBaselineGeneration) { updateStatus(); return; }
       lastError = "";
       running = true; updateStatus();
       try {
         while (!session.getState().hasKey) {
           const key = await getAccess();
-          if (!key) return;
+          if (!key || operationGeneration !== localBaselineGeneration) return;
           progress();
-          try { await session.connect({ key }); close(null); }
-          catch (error) { close(null); if (error.code === "INVALID_KEY") { const retryKey = await getAccess(false, friendlyError(error)); if (!retryKey) return; progress(); await session.connect({ key: retryKey }); close(null); } else throw error; }
+          try { await session.connect({ key }); close(null); if (operationGeneration !== localBaselineGeneration) return; }
+          catch (error) { close(null); if (operationGeneration !== localBaselineGeneration) return; if (error.code === "INVALID_KEY") { const retryKey = await getAccess(false, friendlyError(error)); if (!retryKey || operationGeneration !== localBaselineGeneration) return; progress(); await session.connect({ key: retryKey }); close(null); if (operationGeneration !== localBaselineGeneration) return; } else throw error; }
         }
         let result;
         for (;;) {
           progress();
           try {
             if (githubMode && !session.getState().hasGitHubToken) {
-              close(null); const token = await getAccess("github"); if (!token) return;
-              progress(); await session.setGitHubToken(token);
+              close(null); const token = await getAccess("github"); if (!token || operationGeneration !== localBaselineGeneration) return;
+              progress(); await session.setGitHubToken(token); if (operationGeneration !== localBaselineGeneration) { close(null); return; }
             }
-            result = await session.save({ reason: reviewed.reason, resolveConflicts: async (conflicts) => { close(null); const selected = await resolveConflicts(conflicts); if (selected) progress(); return selected; } });
-            close(null); break;
+            result = await session.save({ reason: reviewed.reason, resolveConflicts: async (conflicts) => { if (operationGeneration !== localBaselineGeneration) return null; close(null); const selected = await resolveConflicts(conflicts); if (operationGeneration !== localBaselineGeneration) return null; if (selected) progress(); return selected; } });
+            close(null); if (operationGeneration !== localBaselineGeneration) return; break;
           } catch (error) {
             close(null);
+            if (operationGeneration !== localBaselineGeneration) return;
             if (error.code === "INVALID_KEY") {
               const newKey = await getAccess(false, friendlyError(error));
-              if (!newKey) return;
-              progress(); await session.connect({ key: newKey }); close(null);
+              if (!newKey || operationGeneration !== localBaselineGeneration) return;
+              progress(); await session.connect({ key: newKey }); close(null); if (operationGeneration !== localBaselineGeneration) return;
               continue;
             }
             if (githubMode && ["GITHUB_TOKEN_REQUIRED", "INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) {
-              const token = await getAccess("github", friendlyError(error)); if (!token) return;
-              progress(); await session.setGitHubToken(token); close(null); continue;
+              const token = await getAccess("github", friendlyError(error)); if (!token || operationGeneration !== localBaselineGeneration) return;
+              progress(); await session.setGitHubToken(token); close(null); if (operationGeneration !== localBaselineGeneration) return; continue;
             }
             if (error.code !== "EDITOR_KEY_REQUIRED" || teamMode) throw error;
             const token = await getAccess(true, session.getState().snapshot?.requiresEditorToken ? "" : friendlyError(error));
-            if (!token) return;
+            if (!token || operationGeneration !== localBaselineGeneration) return;
             session.setEditorToken(token);
           }
         }
@@ -394,6 +398,7 @@
           notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Latest values kept" : "Changes saved", message: "Your team will see these updates automatically.", revision: String(Date.now()), toast: true });
         }
       } catch (error) {
+        if (operationGeneration !== localBaselineGeneration) { close(null); return; }
         if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
         close(null); lastError = friendlyError(error, true); lastErrorWasSave = true;
         updateStatus(); notices?.show("master-sync-error");
@@ -403,14 +408,17 @@
     async function saveScoped(options) {
       if (running || discarding || refreshRunning || dialog.open || session.getState().busy || adapter.hasPendingPackageOperation?.()) return { status: "pending", saved: false, code: "MASTER_BUSY", message: "PLC data is saved on this device. Sharing will resume when the current update finishes." };
       if (typeof session.saveScoped !== "function") return { status: "local", saved: false, code: "SCOPED_SAVE_UNAVAILABLE", message: "PLC data is saved on this device. Shared saving needs an updated connection." };
+      const operationGeneration = localBaselineGeneration;
       running = true;
       try {
         const result = await session.saveScoped(options);
+        if (operationGeneration !== localBaselineGeneration) return { status: "superseded", saved: false };
         if (Number.isFinite(result.retryUntil)) retryUntil = Math.max(retryUntil, result.retryUntil);
         if (result.status === "saved") notices?.resolve("plc-master-sharing");
         else notices?.publish({ id: "plc-master-sharing", severity: result.status === "pending" ? "warning" : "info", title: result.status === "pending" ? "PLC sharing needs attention" : "PLC data collected", message: result.status === "pending" ? "Your PLC data is saved on this device. Review the pending changes to share them." : "Your PLC data is saved on this device. Connect with editing access to share it automatically.", toast: false, actions: [{ label: "Review changes", onClick: saveFlow }] });
         return result;
-      } finally { running = false; updateStatus(); }
+      } catch (error) { if (operationGeneration !== localBaselineGeneration) return { status: "superseded", saved: false }; throw error; }
+      finally { running = false; updateStatus(); }
     }
 
     button.addEventListener("click", (event) => { event.preventDefault(); event.stopImmediatePropagation(); showUpdates(); }, true);
@@ -426,9 +434,10 @@
       if (!force && Date.now() < retryUntil) return;
       if (githubMode && !force && Date.now() - lastRefreshAt < (session.getState().hasGitHubToken ? 120000 : 300000)) return;
       lastRefreshAt = Date.now();
+      const operationGeneration = localBaselineGeneration;
       refreshRunning = true; checkMessage = ""; updateStatus();
-      try { const result = await session.refresh(); if (result === null) throw Object.assign(new Error("Another update is in progress."), { code: "MASTER_BUSY" }); lastCheckedAt = Date.now(); checkedPublication = session.getState().snapshot?.publication ? JSON.parse(JSON.stringify(session.getState().snapshot.publication)) : null; lastCheckError = ""; if (!lastErrorWasSave || !session.getState().pending.length) lastError = ""; retryUntil = 0; return { status: "checked", checkedAt: lastCheckedAt }; }
-      catch (error) { lastCheckError = friendlyError(error); if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); if (!lastErrorWasSave) lastError = lastCheckError; return { status: "error" }; }
+      try { const result = await session.refresh(); if (operationGeneration !== localBaselineGeneration) return { status: "superseded" }; if (result === null) throw Object.assign(new Error("Another update is in progress."), { code: "MASTER_BUSY" }); lastCheckedAt = Date.now(); checkedPublication = session.getState().snapshot?.publication ? JSON.parse(JSON.stringify(session.getState().snapshot.publication)) : null; lastCheckError = ""; if (!lastErrorWasSave || !session.getState().pending.length) lastError = ""; retryUntil = 0; return { status: "checked", checkedAt: lastCheckedAt }; }
+      catch (error) { if (operationGeneration !== localBaselineGeneration) return { status: "superseded" }; lastCheckError = friendlyError(error); if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); if (!lastErrorWasSave) lastError = lastCheckError; return { status: "error" }; }
       finally { refreshRunning = false; updateStatus(); }
     }
     const timer = root.setInterval(refreshQuietly, githubMode ? 60000 : 45000);
@@ -437,6 +446,7 @@
       getSummary() { const state = session.getState(); return { pendingCount: session.track().length, busy: Boolean(state.busy || running || discarding || refreshRunning), connected: state.connected, lastCheckedAt, publicationStatus: checkedPublication?.status || state.snapshot?.publication?.status || '', error: Boolean(lastError || lastCheckError) }; },
       reviewConflicts(conflicts) { if (running || discarding || session.getState().busy || !Array.isArray(conflicts) || !conflicts.length) return null; return resolveConflicts(conflicts); },
       markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
+      adoptLocalBaseline() { localBaselineGeneration += 1; session.adoptLocalBaseline(); lastError = ""; lastErrorWasSave = false; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; checkMessage = ""; publicationDelayed = false; lastRefreshAt = 0; retryUntil = 0; for (const id of ["master-save-result", "master-sync-error", "master-publication", "master-github-connected", "plc-master-sharing", "master-discard-result", "master-discard-undone"]) notices?.resolve(id); updateStatus(); },
       disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckedAt = 0; checkedPublication = null; lastCheckError = ""; updateStatus(); },
       destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); updates.remove(); dialog.remove(); },
     });
@@ -463,7 +473,7 @@
     }
     return active;
   }
-  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, getSummary() { return active?.getSummary() || {}; }, openUpdates() { return active?.openUpdates(); }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, disconnect() { active?.disconnect(); } });
+  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, getSummary() { return active?.getSummary() || {}; }, openUpdates() { return active?.openUpdates(); }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, adoptLocalBaseline() { active?.adoptLocalBaseline(); }, disconnect() { active?.disconnect(); } });
   if (root.PortfolioMasterAdapter) {
     const openWhenReady = () => initialize({ adapter: root.PortfolioMasterAdapter });
     root.addEventListener?.("portfolio:workspace-ready", openWhenReady);
