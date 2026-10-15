@@ -28,9 +28,9 @@ const original = {
       partSkus: [{ id: 'hp', code: 'HP001', customNote: 'Keep SKU detail' }], variantGroups: [] }] } }],
 };
 
-async function packed(manifest) {
+async function packed(manifest, extra = attachment) {
   return codec.encrypt(codec.createZip([{ name: 'portfolio.json', data: new TextEncoder().encode(JSON.stringify(manifest)) },
-    { name: 'images/hero.webp', data: image }, { name: 'attachments/extra.bin', data: attachment }]), packageKey);
+    { name: 'images/hero.webp', data: image }, { name: 'attachments/extra.bin', data: extra }]), packageKey);
 }
 async function unpacked(bytes) {
   const entries = codec.readZip(await codec.decrypt(bytes, packageKey));
@@ -42,13 +42,18 @@ function targetFor(manifest = original, patch = { ffsDate: '2026-12-10' }) {
     { requestId: 'fixture-request-one', now: '2026-10-08T00:00:00.000Z', actor: 'Optional name' }).manifest;
 }
 
-export async function harness({ seeded = true, revision = 1, cacheMode = 'match' } = {}) {
-  const initial = await packed(original), blobs = new Map([[sha(initial), initial]]);
+export async function harness({ seeded = true, revision = 1, cacheMode = 'match', extraAssetBytes = 0 } = {}) {
+  const extra = extraAssetBytes ? new Uint8Array(extraAssetBytes).fill(37) : attachment;
+  const initial = await packed(original, extra), blobs = new Map([[sha(initial), initial]]);
   const candidateRefs = new Map();
   let current = sha(initial), manifest = revision ? targetFor() : clone(original), storageRevision = revision;
+  const commits = new Map(), trees = new Map(); let sequence = 0, head, codeVersion = 0;
+  const objectId = kind => createHash('sha1').update(`${kind}:${++sequence}`).digest('hex');
+  function moveHead(blob = current) { const tree = objectId('tree'), commit = objectId('commit'); trees.set(tree, { blob, codeVersion }); commits.set(commit, { tree, parent: head }); head = commit; current = blob; }
+  moveHead();
   let sourceSha = current, seedDigest = null;
   let publication = { requestedRevision: revision, publishedRevision: 0, githubSha: current, status: revision ? 'pending' : 'current' };
-  let ackFails = 0, deployFails = 0, losePut = false, putHook = null, writeDenied = false, exportHook = null, secretError = false;
+  let ackFails = 0, deployFails = 0, losePut = false, malformedPut = false, putHook = null, writeDenied = false, exportHook = null, secretError = false, headHook = null, rejectObject = null, corruptObject = false;
   const calls = [], acknowledgements = [], failures = [];
   const fetchImpl = async (url, options) => {
     assert.equal(options.credentials, 'omit'); assert.equal(options.redirect, 'error'); assert.equal(options.cache, 'no-store');
@@ -90,8 +95,30 @@ export async function harness({ seeded = true, revision = 1, cacheMode = 'match'
     assert.equal(options.headers.Authorization, `Bearer ${githubToken}`);
     assert.equal(options.headers['X-PPC-Publisher-Secret'], undefined);
     assert.ok(!String(options.body || '').includes(packageKey)); assert.ok(!String(options.body || '').includes(publisherSecret));
+    const stage = url.endsWith('/git/blobs') ? 'BLOB' : url.endsWith('/git/trees') ? 'TREE' : url.endsWith('/git/commits') ? 'COMMIT' : url.endsWith('/git/refs/heads/main') ? 'REF' : '';
+    if (rejectObject?.stage === stage && ['POST', 'PATCH'].includes(options.method)) return json({ message: `${packageKey} ${publisherSecret} ${githubToken} private upstream response` }, rejectObject.status);
     if (url.includes('/git/blobs/')) {
       const bytes = blobs.get(url.split('/').at(-1)); calls.push({ operation: 'blob', size: bytes?.length || 0 }); return new Response(bytes?.slice(), { status: bytes ? 200 : 404 });
+    }
+    if (url.endsWith('/git/ref/heads/main')) {
+      if (headHook) { const hook = headHook; headHook = null; await hook(); }
+      calls.push({ operation: 'head' }); return json({ ref: 'refs/heads/main', object: { type: 'commit', sha: head } });
+    }
+    if (/\/git\/commits\/[a-f0-9]{40}$/.test(url)) { const id = url.split('/').at(-1), value = commits.get(id); assert.ok(value); return json({ sha: id, tree: { sha: value.tree }, parents: value.parent ? [{ sha: value.parent }] : [] }); }
+    if (url.endsWith('/git/blobs')) { const body = JSON.parse(options.body); assert.equal(options.method, 'POST'); assert.equal(body.encoding, 'base64'); const bytes = new Uint8Array(Buffer.from(body.content, 'base64')), id = sha(bytes); calls.push({ operation: 'create-blob', size: bytes.length }); blobs.set(id, bytes); return json({ sha: corruptObject ? '0'.repeat(40) : id }, 201); }
+    if (url.endsWith('/git/trees')) { const body = JSON.parse(options.body), base = trees.get(body.base_tree); assert.ok(base); assert.deepEqual(Object.keys(body).sort(), ['base_tree', 'tree']); assert.equal(body.tree.length, 1); assert.deepEqual(body.tree[0], { path: 'public/data/master_ppc.pkg', mode: '100644', type: 'blob', sha: body.tree[0].sha }); assert.ok(blobs.has(body.tree[0].sha)); const id = objectId('tree'); trees.set(id, { ...base, blob: body.tree[0].sha }); calls.push({ operation: 'create-tree' }); return json({ sha: id }, 201); }
+    if (url.endsWith('/git/commits')) { const body = JSON.parse(options.body); assert.ok(trees.has(body.tree)); assert.equal(body.parents.length, 1); assert.ok(commits.has(body.parents[0])); const id = objectId('commit'); commits.set(id, { tree: body.tree, parent: body.parents[0] }); calls.push({ operation: 'create-commit' }); return json({ sha: id, tree: { sha: body.tree }, parents: [{ sha: body.parents[0] }] }, 201); }
+    if (url.endsWith('/git/refs/heads/main')) {
+      assert.equal(options.method, 'PATCH'); const body = JSON.parse(options.body); assert.deepEqual(Object.keys(body).sort(), ['force', 'sha']); assert.equal(body.force, false);
+      calls.push({ operation: 'put', body: { sha: current, branch: 'main' } });
+      if (writeDenied) return json({ error: 'Protected branch' }, 422);
+      if (putHook) { const hook = putHook; putHook = null; await hook(); }
+      const commit = commits.get(body.sha); assert.ok(commit);
+      if (commit.parent !== head) return json({ message: 'Update is not a fast forward' }, 422);
+      head = body.sha; const tree = trees.get(commit.tree); current = tree.blob; codeVersion = tree.codeVersion;
+      if (losePut) { losePut = false; throw new Error(`${githubToken} private network detail`); }
+      if (malformedPut) { malformedPut = false; return new Response('Malformed synthetic final ref response', { status: 200 }); }
+      return json({ ref: 'refs/heads/main', object: { type: 'commit', sha: head } });
     }
     if (url.includes('/actions/workflows/deploy.yml/dispatches')) {
       calls.push({ operation: 'deploy' });
@@ -99,14 +126,8 @@ export async function harness({ seeded = true, revision = 1, cacheMode = 'match'
       return new Response(null, { status: 204 });
     }
     assert.match(url, /\/contents\/public\/data\/master_ppc\.pkg(?:\?ref=(?:main|[a-f0-9]{40}))?$/);
-    if (options.method === 'GET') { const ref=new URL(url).searchParams.get('ref'),chosen=ref&&ref!=='main'?candidateRefs.get(ref):current;return chosen?json({ type: 'file', sha: chosen, size: blobs.get(chosen).length, download_url: 'https://untrusted.invalid/never-fetch' }):json({},404); }
-    const body = JSON.parse(options.body); calls.push({ operation: 'put', body: { sha: body.sha, branch: body.branch } });
-    if (writeDenied) return json({ error: 'Protected branch' }, 422);
-    if (putHook) { const hook = putHook; putHook = null; await hook(); }
-    if (body.sha !== current) return json({}, 409);
-    const bytes = new Uint8Array(Buffer.from(body.content, 'base64')); current = sha(bytes); blobs.set(current, bytes);
-    if (losePut) { losePut = false; throw new Error(`${githubToken} private network detail`); }
-    return json({ content: { sha: current } });
+    assert.equal(options.method, 'GET', 'package Contents endpoint is read-only; large package writes use Git Database');
+    const ref=new URL(url).searchParams.get('ref'),chosen=ref&&ref!=='main'?(candidateRefs.get(ref)||trees.get(commits.get(ref)?.tree)?.blob):current;return chosen?json({ type: 'file', sha: chosen, size: blobs.get(chosen).length, download_url: 'https://untrusted.invalid/never-fetch' }):json({},404);
   };
   const makePublisher=imagesCommit=>createSupabasePublisher({ endpoint, packageKey, githubToken, publisherSecret, fetchImpl, imagesCommit, readCachedPackage: async () => {
     if (cacheMode === 'missing') return null;
@@ -118,11 +139,13 @@ export async function harness({ seeded = true, revision = 1, cacheMode = 'match'
   const publisher=makePublisher();
   return { publisher, calls, acknowledgements, failures, get current() { return current; }, get bytes() { return blobs.get(current).slice(); },
     get publication() { return clone(publication); },
-    failAck(count = 1) { ackFails = count; }, failDeploy(count = 1) { deployFails = count; }, loseWriteReply() { losePut = true; },
+    failAck(count = 1) { ackFails = count; }, failDeploy(count = 1) { deployFails = count; }, loseWriteReply() { losePut = true; }, malformedWriteReply() { malformedPut = true; },
     beforePut(hook) { putHook = hook; }, afterExport(hook) { exportHook = hook; }, denyWrites() { writeDenied = true; },
+    beforeHead(hook) { headHook = hook; }, advanceCode() { codeVersion += 1; moveHead(); }, get codeVersion() { return codeVersion; },
+    rejectGitObject(stage = 'BLOB', status = 403) { rejectObject = { stage, status }; }, corruptGitObject() { corruptObject = true; },
     secretTransportError() { secretError = true; },
-    async replace(value) { const bytes = await packed(value); current = sha(bytes); blobs.set(current, bytes); },
-    replaceRaw(bytes) { current = sha(bytes); blobs.set(current, bytes.slice()); },
+    async replace(value) { const bytes = await packed(value, extra); const id = sha(bytes); blobs.set(id, bytes); moveHead(id); },
+    replaceRaw(bytes) { const id = sha(bytes); blobs.set(id, bytes.slice()); moveHead(id); },
     advance(patch) { manifest = targetFor(manifest, patch); storageRevision += 1; publication.requestedRevision = storageRevision; publication.status = 'pending'; },
     staleExport(value, revisionValue) { manifest = clone(value); storageRevision = revisionValue; publication.publishedRevision = Math.min(publication.publishedRevision, revisionValue); },
     candidate(commit,bytes) { const digest=sha(bytes);blobs.set(digest,bytes);candidateRefs.set(commit,digest);return makePublisher(commit); },
@@ -212,7 +235,7 @@ for (const kind of ['manifest', 'asset']) {
 
 {
   const h = await harness(); h.denyWrites();
-  await assert.rejects(h.publisher.publish(), error => error.code === 'GITHUB_WRITE_REJECTED');
+  await assert.rejects(h.publisher.publish(), error => error.code === 'GITHUB_REF_HTTP_422');
   assert.equal(h.calls.filter(call => call.operation === 'put').length, 1, 'unchanged SHA with a validation rejection is not uploaded repeatedly');
   assert.equal(h.acknowledgements.length, 0); assert.equal(h.failures.length, 1);
 }
@@ -252,3 +275,63 @@ for (const cacheMode of ['missing', 'unavailable', 'corrupt', 'short']) {
   assert.equal((await h.publisher.publish()).status, 'published');
   assert.equal(h.calls.filter(call => call.operation === 'blob').length, 1, 'A missing or mismatched cache must use the authenticated remote blob.');
 }
+
+{
+  const h = await harness(); h.beforePut(() => h.advanceCode());
+  await h.publisher.publish();
+  assert.equal(h.codeVersion, 1, 'a nonforce retry preserves the unrelated racing code commit');
+  assert.equal(h.calls.filter(call => call.operation === 'put').length, 2);
+  assert.equal(h.calls.filter(call => call.operation === 'export').length, 2, 'a changed head obtains a fresh consistent export');
+  assert.equal((await unpacked(h.bytes)).manifest.categories[0].board.products[0].ffsDate, '2026-12-10');
+}
+{
+  const h = await harness(); h.beforeHead(() => h.advanceCode()); await h.publisher.publish();
+  assert.equal(h.codeVersion, 1, 'code that advances before the observed head is retained in the base tree');
+  assert.equal(h.calls.filter(call => call.operation === 'put').length, 1);
+}
+{
+  const h = await harness(); h.malformedWriteReply(); await h.publisher.publish();
+  assert.equal(h.calls.filter(call => call.operation === 'put').length, 1, 'malformed accepted ref reply creates no second accepted package commit');
+  const confirm = h.calls.findIndex((call, index) => call.operation === 'head' && index > h.calls.findIndex(c => c.operation === 'put'));
+  assert.equal(confirm, -1, 'successful blob confirmation does not create another git object chain');
+  assert.equal(h.acknowledgements.length, 1); assert.equal(h.publication.githubSha, h.current);
+  assert.equal(h.calls.findIndex(call => call.operation === 'deploy') < h.calls.findIndex(call => call.operation === 'ack'), true);
+}
+{
+  const h = await harness(), changed = clone(original); changed.categories[0].board.products[0].name = 'Racing package before head read';
+  h.beforeHead(() => h.replace(changed));
+  await assert.rejects(h.publisher.publish(), error => error.code === 'EXTERNAL_PACKAGE_CHANGE');
+  assert.equal(h.calls.filter(call => call.operation === 'create-blob').length, 0, 'the immutable observed-head package must match before creating objects');
+  assert.equal(h.calls.filter(call => call.operation === 'put').length, 0);
+  assert.equal(h.acknowledgements.length, 0);
+}
+for (const fault of ['rejectGitObject', 'corruptGitObject']) {
+  const h = await harness(), originalBytes = h.bytes; h[fault]();
+  await assert.rejects(h.publisher.publish(), error => error.code === (fault === 'rejectGitObject' ? 'GITHUB_BLOB_HTTP_403' : 'PACKAGE_CHANGED_RETRY'));
+  assert.deepEqual(h.bytes, originalBytes);
+  assert.equal(h.calls.filter(call => call.operation === 'put').length, 0, 'ref is never changed after a rejected or wrong blob');
+  assert.equal(h.acknowledgements.length, 0);
+}
+for (const stage of ['BLOB', 'TREE', 'COMMIT', 'REF']) {
+  const h = await harness(), before = h.bytes; h.rejectGitObject(stage, 403);
+  await assert.rejects(h.publisher.publish(), error => {
+    assert.equal(error.code, `GITHUB_${stage}_HTTP_403`);
+    for (const secret of [packageKey, githubToken, publisherSecret]) assert.ok(!`${error.message} ${error.stack}`.includes(secret));
+    return true;
+  });
+  assert.deepEqual(h.bytes, before); assert.equal(h.acknowledgements.length, 0);
+  assert.equal(h.failures[0].code, `GITHUB_${stage}_HTTP_403`, 'safe stage/status is retained without raw upstream text');
+  assert.equal(h.calls.filter(call => call.operation === 'export').length, 1, 'definitive stage rejection is not probed by another production-style attempt');
+}
+{
+  const h = await harness({ extraAssetBytes: 45 * 1024 * 1024 });
+  const result = await h.publisher.publish();
+  assert.equal(result.status, 'published');
+  const upload = h.calls.find(call => call.operation === 'create-blob');
+  assert.ok(upload.size > 45 * 1024 * 1024 && upload.size < codec.MAX_PACKAGE_BYTES, 'large encrypted packages use the documented Git blob range');
+  const out = await unpacked(h.bytes);
+  assert.equal(out.entries.get('attachments/extra.bin').length, 45 * 1024 * 1024);
+  assert.ok(out.entries.get('attachments/extra.bin').every(byte => byte === 37), 'all large archive bytes survive');
+  assert.equal(h.calls.filter(call => call.operation === 'put').length, 1);
+}
+console.log('Git Database publication checks passed: 45 MiB archive, immutable-head package guard, one-path base tree, nonforce code/package races, wrong-object refusal and existing ambiguous-write recovery.');
