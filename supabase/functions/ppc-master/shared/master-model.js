@@ -103,8 +103,37 @@
 
   // Treat one bounded evidence record as an atomic shared fact. Dates still merge
   // independently, while provenance cannot be spliced between different imports.
+  function isLegacyNativeManualPlc(value) {
+    // Older native date edits omitted only the container version. Accept
+    // that emitted shape, without guessing versions for imports or other data.
+    if (!object(value) || own(value, "version") || Object.keys(value).join(",") !== "fields") return false;
+    if (!object(value.fields) || !Object.keys(value.fields).length) return false;
+    return Object.entries(value.fields).every(([field, evidence]) => {
+      if (!DATE_FIELDS.includes(field) || !object(evidence)) return false;
+      const hasPeriod = own(evidence, "period");
+      if (Object.keys(evidence).sort().join(",") !== (hasPeriod ? "changedAt,observedAt,period,raw,source,sourceType,value" : "changedAt,observedAt,raw,source,sourceType,value")) return false;
+      if (evidence.sourceType !== "local" || !object(evidence.source) || Object.keys(evidence.source).join(",") !== "kind" || evidence.source.kind !== "manual") return false;
+      if (typeof evidence.value !== "string" || typeof evidence.changedAt !== "string" || evidence.changedAt !== evidence.observedAt) return false;
+      const at = evidence.changedAt;
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(at) || !Number.isFinite(Date.parse(at)) || new Date(at).toISOString() !== at) return false;
+      if (hasPeriod) {
+        const period = evidence.period;
+        if (!object(period) || Object.keys(period).sort().join(",") !== "basis,end,label,precision,quarter,start,year") return false;
+        if (period.precision !== "quarter" || period.basis !== "calendar" || !Number.isInteger(period.year) || period.year < 1900 || period.year > 9999 || !Number.isInteger(period.quarter) || period.quarter < 1 || period.quarter > 4) return false;
+        const start = `${period.year}-${String((period.quarter - 1) * 3 + 1).padStart(2, "0")}-01`;
+        const end = new Date(Date.UTC(period.year, period.quarter * 3, 0)).toISOString().slice(0, 10);
+        const label = `Q${period.quarter} ${period.year}`;
+        return period.start === start && period.end === end && period.label === label && evidence.value === start && evidence.raw === label;
+      }
+      if (evidence.raw !== evidence.value) return false;
+      try { return exactDate(evidence.value, field) === evidence.value; }
+      catch { return false; }
+    });
+  }
+
   function plcMetadata(value) {
     if (value === undefined || value === null) return null;
+    if (isLegacyNativeManualPlc(value)) value = { version: 1, ...value };
     let nodes = 0;
     const safe = (node, depth = 0) => {
       if (++nodes > 16000 || depth > 14) throw new TypeError("PLC evidence exceeds the allowed size.");
@@ -1290,5 +1319,5 @@
     return { manifest: nextManifest, conflicts: [], savedFields, savedProducts: affectedLanes.size ? new Set(history.map(item => item.productId)).size : updates.length, history };
   }
 
-  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, cardPlacement, laneVersion, productValues, values: productValues, productVersion, variantSkuIdentity, variantMatchIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, compactSnapshot, conflictPlan, restoreConflictPlan, latestPackageInfo, dateEditsForProduct, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
+  root.PortfolioMasterModel = Object.freeze({ DATE_FIELDS, PRODUCT_FIELDS, ROADMAP_FIELDS, SHARED_FIELDS, cardPlacement, plcMetadata, laneVersion, productValues, values: productValues, productVersion, variantSkuIdentity, variantMatchIdentity, applyProductValues, validateValues, patchValues, diffValues, diffOperations, describeChanges, describeNode, planMerge, resolveConflicts, draftBaseline, draftRevisions, entriesFromManifest, productsFromManifest: (manifest) => entriesFromManifest(manifest).map((entry) => entry.product), snapshot, compactSnapshot, conflictPlan, restoreConflictPlan, latestPackageInfo, dateEditsForProduct, publicMetadata, supplementProduct, supplementReview, resolveSupplementReview, mergeChanges });
 })(globalThis);
