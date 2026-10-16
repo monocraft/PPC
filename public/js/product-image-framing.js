@@ -36,6 +36,29 @@
   ]);
   const usesAudioFraming = (categoryId, product = null) => audioCategories.has(categoryId)
     && !(product && /earbuds|earphones|cirro|\bbuds?\d*/i.test(String(product.name || "")));
+  // Only independently reviewed left-side originals can use mouse framing.
+  // Unknown or held artwork keeps ordinary contain rendering in the caller.
+  const mouseProfiles = new Map([
+    ["088fab7f645358a7365b", { imageWidth: 800, imageHeight: 600 }],
+    ["0bcad882a144e151b997", { imageWidth: 800, imageHeight: 600 }],
+    ["0f3fd637592636b2ebca", { imageWidth: 800, imageHeight: 600 }],
+    ["1623e372a00d64800552", { imageWidth: 800, imageHeight: 600 }],
+    ["201a720e9b6c2411017d", { imageWidth: 800, imageHeight: 600, bounds: { x: 215, y: 238, width: 410, height: 148 } }],
+    ["233168acdf128d45c482", { imageWidth: 800, imageHeight: 600 }],
+    ["2c02e9114c417c6c3b83", { imageWidth: 832, imageHeight: 308 }],
+    ["40fc155b2cf535f621d1", { imageWidth: 800, imageHeight: 600, bounds: { x: 204, y: 233, width: 419, height: 135 } }],
+    ["43022fe7844a8e8edbde", { imageWidth: 800, imageHeight: 600 }],
+    ["6541bd9b2ea10a8ae89e", { imageWidth: 800, imageHeight: 600, bounds: { x: 204, y: 233, width: 419, height: 135 } }],
+    ["8b66fddfb618bae1f00c", { imageWidth: 800, imageHeight: 600 }],
+    ["92a0a4f0192a336e0ccd", { imageWidth: 800, imageHeight: 600, bounds: { x: 188, y: 233, width: 425, height: 135 } }],
+    ["9b13bbfcfff7a439f115", { imageWidth: 800, imageHeight: 600 }],
+    ["a8fac4586682179db478", { imageWidth: 800, imageHeight: 600 }],
+    ["bb8b8a030a09cf3c2fcf", { imageWidth: 800, imageHeight: 600 }],
+    ["bc4abe5f0d72502a7d5b", { imageWidth: 800, imageHeight: 600 }],
+    ["eab95aabb27d4e94ec3f", { imageWidth: 800, imageHeight: 600 }],
+  ]);
+  const mouseProfile = assetName => mouseProfiles.get(String(assetName).match(/^.+-([a-f0-9]{20})\.png$/)?.[1]);
+  const usesMouseFraming = (categoryId, assetName = "") => categoryId === "mice" && Boolean(mouseProfile(assetName));
 
   // Measure transparent padding once per decoded image. Pixels and saved assets
   // remain unchanged; the result is only a presentation source rectangle.
@@ -104,5 +127,15 @@
     return true;
   }
 
-  root.PortfolioImageFraming = Object.freeze({ usesAudioFraming, boundsFromPixels, measure, placement, draw });
+  function drawMouse(context, image, box, { assetName = "" } = {}) {
+    const reviewed = mouseProfile(assetName);
+    if (!reviewed || image?.naturalWidth !== reviewed.imageWidth || image?.naturalHeight !== reviewed.imageHeight) return false;
+    const frame = placement(image, box, reviewed.bounds || measure(image));
+    if (!frame) return false;
+    const s = frame.source;
+    context.drawImage(image, s.x, s.y, s.width, s.height, frame.x, frame.y, frame.width, frame.height);
+    return true;
+  }
+
+  root.PortfolioImageFraming = Object.freeze({ usesAudioFraming, usesMouseFraming, boundsFromPixels, measure, placement, draw, drawMouse });
 })(globalThis);

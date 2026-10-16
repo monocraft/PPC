@@ -120,4 +120,55 @@ assert.equal(simpleMixedLayout.detailed, false);
 assert.equal(simpleEarbud.length, 5);
 assert(Math.abs(simpleEarbud[4] - 112) < 1e-9, "Simple earbud drawCard rendering keeps its original112px height.");
 assert(simpleEarbud[2] >= 24 && simpleEarbud[2] + simpleEarbud[4] <= simpleMixedLayout.titleBlockTop, "A natural earbud stays inside the simple mixed image region.");
-console.log("Product image framing checks passed: visible-size consistency, aspect ratio, whole-subject bounds, safe fallbacks, audio-only geometry, export parity and immutable pixels/data.");
+
+// Mouse normalization is separate from headset framing and only accepts
+// reviewed side-source identities. Held/top-down sources keep ordinary contain.
+const mouseName = "side-0bcad882a144e151b997.png", mouseBox = { x: 18, y: 34, width: 210, height: 112 };
+assert.equal(api.usesMouseFraming("mice", mouseName), true);
+for (const categoryId of ["keyboards", "controllers", "pc-gaming-audio", "lifestyle-audio"]) assert.equal(api.usesMouseFraming(categoryId, mouseName), false);
+assert.equal(api.usesMouseFraming("mice", "held-top-down.png"), false);
+assert.equal(api.usesMouseFraming("mice", "e4.png"), false, "A retained generic filename cannot enable mouse cropping.");
+const rejectedMouseCalls = [];
+assert.equal(api.drawMouse({ drawImage: (...args) => rejectedMouseCalls.push(args) }, image, mouseBox, { assetName: "unknown-ffffffffffffffffffff.png" }), false);
+assert.equal(api.drawMouse({ drawImage: (...args) => rejectedMouseCalls.push(args) }, { naturalWidth: 400, naturalHeight: 300 }, mouseBox, { assetName: mouseName }), false);
+assert.equal(rejectedMouseCalls.length, 0, "Unknown hashes and mismatched dimensions cannot crop or enlarge artwork.");
+const heldDraws = [];
+sandbox.drawContainedImage({ drawImage: (...args) => heldDraws.push(args) }, image, 18, 34, 210, 112, { categoryId: "mice", assetName: "held-top-down.png" });
+assert.equal(heldDraws[0].length, 5, "An unapproved held mouse retains ordinary contain rendering.");
+const previousDocument = globalThis.document;
+let sampled = 0;
+globalThis.document = { createElement: () => {
+  const canvas = { width: 0, height: 0 };
+  canvas.getContext = () => ({ drawImage(source) { canvas.wideSubject = source.wideSubject; }, getImageData() {
+    sampled += 1;
+    const data = new Uint8ClampedArray(canvas.width * canvas.height * 4);
+    const rect = canvas.wideSubject ? { left: 55, right: 455, top: 130, bottom: 254 } : { left: 125, right: 387, top: 152, bottom: 233 };
+    for (let y = rect.top; y < rect.bottom; y++) for (let x = rect.left; x < rect.right; x++) data[(y * canvas.width + x) * 4 + 3] = 255;
+    return { data };
+  } });
+  return canvas;
+} };
+const mouseImage = { naturalWidth: 800, naturalHeight: 600 }, mouseCalls = [];
+try {
+  assert.equal(api.drawMouse({ drawImage: (...args) => mouseCalls.push(args) }, mouseImage, mouseBox, { assetName: mouseName }), true);
+  api.drawMouse({ drawImage: (...args) => mouseCalls.push(args) }, mouseImage, mouseBox, { assetName: mouseName });
+  api.drawMouse({ drawImage: (...args) => mouseCalls.push(args) }, { naturalWidth: 800, naturalHeight: 600, wideSubject: true }, mouseBox, { assetName: "side-a8fac4586682179db478.png" });
+} finally {
+  if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument;
+}
+assert.equal(sampled, 2, "Approved mouse alpha is measured once per decoded image, including a cached repeat.");
+const mouseDraw = mouseCalls[0];
+assert.equal(mouseDraw.length, 9, "Mouse rendering preserves the shared Canvas/PPTX source-rectangle path.");
+assert(Math.abs(mouseDraw[7] - 205.8) < 1e-9, "Reviewed side art fills98percent of the ordinary210px image width.");
+assert(Math.abs(mouseDraw[7] - mouseCalls[2][7]) < 1e-9, "Different transparent padding keeps the same approved side-body frame width.");
+assert(Math.abs(mouseDraw[7] / mouseDraw[8] - mouseDraw[3] / mouseDraw[4]) < 1e-9, "Side silhouettes retain their natural aspect ratio.");
+assert(Math.abs(mouseDraw[5] + mouseDraw[7] / 2 - 123) < 1e-9 && Math.abs(mouseDraw[6] + mouseDraw[8] / 2 - 90) < 1e-9, "Mouse bodies are centered within the ordinary112px region.");
+assert(mouseDraw[5] >= 18 && mouseDraw[6] >= 34 && mouseDraw[5] + mouseDraw[7] <= 228 && mouseDraw[6] + mouseDraw[8] <= 146, "A side silhouette cannot cross its image region.");
+const wiredMouseCalls = [];
+api.drawMouse({ drawImage: (...args) => wiredMouseCalls.push(args) }, image, mouseBox, { assetName: "side-6541bd9b2ea10a8ae89e.png" });
+assert.deepEqual(wiredMouseCalls[0].slice(1, 5), [204, 233, 419, 135], "Only the reviewed wired side original trims excess cable in presentation.");
+api.drawMouse({ drawImage: (...args) => wiredMouseCalls.push(args) }, image, mouseBox, { assetName: "side-92a0a4f0192a336e0ccd.png" });
+api.drawMouse({ drawImage: (...args) => wiredMouseCalls.push(args) }, image, mouseBox, { assetName: "side-201a720e9b6c2411017d.png" });
+assert.deepEqual(wiredMouseCalls[1].slice(1, 5), [188, 233, 425, 135], "The other reviewed wired model keeps its distinct complete body frame.");
+assert.deepEqual(wiredMouseCalls[2].slice(1, 5), [215, 238, 410, 148], "The reviewed taller body trims only its cable-only extension.");
+console.log("Product image framing checks passed: headset size and natural earbuds, approved-side-only mouse sizing, content/dimension guards, padding consistency, complete bodies, export parity and immutable pixels/data.");
