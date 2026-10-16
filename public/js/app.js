@@ -208,6 +208,7 @@ const splitRoadmapNavRange = $("#splitRoadmapNavRange");
 const splitRoadmapNavLeft = $("#splitRoadmapNavLeft");
 const splitRoadmapNavRight = $("#splitRoadmapNavRight");
 const splitRoadmapNavPosition = $("#splitRoadmapNavPosition");
+const horizontalNavigators = new Map();
 const splitProduct = $("#splitProduct");
 const roadmapMenuButton = $("#roadmapMenuButton");
 const roadmapMenu = $("#roadmapMenu");
@@ -3807,6 +3808,7 @@ function syncRoadmapNavigator(targetScroll, refs) {
   refs.left.disabled = !hasOverflow || current <= 1;
   refs.right.disabled = !hasOverflow || current >= max - 1;
   refs.position.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
+  syncHorizontalOverview(targetScroll, refs.element, true);
 }
 
 function scrollRoadmapSelected(targetScroll, smooth = true) {
@@ -4736,10 +4738,42 @@ function syncBoardNavigator() {
   navLeft.disabled = !hasOverflow || current <= 1;
   navRight.disabled = !hasOverflow || current >= max - 1;
   navPosition.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
+  syncHorizontalOverview(canvasScroll, boardNavigator);
+}
+
+function syncHorizontalOverview(targetScroll, element, roadmap = false) {
+  if (!globalThis.PortfolioNavigator) return;
+  let controller = horizontalNavigators.get(element);
+  if (!controller) {
+    controller = PortfolioNavigator.create(element, {
+      getState: () => {
+        const scale = roadmap ? roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH : zoom;
+        const inset = roadmap ? ROADMAP_LEFT_WIDTH : 0;
+        const regions = roadmap ? roadmapHitRegions.get(targetScroll.querySelector("canvas[id]")) || [] : renderedCards;
+        return {
+          total: Math.max(1, targetScroll.scrollWidth - inset), visible: Math.max(1, targetScroll.clientWidth - inset), left: targetScroll.scrollLeft,
+          height: targetScroll.scrollHeight, scale,
+          minScale: roadmap ? ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH : PRODUCT_MIN_ZOOM,
+          maxScale: roadmap ? ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH : PRODUCT_MAX_ZOOM,
+          items: regions.map(item => ({ x: item.x * (roadmap ? 1 : scale) - inset, y: item.y * (roadmap ? 1 : scale), width: item.width * (roadmap ? 1 : scale), height: item.height * (roadmap ? 1 : scale), selected: item.productId === selectedId })),
+        };
+      },
+      onPan: left => { targetScroll.scrollLeft = left; },
+      onResize: ({ scale, edge, anchor }) => {
+        if (roadmap) setRoadmapZoom(scale * ROADMAP_DEFAULT_MONTH_WIDTH);
+        else setProductZoom(scale);
+        const appliedScale = roadmap ? roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH : zoom;
+        const visible = Math.max(1, targetScroll.clientWidth - (roadmap ? ROADMAP_LEFT_WIDTH : 0));
+        targetScroll.scrollLeft = Math.max(0, Math.min(targetScroll.scrollWidth - targetScroll.clientWidth, anchor * appliedScale - (edge === "left" ? visible : 0)));
+      },
+    });
+    horizontalNavigators.set(element, controller);
+  }
+  controller.update();
 }
 
 function scrollBoardBy(amount, smooth = true) {
-  canvasScroll.scrollBy({ left: amount, behavior: smooth ? "smooth" : "auto" });
+  canvasScroll.scrollBy({ left: amount, behavior: smooth && !globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "smooth" : "auto" });
 }
 
 function scrollSelectedIntoView() {
@@ -8612,8 +8646,9 @@ $("#roadmapMoveDown").onclick = () => moveSelectedRoadmapRow(1);
 
 function bindRoadmapNavigatorControls(targetScroll, refs) {
   refs.range.addEventListener("input", () => { targetScroll.scrollLeft = Number(refs.range.value); });
-  refs.left.onclick = () => targetScroll.scrollBy({ left: -Math.max(300, targetScroll.clientWidth * .75), behavior: "smooth" });
-  refs.right.onclick = () => targetScroll.scrollBy({ left: Math.max(300, targetScroll.clientWidth * .75), behavior: "smooth" });
+  const behavior = () => globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth";
+  refs.left.onclick = () => targetScroll.scrollBy({ left: -Math.max(300, targetScroll.clientWidth * .75), behavior: behavior() });
+  refs.right.onclick = () => targetScroll.scrollBy({ left: Math.max(300, targetScroll.clientWidth * .75), behavior: behavior() });
 }
 
 bindRoadmapCanvas(roadmapCanvas, roadmapScroll, roadmapNavigatorRefs);

@@ -26,6 +26,12 @@ function operation(manifest = initial, overrides = {}) {
 const request = operation(), untouched = copy(initial), accepted = model.mergeChanges(initial, [request], { requestId: 'merge-one' });
 assert.deepEqual(initial, untouched, 'planning and saving leave originals unchanged');
 assert.equal(accepted.conflicts.length, 0);
+const annotatedMerge = model.mergeChanges(initial, [request], { requestId: 'merge-one', actorSource: 'self-reported' });
+assert.equal(annotatedMerge.history.length, accepted.history.length);
+assert(annotatedMerge.history.some(record => record.kind === 'merge' && record.productId === 'source'));
+assert(annotatedMerge.history.some(record => record.productId === 'related' && record.path === 'roadmapPredecessorId'));
+assert(annotatedMerge.history.every(record => record.actorSource === 'self-reported'), 'merge tombstones and secondary relationship redirects are annotated before retention');
+assert.deepEqual(model.snapshot(annotatedMerge.manifest).products, model.snapshot(accepted.manifest).products, 'attribution preserves merged products and revisions');
 const completed = accepted.manifest.categories[0].board.products.find((product) => product.id === 'keep');
 assert.equal(accepted.manifest.categories[0].board.products.length, 2);
 assert.equal(completed.order, 3); assert.equal(completed.imageAssetId, 'keeper-image');

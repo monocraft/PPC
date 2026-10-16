@@ -339,6 +339,75 @@ assert.equal(sourceRemovalResult.savedFields, 1);
 assert.equal(sourceRemovalResult.snapshot.products[0].values.plc, null, 'The gateway response reflects its accepted source-clear receipt.');
 assert.equal(Object.hasOwn(sourceRemovalDatabase.inspect().manifest.categories[0].board.products[0], 'plc'), false, 'The gateway commits the cleared source to the accepted manifest.');
 
+{
+  const maximumHistoryBytes = 512 * 1024;
+  const historyBytes = records => records.reduce((total, record) => total + JSON.stringify(record).length * 2, 0);
+  const context = { actor: 'History fixture', team: 'Team', reason: 'History budget fixture', requestId: 'history-budget-save', now: '2026-10-08T01:02:03.000Z' };
+  const historySeed = clone(seed), historyBase = model.snapshot(historySeed).products[0];
+  const changes = [change(historyBase, { name: 'Budget headset', codename: 'Budget code', price: 14.99, tier: 'Core', statusLabel: 'Budget checked' })];
+  const newHistory = model.mergeChanges(historySeed, changes, context).history;
+  assert.equal(newHistory.length, 5);
+  const annotationBytes = historyBytes(newHistory.map(record => ({ ...record, actorSource: 'self-reported' }))) - historyBytes(newHistory);
+  const remainingBytes = 100;
+  assert(annotationBytes > remainingBytes, 'five post-budget annotations would exceed the remaining space');
+  const priorHistory = Array.from({ length: 10 }, (_, index) => ({ productId: 'product-one', path: 'name', before: 'Earlier accepted value', after: 'Retained legacy value',
+    actorSource: 'legacy-import', requestId: `legacy-history-${index}`, padding: '' }));
+  let characters = (maximumHistoryBytes - historyBytes(newHistory) - remainingBytes - historyBytes(priorHistory)) / 2;
+  assert(Number.isSafeInteger(characters) && characters > 0);
+  priorHistory.forEach((record, index) => { const count = Math.floor(characters / (priorHistory.length - index)); record.padding = 'H'.repeat(count); characters -= count; });
+  assert.equal(historyBytes(priorHistory) + historyBytes(newHistory), maximumHistoryBytes - remainingBytes);
+  historySeed.masterSync = { history: clone(priorHistory) };
+  const original = clone(historySeed), unannotated = model.mergeChanges(historySeed, changes, context);
+  assert.equal(unannotated.manifest.masterSync.history.length, priorHistory.length + newHistory.length);
+  assert(historyBytes(unannotated.manifest.masterSync.history.map(record => record.requestId === context.requestId ? { ...record, actorSource: 'self-reported' } : record)) > maximumHistoryBytes,
+    'the fixture reproduces the former gateway post-merge history overflow');
+  const historyDatabase = inMemoryRpc(), persistedPayloads = [];
+  await historyDatabase.call('bootstrap', { manifest: historySeed, sourceSha, fingerprint: 'history-budget-fixture' });
+  const historyGateway = createMasterGateway({ env, now: () => context.now,
+    fetchImpl: async () => { throw new Error('Unexpected network access in history fixture'); },
+    rpc: async (operation, payload) => { if (operation === 'commit' && payload.changed) persistedPayloads.push(clone(payload.manifest)); return historyDatabase.call(operation, payload); } });
+  const historySave = async (requestId, operations, extras = {}) => {
+    const response = await historyGateway(new Request('https://history.example/api/master/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, sessionId: 'history-fixture-session', displayName: context.actor, reason: context.reason, requestId, changes: operations, ...extras }) }));
+    return { status: response.status, data: await response.json() };
+  };
+  const accepted = await historySave(context.requestId, changes);
+  assert.equal(accepted.status, 200); assert.equal(accepted.data.savedFields, 5); assert.equal(accepted.data.savedProducts, 1);
+  assert.equal(persistedPayloads.length, 1);
+  const persisted = persistedPayloads[0], retained = persisted.masterSync.history;
+  assert(historyBytes(retained) <= maximumHistoryBytes, 'the actual gateway commit payload includes attribution inside its exact 524288-byte history budget');
+  const added = retained.filter(record => record.requestId === context.requestId), old = retained.filter(record => record.requestId !== context.requestId);
+  assert.equal(added.length, 5); assert(added.every(record => record.actorSource === 'self-reported'));
+  assert(old.length > 0 && old.length < priorHistory.length, 'overflow expires only the oldest accepted history prefix');
+  assert.deepEqual(old, priorHistory.slice(-old.length), 'retained prior history is an exact unchanged suffix, including its original attribution');
+  assert.deepEqual(historySeed, original, 'retention leaves the input manifest and prior history untouched');
+  assert.deepEqual(persisted.categories, unannotated.manifest.categories, 'gateway attribution does not change saved product records');
+  assert.deepEqual(clone(model.snapshot(persisted).products), clone(model.snapshot(unannotated.manifest).products), 'gateway attribution does not change canonical product values or field revisions');
+  const beforeNoOp = clone(historyDatabase.inspect().manifest);
+  const noOp = await historySave('history-budget-noop', changes);
+  assert.equal(noOp.status, 200); assert.equal(noOp.data.savedFields, 0);
+  assert.deepEqual(historyDatabase.inspect().manifest, beforeNoOp, 'no-op saves never annotate or rebudget prior history');
+  const rejected = await historySave('history-budget-conflict', [change(historyBase, { name: 'Stale name' })]);
+  assert.equal(rejected.status, 409); assert.deepEqual(historyDatabase.inspect().manifest, beforeNoOp);
+  const claimed = await historySave('history-budget-claimed', changes, { actorSource: 'verified' });
+  assert.equal(claimed.status, 400, 'caller-controlled attribution claims remain unsupported');
+  assert.deepEqual(historyDatabase.inspect().manifest, beforeNoOp);
+
+  const largeValues = model.values({ name: 'Large gateway history fixture', specs: Array.from({ length: 20 }, (_, index) => ({ id: `large-${index}`, label: 'Large value', value: 'x'.repeat(16000) })) });
+  const created = await historySave('history-large-create', [{ kind: 'create', productId: 'large-history-product', categoryId: 'pc-audio', laneId: 'wired', mine: largeValues }]);
+  assert.equal(created.status, 200);
+  const large = model.snapshot(historyDatabase.inspect().manifest).products.find(product => product.productId === 'large-history-product');
+  const removed = await historySave('history-large-delete', [{ kind: 'delete', productId: large.productId, categoryId: large.categoryId, laneId: large.laneId,
+    base: large.values, baseRevisions: large.revisions, baseProductVersion: large.productVersion }]);
+  assert.equal(removed.status, 200);
+  for (const [index, requestId] of [[1, 'history-large-create'], [2, 'history-large-delete']]) {
+    const committed = persistedPayloads[index], record = committed.masterSync.history.find(entry => entry.requestId === requestId);
+    assert.equal(record.valueTruncated, true, 'the lifecycle record is retained as a shortened copy');
+    assert.equal(record.actorSource, 'self-reported', 'persisted oversized create/delete records retain their attribution');
+    assert(historyBytes(committed.masterSync.history) <= maximumHistoryBytes);
+  }
+}
+
 const sql = await readFile(resolve('supabase/migrations/202610080001_private_master.sql'), 'utf8');
 for (const operation of ['read', 'bootstrap', 'commit', 'rate', 'presence', 'ack', 'failure']) {
   assert(sql.includes(`revoke all on function public.ppc_master_${operation}(jsonb) from public, anon, authenticated`));

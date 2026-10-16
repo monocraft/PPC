@@ -49,6 +49,10 @@ assert.deepEqual(model.resolveConflicts(plan, { cardPlacement: "master" }).cardP
     assert.equal(stored(result.manifest, id).imageAssetId, stored(manifest, id).imageAssetId);
   }
   assert.equal(result.savedProducts, 3, "all renumbered neighbors are represented in the atomic receipt");
+  const annotated = model.mergeChanges(manifest, [changeFor(manifest, "a", { laneId: "wireless", order: 2 })], { actorSource: "self-reported" });
+  assert.equal(annotated.history.length, result.history.length);
+  assert(annotated.history.every(record => record.actorSource === "self-reported"), "secondary lane renumbering receives attribution before history is bounded");
+  assert.deepEqual(model.snapshot(annotated.manifest).products, model.snapshot(result.manifest).products, "attribution preserves placement values and field revisions");
   assert.deepEqual(result.manifest.imageAssets, manifest.imageAssets);
   assert.equal(JSON.stringify(manifest), before);
   assert.throws(() => apply(manifest, [changeFor(manifest, "a", { laneId: "missing", order: 0 })]), /lane/);
