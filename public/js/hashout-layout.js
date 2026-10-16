@@ -106,12 +106,42 @@
     return glyphs;
   }
 
+  // Earliest-finish interval partitioning. Pack the full timeline before viewport
+  // clipping so panning never changes a product's track or category height.
+  function adaptiveTracks(items, gap) {
+    const heap = [], assignments = [];
+    const before = (a, b) => a.end < b.end || a.end === b.end && a.track < b.track;
+    const push = value => {
+      heap.push(value); let index = heap.length - 1;
+      while (index > 0) { const parent = (index - 1) >> 1; if (!before(heap[index], heap[parent])) break;
+        [heap[index], heap[parent]] = [heap[parent], heap[index]]; index = parent; }
+    };
+    const pop = () => {
+      const first = heap[0], last = heap.pop();
+      if (heap.length) { heap[0] = last; let index = 0;
+        for (;;) { let next = index, left = index * 2 + 1, right = left + 1;
+          if (left < heap.length && before(heap[left], heap[next])) next = left;
+          if (right < heap.length && before(heap[right], heap[next])) next = right;
+          if (next === index) break; [heap[index], heap[next]] = [heap[next], heap[index]]; index = next; }
+      }
+      return first;
+    };
+    let tracks = 0;
+    for (const item of [...items].sort((a, b) => a.visualX - b.visualX || a.visualRight - b.visualRight || a.entry.key.localeCompare(b.entry.key))) {
+      const track = heap.length && heap[0].end + gap <= item.visualX ? pop().track : tracks++;
+      assignments.push({ item, track }); push({ track, end: finite(item.packingRight, item.visualRight) });
+    }
+    return { assignments, tracks };
+  }
+
   function layout(sourceEntries, range, options = {}) {
     const entries = Array.isArray(sourceEntries) ? sourceEntries : [];
     const width = Math.max(0, finite(options.width, 960)), height = Math.max(0, finite(options.height, 640));
     const leftWidth = Math.min(width, Math.max(0, finite(options.leftWidth, 170)));
     const headerHeight = Math.min(height, Math.max(0, finite(options.headerHeight, 46)));
     const categories = categoryList(entries, options.categories || entries.categories);
+    const adaptive = options.adaptiveRows === true;
+    const rowHeight = Math.max(24, Math.min(48, finite(options.rowHeight, 38)));
     const laneHeight = categories.length ? Math.max(0, Math.min(finite(options.maxLaneHeight, 82), (height - headerHeight) / categories.length)) : 0;
     const horizonValid = validRange(range);
     const viewportStart = finite(options.viewportStart, horizonValid ? range.start : 0);
@@ -129,8 +159,9 @@
       entriesByKey.set(current.key, current);
       laneEntries.get(current.categoryId).push(current);
     }
+    let nextLaneY = headerHeight;
     for (const [index, category] of categories.entries()) {
-      const members = laneEntries.get(category.id), radius = Math.min(4.5, Math.max(1, laneHeight * .16), laneHeight / 2);
+      const members = laneEntries.get(category.id), radius = adaptive ? 4.5 : Math.min(4.5, Math.max(1, laneHeight * .16), laneHeight / 2);
       const lane = { categoryId: category.id, name: category.name, y: headerHeight + index * laneHeight, height: laneHeight,
         count: members.length, mappedCount: 0, visibleCount: 0, missingCount: 0, outsideCount: 0, offscreenCount: 0,
         missingEntries: [], outsideEntries: [], offscreenEntries: [], glyphs: [] };
@@ -147,19 +178,51 @@
         const fullX = point ? geometry.centerX : geometry.x;
         const fullWidth = point ? 0 : geometry.width;
         const fullRight = fullX + fullWidth;
-        if (monthWidth <= 0 || (point ? geometry.centerX < leftWidth || geometry.centerX > width : fullRight <= leftWidth || fullX >= width)) {
-          lane.offscreenEntries.push(entry); counts.offscreen += 1; continue;
-        }
+        const offscreen = monthWidth <= 0 || (point ? geometry.centerX < leftWidth || geometry.centerX > width : fullRight <= leftWidth || fullX >= width);
+        if (offscreen) { lane.offscreenEntries.push(entry); counts.offscreen += 1; if (!adaptive) continue; }
         const x = point ? geometry.centerX : Math.max(leftWidth, fullX);
         const right = point ? geometry.centerX : Math.min(width, fullRight);
-        positioned.push({ entry, kind: geometry.kind, x, width: right - x, fullX, fullWidth, centerX: geometry.centerX,
-          visualX: point ? x - radius : x, visualRight: point ? right + radius : right,
+        const visualX = adaptive ? fullX - (point ? radius : 0) : point ? x - radius : x;
+        const visualRight = adaptive ? fullRight + (point ? radius : 0) : point ? right + radius : right;
+        const nameWidth = options.labelWidths instanceof Map ? options.labelWidths.get(entry.key) : options.labelWidths?.[entry.key];
+        positioned.push({ entry, kind: geometry.kind, x, width: Math.max(0, right - x), fullX, fullWidth, centerX: geometry.centerX, offscreen,
+          packingRight: adaptive && Number.isFinite(nameWidth) ? Math.max(visualRight, visualX + nameWidth + 24) : visualRight,
+          visualX, visualRight,
           clippedBefore: geometry.clippedBefore || !point && fullX < leftWidth,
           clippedAfter: geometry.clippedAfter || !point && fullRight > width });
-        lane.visibleCount += 1; counts.visible += 1;
+        if (!offscreen) { lane.visibleCount += 1; counts.visible += 1; }
       }
       lane.missingCount = lane.missingEntries.length; lane.outsideCount = lane.outsideEntries.length; lane.offscreenCount = lane.offscreenEntries.length;
-      lane.glyphs = pack(positioned, lane, radius, Math.max(4, finite(options.collisionGap, 14)));
+      if (adaptive) {
+        const partition = adaptiveTracks(positioned, Math.max(4, finite(options.collisionGap, 14)));
+        const cohorts = [], cohortByKey = new Map();
+        // Each cohort has at most one product per track. Reused tracks at a
+        // different date therefore receive a separate local label column.
+        for (const { item, track } of partition.assignments) {
+          let cohort = cohorts[cohorts.length - 1];
+          const spread = cohort && (!cohort.windows || item.kind !== "window") && item.visualX - cohort.left > 32;
+          if (!cohort || spread || item.visualX > cohort.right + Math.max(14, monthWidth * .25) || cohort.tracks.has(track)) {
+            cohort = { key: item.entry.key, left: item.visualX, right: item.visualRight,
+              insideLeft: item.fullX, insideRight: item.fullX + item.fullWidth,
+              windows: item.kind === "window", tracks: new Set(), memberKeys: [] }; cohorts.push(cohort);
+          }
+          cohort.left = Math.min(cohort.left, item.visualX); cohort.right = Math.max(cohort.right, item.visualRight);
+          cohort.insideLeft = Math.max(cohort.insideLeft, item.fullX);
+          cohort.insideRight = Math.min(cohort.insideRight, item.fullX + item.fullWidth);
+          cohort.windows = cohort.windows && item.kind === "window";
+          cohort.tracks.add(track); cohort.memberKeys.push(item.entry.key); cohortByKey.set(item.entry.key, cohort);
+        }
+        lane.trackCount = Math.max(1, partition.tracks); lane.rowHeight = rowHeight;
+        lane.y = nextLaneY; lane.height = lane.trackCount * rowHeight + 12; nextLaneY += lane.height;
+        lane.glyphs = partition.assignments.filter(({ item }) => !item.offscreen).map(({ item, track }) => {
+          const glyph = glyphFor([item], track, lane, lane.trackCount, radius);
+          glyph.centerY = lane.y + 6 + (track + .5) * rowHeight; glyph.y = glyph.centerY - glyph.height / 2;
+          const cohort = cohortByKey.get(item.entry.key);
+          glyph.labelCohort = { key: cohort.key, left: cohort.left, right: cohort.right, windows: cohort.windows,
+            insideLeft: cohort.insideLeft, insideRight: cohort.insideRight, memberKeys: cohort.memberKeys };
+          return glyph;
+        });
+      } else lane.glyphs = pack(positioned, lane, radius, Math.max(4, finite(options.collisionGap, 14)));
       for (const glyph of lane.glyphs) {
         glyph.categoryId = category.id;
         if (glyph.type === "group") {
@@ -175,6 +238,7 @@
       lanes.push(lane);
     }
     return { width, height, leftWidth, headerHeight, monthWidth, viewportStart, viewportEnd, laneHeight, lanes, glyphs, counts, entriesByKey,
+      adaptiveRows: adaptive, rowHeight, contentHeight: adaptive ? Math.max(height, nextLaneY) : height,
       duplicates: entries.duplicates || [], rangeValid: horizonValid };
   }
 
@@ -383,9 +447,131 @@
     return Object.freeze(matches);
   }
 
+  function adaptiveLabels(map, measuredCandidates, options = {}) {
+    const mode = options.mode === "on" || options.mode === "off" ? options.mode : "default";
+    const padding = Math.max(0, finite(options.padding, 4)), gap = Math.max(0, finite(options.gap, 6));
+    const left = finite(map.leftWidth, 0) + padding, right = finite(map.width, 0) - padding;
+    const minimum = 32, edgeHysteresis = 24, cohorts = {}, output = [], lanes = [];
+    const previous = options.previousCohorts || {};
+    const overlap = (a, b) => a.x < b.x + b.width + gap && a.x + a.width + gap > b.x
+      && a.y < b.y + b.height + gap && a.y + a.height + gap > b.y;
+    const seen = new Set(), candidates = (Array.isArray(measuredCandidates) ? measuredCandidates : []).filter(candidate => {
+      if (!candidate?.key || seen.has(candidate.key) || !Number.isFinite(candidate.anchorY) || !Number.isFinite(candidate.width)) return false;
+      if (map.entriesByKey && map.entriesByKey.get(candidate.key)?.categoryId !== candidate.categoryId) return false;
+      seen.add(candidate.key); return true;
+    });
+    for (const lane of map.lanes || []) {
+      const laneCandidates = candidates.filter(candidate => candidate.categoryId === lane.categoryId);
+      const grouped = new Map();
+      for (const candidate of laneCandidates) {
+        const geometry = candidate.glyph?.labelCohort || { key: candidate.key, left: candidate.anchorX - 5, right: candidate.anchorX + 5 };
+        const key = JSON.stringify([lane.categoryId, geometry.key]);
+        if (!grouped.has(key)) grouped.set(key, { geometry, candidates: [] });
+        grouped.get(key).candidates.push(candidate);
+      }
+      const placements = [];
+      for (const [key, group] of grouped) {
+        const geometry = group.geometry;
+        const preferredWidth = Math.min(Math.max(0, right - left), Math.max(...group.candidates.map(candidate => finite(candidate.cohortWidth, candidate.width))));
+        const inside = geometry.windows && geometry.insideRight > geometry.insideLeft;
+        const rightStart = geometry.right + 8, leftEnd = geometry.left - 8;
+        const rightRoom = right - rightStart, leftRoom = leftEnd - left;
+        let side = inside ? "inside" : previous[key]?.side === "left" ? "left" : "right";
+        // A whole neighboring stack changes side only at an unreadable edge,
+        // and needs another 24px of room before it can change back.
+        if (side === "right" && rightRoom < minimum && leftRoom >= minimum + edgeHysteresis) side = "left";
+        else if (side === "left" && leftRoom < minimum && rightRoom >= minimum + edgeHysteresis) side = "right";
+        let x, available;
+        if (side === "inside") {
+          x = Math.max(left, Math.min(right - minimum, geometry.insideLeft + 6));
+          const within = Math.min(right, geometry.insideRight - 6) - x;
+          available = within >= minimum ? within : right - x;
+        } else if (side === "left") {
+          x = Math.max(left, Math.min(right - minimum, leftEnd - preferredWidth));
+          available = Math.min(right, leftEnd) - x;
+        } else {
+          x = Math.max(left, Math.min(right - minimum, rightStart)); available = right - x;
+        }
+        cohorts[key] = { side, x };
+        for (const candidate of group.candidates) {
+          const labelWidth = Math.max(0, Math.min(candidate.width, available));
+          const compact = candidate.compact || labelWidth < 112;
+          const labelHeight = compact ? Math.min(14, candidate.height) : candidate.height;
+          const y = candidate.anchorY - labelHeight / 2;
+          const top = Math.max(map.headerHeight + padding, lane.y + padding), bottom = Math.min(map.height - padding, lane.y + lane.height - padding);
+          if (labelWidth < minimum || y < top || y + labelHeight > bottom) continue;
+          placements.push({ ...candidate, x, y, width: labelWidth, height: labelHeight, compact,
+            placement: side, cohortKey: key, truncated: labelWidth < candidate.width });
+        }
+      }
+      const markerBounds = candidate => {
+        const glyph = candidate.glyph;
+        return glyph?.type === "window" ? { left: glyph.x, right: glyph.x + glyph.width }
+          : { left: finite(glyph?.centerX, candidate.anchorX) - finite(glyph?.radius, 5),
+            right: finite(glyph?.centerX, candidate.anchorX) + finite(glyph?.radius, 5) };
+      };
+      const constraints = new Map(), cohortStarts = new Map();
+      for (const candidate of placements) {
+        const own = markerBounds(candidate);
+        const neighbors = (lane.glyphs || []).filter(glyph => glyph !== candidate.glyph && glyph.track === candidate.glyph?.track
+          && !(glyph.labelCohort && candidate.glyph?.labelCohort && glyph.labelCohort.key === candidate.glyph.labelCohort.key)).map(glyph => ({ glyph, anchorX: glyph.centerX,
+            label: placements.find(other => glyph.memberKeys.includes(other.key)) })).sort((a, b) => a.anchorX - b.anchorX);
+        const prior = neighbors.filter(other => other.anchorX < candidate.anchorX).at(-1);
+        const next = neighbors.find(other => other.anchorX > candidate.anchorX);
+        let low = left, high = right;
+        if (prior) {
+          const marker = markerBounds(prior), free = Math.max(0, own.left - marker.right - 16);
+          const reserved = prior.label?.placement === "right" ? Math.min(prior.label.width, Math.max(minimum, free / 2)) : 0;
+          low = Math.max(low, marker.right + 8 + reserved + gap);
+        }
+        if (next) {
+          const marker = markerBounds(next), free = Math.max(0, marker.left - own.right - 16);
+          const reserved = next.label?.placement === "left" ? Math.min(next.label.width, Math.max(minimum, free / 2)) : 0;
+          high = Math.min(high, marker.left - 8 - reserved - gap);
+        }
+        constraints.set(candidate.key, { low, high });
+        cohortStarts.set(candidate.cohortKey, Math.max(cohortStarts.get(candidate.cohortKey) ?? candidate.x, candidate.x, low));
+      }
+      for (const candidate of placements) {
+        const limits = constraints.get(candidate.key), x = cohortStarts.get(candidate.cohortKey);
+        const ownEnd = candidate.placement === "left" ? markerBounds(candidate).left - 8 : right;
+        const end = Math.min(x + candidate.width, limits.high, ownEnd);
+        candidate.truncated ||= end - x < candidate.width;
+        candidate.x = x; candidate.width = Math.max(0, end - x);
+        if (cohorts[candidate.cohortKey]) cohorts[candidate.cohortKey].x = x;
+      }
+      const placed = [];
+      placements.sort((a, b) => finite(b.priority, 0) - finite(a.priority, 0) || a.anchorX - b.anchorX || String(a.key).localeCompare(String(b.key)));
+      if (mode !== "off") for (const candidate of placements) {
+        // Keep the baseline. A reused-track neighbor may limit the end of a
+        // label; it must never push a product name into another product's row.
+        const blockers = placed.filter(other => overlap(candidate, other)).sort((a, b) => a.x - b.x);
+        let end = candidate.x + candidate.width;
+        for (const other of blockers) { if (other.x <= candidate.x) { end = candidate.x; break; } end = Math.min(end, other.x - gap); }
+        const width = end - candidate.x;
+        if (width >= minimum) {
+          const glyph = candidate.glyph;
+          const glyphLeft = glyph?.type === "window" ? glyph.x : finite(glyph?.centerX, candidate.anchorX) - finite(glyph?.radius, 5);
+          const glyphRight = glyph?.type === "window" ? glyph.x + glyph.width : finite(glyph?.centerX, candidate.anchorX) + finite(glyph?.radius, 5);
+          const connector = candidate.placement === "inside" ? null : candidate.x - glyphRight > 12
+            ? { x1: glyphRight + 3, x2: candidate.x - 3, y: candidate.anchorY }
+            : glyphLeft - candidate.x - width > 12 ? { x1: candidate.x + width + 3, x2: glyphLeft - 3, y: candidate.anchorY } : null;
+          placed.push({ ...candidate, width, connector, compact: candidate.compact || width < 112, truncated: candidate.truncated || width < candidate.width });
+        }
+      }
+      placed.sort((a, b) => a.anchorX - b.anchorX || a.anchorY - b.anchorY || String(a.key).localeCompare(String(b.key)));
+      output.push(...placed);
+      const visibleCandidates = laneCandidates.filter(candidate => candidate.anchorY >= map.headerHeight && candidate.anchorY <= map.height);
+      lanes.push({ categoryId: lane.categoryId, enabled: placed.length > 0, complete: placed.length === visibleCandidates.length,
+        total: visibleCandidates.length, placed: placed.length, hiddenCount: Math.max(0, visibleCandidates.length - placed.length), fitCount: placed.length, forcedCount: 0 });
+    }
+    return { mode, labels: output, lanes, cohorts, hiddenCount: lanes.reduce((sum, lane) => sum + lane.hiddenCount, 0) };
+  }
+
   // Labels are a view-only annotation. Their measured rectangles may move near a
   // marker, but neither the marker nor its FFS geometry participates in packing.
   function labels(map, measuredCandidates, options = {}) {
+    if (map?.adaptiveRows) return adaptiveLabels(map, measuredCandidates, options);
     const mode = options.mode === "on" || options.mode === "off" ? options.mode : "default";
     const gap = Math.max(0, finite(options.gap, 6)), padding = Math.max(0, finite(options.padding, 4));
     const markerGap = Math.max(0, finite(options.markerGap, 5));
@@ -403,14 +589,15 @@
     // the viewport moves. Rank those ties explicitly rather than letting a
     // sub-pixel translation flip a name to the opposite side of its marker.
     const compareRank = (a, b) => Math.abs(a - b) <= 1e-6 ? 0 : a - b;
-    const placementPriority = { right: 0, left: 1, above: 2, below: 3 };
+    const placementPriority = { inside: -1, right: 0, left: 1, above: 2, below: 3 };
     const compareProposal = (a, b) => compareRank(a.cost, b.cost) || placementPriority[a.placement] - placementPriority[b.placement]
       || compareRank(a.y, b.y) || compareRank(a.x, b.x);
     const output = [], lanes = [];
     for (const lane of sourceLanes) {
       const candidates = candidatesByLane.get(lane.categoryId);
       const bounds = { left: finite(map.leftWidth, 0) + padding, right: finite(map.width, 0) - padding,
-        top: lane.y + padding, bottom: lane.y + lane.height - padding };
+        top: Math.max(lane.y + padding, map.adaptiveRows ? map.headerHeight + padding : -Infinity),
+        bottom: Math.min(lane.y + lane.height - padding, map.adaptiveRows ? map.height - padding : Infinity) };
       const obstacles = [], markerRadii = new Map();
       for (const glyph of lane.glyphs || []) {
         const clearance = glyph.type === "group" ? finite(glyph.badgeRadius, 9) + 2 : glyph.type === "window"
@@ -422,7 +609,7 @@
           obstacles.push({ x: glyph.x - 1, y: glyph.centerY - 5, width: glyph.width + 2, height: 10 });
         } else if (glyph.type === "window") {
           const halfHeight = Math.max(5, finite(glyph.radius, 4.5) * .68 + 2);
-          obstacles.push({ x: glyph.x - 2, y: glyph.centerY - halfHeight, width: glyph.width + 4, height: halfHeight * 2 });
+          obstacles.push({ key: glyph.memberKeys?.[0], x: glyph.x - 2, y: glyph.centerY - halfHeight, width: glyph.width + 4, height: halfHeight * 2 });
         } else {
           const radius = finite(glyph.radius, 4.5) + 4;
           obstacles.push({ x: glyph.centerX - radius, y: glyph.centerY - radius, width: radius * 2, height: radius * 2 });
@@ -438,6 +625,14 @@
         const rows = [anchorY - height / 2, anchorY - horizontal - height, anchorY + horizontal,
           anchorY - horizontal - height * 2 - gap, anchorY + horizontal + height + gap];
         const proposals = [], fallbacks = [], coordinates = new Set();
+        const windowGlyph = candidate.compact && candidate.glyph?.type === "window" ? candidate.glyph : null;
+        if (map.adaptiveRows && windowGlyph && width <= windowGlyph.width - 8) {
+          const rectangle = { x: windowGlyph.x + (windowGlyph.width - width) / 2, y: anchorY - height / 2, width, height };
+          if (rectangle.x >= bounds.left && rectangle.x + width <= bounds.right && rectangle.y >= bounds.top && rectangle.y + height <= bounds.bottom
+            && !obstacles.some(obstacle => obstacle.key !== candidate.key && overlaps(rectangle, obstacle, markerGap))) {
+            proposals.push({ ...rectangle, placement: "inside", cost: -1 });
+          }
+        }
         // Adjacent positions first; a few nearby rows handle small coincident
         // groups without spreading names across the map or moving their dates.
         for (const [row, requestedY] of rows.entries()) {
@@ -445,7 +640,8 @@
           // a centered text block. Keep adjacent text inside its lane while the
           // following obstacle test still protects every actual marker.
           const y = Math.max(bounds.top, Math.min(bounds.bottom - height, requestedY));
-          const starts = row === 0 ? [anchorX + horizontal, anchorX - horizontal - width]
+          const starts = row === 0 && windowGlyph ? [windowGlyph.x + windowGlyph.width + markerGap + 3, windowGlyph.x - markerGap - 3 - width]
+            : row === 0 ? [anchorX + horizontal, anchorX - horizontal - width]
             : [anchorX - width / 2, anchorX + horizontal, anchorX - horizontal - width];
           for (const x of starts) {
             const signature = `${x}:${y}`;
@@ -468,8 +664,9 @@
         fallbackChoices.set(candidate.key, fallbacks);
       }
       const byPosition = (a, b) => finite(a.anchorX, 0) - finite(b.anchorX, 0) || finite(a.anchorY, 0) - finite(b.anchorY, 0) || String(a.key).localeCompare(String(b.key));
-      const ordered = [...candidates].sort(byPosition);
-      const orders = [ordered, [...ordered].reverse(), [...ordered].sort((a, b) => choices.get(a.key).length - choices.get(b.key).length || b.width - a.width || byPosition(a, b))];
+      const priority = (a, b) => finite(b.priority, 0) - finite(a.priority, 0);
+      const ordered = [...candidates].sort((a, b) => priority(a, b) || byPosition(a, b));
+      const orders = map.adaptiveRows ? [ordered] : [ordered, [...ordered].reverse(), [...ordered].sort((a, b) => choices.get(a.key).length - choices.get(b.key).length || b.width - a.width || byPosition(a, b))];
       let packed = [], bestCost = Infinity;
       if (mode !== "off") for (const order of orders) {
         const placed = []; let cost = 0;
@@ -494,7 +691,7 @@
           if (scored.length) packed.push({ ...candidate, ...scored[0].position, forced: true });
         }
       }
-      const visible = mode === "off" || mode === "default" && !complete ? [] : packed;
+      const visible = mode === "off" || mode === "default" && !complete && !map.adaptiveRows ? [] : packed;
       visible.sort(byPosition); output.push(...visible);
       lanes.push({ categoryId: lane.categoryId, enabled: visible.length > 0, complete, total: candidates.length,
         placed: visible.length, hiddenCount: candidates.length - visible.length, fitCount,

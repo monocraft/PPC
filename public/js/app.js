@@ -26,7 +26,7 @@ const ROADMAP_LEFT_WIDTH = 190;
 const ROADMAP_CALENDAR_TOP = 40;
 const ROADMAP_HEADER_HEIGHT = ROADMAP_CALENDAR_TOP + 88;
 const ROADMAP_GROUP_HEADER_HEIGHT = 28;
-const ROADMAP_ROW_HEIGHT = 38;
+let ROADMAP_ROW_HEIGHT = globalThis.PortfolioRoadmapDensity?.getHeight() || 38;
 const ROADMAP_BOTTOM_PADDING = 24;
 const ROADMAP_MIN_BODY_HEIGHT = 156;
 const ROADMAP_CATEGORY_LABEL_FONT_SIZE = 13;
@@ -3535,16 +3535,21 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         roundRect(context, barX, barY, barWidth, barHeight, 3, color);
         context.restore();
 
-        context.save();
-        context.beginPath();
-        context.rect(barX + 8, barY, Math.max(0, barWidth - 16), barHeight);
-        context.clip();
-        context.fillStyle = PortfolioModel.productLabelColor(product, contrastTextColor(color));
-        context.font = `${portfolio?.settings?.showRoadmapMsrp ? "700 11px" : "700 12px"} ${UI_FONT_FACE}`;
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.fillText(roadmapProductBarLabel(product), barX + barWidth / 2, barY + barHeight / 2 + .5);
-        context.restore();
+        const labelBounds = exportMode ? { x: barX + 8, width: Math.max(0, barWidth - 16) }
+          : RoadmapInteraction.stickyLabelBounds(bar, { left: stickyX + ROADMAP_LEFT_WIDTH, right: stickyX + targetScroll.clientWidth - 24 });
+        if (labelBounds) {
+          context.save();
+          context.beginPath();
+          context.rect(labelBounds.x, barY, labelBounds.width, barHeight);
+          context.clip();
+          context.fillStyle = PortfolioModel.productLabelColor(product, contrastTextColor(color));
+          context.font = `${portfolio?.settings?.showRoadmapMsrp ? "700 11px" : "700 12px"} ${UI_FONT_FACE}`;
+          context.textAlign = exportMode ? "center" : "left";
+          context.textBaseline = "middle";
+          const label = roadmapProductBarLabel(product);
+          context.fillText(exportMode ? label : fitHashoutLabel(context, label, labelBounds.width), exportMode ? barX + barWidth / 2 : labelBounds.x, barY + barHeight / 2 + .5);
+          context.restore();
+        }
 
         // A fine outline and leading mark identify selection without a glow.
         if (selected) {
@@ -3635,12 +3640,14 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
         for (let column = 0; roadmapInteractionMode === "dates" && column < 2; column += 1) {
           for (let dot = 0; dot < 3; dot += 1) context.fillRect(stickyX + 54 + column * 3.5, y + 14 + dot * 4.5, 1.4, 1.4);
         }
-        context.font = ffsMode ? `600 11px ${UI_FONT_FACE}` : `10px ${UI_FONT_FACE}`;
+        context.font = ffsMode ? `600 11px ${UI_FONT_FACE}` : `11px ${UI_FONT_FACE}`;
         context.textAlign = "left";
         context.textBaseline = "middle";
         context.fillStyle = activeRow ? UI_PALETTE.whiteSmoke : UI_PALETTE.silver;
         const nameWidth = ROADMAP_LEFT_WIDTH - 73;
-        const nameLines = RoadmapInteraction.labelLines(product.name, nameWidth, (text) => context.measureText(text).width);
+        const nameLines = ROADMAP_ROW_HEIGHT < 28
+          ? [fitHashoutLabel(context, product.name, nameWidth)]
+          : RoadmapInteraction.labelLines(product.name, nameWidth, (text) => context.measureText(text).width);
         nameLines.forEach((line, lineIndex) => context.fillText(line, stickyX + 65, y + ROADMAP_ROW_HEIGHT / 2 + (lineIndex - (nameLines.length - 1) / 2) * 12));
       });
     }
@@ -3890,6 +3897,59 @@ function syncRoadmapNavigator(targetScroll, refs) {
   refs.left.disabled = !hasOverflow || current <= 1;
   refs.right.disabled = !hasOverflow || current >= max - 1;
   syncHorizontalOverview(targetScroll, refs.element, true);
+  syncVerticalRoadmapOverview(targetScroll);
+}
+
+const verticalRoadmapNavigators = new Map();
+function syncVerticalRoadmapOverview(targetScroll) {
+  const density = globalThis.PortfolioRoadmapDensity;
+  if (!density?.createNavigator || !targetScroll.clientHeight) return;
+  let controller = verticalRoadmapNavigators.get(targetScroll);
+  if (!controller) {
+    controller = density.createNavigator(targetScroll.parentElement, {
+      getState: () => {
+        const dimensions = roadmapDimensions(), targetCanvas = targetScroll.querySelector("canvas");
+        const total = dimensions.height - ROADMAP_HEADER_HEIGHT;
+        const rowCount = dimensions.groups.reduce((sum, group) => sum + group.products.length, 0);
+        return { total, visible: Math.max(1, targetScroll.clientHeight - ROADMAP_HEADER_HEIGHT),
+          offset: targetScroll.scrollTop, height: ROADMAP_ROW_HEIGHT,
+          rowCount, overhead: Math.max(0, total - rowCount * ROADMAP_ROW_HEIGHT),
+          items: (roadmapRowRegions.get(targetCanvas) || []).map(row => ({ y: row.y - ROADMAP_HEADER_HEIGHT, height: row.height, selected: row.productId === selectedId })) };
+      },
+      onPan: offset => { targetScroll.scrollTop = offset; },
+      onResize: ({ height, edge, anchor, initialHeight }) => density.setHeight(height, { edge, anchor, initialHeight, scrollId: targetScroll.id }),
+    });
+    verticalRoadmapNavigators.set(targetScroll, controller);
+  }
+  controller.update();
+}
+
+function changeRoadmapDensity(height, metadata = {}) {
+  const anchors = [roadmapScroll, splitRoadmapScroll].filter(scroll => scroll?.clientHeight).map(scroll => {
+    const resizing = metadata.scrollId === scroll.id && Number.isFinite(metadata.anchor);
+    let rows = roadmapRowRegions.get(scroll.querySelector("canvas")) || [];
+    if (resizing && Number.isFinite(metadata.initialHeight)) {
+      let y = ROADMAP_HEADER_HEIGHT;
+      rows = roadmapGroups().flatMap(group => {
+        y += ROADMAP_GROUP_HEADER_HEIGHT;
+        return group.products.map(product => { const row = { productId: product.id, y, height: metadata.initialHeight }; y += metadata.initialHeight; return row; });
+      });
+    }
+    const point = resizing ? metadata.anchor + ROADMAP_HEADER_HEIGHT : scroll.scrollTop + ROADMAP_HEADER_HEIGHT;
+    const selected = rows.find(row => row.productId === selectedId && row.y >= point && row.y + row.height <= scroll.scrollTop + scroll.clientHeight);
+    const row = resizing ? rows.find(row => row.y + row.height > point) || rows.at(-1) : selected || rows.find(row => row.y + row.height > point);
+    const fraction = resizing && row ? (point - row.y) / row.height : 0;
+    return { scroll, productId: row?.productId, fraction,
+      screenY: resizing ? metadata.edge === "top" ? scroll.clientHeight : ROADMAP_HEADER_HEIGHT : row ? row.y - scroll.scrollTop : ROADMAP_HEADER_HEIGHT };
+  });
+  ROADMAP_ROW_HEIGHT = height;
+  if (workspaceOpening || activeView === "products" || hasDedicatedHashoutView()) return;
+  renderRoadmaps();
+  for (const anchor of anchors) {
+    const row = (roadmapRowRegions.get(anchor.scroll.querySelector("canvas")) || []).find(row => row.productId === anchor.productId);
+    if (row) anchor.scroll.scrollTop = Math.max(0, row.y + anchor.fraction * row.height - anchor.screenY);
+    syncVerticalRoadmapOverview(anchor.scroll);
+  }
 }
 
 function scrollRoadmapSelected(targetScroll, smooth = true) {
@@ -9665,6 +9725,8 @@ document.getElementById("workspaceRecoveryRestore").onclick = async () => {
   catch (error) { document.getElementById("workspaceRecoveryStatus").textContent = error.message || "The backup was not restored. Your previous saved data has been kept."; }
   finally { setWorkspaceRecoveryBusy(false); }
 };
+globalThis.PortfolioRoadmapDensity?.subscribe(changeRoadmapDensity);
+globalThis.PortfolioRoadmapDensity?.attachControl(document.querySelector("#roadmapNavigationTools .view-tools"));
 startWorkspace();
 // A user Analytics click shares requested SKU/USD price fields only.
 void Promise.resolve(globalThis.PortfolioWorkspaceReady).then(() => {

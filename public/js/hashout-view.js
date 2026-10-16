@@ -68,10 +68,12 @@
     windowsKey.append(windowsSummary, windowsPanel); windowsControl.append(windowsToggle, windowsKey);
     toolbar.append(searchShell, labelControl, windowsControl, back, scopeCount);
     const stage = node("div", "hashout-stage");
+    const stageViewport = node("div", "hashout-stage-viewport");
+    const scrollSpace = node("div", "hashout-scroll-space"); scrollSpace.setAttribute("aria-hidden", "true");
     const canvas = node("canvas", "hashout-canvas");
     canvas.tabIndex = 0;
     canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", "Hashout category map. Hover a product to see its name and timing. Click a numbered group to expand its product circles on the roadmap. Arrow keys browse products; Enter expands a group or opens a product. Escape collapses the group. Drag to pan and use the zoom controls to change scale.");
+    canvas.setAttribute("aria-label", "Hashout category map. Products sharing a launch window occupy separate tracks. Arrow keys browse products; Enter opens a product. Scroll vertically through categories, drag to pan dates, and use the zoom controls to change the time scale.");
     const laneHoverClip = node("div", "hashout-lane-hover-clip"); laneHoverClip.setAttribute("aria-hidden", "true");
     const laneHover = node("div", "hashout-lane-hover-frame"); laneHoverClip.append(laneHover);
     const selectionEffects = node("div", "hashout-selection-effects"); selectionEffects.setAttribute("aria-hidden", "true");
@@ -99,7 +101,9 @@
     navRange.type = "range"; navRange.min = navRange.max = navRange.value = "0";
     navRange.setAttribute("aria-label", "Hashout horizontal position");
     navigator.append(navLeft, navRange, navRight);
-    stage.append(canvas, laneHoverClip, selectionGuide, selectionEffects, rail, empty, card, ring);
+    const verticalHost = node("div", "hashout-vertical-navigator");
+    stageViewport.append(canvas, laneHoverClip, selectionGuide, selectionEffects, rail, empty, card, ring, verticalHost);
+    stage.append(stageViewport, scrollSpace);
     shell.append(toolbar, stage, navigator, live);
     host.append(shell);
 
@@ -112,10 +116,13 @@
     let selectedKey = options.getSelectedKey?.() || null, hovered = null, hoverMemberKey = null, pinned = false, cardAnchor = null, cardEntries = [], hideTimer = 0, keyboardIndex = -1, drag = null, suppressClick = false;
     let railSignature = "", searchSignature = "", viewportSignature = "", suppressSearchFocus = false;
     let labelSignature = "", capsuleExpanded = false;
+    let nameWidthSignature = "", nameWidths = new Map();
     let hoveredCategoryId = null, lanePointer = null, laneHoverFrame = 0;
     let ringState = null, ringCloseTimer = 0, previousViewport = null;
     let navigatorProjection = [], navigatorProjectionEntries = null, navigatorProjectionSignature = "";
     let coarseInput = Boolean(root.matchMedia?.("(pointer: coarse)")?.matches), revealGeneration = 0, revealTimers = [], revealFrames = [];
+    let densityAnchor = null;
+    const densityHeight = () => root.PortfolioRoadmapDensity?.getHeight?.() || 38;
     const listen = (element, event, handler, config = {}) => element.addEventListener(event, handler, { ...config, signal: abort.signal });
     const theme = () => root.PortfolioTheme?.colors || { page: "#1A1B1C", surface: "#242527", header: "#333538", input: "#4D5054", text: "#D5D7DC", label: "#BBBCC0", alert: "#FF2525", borderStrong: "#676A70" };
     const alpha = (color, opacity) => root.PortfolioTheme?.alpha?.(color, opacity) || color;
@@ -183,7 +190,7 @@
         colors: theme(), fontFamily: root.PortfolioTheme?.cssFontFamily || font(),
         visible: span > 0 && width > leftWidth && height > headerHeight() && today >= viewport.start && today < viewport.end };
     };
-    const todayMarker = root.PortfolioTodayMarker?.create({ host: stage, eventTarget: stage, getGeometry: todayGeometry,
+    const todayMarker = root.PortfolioTodayMarker?.create({ host: stageViewport, eventTarget: stage, getGeometry: todayGeometry,
       isActive: () => !destroyed && host.isConnected && !host.closest(".hidden, [hidden]") });
 
     function normalizedRange() {
@@ -379,9 +386,11 @@
       rail.style.width = `${leftWidth}px`;
       rail.replaceChildren();
       for (const lane of layout.lanes) {
+        if (lane.y + lane.height < headerHeight() || lane.y > height) continue;
         const label = node("div", "hashout-lane-label");
         label.dataset.categoryId = lane.categoryId;
-        label.style.top = `${lane.y}px`; label.style.height = `${lane.height}px`;
+        const labelTop = Math.max(headerHeight(), lane.y), labelBottom = Math.min(height, lane.y + lane.height);
+        label.style.top = `${labelTop}px`; label.style.height = `${Math.max(0, labelBottom - labelTop)}px`;
         if (lane.height < 31) label.classList.add("is-compact");
         const heading = node("button", "hashout-lane-name", lane.name);
         heading.type = "button"; heading.title = `${lane.name} · ${lane.count} products`;
@@ -403,9 +412,10 @@
 
     function dimensions() {
       const rectangle = stage.getBoundingClientRect();
-      const nextWidth = Math.max(1, Math.round(rectangle.width)), nextHeight = Math.max(1, Math.round(rectangle.height));
+      const nextWidth = Math.max(1, stage.clientWidth), nextHeight = Math.max(1, Math.round(rectangle.height));
       if (width !== nextWidth || height !== nextHeight) { clearLaneHover(); windowsKey.open = false; }
       width = nextWidth; height = nextHeight;
+      stageViewport.style.height = `${height}px`;
       if (ringState && (ringState.width !== width || ringState.height !== height)) { closeRing(); closeCard(); clearTimeout(ringCloseTimer); ring.hidden = true; ring.replaceChildren(); ring.classList.remove("is-closing"); }
       leftWidth = width < 520 ? 112 : width < 800 ? 142 : 166;
       shell.style.setProperty("--hashout-plot-left", `${leftWidth}px`);
@@ -551,14 +561,20 @@
     }
 
     function updateLabels(context) {
-      const signature = JSON.stringify([labelMode, width, height, leftWidth, viewport, font(), layout.glyphs.map((glyph) => [glyph.categoryId, glyph.x, glyph.width, glyph.centerY, glyph.memberKeys]), entries.map((entry) => [entry.key, entry.product?.name, entry.period?.label, entry.stage])]);
+      const signature = JSON.stringify([labelMode, selectedKey, search.value, densityHeight(), width, height, leftWidth, viewport, font(), layout.glyphs.map((glyph) => [glyph.categoryId, glyph.x, glyph.width, glyph.centerY, glyph.memberKeys]), entries.map((entry) => [entry.key, entry.product?.name, entry.period?.label, entry.stage])]);
       if (signature === labelSignature) return;
       labelSignature = signature;
-      const candidates = [], seen = new Set(), maximumWidth = Math.min(270, Math.max(0, width - leftWidth - 12));
+      const candidates = [], seen = new Set(), cohortWidths = new Map(), maximumWidth = Math.min(270, Math.max(0, width - leftWidth - 12));
+      const compact = densityHeight() < 34;
+      const preferredWidth = entry => {
+        context.font = `500 11px ${font()}`; const name = context.measureText(entry.product?.name || "Unnamed product").width;
+        context.font = `10px ${font()}`; const date = context.measureText(entry.period?.label || "").width;
+        return Math.min(maximumWidth, Math.max(34, name) + (compact ? 8 : date + 36));
+      };
       for (const glyph of layout.glyphs) for (const entry of glyph.entries) {
         if (seen.has(entry.key) || !entry.period || maximumWidth < 72) continue;
         const source = glyph.type === "group" ? selectedOverlay(entry, glyph) : glyph;
-        if (!source || source.centerX < leftWidth || source.centerX > width) continue;
+        if (!source || source.type !== "window" && (source.centerX < leftWidth || source.centerX > width)) continue;
         seen.add(entry.key);
         const name = entry.product?.name || "Unnamed product", date = entry.period.label;
         context.font = `500 11px ${font()}`; const nameWidth = context.measureText(name).width;
@@ -567,9 +583,22 @@
         const chipWidth = Math.min(dateWidth + 14, labelWidth - 38);
         context.font = `500 11px ${font()}`; const nameText = fitLabelText(context, name, labelWidth - chipWidth - 22);
         context.font = `10px ${font()}`; const dateText = fitLabelText(context, date, chipWidth - 14);
-        candidates.push({ key: entry.key, categoryId: entry.categoryId, anchorX: source.centerX, anchorY: source.centerY, width: labelWidth, height: 28, markerRadius: source.radius || 5, name, date, nameText, dateText, chipWidth, entry, glyph: source });
+        const query = search.value.trim().toLowerCase();
+        const priority = entry.key === selectedKey ? 3 : query && searchText(entry).includes(query) ? 2 : 0;
+        const compactWidth = Math.min(maximumWidth, Math.max(34, nameWidth) + 8);
+        const cohort = source.labelCohort;
+        if (cohort && !cohortWidths.has(cohort.key)) cohortWidths.set(cohort.key, Math.max(...cohort.memberKeys.map(key => {
+          const member = layout.entriesByKey.get(key); return member ? preferredWidth(member) : 0;
+        })));
+        context.font = `500 11px ${font()}`;
+        const anchorX = source.type === "window" ? clamp(source.centerX, source.x, source.x + source.width) : source.centerX;
+        candidates.push({ key: entry.key, categoryId: entry.categoryId, anchorX, anchorY: source.centerY, cohortWidth: cohortWidths.get(cohort?.key),
+          width: compact ? compactWidth : labelWidth, height: compact ? 14 : 28, compact, priority,
+          markerRadius: source.radius || 5, name, date, nameText: compact ? fitLabelText(context, name, compactWidth - 8) : nameText,
+          dateText, chipWidth, entry, glyph: source });
       }
-      labelLayout = typeof root.PortfolioHashoutLayout.labels === "function" ? root.PortfolioHashoutLayout.labels(layout, candidates, { mode: labelMode, gap: 6, padding: 4, markerGap: 5 }) : { mode: labelMode, labels: [], lanes: [] };
+      labelLayout = typeof root.PortfolioHashoutLayout.labels === "function" ? root.PortfolioHashoutLayout.labels(layout, candidates,
+        { mode: labelMode, gap: 6, padding: 4, markerGap: 5, previousCohorts: labelLayout.cohorts }) : { mode: labelMode, labels: [], lanes: [] };
     }
 
     function drawLabels(context, focused, neutral) {
@@ -580,6 +609,19 @@
         const lane = layout.lanes.find((item) => item.categoryId === label.categoryId);
         if (lane) { context.beginPath(); context.rect(leftWidth, lane.y, width - leftWidth, lane.height); context.clip(); }
         const active = label.key === selectedKey || !neutral && label.key === hoverMemberKey;
+        if (label.connector) {
+          const { x1, x2, y } = label.connector;
+          context.strokeStyle = alpha(theme().label, active ? .4 : .22); context.lineWidth = 1;
+          context.beginPath(); context.moveTo(x1, y + .5); context.lineTo(x2, y + .5); context.stroke();
+        }
+        context.font = `500 11px ${font()}`;
+        const dateChipWidth = Math.min(label.chipWidth, Math.max(38, label.width * .45));
+        const nameOnly = label.compact || label.width - dateChipWidth - 22 < context.measureText(label.name).width;
+        if (nameOnly) {
+          context.font = `500 11px ${font()}`; context.fillStyle = active ? HASHOUT_SELECTION : theme().text;
+          context.textAlign = "left"; context.textBaseline = "middle";
+          context.fillText(fitLabelText(context, label.name, label.width - 8), label.x + 4, label.y + label.height / 2); context.restore(); continue;
+        }
         const surface = "#2A2F30", chip = active ? "#3B514C" : "#373C3D";
         context.fillStyle = surface; context.beginPath(); context.roundRect(label.x, label.y, label.width, label.height, 13); context.fill();
         // A short, filled tail identifies the source without introducing a
@@ -591,11 +633,11 @@
         else if (label.anchorY < label.y) { context.moveTo(tailX - 5, label.y + 1); context.lineTo(tailX, label.y - 5); context.lineTo(tailX + 5, label.y + 1); }
         else if (label.anchorY > label.y + label.height) { context.moveTo(tailX - 5, label.y + label.height - 1); context.lineTo(tailX, label.y + label.height + 5); context.lineTo(tailX + 5, label.y + label.height - 1); }
         context.closePath(); context.fill();
-        const chipX = label.x + label.width - label.chipWidth - 5;
-        context.fillStyle = chip; context.beginPath(); context.roundRect(chipX, label.y + 4, label.chipWidth, 20, 8); context.fill();
+        const chipWidth = Math.min(label.chipWidth, Math.max(38, label.width * .45)), chipX = label.x + label.width - chipWidth - 5;
+        context.fillStyle = chip; context.beginPath(); context.roundRect(chipX, label.y + 4, chipWidth, 20, 8); context.fill();
         context.textAlign = "left"; context.textBaseline = "middle";
-        context.font = `500 11px ${font()}`; context.fillStyle = active ? "#DDF8F0" : "#E6EBE9"; context.fillText(label.nameText, label.x + 11, label.y + 14);
-        context.font = `10px ${font()}`; context.fillStyle = active ? "#B5F1E3" : "#BDC8C4"; context.textAlign = "center"; context.fillText(label.dateText, chipX + label.chipWidth / 2, label.y + 14);
+        context.font = `500 11px ${font()}`; context.fillStyle = active ? "#DDF8F0" : "#E6EBE9"; context.fillText(fitLabelText(context, label.name, label.width - chipWidth - 22), label.x + 11, label.y + 14);
+        context.font = `10px ${font()}`; context.fillStyle = active ? "#B5F1E3" : "#BDC8C4"; context.textAlign = "center"; context.fillText(fitLabelText(context, label.date, chipWidth - 14), chipX + chipWidth / 2, label.y + 14);
         context.restore();
       }
     }
@@ -654,19 +696,43 @@
       if (destroyed || !horizon) return;
       const ratio = dimensions();
       if (width <= 1 || height <= 1) { todayMarker?.clear(); return; }
-      layout = root.PortfolioHashoutLayout.layout(entries, horizon, { width, height, leftWidth, headerHeight: headerHeight(), maxLaneHeight: height, viewportStart: viewport.start, viewportEnd: viewport.end });
+      const namesSignature = JSON.stringify([font(), entries.map(entry => [entry.key, entry.product?.name])]);
+      if (namesSignature !== nameWidthSignature) {
+        nameWidthSignature = namesSignature; const measure = canvas.getContext("2d"); measure.font = `500 11px ${font()}`;
+        nameWidths = new Map(entries.map(entry => [entry.key, Math.min(246, Math.max(34, measure.measureText(entry.product?.name || "Unnamed product").width) + 8)]));
+      }
+      layout = root.PortfolioHashoutLayout.layout(entries, horizon, { width, height, leftWidth, headerHeight: headerHeight(), adaptiveRows: true,
+        rowHeight: densityHeight(), labelWidths: nameWidths, viewportStart: viewport.start, viewportEnd: viewport.end });
+      scrollSpace.style.height = `${Math.max(0, layout.contentHeight - height)}px`;
+      if (densityAnchor) {
+        if (densityAnchor.categoryId) {
+          const lane = layout.lanes.find(item => item.categoryId === densityAnchor.categoryId);
+          if (lane) stage.scrollTop = Math.max(0, lane.y + 6 + densityAnchor.track * densityHeight() - densityAnchor.screenY);
+        } else {
+          const source = layout.glyphs.find(glyph => glyph.memberKeys.includes(densityAnchor.key));
+          if (source) stage.scrollTop = Math.max(0, source.centerY - densityAnchor.screenY);
+        }
+        densityAnchor = null;
+      }
+      const scrollTop = Math.min(stage.scrollTop, Math.max(0, layout.contentHeight - height));
+      layout.scrollTop = scrollTop;
+      for (const lane of layout.lanes) {
+        lane.worldY = lane.y; lane.y -= scrollTop;
+        for (const glyph of lane.glyphs) { glyph.worldCenterY = glyph.centerY; glyph.y -= scrollTop; glyph.centerY -= scrollTop; }
+      }
       const context = canvas.getContext("2d"); context.setTransform(ratio, 0, 0, ratio, 0, 0);
       const colors = theme(); context.fillStyle = colors.page; context.fillRect(0, 0, width, height);
       const focused = focusKeys(neutral);
       drawCalendar(context);
       context.save(); context.beginPath(); context.rect(leftWidth, headerHeight(), Math.max(0, width - leftWidth), Math.max(0, height - headerHeight())); context.clip();
       for (const [index, lane] of layout.lanes.entries()) {
+        if (lane.y + lane.height < headerHeight() || lane.y > height) continue;
         if (index % 2 === 0) { context.fillStyle = alpha(colors.label, .026); context.fillRect(leftWidth, lane.y, width - leftWidth, lane.height); }
         context.strokeStyle = alpha(colors.label, .065); context.beginPath(); context.moveTo(leftWidth, lane.y + lane.height - .5); context.lineTo(width, lane.y + lane.height - .5); context.stroke();
       }
-      drawLabels(context, focused, neutral);
       for (const lane of layout.lanes) {
         for (const glyph of lane.glyphs) {
+          if (glyph.centerY < headerHeight() - 15 || glyph.centerY > height + 15) continue;
           context.save(); if (focused && !glyph.memberKeys.some((key) => focused.has(key))) context.globalAlpha = .33;
           const activeGroup = !neutral && ringState && glyph.type === "group" && glyph.memberKeys.some((key) => ringState.entries.some((entry) => entry.key === key));
           drawGlyph(context, glyph, Boolean(activeGroup || glyph.type !== "group" && glyph.memberKeys.includes(selectedKey)), !neutral && sameGlyph(hovered, glyph)); context.restore();
@@ -680,6 +746,7 @@
         const hoverOverlay = hoverGroup && selectedOverlay(getEntry(hoverMemberKey), hoverGroup);
         if (hoverOverlay) drawGlyph(context, hoverOverlay, false, true);
       }
+      drawLabels(context, focused, neutral);
       context.restore();
       if (neutral) root.PortfolioTodayMarker?.drawStatic?.(context, todayGeometry(), new Date());
       else todayMarker?.sync();
@@ -689,8 +756,10 @@
       canvas.dataset.glyphCount = String(layout.glyphs.length); canvas.dataset.productCount = String(entries.length); canvas.dataset.categoryCount = String(layout.lanes.length);
       canvas.dataset.viewportStart = String(viewport.start); canvas.dataset.viewportEnd = String(viewport.end);
       canvas.dataset.labelMode = labelMode; canvas.dataset.labelCount = String(labelLayout.labels.length);
+      canvas.dataset.labelCohortCount = String(Object.keys(labelLayout.cohorts || {}).length);
       updateSelectionWave(); syncLaneHover();
       updateNavigator();
+      verticalNavigator?.update();
       empty.hidden = layout.lanes.length > 0;
       empty.textContent = allCategories.length ? "Choose categories to map your products." : "Add products to build your Hashout roadmap.";
       if (!card.hidden && cardAnchor) positionCard();
@@ -701,6 +770,39 @@
       if (destroyed || renderFrame) return;
       renderFrame = requestAnimationFrame(() => { renderFrame = 0; draw(); });
     }
+
+    function anchorDensity() {
+      if (!layout) return;
+      const selected = selectedKey && layout.glyphs.find(glyph => glyph.memberKeys.includes(selectedKey)
+        && glyph.centerY >= headerHeight() && glyph.centerY <= height);
+      const top = selected || layout.glyphs.filter(glyph => glyph.centerY >= headerHeight()).sort((a, b) => a.centerY - b.centerY)[0];
+      if (top) densityAnchor = { key: top.memberKeys[0], screenY: top.centerY };
+    }
+    const unsubscribeDensity = root.PortfolioRoadmapDensity?.subscribe?.((nextHeight, metadata = {}) => {
+      if (layout && !metadata.scrollId && Number.isFinite(metadata.anchor) && metadata.edge) {
+        const sourceHeight = Number.isFinite(metadata.initialHeight) ? metadata.initialHeight : layout.rowHeight;
+        let lane = null, laneTop = 0;
+        for (const item of layout.lanes) {
+          const laneSize = item.trackCount * sourceHeight + 12;
+          if (metadata.anchor >= laneTop && metadata.anchor <= laneTop + laneSize) { lane = item; break; }
+          laneTop += laneSize;
+        }
+        if (lane) densityAnchor = { categoryId: lane.categoryId, track: (metadata.anchor - laneTop - 6) / sourceHeight,
+          screenY: metadata.edge === "top" ? height : headerHeight() };
+        else anchorDensity();
+      } else anchorDensity();
+      closeCard(); closeRing(); requestRender();
+    });
+    const verticalNavigator = root.PortfolioRoadmapDensity?.createNavigator?.(verticalHost, {
+      getState: () => ({ total: Math.max(0, (layout?.contentHeight || height) - headerHeight()), visible: Math.max(0, height - headerHeight()),
+        offset: stage.scrollTop, height: densityHeight(), rowCount: layout?.lanes.reduce((sum, lane) => sum + (lane.trackCount || 1), 0) || 0,
+        overhead: Math.max(0, (layout?.contentHeight || height) - headerHeight()
+          - (layout?.lanes.reduce((sum, lane) => sum + (lane.trackCount || 1), 0) || 0) * densityHeight()),
+        items: layout?.glyphs.map(glyph => ({ y: glyph.worldCenterY - headerHeight() - densityHeight() / 2, height: densityHeight(), selected: glyph.memberKeys.includes(selectedKey) })) || [] }),
+      onPan: offset => { stage.scrollTop = offset; },
+      onResize: ({ height: nextHeight, edge, anchor, initialHeight }) => { root.PortfolioRoadmapDensity?.setHeight?.(nextHeight, { edge, anchor, initialHeight }); },
+    });
+    listen(stage, "scroll", () => { closeRing(false, true); closeCard(); clearLaneHover(); requestRender(); }, { passive: true });
 
     function point(event) { const rectangle = canvas.getBoundingClientRect(); return { x: event.clientX - rectangle.left, y: event.clientY - rectangle.top }; }
     function hit(position) {
@@ -1120,7 +1222,11 @@
         if (last + 1 < viewport.start || first > viewport.end) setViewport({ start: center - span / 2, end: center + span / 2 }, false);
       }
       draw();
-      const glyph = layout.glyphs.find((item) => item.memberKeys.includes(entry.key));
+      let glyph = layout.glyphs.find((item) => item.memberKeys.includes(entry.key));
+      if (glyph && (glyph.centerY < headerHeight() + 16 || glyph.centerY > height - 16)) {
+        stage.scrollTop += glyph.centerY - (headerHeight() + height) / 2; draw();
+        glyph = layout.glyphs.find((item) => item.memberKeys.includes(entry.key));
+      }
       const lane = layout.lanes.find((item) => item.categoryId === entry.categoryId);
       cardAnchor = glyph ? { x: entry.period && glyph.type === "group" ? selectedOverlay(entry, glyph)?.centerX ?? glyph.centerX : glyph.centerX, y: glyph.centerY } : { x: leftWidth + 8, y: lane ? lane.y + lane.height / 2 : 70 };
       selectEntry(entry);
@@ -1210,18 +1316,21 @@
     listen(canvas, "dblclick", (event) => { const glyph = hit(point(event)); if (glyph?.entries.length === 1) selectEntry(glyph.entries[0], { openDetails: true }); });
     listen(canvas, "wheel", (event) => {
       if (!viewport || event.ctrlKey) return;
-      event.preventDefault();
       // Navigation must remove the old screen-space orbit before the calendar itself moves.
       closeRing(false, true); closeCard();
-      if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) { const delta = (event.deltaX || event.deltaY) / Math.max(1, width - leftWidth) * (viewport.end - viewport.start); setViewport({ start: viewport.start + delta, end: viewport.end + delta }, false); }
-      else { const position = point(event); zoomScale(Math.exp(-clamp(event.deltaY, -80, 80) * .004), clamp((position.x - leftWidth) / Math.max(1, width - leftWidth), 0, 1), false); }
+      if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) { event.preventDefault(); const delta = (event.deltaX || event.deltaY) / Math.max(1, width - leftWidth) * (viewport.end - viewport.start); setViewport({ start: viewport.start + delta, end: viewport.end + delta }, false); }
     }, { passive: false });
     listen(canvas, "keydown", (event) => {
       if (event.key === "Escape") { closeCard(); closeRing(); return; }
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
         const candidates = layout?.glyphs || []; if (!candidates.length) return;
         keyboardIndex = clamp(keyboardIndex + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1), 0, candidates.length - 1);
-        const glyph = candidates[keyboardIndex]; hovered = glyph; showEntries(glyph.entries, { x: glyph.countLabelX ?? glyph.centerX, y: glyph.centerY }, true); live.textContent = glyph.entries.length === 1 ? `${glyph.entries[0].product?.name}, FFS ${glyph.entries[0].period?.label || "TBD"}` : `${glyph.entries.length} products in ${glyph.entries[0].categoryName}`; requestRender(); event.preventDefault();
+        let glyph = candidates[keyboardIndex];
+        if (glyph.centerY < headerHeight() + 16 || glyph.centerY > height - 16) {
+          const key = glyph.memberKeys[0]; stage.scrollTop += glyph.centerY - (headerHeight() + height) / 2; draw();
+          glyph = layout.glyphs.find(item => item.memberKeys.includes(key)) || glyph;
+        }
+        hovered = glyph; showEntries(glyph.entries, { x: glyph.countLabelX ?? glyph.centerX, y: glyph.centerY }, true); live.textContent = glyph.entries.length === 1 ? `${glyph.entries[0].product?.name}, FFS ${glyph.entries[0].period?.label || "TBD"}` : `${glyph.entries.length} products in ${glyph.entries[0].categoryName}`; requestRender(); event.preventDefault();
       }
       if (event.key === "Enter" || event.key === " ") { if (hovered?.type === "group") openRing(hovered, true); else if (!card.hidden) card.querySelector("button.hashout-product-result, .hashout-card-actions button, button")?.focus(); event.preventDefault(); }
       if (event.key === "+" || event.key === "=") { zoomBy(1); event.preventDefault(); }
@@ -1241,20 +1350,25 @@
       const context = image.getContext("2d"), ratio = canvas.width / width; context.drawImage(canvas, 0, 0); context.scale(ratio, ratio);
       context.fillStyle = theme().surface; context.fillRect(0, headerHeight(), leftWidth, height - headerHeight());
       for (const lane of layout.lanes) {
-        context.save(); context.beginPath(); context.rect(8, lane.y, leftWidth - 16, lane.height); context.clip(); context.fillStyle = theme().text; context.font = `500 11px ${font()}`; context.textAlign = "left"; context.textBaseline = "middle";
+        const top = Math.max(headerHeight(), lane.y), bottom = Math.min(height, lane.y + lane.height);
+        if (bottom <= top) continue;
+        const center = (top + bottom) / 2;
+        context.save(); context.beginPath(); context.rect(8, top, leftWidth - 16, bottom - top); context.clip(); context.fillStyle = theme().text; context.font = `500 11px ${font()}`; context.textAlign = "left"; context.textBaseline = "middle";
         let label = lane.name; while (label.length > 1 && context.measureText(label).width > leftWidth - 35) label = label.slice(0, -2) + "…";
-        context.fillText(label, 13, lane.y + lane.height / 2); context.fillStyle = theme().label; context.font = `10px ${font()}`; context.textAlign = "right"; context.fillText(String(lane.count), leftWidth - 9, lane.y + lane.height / 2); context.restore();
+        context.fillText(label, 13, center); context.fillStyle = theme().label; context.font = `10px ${font()}`; context.textAlign = "right"; context.fillText(String(lane.count), leftWidth - 9, center); context.restore();
       }
       draw();
       return new Promise((resolve, reject) => image.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not create the Hashout image.")), "image/png"));
     }
     const resize = new ResizeObserver(() => { if (!destroyed) requestRender(); }); resize.observe(stage);
-    const refreshFontMeasurements = () => { if (!destroyed) { labelSignature = ""; requestRender(); } };
+    const refreshFontMeasurements = () => { if (!destroyed) { labelSignature = ""; nameWidthSignature = ""; requestRender(); } };
     if (document.fonts?.ready) void document.fonts.ready.then(refreshFontMeasurements);
     if (document.fonts?.addEventListener) listen(document.fonts, "loadingdone", refreshFontMeasurements);
     refreshData(); requestRender();
     return Object.freeze({
       render, fit, zoomBy, today, focusProduct, exportPng, setScope: chooseScope,
+      fitRows() { if (!layout) draw(); const tracks = layout?.lanes.reduce((sum, lane) => sum + lane.trackCount, 0) || 1;
+        root.PortfolioRoadmapDensity?.setHeight?.(clamp((height - headerHeight() - (layout?.lanes.length || 0) * 12) / tracks, 24, 48)); },
       closeOverlay() { closeCard(); closeRing(); clearLaneHover(); },
       getViewport() { return viewport ? { ...viewport, zoom: horizon.count / (viewport.end - viewport.start) } : null; },
       setSearch(value) { search.value = String(value || ""); searchSignature = ""; updateSearch(); },
@@ -1264,7 +1378,7 @@
           counts: layout?.counts || {}, entries, layout, labelMode, labelLayout, windowsVisible, seasonalWindows, seasonalBands, windowMatches: Object.fromEntries(entries.map((entry) => [entry.key, targetMatches(entry.period)])), hoveredCategoryId, sourcePulseKey: selectionWave.hidden ? null : selectionWave.dataset.productKey, sourceGuideKey: selectionGuide.hidden ? null : selectionGuide.dataset.productKey, focusKeys: focused ? [...focused] : null, previousViewport: previousViewport ? { ...previousViewport } : null,
           ring: ringState ? { ...ringState.geometry, open: true, page: ringState.page, pageSize: ringState.pageSize, radius: ringState.radius, activeKey: ringState.activeKey, selectedKey: ringState.selectedKey, animationDuration: ringState.animationDuration, staggerMs: RING_STAGGER_MS, motionMs: RING_MOTION_MS, memberKeys: ringState.entries.map((entry) => entry.key) } : { open: false } };
       },
-      destroy() { destroyed = true; todayMarker?.destroy(); clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); overview?.destroy(); abort.abort(); shell.remove(); },
+      destroy() { destroyed = true; unsubscribeDensity?.(); verticalNavigator?.destroy(); todayMarker?.destroy(); clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); overview?.destroy(); abort.abort(); shell.remove(); },
     });
   }
 
