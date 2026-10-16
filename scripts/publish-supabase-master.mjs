@@ -101,7 +101,7 @@ async function unpack(bytes, packageKey) {
     plaintext = await codec.decrypt(bytes, packageKey);
     const entries = codec.readZip(plaintext);
     const data = entries.get('portfolio.json');
-    if (!data || data.length > 4 * 1024 * 1024) throw failure('INVALID_MANIFEST');
+    if (!data || data.length > 8 * 1024 * 1024) throw failure('INVALID_MANIFEST');
     const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
     validateManifest(manifest, entries);
     return { entries, manifest };
@@ -294,7 +294,7 @@ export function createSupabasePublisher(options = {}) {
           nextManifest.masterSync.supabasePublication = { version: 1, source: endpoint, sourceSha: target.sourceSha,
             revision: target.revision, manifestDigest: expectedDigest, assetDigest: assetDigest(projected.entries) };
           const manifestBytes = new TextEncoder().encode(JSON.stringify(nextManifest));
-          if (manifestBytes.length > 4 * 1024 * 1024) throw failure('MASTER_TOO_LARGE');
+          if (manifestBytes.length > 8 * 1024 * 1024) throw failure('MASTER_TOO_LARGE');
           let plaintext, encrypted;
           try {
             plaintext = codec.createZip([...projected.entries].map(([name, bytes]) => ({ name, data: name === 'portfolio.json' ? manifestBytes : bytes })));

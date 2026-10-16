@@ -33,6 +33,29 @@
     ["dda74ba64bde65b60f5a", { imageWidth: 800, imageHeight: 600, bounds: { x: 236, y: 46, width: 328, height: 417 } }],
     ["6dc9b5f8a5b0c6292a31", { imageWidth: 800, imageHeight: 600, bounds: { x: 184, y: 77, width: 464, height: 446 } }],
     ["a42c61a2f4b886d31b14", { imageWidth: 480, imageHeight: 480, bounds: { x: 81, y: 73, width: 340, height: 324 } }],
+    ["87588e15eb1e4af72e95", { imageWidth: 800, imageHeight: 600, bounds: { x: 209, y: 32, width: 382, height: 292 } }],
+    ["b98ba5e4f28bab3bba3c", { imageWidth: 800, imageHeight: 600, bounds: { x: 207, y: 31, width: 384, height: 295 } }],
+    ["ec77fb7a1cf39bfe3de1", { imageWidth: 800, imageHeight: 600, bounds: { x: 228, y: 39, width: 344, height: 264 } }],
+    ["24b4ad3518144435d863", {"imageWidth":800,"imageHeight":600,"bounds":{"x":240,"y":60,"width":321,"height":418}}],
+    ["6d0df09164305161e01f", {"imageWidth":800,"imageHeight":600,"bounds":{"x":235,"y":61,"width":330,"height":388}}],
+    ["8fa74053951cb5cdd123", {"imageWidth":800,"imageHeight":600,"bounds":{"x":235,"y":61,"width":330,"height":388}}],
+    ["1b6bab9f00f131de61c4", {"imageWidth":800,"imageHeight":600,"bounds":{"x":237,"y":60,"width":326,"height":390}}],
+    ["be3121a491218d77cd41", {"imageWidth":800,"imageHeight":600,"bounds":{"x":230,"y":63,"width":338,"height":440}}],
+    ["ceaf93a66b28255c7a42", {"imageWidth":800,"imageHeight":600,"bounds":{"x":230,"y":63,"width":338,"height":440}}],
+    ["8fcb84c598219588505e", {"imageWidth":800,"imageHeight":600,"bounds":{"x":220,"y":54,"width":360,"height":404}}],
+    ["2c96ab14db92bf59a6cc", {"imageWidth":800,"imageHeight":600,"bounds":{"x":244,"y":67,"width":311,"height":395}}],
+    ["9c19e46d2c7b20065e5f", {"imageWidth":800,"imageHeight":600,"bounds":{"x":231,"y":61,"width":371,"height":406}}],
+    ["4f0a165294bebc40315b", {"imageWidth":800,"imageHeight":600,"bounds":{"x":181,"y":42,"width":437,"height":493}}],
+    ["4b11472a46493ccc8cd4", {"imageWidth":800,"imageHeight":600,"bounds":{"x":212,"y":73,"width":376,"height":432}}],
+    ["3c13bf1e5ffc9eb6c2f4", {"imageWidth":800,"imageHeight":600,"bounds":{"x":200,"y":48,"width":401,"height":427}}],
+    ["8d94eca63cd0c5d37c5c", {"imageWidth":800,"imageHeight":600,"bounds":{"x":210,"y":45,"width":420,"height":414}}],
+    ["80819fd14a36e0158e1b", {"imageWidth":800,"imageHeight":600,"bounds":{"x":210,"y":45,"width":420,"height":412}}],
+    ["99630729ffa7913b8e1a", {"imageWidth":800,"imageHeight":600,"bounds":{"x":210,"y":45,"width":420,"height":416}}],
+    ["15331691796cb2198ec8", {"imageWidth":800,"imageHeight":600,"bounds":{"x":162,"y":97,"width":477,"height":393}}],
+    ["f9fcdf6b9e491ba66a04", {"imageWidth":800,"imageHeight":600,"bounds":{"x":208,"y":44,"width":439,"height":411}}],
+    ["ef75421ece2ec3e458ad", {"imageWidth":800,"imageHeight":600,"bounds":{"x":209,"y":44,"width":431,"height":414}}],
+    ["fe048ee5d022244a0e26", {"imageWidth":800,"imageHeight":600,"bounds":{"x":161,"y":97,"width":478,"height":393}}],
+    ["839c976e36810a16289b", {"imageWidth":800,"imageHeight":600,"bounds":{"x":209,"y":44,"width":438,"height":411}}],
   ]);
   const usesAudioFraming = (categoryId, product = null) => audioCategories.has(categoryId)
     && !(product && /earbuds|earphones|cirro|\bbuds?\d*/i.test(String(product.name || "")));
@@ -56,6 +79,19 @@
     ["bb8b8a030a09cf3c2fcf", { imageWidth: 800, imageHeight: 600 }],
     ["bc4abe5f0d72502a7d5b", { imageWidth: 800, imageHeight: 600 }],
     ["eab95aabb27d4e94ec3f", { imageWidth: 800, imageHeight: 600 }],
+    ["98647d2b0b35f76ab3e7", {"imageWidth":800,"imageHeight":600,"bounds":{"x":215,"y":239,"width":409,"height":145}}],
+    ["9aeaf7db0b5eff3cbf9a", {"imageWidth":800,"imageHeight":600,"bounds":{"x":204,"y":230,"width":423,"height":154}}],
+    ["9f7387bb733cc6172698", {"imageWidth":800,"imageHeight":600,"bounds":{"x":218,"y":236,"width":431,"height":150}}],
+    ["0ab99cb90a3dd8703e1d", {"imageWidth":800,"imageHeight":600,"bounds":{"x":208,"y":253,"width":416,"height":132}}],
+    ["db2479682e64485ad5cc", {"imageWidth":800,"imageHeight":600,"bounds":{"x":207,"y":252,"width":420,"height":133}}],
+    ["f5aa0846f8f212d49cb7", {"imageWidth":800,"imageHeight":600,"bounds":{"x":207,"y":253,"width":417,"height":131}}],
+    ["d6b4c549c567333c36ea", {"imageWidth":800,"imageHeight":600,"bounds":{"x":207,"y":253,"width":417,"height":132}}],
+    ["c5d2ad976c221a6bb8bd", {"imageWidth":800,"imageHeight":600,"bounds":{"x":207,"y":253,"width":417,"height":132}}],
+    ["52816df28c8ac4d93a44", {"imageWidth":800,"imageHeight":600,"bounds":{"x":212,"y":254,"width":412,"height":131}}],
+    ["6fad9b26143512f5855c", {"imageWidth":800,"imageHeight":600,"bounds":{"x":211,"y":254,"width":413,"height":131}}],
+    ["40cdb4109f76cc054599", {"imageWidth":800,"imageHeight":600,"bounds":{"x":212,"y":237,"width":433,"height":149}}],
+    ["a778ecd9b63b33075d88", {"imageWidth":800,"imageHeight":600,"bounds":{"x":221,"y":242,"width":407,"height":144}}],
+    ["d148705da03b64b8db4c", {"imageWidth":800,"imageHeight":600,"bounds":{"x":200,"y":236,"width":400,"height":129}}],
   ]);
   const mouseProfile = assetName => mouseProfiles.get(String(assetName).match(/^.+-([a-f0-9]{20})\.png$/)?.[1]);
   const usesMouseFraming = (categoryId, assetName = "") => categoryId === "mice" && Boolean(mouseProfile(assetName));
@@ -77,6 +113,15 @@
     ["f44cfd84f8d86580f401", { imageWidth: 800, imageHeight: 600, bounds: { x: 213, y: 232, width: 374, height: 137 } }],
     ["fc61d8ec11bbbbb2636e", { imageWidth: 800, imageHeight: 600, bounds: { x: 173, y: 212, width: 454, height: 166 } }],
     ["fd3ed8b9b1e16f54d526", { imageWidth: 800, imageHeight: 600, bounds: { x: 153, y: 196, width: 495, height: 189 } }],
+    ["2a010746506817f2b3cc", {"imageWidth":800,"imageHeight":600,"bounds":{"x":143,"y":204,"width":516,"height":205}}],
+    ["83e81b52939b8f0a2c81", {"imageWidth":800,"imageHeight":600,"bounds":{"x":143,"y":189,"width":515,"height":201}}],
+    ["a3e4266bf49fd8f2ba77", {"imageWidth":1659,"imageHeight":1246,"bounds":{"x":319,"y":395,"width":1021,"height":393}}],
+    ["d498c233813592784512", {"imageWidth":800,"imageHeight":600,"bounds":{"x":141,"y":225,"width":518,"height":194}}],
+    ["8dedc91132aaa29abd1a", {"imageWidth":800,"imageHeight":600,"bounds":{"x":146,"y":223,"width":508,"height":155}}],
+    ["5213d971e1c6babe93b7", {"imageWidth":800,"imageHeight":600,"bounds":{"x":151,"y":209,"width":498,"height":183}}],
+    ["7fb6dced3bbb35ce5b56", {"imageWidth":800,"imageHeight":600,"bounds":{"x":130,"y":216,"width":540,"height":168}}],
+    ["83396b9931a705a2a0f1", {"imageWidth":800,"imageHeight":600,"bounds":{"x":151,"y":216,"width":498,"height":155}}],
+    ["762b1cdc718c33a64549", {"imageWidth":800,"imageHeight":600,"bounds":{"x":152,"y":216,"width":496,"height":155}}],
   ]);
   const keyboardProfile = assetName => keyboardProfiles.get(String(assetName).match(/^.+-([a-f0-9]{20})\.png$/)?.[1]);
   const usesKeyboardFraming = (categoryId, assetName = "") => categoryId === "keyboards" && Boolean(keyboardProfile(assetName));
@@ -131,8 +176,19 @@
     ["controllers:8B1S0AA-4369df6f55e6e63a477e.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":213,"y":92,"width":374,"height":348},"body":{"x":215,"y":94,"width":370,"height":344},"axis":"width","relativeSize":0.4344781593864622}],
   ]);
 
+  // New reviewed catalogue originals use source-content suffixes, so deduplicated
+  // regional aliases share geometry without publishing a private SKU mapping.
+  const scaledContentProfiles = new Map([
+    ["microphones:21edd9f2c4a46e7a066d", {"imageWidth":800,"imageHeight":600,"bounds":{"x":303,"y":54,"width":194,"height":394},"body":{"x":305,"y":56,"width":190,"height":390},"axis":"height","relativeSize":0.7798507462686567}],
+    ["microphones:2a62ec53910c1d8f3e7e", {"imageWidth":800,"imageHeight":600,"bounds":{"x":296,"y":44,"width":208,"height":508},"body":{"x":298,"y":46,"width":204,"height":504},"axis":"height","relativeSize":0.9328358208955224}],
+    ["microphones:3189a46f1f1b14abb5e6", {"imageWidth":800,"imageHeight":600,"bounds":{"x":299,"y":54,"width":202,"height":492},"body":{"x":301,"y":56,"width":198,"height":488},"axis":"height","relativeSize":0.9328358208955224}],
+    ["microphones:9370f2ecbf65def8272a", {"imageWidth":800,"imageHeight":600,"bounds":{"x":289,"y":52,"width":222,"height":504},"body":{"x":291,"y":54,"width":218,"height":500},"axis":"height","relativeSize":0.6492537313432836}],
+    ["controllers:011712aaaadf719e11f7", {"imageWidth":800,"imageHeight":600,"bounds":{"x":171,"y":146,"width":458,"height":308},"body":{"x":173,"y":148,"width":454,"height":304},"axis":"width","relativeSize":0.5188396132044015}],
+  ]);
+
   function scaledProfile(categoryId, assetName, assetId) {
-    const profile = scaledProfiles.get(`${categoryId}:${assetName}`);
+    const profile = scaledProfiles.get(`${categoryId}:${assetName}`)
+      || scaledContentProfiles.get(`${categoryId}:${String(assetName).match(/^.+-([a-f0-9]{20})\.png$/)?.[1]}`);
     return profile && (!profile.assetIds || profile.assetIds.includes(assetId)) ? profile : null;
   }
 

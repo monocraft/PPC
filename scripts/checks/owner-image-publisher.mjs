@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {harness,unpacked,packageKey,original}from'./supabase-publisher.mjs';
 import {canonical,digest,imageBinding,scopedImageDigest,projectOwnerImages}from'../owner-image-layer.mjs';
+import {checkOwnerImageRetirement}from'./owner-image-retirement.mjs';
 const codec=globalThis.PortfolioPackage,clone=structuredClone,commit='c'.repeat(40),newBytes=Uint8Array.of(137,80,78,71,19,23);
 const product=m=>m.categories[0].board.products[0];
 function makeInput(base,seed,{bytes=newBytes,id='owner-hero',variantId=null,featured='',assignments,foreign=false}={}){
@@ -65,4 +66,5 @@ for(const failure of ['loseWriteReply','failDeploy','failAck']){
  const removedVariant=clone(manifest);product(removedVariant).variantGroups=[];const withoutVariant=projectOwnerImages(removedVariant,two.manifest,two.entries,{sourceSha:seed});assert.equal(product(withoutVariant.manifest).featuredVariantId,'','a removed colorway cannot remain the default');assert.equal(withoutVariant.retired,1);
  const removed=clone(manifest);removed.categories[0].board.products=[];const retired=projectOwnerImages(removed,two.manifest,two.entries,{sourceSha:seed});assert.equal(retired.manifest.categories[0].board.products.length,0,'future canonical deletion is never resurrected');assert.equal(retired.retired,2);
 }
-console.log('Owner image publisher checks passed: immutable scoped input, source identity, same-revision updates, canonical fact preservation, complete archive retention, byte deduplication, future overlay/deletion, partial defaults, stale rejection, races and lost-response recovery.');
+await checkOwnerImageRetirement({harness,unpacked,encrypted,makeInput});
+console.log('Owner image publisher checks passed: immutable scoped input, source identity, same-revision updates, canonical fact preservation, complete archive retention by default, explicit unassigned-image retirement, byte deduplication, future overlay/deletion, partial defaults, stale rejection, races and lost-response recovery.');

@@ -42,11 +42,11 @@ function targetFor(manifest = original, patch = { ffsDate: '2026-12-10' }) {
     { requestId: 'fixture-request-one', now: '2026-10-08T00:00:00.000Z', actor: 'Optional name' }).manifest;
 }
 
-export async function harness({ seeded = true, revision = 1, cacheMode = 'match', extraAssetBytes = 0 } = {}) {
+export async function harness({ seeded = true, revision = 1, cacheMode = 'match', extraAssetBytes = 0, initialManifest = original } = {}) {
   const extra = extraAssetBytes ? new Uint8Array(extraAssetBytes).fill(37) : attachment;
-  const initial = await packed(original, extra), blobs = new Map([[sha(initial), initial]]);
+  const initial = await packed(initialManifest, extra), blobs = new Map([[sha(initial), initial]]);
   const candidateRefs = new Map();
-  let current = sha(initial), manifest = revision ? targetFor() : clone(original), storageRevision = revision;
+  let current = sha(initial), manifest = revision ? targetFor(initialManifest) : clone(initialManifest), storageRevision = revision;
   const commits = new Map(), trees = new Map(); let sequence = 0, head, codeVersion = 0;
   const objectId = kind => createHash('sha1').update(`${kind}:${++sequence}`).digest('hex');
   function moveHead(blob = current) { const tree = objectId('tree'), commit = objectId('commit'); trees.set(tree, { blob, codeVersion }); commits.set(commit, { tree, parent: head }); head = commit; current = blob; }
@@ -291,4 +291,25 @@ for (const cacheMode of ['missing', 'unavailable', 'corrupt', 'short']) {
   assert.equal(h.calls.filter(call => call.operation === 'put').length, 0);
   assert.equal(h.acknowledgements.length, 0);
 }
-console.log('Publisher transport integration checks passed: immutable-head guard, code/package races and exact-blob confirmation of ambiguous pushes.');
+{
+  const expanded = clone(original); expanded.ownerEvidence = 'E'.repeat(5 * 1024 * 1024);
+  const h = await harness({ initialManifest: expanded });
+  assert.equal((await h.publisher.publish()).status, 'published');
+  const value = await unpacked(h.bytes);
+  assert.equal(value.manifest.ownerEvidence.length, expanded.ownerEvidence.length);
+  assert.equal(value.manifest.ownerEvidence, expanded.ownerEvidence, 'publisher preserves complete existing evidence above the old 4 MiB ceiling');
+  assert.deepEqual(value.entries.get('images/hero.webp'), image);
+  assert.deepEqual(value.entries.get('attachments/extra.bin'), attachment);
+  assert(value.entries.get('portfolio.json').length > 4 * 1024 * 1024 && value.entries.get('portfolio.json').length < 8 * 1024 * 1024);
+  assert.equal(h.calls.filter(c => c.operation === 'put').length, 1);
+  assert.equal(h.acknowledgements.length, 1);
+}
+{
+  const expanded = clone(original); expanded.ownerEvidence = '';
+  expanded.ownerEvidence = 'E'.repeat(8 * 1024 * 1024 - 32 - Buffer.byteLength(JSON.stringify(expanded)));
+  const h = await harness({ initialManifest: expanded }), before = h.bytes;
+  await assert.rejects(h.publisher.publish(), error => error.code === 'MASTER_TOO_LARGE');
+  assert.deepEqual(h.bytes, before, 'growth beyond 8 MiB does not replace the encrypted package');
+  assert.equal(h.calls.filter(c => ['put', 'deploy', 'ack'].includes(c.operation)).length, 0, 'oversized publication is rejected before any write/deploy/ack');
+}
+console.log('Publisher transport integration checks passed: immutable-head guard, code/package races, exact-blob confirmation of ambiguous pushes and bounded 8 MiB manifests.');
