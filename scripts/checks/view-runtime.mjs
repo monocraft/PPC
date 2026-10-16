@@ -396,6 +396,27 @@ suspended = true; cardScroll.fire("pointermove", { clientX: 350, clientY: 150 })
 suspended = false; owner = "new"; cardScroll.fire("pointermove", { clientX: 140, clientY: 150 }); flush(); assert.equal(hover.style.opacity, "0");
 assert.equal(JSON.stringify(cards), unchangedCards);
 
+// A discontinued card dissolves once on entry, not on pointer jitter or redraw.
+cards[0].discontinued = true;
+cardScroll.fire("pointermove", { clientX: 140, clientY: 150, pointerType: "mouse" }); flush(); flush();
+assert.equal(hover.style.opacity, ".4");
+assert.equal(hover.children.length, 16, "one reused particle pool serves every card");
+assert.equal(hover.classList.contains("is-disintegrating"), true);
+let restarts = 0;
+const addHoverClass = hover.classList.add;
+hover.classList.add = name => { if (name === "is-disintegrating") restarts++; addHoverClass(name); };
+for (let i = 0; i < 10; i++) { cardScroll.fire("pointermove", { clientX: 145 + i, clientY: 150, pointerType: "mouse" }); flush(); }
+assert.equal(restarts, 0, "moving within the same card never restarts the burst");
+cardScroll.fire("pointermove", { clientX: 350, clientY: 150, pointerType: "mouse" }); flush();
+assert.equal(hover.classList.contains("is-disintegrating"), false); assert.equal(hover.style.opacity, "1");
+cardScroll.fire("pointermove", { clientX: 140, clientY: 150, pointerType: "mouse" }); flush();
+assert.equal(restarts, 1);
+cardScroll.fire("pointerleave"); assert.equal(hover.classList.contains("is-disintegrating"), false);
+cardScroll.fire("pointermove", { clientX: 140, clientY: 150, pointerType: "mouse" }); flush();
+assert.equal(restarts, 2, "leaving and returning starts one new burst");
+cardScroll.fire("pointermove", { clientX: 140, clientY: 150, pointerType: "touch" }); flush();
+assert.equal(hover.style.opacity, "0"); assert.equal(hover.classList.contains("is-disintegrating"), false);
+
 assert.ok(appSource.includes("allocationWidth"), "opening Details reserves canvas allocation once");
 assert.ok(appSource.includes("const viewportPaint = includeSelection"), "native screen paints are clipped while exports remain complete");
 assert.ok(appSource.includes("queueScrollPaint();"), "scroll bursts use the coalesced frame task");

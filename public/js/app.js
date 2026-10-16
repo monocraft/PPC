@@ -2423,11 +2423,22 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
         const sourceX = position.x + sourceOffset;
         const cardLayout = integrated ? { ...layout, cardHeight: stacked ? layout.cardHeight : contentHeight, viewerExtended: true } : layout;
         if (stacked) {
+          // Only the side extensions need backing; the card supplies its own
+          // surface, which must not be composited over a second faded surface.
+          context.save(); context.beginPath();
+          context.rect(position.x, position.y, sourceOffset, layout.cardHeight);
+          context.rect(sourceX + CARD_WIDTH, position.y, sourceOffset, layout.cardHeight);
+          context.clip();
           roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, layout.cardHeight, [4, 4, 0, 0], UI_PALETTE.carbon);
           const presentation = productPresentation(product);
           if (presentation.primaryLabel) roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
+          if (presentation.discontinued) {
+            context.save(); context.globalAlpha *= .6; context.fillStyle = UI_PALETTE.charcoal800;
+            context.fillRect(position.x, position.y, CARD_WIDTH + sourceOffset * 2, layout.cardHeight); context.restore();
+          }
+          context.restore();
         }
-        renderedCards.push({ productId: product.id, name: product.name, laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
+        renderedCards.push({ productId: product.id, name: product.name, discontinued: globalThis.PortfolioModel?.isDiscontinued?.(product) === true, laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
           ...(integrated ? { viewerIntegrated: true, viewerStacked: stacked, integrationX: position.x, integrationWidth: CARD_WIDTH + viewerInfoReserveLogical(), integrationHeight: contentHeight } : {}) });
         const outsideViewport = includeSelection && !dimensions.pptxPage && !motion && canvasScroll?.clientHeight > 0 &&
           ((sourceX + CARD_WIDTH) * zoom < canvasScroll.scrollLeft - 16 || sourceX * zoom > canvasScroll.scrollLeft + canvasScroll.clientWidth + 16 ||
@@ -2438,6 +2449,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
   if (includeProducts && drag) {
     // A thin source outline stays legible even after neighbours fill its slot.
     context.save();
+    if (globalThis.PortfolioModel?.isDiscontinued?.(products.find(item => item.id === drag.productId))) context.globalAlpha *= .4;
     context.setLineDash([3, 6]);
     roundRect(context, drag.source.x + 1.5, drag.source.y + 1.5, CARD_WIDTH - 3, layout.cardHeight - 3, 4, null, globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .3), 1);
     context.restore();
@@ -2446,15 +2458,21 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
     const product = products.find((item) => item.id === liftedId);
     const position = drag?.position || motion.positions.get(liftedId);
     if (product && position) {
-      context.save();
-      context.shadowColor = "rgba(0,0,0,.5)";
-      context.shadowBlur = 20;
-      context.shadowOffsetY = 9;
-      roundRect(context, position.x, position.y, CARD_WIDTH, layout.cardHeight, 5, UI_PALETTE.carbon);
-      context.restore();
+      const discontinued = globalThis.PortfolioModel?.isDiscontinued?.(product) === true;
+      if (!discontinued) {
+        context.save();
+        context.shadowColor = "rgba(0,0,0,.5)";
+        context.shadowBlur = 20;
+        context.shadowOffsetY = 9;
+        roundRect(context, position.x, position.y, CARD_WIDTH, layout.cardHeight, 5, UI_PALETTE.carbon);
+        context.restore();
+      }
       drawCard(context, product, position.x, position.y, true, layout, false);
+      context.save();
+      if (discontinued) context.globalAlpha *= .4;
       roundRect(context, position.x + .5, position.y + .5, CARD_WIDTH - 1, layout.cardHeight - 1, 4, null, UI_PALETTE.steelTealLight, 1.5);
-      renderedCards.push({ productId: product.id, laneId: drag?.dropTarget?.laneId || position.laneId || product.laneId, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
+      context.restore();
+      renderedCards.push({ productId: product.id, name: product.name, discontinued, laneId: drag?.dropTarget?.laneId || position.laneId || product.laneId, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
     }
   }
   if (viewportPaint) context.restore();
@@ -2669,8 +2687,30 @@ function drawDetailedSpecs(context, product, x, startY, categoryId = activeCateg
   return cursorY;
 }
 
-function drawCard(context, product, x, y, selected, layout = productCardLayout(), interactive = true) {
+function drawCard(context, product, x, y, selected, layout = productCardLayout(), interactive = true, opaque = false) {
   const presentation = productPresentation(product);
+  // Composite the completed native card once, so overlapping artwork, text and
+  // selection all share 40% opacity, including while moving over another card.
+  // The PPTX recorder is a proxy, so it deliberately takes the editable path below.
+  if (presentation.discontinued && !opaque && context.canvas?.getContext("2d") === context) {
+    const layer = drawCard.fadeLayer || (drawCard.fadeLayer = document.createElement("canvas"));
+    const transform = context.getTransform();
+    const scale = Math.min(4, Math.max(1, Math.hypot(transform.a, transform.b), Math.hypot(transform.c, transform.d)));
+    const padding = 2, width = Math.ceil((CARD_WIDTH + padding * 2) * scale), height = Math.ceil((layout.cardHeight + padding * 2) * scale);
+    if (layer.width !== width) layer.width = width;
+    if (layer.height !== height) layer.height = height;
+    const paint = layer.getContext("2d");
+    paint.clearRect(0, 0, width, height);
+    paint.save();
+    paint.setTransform(scale, 0, 0, scale, (padding - x) * scale, (padding - y) * scale);
+    paint.textBaseline = context.textBaseline;
+    drawCard(paint, product, x, y, selected, layout, interactive, true);
+    paint.restore();
+    context.save(); context.globalAlpha *= .4;
+    context.drawImage(layer, x - padding, y - padding, width / scale, height / scale);
+    context.restore();
+    return;
+  }
   const labelColor = presentation.primaryLabel
     ? PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)) : UI_PALETTE.silver;
   const cardHeight = layout.cardHeight;
@@ -2697,7 +2737,6 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   const imageInset = headset ? (CARD_WIDTH - HEADSET_IMAGE_WIDTH) / 2 : 18;
   if (imageRecord.ready) {
     context.save();
-    if (presentation.discontinued) context.globalAlpha *= .42;
     drawContainedImage(context, imageRecord.image, x + imageInset, imageTop + (layout.imageSlotHeight - imageHeight) / 2, CARD_WIDTH - imageInset * 2, imageHeight, { categoryId: layout.categoryId, product, assetName: typeof productImageAssetName === "function" ? productImageAssetName(product) : "", assetId: typeof productDisplayImageAssetId === "function" ? productDisplayImageAssetId(product) : "" });
     context.restore();
   }
@@ -2730,9 +2769,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   const footerHeight = footerLayout.height;
   const detailsBottom = y + cardHeight - footerHeight;
 
-  // Keep identifying text and actions clear while EOM cards recede visually.
   context.save();
-  if (presentation.discontinued) context.globalAlpha *= .88;
   if (layout.detailed) {
     drawDetailedSpecs(context, product, x, detailsTop + 5, layout.categoryId);
   } else {
@@ -2772,6 +2809,13 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     context.fillStyle = UI_PALETTE.silver;
     context.fillText("Selected", x + 22, markerY + 9.5);
     context.restore();
+  }
+
+  // Preserve native editable PowerPoint text and shapes under one translucent
+  // background mask; its appearance matches the 40% canvas group on the export page.
+  if (presentation.discontinued && !opaque) {
+    context.save(); context.globalAlpha *= .6; context.fillStyle = UI_PALETTE.charcoal800;
+    context.fillRect(x, y, CARD_WIDTH, cardHeight); context.restore();
   }
 
   // Native text actions are mounted separately; exported cards contain no controls.
@@ -4701,13 +4745,14 @@ function positionViewerInfo() {
   viewerInfo.style.left = `${left}px`;
   viewerInfo.style.top = `${top}px`;
   viewerInfo.style.transform = "none";
-  viewerInfo.style.opacity = "1";
+  viewerInfo.style.opacity = presentation.discontinued ? ".4" : "1";
   viewerInfo.style.clipPath = stacked ? `inset(0 0 ${hiddenPercent}% 0)` : `inset(0 ${hiddenPercent}% 0 0)`;
   viewerInfo.style.pointerEvents = viewerInfoProgress > .96 ? "auto" : "none";
 
   if (viewerInfoOutline) {
     const outlineWidth = stacked ? visibleWidth : (CARD_WIDTH * zoom) + visibleWidth;
     viewerInfoOutline.classList.toggle("is-open", viewerInfoProgress > .001);
+    viewerInfoOutline.style.opacity = presentation.discontinued ? ".4" : "1";
     viewerInfoOutline.style.left = `${(card.integrationX ?? card.x) * zoom}px`;
     viewerInfoOutline.style.top = `${card.y * zoom}px`;
     viewerInfoOutline.style.width = `${outlineWidth}px`;
@@ -6059,6 +6104,7 @@ function syncProductCardActions() {
     const width = `${placement.width}px`;
     if (row.style.transform !== transform) row.style.transform = transform;
     if (row.style.width !== width) row.style.width = width;
+    row.classList.toggle("is-discontinued", card.discontinued === true);
     row.classList.toggle("is-condensed", card.width * zoom < 68); if (row.hidden) row.hidden = false;
     for (const button of row.querySelectorAll("button")) {
       const actionLabel = button.dataset.cardDetailTab === "dates" ? "Dates" : "Specifications";

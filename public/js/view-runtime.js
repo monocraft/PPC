@@ -123,10 +123,17 @@
   function cardHover(canvas, scroll, { getCards, getOwner, getZoom, isSuspended }) {
     const clip = document.createElement("div"), frame = document.createElement("div");
     clip.className = "product-card-hover-clip"; frame.className = "product-card-hover-frame";
+    // A small, reused decorative pool: no per-card DOM or continuous animation loop.
+    for (let index = 0; index < 16; index++) {
+      const pixel = document.createElement("span");
+      pixel.className = "product-card-dissolve-pixel";
+      pixel.style.cssText = `--pixel-left:${5 + index * 6}%;--pixel-size:${3 + index % 4}px;--pixel-x:${(index % 5 - 2) * 9}px;--pixel-y:${22 + index % 4 * 8}px;--pixel-delay:${index % 4 * 45}ms;`;
+      frame.append(pixel);
+    }
     clip.setAttribute("aria-hidden", "true"); clip.append(frame); scroll.parentElement.append(clip);
     let pointer = null, productId = "", owner = getOwner(), previousLeft = scroll.scrollLeft, previousTop = scroll.scrollTop, previousZoom = getZoom();
     const release = frameTask(() => frame.classList.remove("is-immediate"));
-    function clear() { pointer = null; productId = ""; frame.style.opacity = "0"; canvas.title = ""; }
+    function clear() { pointer = null; productId = ""; frame.style.opacity = "0"; frame.classList.remove("is-disintegrating"); canvas.title = ""; }
     function sync() {
       if (owner !== getOwner()) { owner = getOwner(); clear(); }
       clip.style.left = `${scroll.offsetLeft}px`; clip.style.top = `${scroll.offsetTop}px`;
@@ -137,14 +144,17 @@
       const px = (x + scroll.scrollLeft) / zoom, py = (y + scroll.scrollTop) / zoom;
       const card = x >= 0 && y >= 0 && x < scroll.clientWidth && y < scroll.clientHeight
         ? getCards().find(item => px >= item.x && px < item.x + item.width && py >= item.y && py < item.y + item.height) : null;
-      if (!card) { productId = ""; frame.style.opacity = "0"; canvas.title = ""; return; }
+      if (!card) { clear(); return; }
+      const changed = productId !== card.productId;
+      if (changed || !card.discontinued) frame.classList.remove("is-disintegrating");
       const immediate = !productId || previousLeft !== scroll.scrollLeft || previousTop !== scroll.scrollTop || previousZoom !== zoom;
       previousLeft = scroll.scrollLeft; previousTop = scroll.scrollTop; previousZoom = zoom;
       if (immediate) { frame.classList.add("is-immediate"); release(); }
       frame.style.transform = `translate3d(${card.x * zoom - scroll.scrollLeft}px, ${card.y * zoom - scroll.scrollTop}px, 0)`;
       frame.style.width = `${card.width * zoom}px`; frame.style.height = `${card.height * zoom}px`;
-      if (immediate) void frame.offsetHeight;
-      frame.style.opacity = "1"; productId = card.productId; frame.dataset.productId = productId;
+      if (immediate || (changed && card.discontinued)) void frame.offsetHeight;
+      if (changed && card.discontinued) frame.classList.add("is-disintegrating");
+      frame.style.opacity = card.discontinued ? ".4" : "1"; productId = card.productId; frame.dataset.productId = productId;
       canvas.title = card.name || "";
     }
     const schedule = frameTask(sync);
