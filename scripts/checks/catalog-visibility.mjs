@@ -285,6 +285,9 @@ for (const [group, expected] of [["all", products.map(p => p.id)], ["launched", 
   checks++;
 }
 const allHidden = { id: "hidden", board: { ...appBoard, products: [products[0]], settings: { catalogGroup: "eol" } } };
+const trulyEmpty = { id: "empty", board: { ...appBoard, products: [], settings: {} } };
+assert.equal(app.buildPptxExportPlan("products", [trulyEmpty]).length, 1, "a genuinely empty category retains its existing placeholder slide");
+checks++;
 assert.equal(app.buildPptxExportPlan("products", [allHidden]).length, 0, "all-hidden lifecycle category creates no phantom slide");
 assert.deepEqual(Array.from(app.buildPptxExportPlan("both", [allHidden])).flatMap(page => page.kind === "roadmap" ? Array.from(page.groups).flatMap(group => idsOf(group.products)) : []), ["launched"], "combined export retains Roadmap history when every product card is hidden");
 let emptyDecks = 0;

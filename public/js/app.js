@@ -6926,7 +6926,7 @@ function productPagesForPptx(category, targetBoard = null, canvasWidth = 0) {
   const categoryBoard = targetBoard || ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
   const layout = productCardLayout(categoryBoard, definition, { includeControls: false });
   const products = PortfolioModel.catalogProducts(categoryBoard.products, categoryBoard.settings);
-  if (!products.length) return [];
+  if (categoryBoard.products.length > 0 && !products.length) return [];
   return PPTXPagination.paginateProductLanes(categoryBoard.lanes, products, {
     canvasWidth,
     cardWidth: CARD_WIDTH, cardGap: CARD_GAP, cardHeight: layout.cardHeight,
