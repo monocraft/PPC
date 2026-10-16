@@ -51,7 +51,7 @@ function harness({ view = "products", basis = "lifecycle", scope = ["pc-gaming-a
   const events = { saves: 0, scans: 0, create: 0, updates: [], scope: [], cardsClosed: 0, ringsClosed: 0, laneCleared: 0, hashoutPaints: 0, lifecycleControls: 0, status: 0, fits: 0, renders: 0, reorderFinished: 0 };
   let callbacks;
   const context = {
-    Date, portfolio, board: portfolio.categories[0].board, activeCategoryId: "pc-gaming-audio", activeView: view,
+    Date, portfolio, board: portfolio.categories[0].board, activeCategoryId: "pc-gaming-audio", activeView: view, canvasScroll: { scrollLeft: 0, scrollTop: 0 },
     selectedId: "headset", viewerInfoProductId: "headset", viewerInfoProgress: 1, viewerInfoOpen: true, viewerInfoOutline: node(), inspectorOpen: true,
     searchQuery: "Keep until navigation", roadmapSearchQuery: "Keep roadmap until navigation", hoveredHeroVariant: { productId: "headset" },
     workspaceOpening: false, workspaceSaveRevision: 0, productLayoutEditing: false, packageOperationInProgress: false, pptxExportInProgress: false, roadmapDraft: null,

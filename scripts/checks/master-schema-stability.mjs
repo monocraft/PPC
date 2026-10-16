@@ -19,7 +19,7 @@ function appFunctionSource(name) {
 // Keep the production schema and category activation intact. Only browser
 // rendering and local persistence are inert; no backend or private data is used.
 const sandbox = {
-  window: {}, crypto: globalThis.crypto, PortfolioModel: globalThis.PortfolioModel,
+  window: {}, crypto: globalThis.crypto, PortfolioModel: globalThis.PortfolioModel, canvasScroll: { scrollLeft: 0, scrollTop: 0 },
   PortfolioPackage: globalThis.PortfolioPackage, PortfolioTheme: globalThis.PortfolioTheme,
   UI_FONT_FACE: globalThis.PortfolioTheme.fontFace,
   PPTXPagination: { paginateRoadmapGroups() { return []; } },

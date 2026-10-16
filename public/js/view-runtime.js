@@ -12,6 +12,62 @@
     return schedule;
   }
 
+  function categoryTransition(element) {
+    const win = element?.ownerDocument?.defaultView || root;
+    let active = null, cleanup = null;
+    function release() {
+      cleanup?.(); cleanup = null;
+    }
+    function cancel() {
+      const animation = active;
+      active = null;
+      release();
+      if (animation) {
+        animation.onfinish = null; animation.oncancel = null;
+        animation.cancel?.();
+      }
+    }
+    function reveal() {
+      cancel();
+      const media = win.matchMedia?.("(prefers-reduced-motion: reduce)");
+      if (media?.matches || typeof element?.animate !== "function") return false;
+      let animation;
+      try {
+        animation = element.animate([{ opacity: .45 }, { opacity: 1 }], {
+          duration: 180, easing: "cubic-bezier(.22,1,.36,1)",
+        });
+      } catch (_) { return false; }
+      if (!animation) return false;
+      active = animation;
+      const removers = [];
+      const listen = (target, name, handler, options) => {
+        if (typeof target?.addEventListener !== "function") return;
+        target.addEventListener(name, handler, options);
+        removers.push(() => target.removeEventListener?.(name, handler, options));
+      };
+      const interrupt = () => { if (active === animation) cancel(); };
+      listen(element, "wheel", interrupt, { capture: true, passive: true });
+      listen(element, "pointerdown", interrupt, { capture: true, passive: true });
+      listen(element, "keydown", interrupt, { capture: true });
+      listen(win, "blur", interrupt);
+      const reduceMotion = event => { if (event.matches) interrupt(); };
+      if (typeof media?.addEventListener === "function") listen(media, "change", reduceMotion);
+      else if (typeof media?.addListener === "function") {
+        media.addListener(reduceMotion);
+        removers.push(() => media.removeListener?.(reduceMotion));
+      }
+      cleanup = () => removers.forEach(remove => remove());
+      const finish = () => {
+        if (active !== animation) return;
+        active = null; release();
+        animation.onfinish = null; animation.oncancel = null;
+      };
+      animation.onfinish = finish; animation.oncancel = finish;
+      return true;
+    }
+    return Object.freeze({ reveal, cancel });
+  }
+
   function preferences({ key, storage, maxCategories = 100 }) {
     let values = null;
     const scale = (value, minimum) => Number.isFinite(value) && value >= minimum && value <= 2 ? Math.round(value * 10) / 10 : null;
@@ -169,5 +225,5 @@
     return Object.freeze({ sync, clear });
   }
 
-  root.PortfolioViewRuntime = Object.freeze({ frameTask, preferences, navigation, layoutCache, panelCache, stickyHeader, cardHover });
+  root.PortfolioViewRuntime = Object.freeze({ frameTask, categoryTransition, preferences, navigation, layoutCache, panelCache, stickyHeader, cardHover });
 })(globalThis);
