@@ -63,6 +63,11 @@ if (!argumentsSet.has("--deployment-only")) {
   assert.throws(() => validateDecryptedPackage(codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify(dangling)) }, { name: "images/image1.webp", data: Uint8Array.of(1) }])), /missing from its image library/i);
   assert.throws(() => validateDecryptedPackage(codec.createZip([{ name: "portfolio.json", data: encode("{broken-json") }])), /damaged/i);
   assert.throws(() => validateDecryptedPackage(codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify({ version: 99, categories: [] })) }])), /unsupported/i);
+  const expandedManifest = { ...structuredClone(manifest), ownerEvidence: "x".repeat(5 * 1024 * 1024) };
+  const expandedZip = codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify(expandedManifest)) }, { name: "images/image1.webp", data: Uint8Array.of(1, 2, 3) }]);
+  assert.equal(validateDecryptedPackage(expandedZip).productCount, 1, "authenticated package manifests above the old 4 MiB ceiling remain readable below 8 MiB");
+  const overManifest = { ...structuredClone(manifest), ownerEvidence: "x".repeat(8 * 1024 * 1024) };
+  assert.throws(() => validateDecryptedPackage(codec.createZip([{ name: "portfolio.json", data: encode(JSON.stringify(overManifest)) }])), /8 MiB/i, "the manifest remains bounded independently of the unchanged 64 MiB package ceiling");
 
   const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "ppc-hosted-package-"));
   try {

@@ -4,7 +4,7 @@ import './shared/product-merge.js';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
-const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 5 * 1024 * 1024;
 const MAX_RPC_BYTES = 9 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 12 * 1024 * 1024 - 64 * 1024;

@@ -259,4 +259,23 @@ const legacySnapshot = (await legacyReader.latest({ key })).snapshot;
 assert.equal(legacySnapshot.packageInfo.comments, 'Team fixture edit', 'legacy GitHub readers immediately derive the last accepted note');
 assert.equal(legacySnapshot.packageInfo.updatedAt, legacy.masterSync.history.at(-1).at);
 assert.equal(legacyDatabase.calls.filter(call => call.method === 'PUT').length, 0, 'the legacy footer repair needs no package write');
-console.log('GitHub master checks passed: immutable encrypted reads, authenticated authors, CAS merges/conflicts, ABA, lost reply recovery, complete ZIP preservation, bounded requests, and memory-only tokens.');
+{
+  const expanded = structuredClone(manifest); expanded.ownerEvidence = 'E'.repeat(5 * 1024 * 1024);
+  const db = mockGitHub(await packageBytes(expanded)), reader = github.createTransport({ token: tokenA, fetchImpl: db.fetchImpl });
+  const snapshot = (await reader.latest({ key })).snapshot;
+  assert.equal(snapshot.products.length, 1, 'GitHub fallback reads a valid manifest above the old 4 MiB ceiling');
+  await reader.save(savePayload(snapshot, { ffsDate: '2026-12-16' }));
+  const entries = codec.readZip(await codec.decrypt(db.bytes, key));
+  const updated = JSON.parse(decoder.decode(entries.get('portfolio.json')));
+  assert.equal(updated.ownerEvidence, expanded.ownerEvidence, 'fallback writes preserve complete large owner evidence');
+  assert.deepEqual(entries.get('images/image1.webp'), image); assert.deepEqual(entries.get('attachments/extra.bin'), extra);
+}
+{
+  const expanded = structuredClone(manifest); expanded.ownerEvidence = '';
+  expanded.ownerEvidence = 'E'.repeat(8 * 1024 * 1024 - 32 - encoder.encode(JSON.stringify(expanded)).length);
+  const db = mockGitHub(await packageBytes(expanded)), reader = github.createTransport({ token: tokenA, fetchImpl: db.fetchImpl });
+  const snapshot = (await reader.latest({ key })).snapshot, before = db.bytes;
+  await assert.rejects(reader.save(savePayload(snapshot, { ffsDate: '2026-12-16' })), error => error.code === 'MASTER_TOO_LARGE');
+  assert.deepEqual(db.bytes, before); assert.equal(db.calls.filter(c => c.method === 'PUT').length, 0, 'fallback rejects 8 MiB growth before writing');
+}
+console.log('GitHub master checks passed: immutable encrypted reads, authenticated authors, CAS merges/conflicts, ABA, lost reply recovery, complete ZIP preservation, 8 MiB manifests, bounded requests, and memory-only tokens.');

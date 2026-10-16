@@ -107,7 +107,7 @@
     if (response.status === 429) throw errorOf("Too many attempts. Wait a minute and try again. Your local changes are safe.", "RATE_LIMIT", 429);
     if (response.status === 404 || response.status >= 500) throw errorOf("The master is unavailable. Your changes are saved on this device; try again later.", "UNAVAILABLE", response.status);
     let data;
-    // A review adds complete product records (jointly bounded by the 4 MiB
+    // A review adds complete product records (jointly bounded by the 8 MiB
     // manifest) to a compact <=12 MiB snapshot. Keep a derived 20 MiB envelope
     // ceiling for that operation, and retain the original limit for the rest.
     // A negotiated conflict plan adds at most 500 bounded descriptors to its

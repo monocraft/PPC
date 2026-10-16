@@ -349,6 +349,38 @@ assert(sql.includes('primary key (session_id, request_id)'), 'request receipt id
 assert(sql.includes("security definer set search_path = ''"));
 assert(!sql.includes('create policy'), 'no browser policy exposes private manifest or receipts');
 
+{
+  let calls = 0;
+  const bounded = createMasterGateway({ env, rpc: async operation => { if (operation === 'rate') return { allowed: true }; calls += 1; throw new Error('Unexpected content RPC'); } });
+  const response = await bounded(new Request('https://capacity.example/api/master/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, padding: 'x'.repeat(5 * 1024 * 1024) }) }));
+  assert.equal(response.status, 413); assert.equal((await response.json()).code, 'REQUEST_TOO_LARGE');
+  assert.equal(calls, 0, 'the unchanged 5 MiB request guard retains attempt limiting and rejects before any content read or commit');
+}
+{
+  let calls = 0;
+  const bounded = createMasterGateway({ env: { ...env, SUPABASE_URL: 'https://fixture.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'synthetic-server-role-not-real' }, fetchImpl: async () => {
+    calls += 1; return new Response(' '.repeat(9 * 1024 * 1024 + 1));
+  } });
+  const response = await bounded(new Request('https://capacity.example/api/master/latest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) }));
+  assert.equal(response.status, 503); assert.equal(calls, 1, 'the unchanged 9 MiB RPC reader remains bounded');
+}
+{
+  const expanded = clone(seed); expanded.ownerEvidence = 'E'.repeat(5 * 1024 * 1024);
+  let state = { manifest: expanded, storageRevision: 1, sourceSha, publication: { requestedRevision: 1, publishedRevision: 0, status: 'pending' } }, commits = 0;
+  const bounded = createMasterGateway({ env, rpc: async (operation, payload) => {
+    if (operation === 'rate') return { allowed: true };
+    if (operation === 'commit') { commits += 1; state = { ...state, manifest: payload.manifest, storageRevision: 2, status: 'saved', savedFields: payload.savedFields, savedProducts: payload.savedProducts, publication: { requestedRevision: 2, publishedRevision: 0, status: 'pending' } }; }
+    return state;
+  } });
+  const base = model.snapshot(expanded).products[0];
+  const response = await bounded(new Request('https://capacity.example/api/master/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, sessionId: 'capacity-session', requestId: 'capacity-valid-save', changes: [change(base, { codename: 'Valid expanded master' })], snapshotFormat: 'compact-conflict-v1' }) }));
+  assert.equal(response.status, 200); assert.equal(commits, 1);
+  assert.equal(state.manifest.ownerEvidence, expanded.ownerEvidence, 'bounded native save preserves full private evidence beyond 4 MiB');
+  assert.equal((await response.json()).snapshot.products[0].values.codename, 'Valid expanded master');
+}
+
 if (process.env.PPC_REQUIRE_SQL_TESTS === '1' && !process.env.PPC_TEST_PGLITE_MODULE) {
   throw new Error('SQL verification is required. Configure PPC_TEST_PGLITE_MODULE before running this check.');
 }
@@ -416,15 +448,34 @@ if (process.env.PPC_TEST_PGLITE_MODULE) {
     assert.equal(actualMaster.storageRevision, 4);
     const actualValues = model.snapshot(actualMaster.manifest).products[0].values;
     assert.equal(actualValues.generalAvailabilityDate, '2027-03-01'); assert.equal(actualValues.specs[0].value, '57 mm');
+    const expanded = clone(actualMaster.manifest);
+    expanded.ownerEvidence = 'E'.repeat(5 * 1024 * 1024);
+    assert.equal((await rpc('bootstrap', { manifest: expanded, sourceSha, fingerprint: hash })).status, 'already_seeded', 'existing bootstrap permits a valid >4 MiB manifest without reseeding state');
+    const acceptedLarge = await rpc('commit', { ...commitPayload, expectedRevision: actualMaster.storageRevision, manifest: expanded, requestId: 'sql-capacity-expanded' });
+    assert.equal(acceptedLarge.status, 'saved');
+    assert.equal(acceptedLarge.storageRevision, actualMaster.storageRevision + 1);
+    assert.equal(acceptedLarge.manifest.ownerEvidence, expanded.ownerEvidence);
+    const atBoundary = clone(actualMaster.manifest); atBoundary.ownerEvidence = '';
+    const emptyBytes = (await postgres.query('select octet_length(($1::jsonb)::text) as bytes', [JSON.stringify(atBoundary)])).rows[0].bytes;
+    atBoundary.ownerEvidence = 'E'.repeat(8388608 - emptyBytes);
+    assert.equal((await postgres.query('select octet_length(($1::jsonb)::text) as bytes', [JSON.stringify(atBoundary)])).rows[0].bytes, 8388608);
+    assert.equal((await rpc('bootstrap', { manifest: atBoundary, sourceSha, fingerprint: hash })).status, 'already_seeded');
+    const boundaryPayload = { ...commitPayload, expectedRevision: acceptedLarge.storageRevision, manifest: atBoundary, requestId: 'sql-capacity-boundary' };
+    assert.equal((await rpc('commit', boundaryPayload)).status, 'saved', 'exact 8 MiB PostgreSQL JSONB text is accepted');
+    assert.equal((await rpc('commit', boundaryPayload)).status, 'already_saved', 'larger manifests retain idempotent durable receipts');
+    const capacityMaster = await rpc('read', {});
+    const oneOver = clone(atBoundary); oneOver.ownerEvidence += 'E';
+    assert.equal((await rpc('commit', { ...boundaryPayload, expectedRevision: capacityMaster.storageRevision, manifest: oneOver, requestId: 'sql-capacity-one-over' })).status, 'manifest_too_large');
+    assert.deepEqual(await rpc('read', {}), capacityMaster, 'one-byte capacity rejection preserves manifest, revisions and publication state');
     const large = clone(actualMaster.manifest);
     large.customOwnerData = Array.from({ length: 40000 }, () => ({ a: 0, b: 1 }));
-    large.customOwnerPadding = 'x'.repeat(4194304 - 100 - Buffer.byteLength(JSON.stringify(large)) - Buffer.byteLength(',"customOwnerPadding":""'));
-    assert(Buffer.byteLength(JSON.stringify(large)) < 4194304);
+    large.customOwnerPadding = 'x'.repeat(8388608 - 100 - Buffer.byteLength(JSON.stringify(large)) - Buffer.byteLength(',"customOwnerPadding":""'));
+    assert(Buffer.byteLength(JSON.stringify(large)) < 8388608);
     const storedBytes = (await postgres.query('select octet_length(($1::jsonb)::text) as bytes', [JSON.stringify(large)])).rows[0].bytes;
-    assert(storedBytes > 4194304, 'PostgreSQL representation can exceed the compact JavaScript byte count.');
+    assert(storedBytes > 8388608, 'PostgreSQL representation can exceed the compact JavaScript byte count.');
     assert.equal((await rpc('bootstrap', { manifest: large, sourceSha, fingerprint: hash })).status, 'manifest_too_large');
-    assert.equal((await rpc('commit', { ...commitPayload, expectedRevision: actualMaster.storageRevision, manifest: large, requestId: 'sql-oversize-save' })).status, 'manifest_too_large');
-    assert.deepEqual(await rpc('read', {}), actualMaster, 'Capacity failure changes neither master nor publication state.');
+    assert.equal((await rpc('commit', { ...commitPayload, expectedRevision: capacityMaster.storageRevision, manifest: large, requestId: 'sql-oversize-save' })).status, 'manifest_too_large');
+    assert.deepEqual(await rpc('read', {}), capacityMaster, 'Capacity failure changes neither master nor publication state.');
     assert.equal((await rpc('read', { sessionId: commitPayload.sessionId, requestId: 'sql-oversize-save' })).receipt, undefined);
     console.log('Supabase migration executed in PostgreSQL; actual RPC CAS, durable receipts, roster expiry, rate limits, publication monotonicity and role permissions verified.');
   } finally { await postgres.close(); }

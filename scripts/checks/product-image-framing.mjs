@@ -315,4 +315,725 @@ assert.equal(actualScaled[0].length, 9);
 assert.equal(actualScaled[1].length, 9, "The actual app hook forwards exact owner identity for legacy color artwork.");
 sandbox.drawContainedImage({ drawImage: (...args) => actualScaled.push(args) }, image, 18, 34, 210, 210, { categoryId: "microphones", assetName: "unreviewed.png" });
 assert.equal(actualScaled[2].length, 5, "New unreviewed files keep the native fallback.");
+
+// Official front compositions use reviewed complete-body frames; detached
+// accessories stay in original files and are omitted only in presentation.
+const flightSourceFrames = [["87588e15eb1e4af72e95",[209,32,382,292],[211,34,589,322]],["b98ba5e4f28bab3bba3c",[207,31,384,295],[209,33,589,324]],["ec77fb7a1cf39bfe3de1",[228,39,344,264],[230,41,570,301]]];
+const flightBox = { x: 39.7, y: 34, width: 166.6, height: 182 };
+for (const [hash, source, body] of flightSourceFrames) {
+  const flightDraws = [];
+  const name = 'front-' + hash + '.png';
+  api.draw({ drawImage: (...args) => flightDraws.push(args) }, image, flightBox, { assetName: name });
+  const d = flightDraws[0];
+  assert.equal(d.length, 9, 'Flight composition uses the Canvas/PPTX source-rectangle path.');
+  assert.deepEqual(d.slice(1, 5), source, 'Only the exact source hash and dimensions enable its reviewed Flight frame.');
+  assert(source[0] <= body[0] && source[1] <= body[1] && source[0] + source[2] >= body[2] && source[1] + source[3] >= body[3], 'The complete headband and both earcups stay inside the source frame.');
+  assert(Math.abs(d[7] / d[8] - source[2] / source[3]) < 1e-10, 'The wider frontal model cannot stretch to fill its card.');
+  assert(d[5] >= flightBox.x && d[6] >= flightBox.y && d[5] + d[7] <= flightBox.x + flightBox.width && d[6] + d[8] <= flightBox.y + flightBox.height, 'Flight stays inside the existing selected seventy-percent headset box.');
+  api.draw({ drawImage: (...args) => flightDraws.push(args) }, { naturalWidth: 400, naturalHeight: 300 }, flightBox, { assetName: name });
+  assert.deepEqual(flightDraws[1].slice(1, 5), [0, 0, 400, 300], 'A filename prefix cannot crop a different source size.');
+  api.draw({ drawImage: (...args) => flightDraws.push(args) }, image, flightBox, { assetName: name + '.backup' });
+  assert.deepEqual(flightDraws[2].slice(1, 5), [0, 0, 800, 600], 'Only an exact native PNG filename enables the Flight crop.');
+  const categoryDraws = [];
+  sandbox.drawContainedImage({ drawImage: (...args) => categoryDraws.push(args) }, image, 18, 34, 210, 210, { categoryId: 'audio-accessories', assetName: name });
+  assert.equal(categoryDraws[0].length, 5, 'The same composition cannot crop an unrelated accessory category.');
+}
+
+
+// Exact reviewed new-catalogue originals; metadata is frozen without private SKU names.
+const catalogueProfiles = {
+  "body": [
+    [
+      "24b4ad3518144435d863",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 240,
+          "y": 60,
+          "width": 321,
+          "height": 418
+        }
+      }
+    ],
+    [
+      "6d0df09164305161e01f",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 235,
+          "y": 61,
+          "width": 330,
+          "height": 388
+        }
+      }
+    ],
+    [
+      "8fa74053951cb5cdd123",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 235,
+          "y": 61,
+          "width": 330,
+          "height": 388
+        }
+      }
+    ],
+    [
+      "1b6bab9f00f131de61c4",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 237,
+          "y": 60,
+          "width": 326,
+          "height": 390
+        }
+      }
+    ],
+    [
+      "be3121a491218d77cd41",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 230,
+          "y": 63,
+          "width": 338,
+          "height": 440
+        }
+      }
+    ],
+    [
+      "ceaf93a66b28255c7a42",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 230,
+          "y": 63,
+          "width": 338,
+          "height": 440
+        }
+      }
+    ],
+    [
+      "8fcb84c598219588505e",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 220,
+          "y": 54,
+          "width": 360,
+          "height": 404
+        }
+      }
+    ],
+    [
+      "2c96ab14db92bf59a6cc",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 244,
+          "y": 67,
+          "width": 311,
+          "height": 395
+        }
+      }
+    ],
+    [
+      "9c19e46d2c7b20065e5f",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 231,
+          "y": 61,
+          "width": 371,
+          "height": 406
+        }
+      }
+    ],
+    [
+      "4f0a165294bebc40315b",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 181,
+          "y": 42,
+          "width": 437,
+          "height": 493
+        }
+      }
+    ],
+    [
+      "4b11472a46493ccc8cd4",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 212,
+          "y": 73,
+          "width": 376,
+          "height": 432
+        }
+      }
+    ],
+    [
+      "3c13bf1e5ffc9eb6c2f4",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 200,
+          "y": 48,
+          "width": 401,
+          "height": 427
+        }
+      }
+    ],
+    [
+      "8d94eca63cd0c5d37c5c",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 210,
+          "y": 45,
+          "width": 420,
+          "height": 414
+        }
+      }
+    ],
+    [
+      "80819fd14a36e0158e1b",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 210,
+          "y": 45,
+          "width": 420,
+          "height": 412
+        }
+      }
+    ],
+    [
+      "99630729ffa7913b8e1a",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 210,
+          "y": 45,
+          "width": 420,
+          "height": 416
+        }
+      }
+    ],
+    [
+      "15331691796cb2198ec8",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 162,
+          "y": 97,
+          "width": 477,
+          "height": 393
+        }
+      }
+    ],
+    [
+      "f9fcdf6b9e491ba66a04",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 208,
+          "y": 44,
+          "width": 439,
+          "height": 411
+        }
+      }
+    ],
+    [
+      "ef75421ece2ec3e458ad",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 209,
+          "y": 44,
+          "width": 431,
+          "height": 414
+        }
+      }
+    ],
+    [
+      "fe048ee5d022244a0e26",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 161,
+          "y": 97,
+          "width": 478,
+          "height": 393
+        }
+      }
+    ],
+    [
+      "839c976e36810a16289b",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 209,
+          "y": 44,
+          "width": 438,
+          "height": 411
+        }
+      }
+    ]
+  ],
+  "mouse": [
+    [
+      "98647d2b0b35f76ab3e7",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 215,
+          "y": 239,
+          "width": 409,
+          "height": 145
+        }
+      }
+    ],
+    [
+      "9aeaf7db0b5eff3cbf9a",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 204,
+          "y": 230,
+          "width": 423,
+          "height": 154
+        }
+      }
+    ],
+    [
+      "9f7387bb733cc6172698",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 218,
+          "y": 236,
+          "width": 431,
+          "height": 150
+        }
+      }
+    ],
+    [
+      "0ab99cb90a3dd8703e1d",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 208,
+          "y": 253,
+          "width": 416,
+          "height": 132
+        }
+      }
+    ],
+    [
+      "db2479682e64485ad5cc",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 207,
+          "y": 252,
+          "width": 420,
+          "height": 133
+        }
+      }
+    ],
+    [
+      "f5aa0846f8f212d49cb7",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 207,
+          "y": 253,
+          "width": 417,
+          "height": 131
+        }
+      }
+    ],
+    [
+      "d6b4c549c567333c36ea",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 207,
+          "y": 253,
+          "width": 417,
+          "height": 132
+        }
+      }
+    ],
+    [
+      "c5d2ad976c221a6bb8bd",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 207,
+          "y": 253,
+          "width": 417,
+          "height": 132
+        }
+      }
+    ],
+    [
+      "52816df28c8ac4d93a44",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 212,
+          "y": 254,
+          "width": 412,
+          "height": 131
+        }
+      }
+    ],
+    [
+      "6fad9b26143512f5855c",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 211,
+          "y": 254,
+          "width": 413,
+          "height": 131
+        }
+      }
+    ],
+    [
+      "40cdb4109f76cc054599",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 212,
+          "y": 237,
+          "width": 433,
+          "height": 149
+        }
+      }
+    ],
+    [
+      "a778ecd9b63b33075d88",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 221,
+          "y": 242,
+          "width": 407,
+          "height": 144
+        }
+      }
+    ],
+    [
+      "d148705da03b64b8db4c",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 200,
+          "y": 236,
+          "width": 400,
+          "height": 129
+        }
+      }
+    ]
+  ],
+  "keyboard": [
+    [
+      "2a010746506817f2b3cc",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 143,
+          "y": 204,
+          "width": 516,
+          "height": 205
+        }
+      }
+    ],
+    [
+      "83e81b52939b8f0a2c81",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 143,
+          "y": 189,
+          "width": 515,
+          "height": 201
+        }
+      }
+    ],
+    [
+      "a3e4266bf49fd8f2ba77",
+      {
+        "imageWidth": 1659,
+        "imageHeight": 1246,
+        "bounds": {
+          "x": 319,
+          "y": 395,
+          "width": 1021,
+          "height": 393
+        }
+      }
+    ],
+    [
+      "d498c233813592784512",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 141,
+          "y": 225,
+          "width": 518,
+          "height": 194
+        }
+      }
+    ],
+    [
+      "8dedc91132aaa29abd1a",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 146,
+          "y": 223,
+          "width": 508,
+          "height": 155
+        }
+      }
+    ],
+    [
+      "5213d971e1c6babe93b7",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 151,
+          "y": 209,
+          "width": 498,
+          "height": 183
+        }
+      }
+    ],
+    [
+      "7fb6dced3bbb35ce5b56",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 130,
+          "y": 216,
+          "width": 540,
+          "height": 168
+        }
+      }
+    ],
+    [
+      "83396b9931a705a2a0f1",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 151,
+          "y": 216,
+          "width": 498,
+          "height": 155
+        }
+      }
+    ],
+    [
+      "762b1cdc718c33a64549",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 152,
+          "y": 216,
+          "width": 496,
+          "height": 155
+        }
+      }
+    ]
+  ],
+  "scaled": [
+    [
+      "microphones:21edd9f2c4a46e7a066d",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 303,
+          "y": 54,
+          "width": 194,
+          "height": 394
+        },
+        "body": {
+          "x": 305,
+          "y": 56,
+          "width": 190,
+          "height": 390
+        },
+        "axis": "height",
+        "relativeSize": 0.7798507462686567
+      }
+    ],
+    [
+      "microphones:2a62ec53910c1d8f3e7e",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 296,
+          "y": 44,
+          "width": 208,
+          "height": 508
+        },
+        "body": {
+          "x": 298,
+          "y": 46,
+          "width": 204,
+          "height": 504
+        },
+        "axis": "height",
+        "relativeSize": 0.9328358208955224
+      }
+    ],
+    [
+      "microphones:3189a46f1f1b14abb5e6",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 299,
+          "y": 54,
+          "width": 202,
+          "height": 492
+        },
+        "body": {
+          "x": 301,
+          "y": 56,
+          "width": 198,
+          "height": 488
+        },
+        "axis": "height",
+        "relativeSize": 0.9328358208955224
+      }
+    ],
+    [
+      "microphones:9370f2ecbf65def8272a",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 289,
+          "y": 52,
+          "width": 222,
+          "height": 504
+        },
+        "body": {
+          "x": 291,
+          "y": 54,
+          "width": 218,
+          "height": 500
+        },
+        "axis": "height",
+        "relativeSize": 0.6492537313432836
+      }
+    ],
+    [
+      "controllers:011712aaaadf719e11f7",
+      {
+        "imageWidth": 800,
+        "imageHeight": 600,
+        "bounds": {
+          "x": 171,
+          "y": 146,
+          "width": 458,
+          "height": 308
+        },
+        "body": {
+          "x": 173,
+          "y": 148,
+          "width": 454,
+          "height": 304
+        },
+        "axis": "width",
+        "relativeSize": 0.5188396132044015
+      }
+    ]
+  ]
+};
+for (const [hash, profile] of catalogueProfiles.body) {
+  const draws = [], im = { naturalWidth: profile.imageWidth, naturalHeight: profile.imageHeight };
+  api.draw({drawImage:(...a)=>draws.push(a)}, im, flightBox, {assetName:'reviewed-'+hash+'.png'});
+  assert.deepEqual(draws[0].slice(1,5), Object.values(profile.bounds));
+  assert(Math.abs(draws[0][7]/draws[0][8]-profile.bounds.width/profile.bounds.height)<1e-10);
+  assert(draws[0][5]>=flightBox.x && draws[0][6]>=flightBox.y && draws[0][5]+draws[0][7]<=flightBox.x+flightBox.width+.001 && draws[0][6]+draws[0][8]<=flightBox.y+flightBox.height+.001);
+  api.draw({drawImage:(...a)=>draws.push(a)}, {naturalWidth:400,naturalHeight:300}, flightBox, {assetName:'reviewed-'+hash+'.png'});
+  assert.deepEqual(draws[1].slice(1,5),[0,0,400,300]);
+}
+for (const [kind, rows] of [['Mouse',catalogueProfiles.mouse],['Keyboard',catalogueProfiles.keyboard]]) for (const [hash, p] of rows) {
+  const draws=[], im={naturalWidth:p.imageWidth,naturalHeight:p.imageHeight}, name='reviewed-'+hash+'.png';
+  assert.equal(api['uses'+kind+'Framing'](kind==='Mouse'?'mice':'keyboards',name),true);
+  assert.equal(api['draw'+kind]({drawImage:(...a)=>draws.push(a)},im,{x:18,y:34,width:210,height:210},{assetName:name}),true);
+  const call=draws[0];assert.equal(call.length,9);assert(Math.abs(call[7]/call[8]-call[3]/call[4])<1e-10);
+  if(kind==='Mouse'){assert(Math.abs(call[7]-205.8)<1e-9);assert.deepEqual(call.slice(1,5),Object.values(p.bounds));}
+  else {assert.equal(call[8],112);assert(Math.abs(call[5]+call[7]-228)<1e-9);assert(call[5]>=0);assert(call[2]>=p.bounds.y&&call[2]+call[4]<=p.bounds.y+p.bounds.height+.001);}
+  assert.equal(api['draw'+kind]({drawImage(){}},{naturalWidth:400,naturalHeight:300},{x:18,y:34,width:210,height:210},{assetName:name}),false);
+  assert.equal(api['uses'+kind+'Framing']('audio-accessories',name),false);
+}
+for(const [key,p] of catalogueProfiles.scaled) for(const height of [112,210]) {
+ const [categoryId,hash]=key.split(':'),im={naturalWidth:p.imageWidth,naturalHeight:p.imageHeight},box={x:18,y:34,width:210,height};
+ for(const prefix of ['reviewed','deduplicated-regional-alias']) {
+  const draws=[],assetName=prefix+'-'+hash+'.png';assert.equal(api.usesScaledFraming(categoryId,assetName),true);
+  assert.equal(api.drawScaled({drawImage:(...a)=>draws.push(a)},im,box,{categoryId,assetName}),true);
+  const d=draws[0];assert.equal(d.length,9);assert.deepEqual(d.slice(1,5),Object.values(p.bounds));
+  const span=p.axis==='height'?p.body.height*d[8]/p.bounds.height:p.body.width*d[7]/p.bounds.width;
+  const reference=p.axis==='height'?Math.min(202,height-8,404):Math.min(202,202,(height-8)*1.30);assert(Math.abs(span-reference*p.relativeSize)<1e-9);
+  assert(d[5]>=box.x&&d[6]>=box.y&&d[5]+d[7]<=box.x+box.width+.001&&d[6]+d[8]<=box.y+box.height+.001);
+  assert.equal(api.drawScaled({drawImage(){}},{naturalWidth:400,naturalHeight:300},box,{categoryId,assetName}),false);
+  assert.equal(api.usesScaledFraming('audio-accessories',assetName),false);
+  assert.equal(api.usesScaledFraming(categoryId,assetName+'.backup'),false);
+ }
+}
+
 console.log("Product image framing checks passed: unchanged headset/mouse/keyboard fitting; microphone color/body scale; controller relative span; source, dimension and owner guards; export parity and immutable pixels/data.");

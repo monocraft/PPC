@@ -10,7 +10,7 @@ export const MASTER_PATH = path.join(PROJECT_ROOT, "public", "data", "master_ppc
 const codec = globalThis.PortfolioPackage;
 const MAGIC = Buffer.from("PPCPKG01", "ascii");
 const MIN_ENVELOPE_BYTES = 20 + 16 + 22; // Header, GCM tag, and at least a ZIP end record.
-const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const catalogContext = { window: {} };
 vm.runInNewContext(await readFile(path.join(PROJECT_ROOT, "public/js/catalog-data.js"), "utf8"), catalogContext);
 const categoryIds = new Set(catalogContext.window.PORTFOLIO_CATALOG.categories.map((category) => category.id));
@@ -91,7 +91,7 @@ export async function inspectHostedData(dataDirectory = path.dirname(MASTER_PATH
 export function validateDecryptedPackage(bytes) {
   const entries = codec.readZip(bytes);
   const manifestBytes = entries.get("portfolio.json");
-  if (!manifestBytes || manifestBytes.length > MAX_MANIFEST_BYTES) throw new Error("The package portfolio is missing or exceeds the 4 MiB data limit.");
+  if (!manifestBytes || manifestBytes.length > MAX_MANIFEST_BYTES) throw new Error("The package portfolio is missing or exceeds the 8 MiB data limit.");
   let manifest;
   try { manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes)); }
   catch { throw new Error("The package portfolio data is damaged."); }

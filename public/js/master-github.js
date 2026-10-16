@@ -5,7 +5,7 @@
   const API = "https://api.github.com";
   const API_VERSION = "2022-11-28";
   const MAX_PACKAGE_BYTES = 64 * 1024 * 1024;
-  const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
+  const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
   const MAX_PUT_BYTES = Math.ceil(MAX_PACKAGE_BYTES / 3) * 4 + 16384;
   const DEFAULT_CONFIG = Object.freeze({ mode: "github", owner: "monocraft", repo: "PPC", branch: "main", path: "public/data/master_ppc.pkg", label: "Master portfolio" });
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -299,7 +299,7 @@
         catch { throw failure("The package key was not accepted, or the encrypted master is damaged.", "INVALID_KEY", 401); }
         entries = codec().readZip(plaintext);
         const bytes = entries.get("portfolio.json");
-        if (!bytes || bytes.length > MAX_MANIFEST_BYTES) throw failure("The master portfolio exceeds the 4 MiB data limit.", "INVALID_MASTER");
+        if (!bytes || bytes.length > MAX_MANIFEST_BYTES) throw failure("The master portfolio exceeds the 8 MiB data limit.", "INVALID_MASTER");
         const manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
         validateManifest(manifest, entries);
         entries.get("portfolio.json").fill(0);
@@ -370,7 +370,7 @@
           savedFields: result.savedFields, savedProducts: result.savedProducts,
         }];
         const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
-        if (manifestBytes.length > MAX_MANIFEST_BYTES) throw failure("The updated portfolio exceeds the 4 MiB master limit.", "MASTER_TOO_LARGE", 413);
+        if (manifestBytes.length > MAX_MANIFEST_BYTES) throw failure("The updated portfolio exceeds the 8 MiB master limit.", "MASTER_TOO_LARGE", 413);
         let plaintext;
         let encrypted;
         try {
