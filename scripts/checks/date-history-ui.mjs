@@ -61,11 +61,16 @@ assert.match(label, /GA &lt;test&gt; &quot;label&quot;/); assert.doesNotMatch(la
 assert.match(label, /aria-label="GA &lt;test&gt; &quot;label&quot; update history"/);
 assert.match(historyUI.labelHtml("GA", "ga", { tag: "script" }), /^<span /);
 
-function documentFixture() {
+function documentFixture({ themeStyles = false } = {}) {
   const document = { activeElement: null }, timers = new Map(), observers = new Set();
   let sequence = 0;
+  const style = () => {
+    if (!themeStyles) return {};
+    const properties = new Map();
+    return { setProperty(name, value) { properties.set(name, String(value)); }, getPropertyValue(name) { return properties.get(name) || ""; }, removeProperty(name) { properties.delete(name); }, properties };
+  };
   class Node {
-    constructor(tag) { this.tagName = tag; this.ownerDocument = document; this.children = []; this.attributes = new Map(); this.events = new Map(); this.parentNode = null; this.className = ""; this.style = {}; this._text = ""; }
+    constructor(tag) { this.tagName = tag; this.ownerDocument = document; this.children = []; this.attributes = new Map(); this.events = new Map(); this.parentNode = null; this.className = ""; this.style = style(); this._text = ""; }
     [Symbol.for("nodejs.util.inspect.custom")]() { return `<${this.tagName}${this.className ? ` class="${this.className}"` : ""}>`; }
     get textContent() { return this._text + this.children.map((child) => child.textContent).join(""); }
     set textContent(value) { this._text = String(value); this.replaceChildren(); }
@@ -266,6 +271,56 @@ assert.match(plcUi.popup().textContent, /Unsaved change.*Last value changed.*10 
 plcSource = null; plcUi.controller.refresh();
 assert.doesNotMatch(plcUi.popup().textContent, /Source report|Biweekly/);
 plcUi.controller.destroy();
+
+const popupThemeKeys = ["--color-page", "--color-shell", "--color-surface", "--color-header", "--color-surface-raised", "--color-surface-hover", "--color-input", "--color-accent", "--color-border", "--color-border-strong", "--color-control-border", "--color-emphasis-deep"];
+for (const className of ["viewer-info", "split-product-card"]) {
+  for (const stage of ["in-planning", "in-development"]) {
+    const themed = documentFixture({ themeStyles: true });
+    const owner = themed.document.createElement("article"), foreignOwner = themed.document.createElement("article");
+    owner.className = className; owner.setAttribute("data-card-stage", stage);
+    foreignOwner.className = className; foreignOwner.setAttribute("data-card-stage", stage === "in-planning" ? "in-development" : "in-planning");
+    owner.append(themed.ga); foreignOwner.append(themed.end); themed.container.append(owner, foreignOwner);
+    const colors = new Map(popupThemeKeys.map((name, index) => [name, ` #${(0x293440 + index).toString(16)} `]));
+    const forbidden = new Map([["--color-danger-text", "#FF0000"], ["--sku-primary", "#00FF00"], ["--unknown-theme-property", "url(https://invalid.example/private)"], ["--color-surface; background-image", "url(https://invalid.example/injected)"]]);
+    const reads = [];
+    themed.window.getComputedStyle = (node) => {
+      assert.ok(node === owner || node === foreignOwner, "The palette comes from the trigger's actual owning card, rather than the document or an unrelated card.");
+      return { cssText: "--unknown-theme-property: url(https://invalid.example/injected)", getPropertyValue(name) { reads.push({ node, name }); return (node === owner ? colors.get(name) ?? forbidden.get(name) : "#2C3F54") || ""; } };
+    };
+    themed.ga.fire("click");
+    const plannedPopup = themed.popup();
+    assert.equal(plannedPopup.parentNode, themed.document.body, "A themed history popup remains in the unclipped body portal.");
+    assert.deepEqual([...plannedPopup.style.properties], [...colors].map(([name, value]) => [name, value.trim()]), `${className} ${stage} transfers only the safe presentation palette.`);
+    assert.ok(reads.every(({ node, name }) => node === owner && popupThemeKeys.includes(name)), "Only explicit presentation properties are read from the owner.");
+    for (const name of forbidden.keys()) assert.equal(plannedPopup.style.getPropertyValue(name), "", "Semantic colors, merchandise swatches, unknown variables, and injected property names are never copied.");
+    assert.equal(plannedPopup.style.cssText, undefined, "A portal never copies a computed cssText block.");
+
+    colors.set("--color-surface", "#3E3829"); colors.delete("--color-input");
+    themed.controller.refresh();
+    assert.equal(themed.popup().style.getPropertyValue("--color-surface"), "#3E3829", "An open history popup refreshes its owner's current palette.");
+    assert.equal(themed.popup().style.getPropertyValue("--color-input"), "", "A removed owner token cannot leave an earlier inline value behind.");
+    themed.end.fire("click");
+    assert.ok([...themed.popup().style.properties.values()].every((value) => value === "#2C3F54"), "Opening a different product's date adopts that product's palette without leaking the previous card's colors.");
+    assert.ok(reads.slice(-popupThemeKeys.length).every(({ node }) => node === foreignOwner));
+
+    themed.controller.close(); themed.container.append(themed.ga);
+    const readsBeforeNeutral = reads.length;
+    themed.ga.fire("click");
+    assert.equal(themed.popup().style.properties.size, 0, "An unowned date popup retains the neutral theme after a colored popup closes.");
+    assert.equal(reads.length, readsBeforeNeutral, "Neutral popups do not read presentation styles from another card.");
+
+    owner.append(themed.ga); themed.controller.refresh();
+    assert.equal(themed.popup().style.getPropertyValue("--color-surface"), "#3E3829");
+    owner.setAttribute("data-card-stage", "embargo"); themed.controller.refresh();
+    assert.equal(themed.popup().style.properties.size, 0, "A cached popup clears the stage palette when its owner becomes neutral or loses a supported stage.");
+    themed.controller.destroy();
+  }
+}
+const unsupportedTheme = documentFixture();
+unsupportedTheme.container.className = "viewer-info"; unsupportedTheme.container.setAttribute("data-card-stage", "in-planning");
+unsupportedTheme.window.getComputedStyle = () => { throw new Error("A fake style without setProperty must not request a palette."); };
+unsupportedTheme.ga.fire("click"); assert.ok(unsupportedTheme.popup(), "Theme inheritance tolerates minimal DOM adapters without CSSStyleDeclaration methods.");
+unsupportedTheme.controller.destroy();
 
 const css = await readFile(new URL("../../public/css/date-history.css", import.meta.url), "utf8");
 assert.match(css, /\.date-history-popup\s*\{[^}]*position:\s*fixed;/);

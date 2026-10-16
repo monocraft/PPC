@@ -1903,7 +1903,7 @@ function detailedSpecsHeight(product, categoryId = activeCategoryId) {
 function productCardLayout(targetBoard = board, definition = categoryDefinition(), { includeControls = true } = {}) {
   const cache = globalThis.PortfolioViewRuntime?.layoutCache;
   const coarsePointer = globalThis.matchMedia?.("(pointer: coarse)")?.matches === true;
-  const actionPixels = coarsePointer ? (CARD_WIDTH * zoom < 110 ? 96 : 52) : 36;
+  const actionPixels = coarsePointer ? (CARD_WIDTH * zoom < 110 ? 102 : 58) : 44;
   const actionHeight = globalThis.PortfolioViewRuntime && includeControls && targetBoard === board && activeView === "products" && !pptxExportInProgress ? actionPixels / zoom : 0;
   const cacheKey = `${typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision}:${definition.id || ""}:${definition.fullSpecCards === true}:${targetBoard.settings.showSkus}:${targetBoard.products.length}:${targetBoard.lanes?.length || 0}:${actionHeight}`;
   const cached = cache?.get(targetBoard, cacheKey);
@@ -2706,6 +2706,7 @@ function productPresentation(product) {
     discontinued,
     cardStage,
     cardStyle,
+    controlStyle: globalThis.PortfolioTheme?.productActionStyle?.(product, discontinued) || null,
     status,
     hasVariant,
     hasStatus: Boolean(status.label),
@@ -4466,7 +4467,7 @@ function renderSplitProduct() {
   if (globalThis.PortfolioViewRuntime?.panelCache.unchanged(splitProduct, signature)) return;
   const labelColor = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
   splitProduct.innerHTML = `
-    <article class="split-product-card split-product-card--detail${presentation.discontinued ? ' is-discontinued' : ''}" data-card-stage="${escapeHtml(presentation.cardStage)}" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)};--product-card-surface:${escapeHtml(presentation.cardStyle?.surface || UI_PALETTE.carbon)};--product-card-accent:${escapeHtml(presentation.cardStyle?.muted || UI_PALETTE.silver)};--product-card-footer:${escapeHtml(presentation.cardStyle?.footer || UI_PALETTE.charcoal700)}">
+    <article class="split-product-card split-product-card--detail${presentation.discontinued ? ' is-discontinued' : ''}" data-card-stage="${escapeHtml(presentation.cardStage)}" data-card-theme="${escapeHtml(presentation.controlStyle?.name || "neutral")}" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)};--product-card-surface:${escapeHtml(presentation.cardStyle?.surface || UI_PALETTE.carbon)};--product-card-accent:${escapeHtml(presentation.cardStyle?.muted || (presentation.controlStyle?.name === "embargo" ? presentation.controlStyle.focus : UI_PALETTE.silver))};--product-card-footer:${escapeHtml(presentation.cardStyle?.footer || UI_PALETTE.charcoal700)}">
       ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(labelColor)}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
       <div class="split-product-hero">
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
@@ -4947,9 +4948,10 @@ function positionViewerInfo() {
   viewerInfo.style.setProperty("--viewer-info-band-height", `${stacked ? 0 : STATUS_BANNER_HEIGHT * zoom}px`);
   viewerInfo.style.setProperty("--viewer-info-band-color", presentation.primaryLabel ? presentation.primaryColor : UI_PALETTE.carbon);
   viewerInfo.style.setProperty("--product-card-surface", presentation.cardStyle?.surface || UI_PALETTE.carbon);
-  viewerInfo.style.setProperty("--product-card-accent", presentation.cardStyle?.muted || UI_PALETTE.silver);
+  viewerInfo.style.setProperty("--product-card-accent", presentation.cardStyle?.muted || (presentation.controlStyle?.name === "embargo" ? presentation.controlStyle.focus : UI_PALETTE.silver));
   viewerInfo.style.setProperty("--product-card-footer", presentation.cardStyle?.footer || UI_PALETTE.charcoal700);
   viewerInfo.dataset.cardStage = presentation.cardStage;
+  viewerInfo.dataset.cardTheme = presentation.controlStyle?.name || "neutral";
   viewerInfo.style.left = `${left}px`;
   viewerInfo.style.top = `${top}px`;
   viewerInfo.style.transform = "none";
@@ -5418,6 +5420,12 @@ function openVariantPopover(region, clientX, clientY, { pinned = false } = {}) {
   if (!product) return;
   const groups = region.groups.filter((group) => Array.isArray(group.items) && group.items.length);
   if (!groups.length) return;
+  const presentation = productPresentation(product);
+  variantPopover.dataset.cardStage = presentation.cardStage;
+  variantPopover.dataset.cardTheme = presentation.controlStyle?.name || "neutral";
+  variantPopover.style.setProperty("--product-card-surface", presentation.cardStyle?.surface || UI_PALETTE.carbon);
+  variantPopover.style.setProperty("--product-card-accent", presentation.cardStyle?.muted || (presentation.controlStyle?.name === "embargo" ? presentation.controlStyle.focus : UI_PALETTE.silver));
+  variantPopover.style.setProperty("--product-card-footer", presentation.cardStyle?.footer || UI_PALETTE.charcoal700);
   variantPopover.innerHTML = `
     <div class="variant-popover-heading">
       <span class="eyebrow">Additional variants</span>
@@ -6315,7 +6323,15 @@ function syncProductCardActions() {
     if (row.style.transform !== transform) row.style.transform = transform;
     if (row.style.width !== width) row.style.width = width;
     row.classList.toggle("is-discontinued", card.discontinued === true);
-    const cardStyle = productPresentation(product).cardStyle;
+    const presentation = productPresentation(product);
+    const cardStyle = presentation.cardStyle;
+    const actionStyle = presentation.controlStyle;
+    row.dataset.cardTheme = actionStyle?.name || "neutral";
+    if (actionStyle) for (const [token, value] of Object.entries(actionStyle)) {
+      if (token === "name") continue;
+      const property = `--card-action-${token === "hoverInk" ? "hover-ink" : token}`;
+      if (row.style.getPropertyValue(property) !== value) row.style.setProperty(property, value);
+    }
     row.classList.toggle("is-stage-colored", Boolean(cardStyle));
     row.style.setProperty("--product-card-accent", cardStyle?.muted || UI_PALETTE.silver);
     row.style.setProperty("--product-card-footer", cardStyle?.footer || UI_PALETTE.charcoal700);

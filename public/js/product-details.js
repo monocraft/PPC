@@ -269,7 +269,7 @@
         row?.classList.toggle("is-copied", copied);
         if (copyStatus) copyStatus.textContent = copied ? `HP SKU ${button.dataset.detailCopy} copied.` : `Could not copy HP SKU ${button.dataset.detailCopy}. Try again.`;
         if (copied && !root.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-          pulse = row?.animate?.([{ backgroundColor: "var(--palette-indigo-dark)" }, { backgroundColor: "#34453a", offset: 0.25 }, { backgroundColor: "var(--palette-indigo-dark)" }], { duration: 700, easing: "ease-out" });
+          pulse = row?.animate?.([{ backgroundColor: "var(--color-shell)" }, { backgroundColor: "var(--color-header)", offset: 0.25 }, { backgroundColor: "var(--color-shell)" }], { duration: 700, easing: "ease-out" });
         }
         resetTimer = setTimeout(() => {
           if (!label.isConnected) return;

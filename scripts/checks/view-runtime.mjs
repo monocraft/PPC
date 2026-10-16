@@ -146,7 +146,7 @@ const screen = layoutContext.productCardLayout();
 for (let i = 0; i < 30; i++) assert.equal(layoutContext.productCardLayout(), screen);
 assert.equal(specMeasurements, 40, "thirty animation frames measure each product only once");
 const exported = layoutContext.productCardLayout(board, { id: "audio" }, { includeControls: false });
-assert.ok(Math.abs((screen.cardHeight - exported.cardHeight) * .9 - 36) < 1e-8);
+assert.ok(Math.abs((screen.cardHeight - exported.cardHeight) * .9 - 44) < 1e-8);
 assert.equal(exported.actionHeight, 0, "exports omit the native action row");
 layoutContext.workspaceSaveRevision++; layoutContext.productCardLayout(); assert.equal(specMeasurements, 120, "data revision invalidates the cached layout");
 assert.equal(JSON.stringify(board), boardBefore);
@@ -182,6 +182,57 @@ for (const detailed of [false, true]) {
   }
 }
 assert.equal(JSON.stringify(mixedBoard.products), mixedProductsBefore);
+
+// The reused variant popup takes the actual product palette on every opening,
+// while preserving its positioning, true swatches and full readable opacity.
+{
+  const popover = node(), popoverProperties = new Map(), closeButton = {}, closes = [];
+  popover.style.setProperty = (name, value) => popoverProperties.set(name, value);
+  popover.getBoundingClientRect = () => ({ width: 330, height: 140 });
+  const variants = [{ type: "color", label: "Colors", items: [{ id: "blue", code: "BL", label: "Blue", colorHex: "#123456", colorHex2: "#FEDCBA" }] }];
+  const products = [
+    { id: "planned", roadmap: { status: "in-planning" } },
+    { id: "development", statusType: "in-development", roadmap: { status: "in-development" } },
+    { id: "embargo", statusType: "embargo", roadmap: { status: "in-planning" } },
+    { id: "neutral", roadmap: { status: "launched" } },
+    { id: "new", statusType: "new", roadmap: { status: "launched" } },
+    { id: "sunsetting", statusType: "sunsetting", roadmap: { status: "launched" } },
+    { id: "discontinued", endManufacturingDate: "2000-01-01", roadmap: { status: "in-planning" } },
+  ];
+  const productsBefore = JSON.stringify(products), variantsBefore = JSON.stringify(variants);
+  const variantContext = { board: { products }, variantPopover: popover, variantPopoverPinned: false, variantPopoverKey: "",
+    window: { innerWidth: 1000, innerHeight: 600 }, clearVariantHoverTimers() {},
+    standardizedStatus: () => ({ label: "" }), escapeHtml: value => String(value), activeHeroVariant: () => null,
+    $: () => closeButton, closeVariantPopover: options => closes.push(options),
+  };
+  vm.createContext(variantContext);
+  vm.runInContext(await fs.readFile(new URL("../../public/js/reference-theme.js", import.meta.url), "utf8"), variantContext);
+  vm.runInContext(await fs.readFile(new URL("../../public/js/portfolio-model.js", import.meta.url), "utf8"), variantContext);
+  variantContext.UI_PALETTE = variantContext.PortfolioTheme.uiPalette;
+  vm.runInContext(["productPresentation", "variantPopoverItemHtml", "positionVariantPopover", "openVariantPopover"].map(extract).join("\n"), variantContext);
+  for (const id of ["planned", "neutral", "development", "embargo", "new", "planned", "discontinued", "development", "sunsetting", "neutral"]) {
+    const product = products.find(item => item.id === id), presentation = variantContext.productPresentation(product);
+    variantContext.openVariantPopover({ key: `variants-${id}`, productId: id, groups: variants }, 113, 81, { pinned: true });
+    assert.equal(popover.dataset.cardStage, presentation.cardStage, `${id} resets the shared popup's previous stage.`);
+    assert.equal(popover.dataset.cardTheme, presentation.controlStyle.name, `${id} resets the shared popup's previous control theme.`);
+    const colored = ["planned", "development"].includes(id), expectedStage = id === "planned" ? "in-planning" : "in-development";
+    const style = colored ? variantContext.PortfolioTheme.productCardStyles[expectedStage] : null;
+    assert.equal(popoverProperties.get("--product-card-surface"), style?.surface || "#242527");
+    assert.equal(popoverProperties.get("--product-card-footer"), style?.footer || "#333538");
+    assert.equal(popoverProperties.get("--product-card-accent"), style?.muted || (id === "embargo" ? "#FF8A8A" : "#BBBCC0"));
+    assert.equal(popover.style.left, "127px"); assert.equal(popover.style.top, "91px", "Theme changes cannot alter the established popup placement.");
+    assert.equal(popover.style.opacity, undefined, "The independent variant list retains full opacity even when its source product is discontinued.");
+    assert.equal(popover.classList.contains("hidden"), false); assert.equal(popover.classList.contains("is-pinned"), true);
+    assert.equal(popover.attributes.get("aria-hidden"), "false"); assert.equal(variantContext.variantPopoverKey, `variants-${id}`);
+    assert.match(popover.innerHTML, /--variant-primary:#123456;--variant-secondary:#FEDCBA/, "Merchandise swatches retain the actual product colors in every lifecycle theme.");
+    assert.doesNotMatch(popover.innerHTML, /split-status|IN-PLANNING|IN-DEVELOPMENT|Discontinued|EMBARGO/, "A variant popup does not invent a new lifecycle banner.");
+  }
+  closeButton.onclick(); assert.deepEqual(plain(closes), [{ force: true }], "The pinned popup keeps its ordinary close control.");
+  assert.equal(JSON.stringify(products), productsBefore); assert.equal(JSON.stringify(variants), variantsBefore, "The presentation change cannot mutate product metadata or variant groups.");
+  const styles = await fs.readFile(new URL("../../public/css/styles.css", import.meta.url), "utf8");
+  assert.match(styles, /\.variant-popover\[data-card-stage="in-planning"\],\s*\.variant-popover\[data-card-stage="in-development"\]\s*\{[^}]*--color-surface:\s*var\(--product-card-surface\)/, "Colored variant lists participate in the complete scoped card palette.");
+  assert.match(styles, /\.variant-popover\[data-card-theme="embargo"\]\s*\{\s*--color-accent:\s*var\(--product-card-accent\);\s*\}/, "Embargo retains a neutral body with its existing warning accent.");
+}
 // The recess stays within its physical card and reserved action band. On touch,
 // narrow zoomed cards stack the independent 44px targets above the SKU footer.
 placementContext.CARD_WIDTH = 246;
@@ -198,8 +249,9 @@ for (const coarse of [false, true]) {
     const right = placement.x + placement.width;
     assert.ok(right - groupWidth >= card.x * scale - 1e-8, "the complete recess fits the physical card at every zoom");
     assert.ok(right <= (card.x + card.width) * scale + 1e-8, "the recess cannot reach the neighboring card");
-    assert.ok(placement.y + groupHeight <= (card.y + layout.actionTop + layout.actionHeight) * scale + 1e-8,
-      "the complete hit area remains above the reserved SKU footer");
+    const footerClearance = (card.y + layout.actionTop + layout.actionHeight) * scale - (placement.y + groupHeight);
+    assert.ok(footerClearance >= 8 - 1e-8,
+      "the recess keeps at least eight physical pixels clear of every SKU footer at any zoom or pointer size");
     assert.equal(placementContext.productCardLayout(mixedBoard, placementContext.categoryDefinition(), { includeControls: false }).actionHeight, 0,
       "desktop and touch exports both omit the interactive recess");
   }
