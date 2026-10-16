@@ -147,6 +147,7 @@ const STANDARD_CARD_STATUSES = {
   embargo: { label: "UPCOMING UNDER EMBARGO", color: PortfolioModel.THEME_ACCENTS.embargo },
   "in-development": { label: "IN-DEVELOPMENT", color: PortfolioModel.THEME_ACCENTS.inDevelopment },
   sunsetting: { label: "SUNSETTING", color: PortfolioModel.THEME_ACCENTS.sunsetting },
+  discontinued: { label: "DISCONTINUED", color: PortfolioModel.lifecycleTone("end-of-life") },
 };
 
 const PRODUCT_TIER_OPTIONS = ["", "Core", "Core+", "Hero", "Star", "Star+"];
@@ -1194,7 +1195,7 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
       product.statusType = "none";
     }
     product.statusType = normalizeCardStatusType(product.statusType);
-    product.statusLabel = standardizedStatus(product.statusType).label;
+    product.statusLabel = product.statusType === "discontinued" ? String(product.statusLabel || "") : standardizedStatus(product.statusType).label;
     product.variantLabel = String(product.variantLabel || "");
     product.variantColor = String(product.variantColor || product.highlightColor || SAVED_PRODUCT_PALETTE.steelTeal);
     if (product.variantColor.toLowerCase() === "#3f6f91") product.variantColor = SAVED_PRODUCT_PALETTE.steelTeal;
@@ -1281,6 +1282,35 @@ function normalizeCardStatusType(type) {
 
 function standardizedStatus(type) {
   return STANDARD_CARD_STATUSES[normalizeCardStatusType(type)];
+}
+
+function effectiveCardStatus(product) {
+  return PortfolioModel.isDiscontinued(product) ? "discontinued" : normalizeCardStatusType(product?.statusType);
+}
+
+function effectiveRoadmapStatus(product) {
+  return PortfolioModel.isDiscontinued(product) ? "end-of-life" : normalizeRoadmapStatus(product?.roadmap?.status);
+}
+
+// Pair the two status controls only when the owner explicitly changes one.
+// Reading an existing End of life record must not create a new shared draft.
+function productStatusPatch(product, value) {
+  const statusType = normalizeCardStatusType(value);
+  const patch = { statusType, statusLabel: standardizedStatus(statusType).label };
+  if (statusType === "discontinued") patch.roadmap = { status: "end-of-life" };
+  else if (product?.roadmap?.status === "end-of-life") {
+    patch.roadmap = { status: statusType === "in-development" ? "in-development" : statusType === "embargo" ? "embargo" : "launched" };
+  }
+  return patch;
+}
+
+function roadmapStatusPatch(product, value) {
+  const status = normalizeRoadmapStatus(value), patch = { roadmap: { status } };
+  if (status === "end-of-life" || product?.statusType === "discontinued") {
+    const statusType = status === "end-of-life" ? "discontinued" : ["in-development", "embargo"].includes(status) ? status : "none";
+    Object.assign(patch, { statusType, statusLabel: standardizedStatus(statusType).label });
+  }
+  return patch;
 }
 
 function catalogImageAssetId(categoryId, productId) {
@@ -1849,7 +1879,7 @@ function syncCatalogFilterControls() {
   const choices = categories.map(category => PortfolioModel.catalogVisibilitySelection(category.board.settings));
   const exclusions = categories.map(category => PortfolioModel.catalogVisibilityExclusions(category.board.settings));
   const mixed = new Set(choices.map((selection, index) => JSON.stringify([selection, exclusions[index]]))).size > 1;
-  const labels = { all: "All products", launched: "Launched", "in-development": "In development", "in-planning": "In planning", embargo: "Embargoed", unreleased: "Upcoming · Stage unconfirmed", eol: "EOL · End of manufacture" };
+  const labels = { all: "All products", launched: "Launched", "in-development": "In development", "in-planning": "In planning", embargo: "Embargoed", unreleased: "Upcoming · Stage unconfirmed", eol: "EOL · End of life" };
   const locked = productLayoutEditing || packageOperationInProgress || pptxExportInProgress || Boolean(typeof roadmapDraft !== "undefined" && roadmapDraft);
   const scopeLabel = scoped ? `across ${categories.length} selected ${categories.length === 1 ? "category" : "categories"}` : "in this category";
   const shortLabels = { ...labels, eol: "EOL", unreleased: "Upcoming" };
@@ -4513,7 +4543,7 @@ function productDetailsModel(product) {
     }),
     lifecycle: [
       ...plannedDates,
-      { key: "stage", label: "Stage", value: splitRoadmapStatusLabel(roadmap.status) },
+      { key: "stage", label: "Stage", value: splitRoadmapStatusLabel(PortfolioModel.isDiscontinued(product) ? "end-of-life" : roadmap.status) },
       { key: "confidence", label: "Confidence", value: roadmap.confidence || "Not set" },
     ],
     skus: productPartSkus(product).map((sku) => ({ code: sku.code, colors: PortfolioModel.resolveSkuColors(sku, displayProduct) })),
@@ -5698,6 +5728,7 @@ function renderInspector() {
   editSelectedButton.disabled = false;
   const featureSpecs = globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs;
   const imageAssetSummary = imageAssetSummaryHtml(product.imageAssetId, "No product image · category placeholder is used");
+  const statusSelection = effectiveCardStatus(product), lifecycleSelection = effectiveRoadmapStatus(product);
   inspector.innerHTML = `
     <div class="inspector-heading">
       <div><span class="eyebrow">Selected product</span><h2>${escapeHtml(product.name)}</h2></div>
@@ -5819,13 +5850,15 @@ function renderInspector() {
     <section class="panel-section">
       <h3>Status and variant label</h3>
       <label>Status<select id="fieldStatus">
-        <option value="none" ${product.statusType === "none" ? "selected" : ""}>None</option>
-        <option value="new" ${product.statusType === "new" ? "selected" : ""}>New product</option>
-        <option value="embargo" ${product.statusType === "embargo" ? "selected" : ""}>Upcoming under embargo</option>
-        <option value="in-development" ${product.statusType === "in-development" ? "selected" : ""}>In development</option>
-        <option value="sunsetting" ${product.statusType === "sunsetting" ? "selected" : ""}>Sunsetting</option>
+        <option value="none" ${statusSelection === "none" ? "selected" : ""}>None</option>
+        <option value="new" ${statusSelection === "new" ? "selected" : ""}>New product</option>
+        <option value="embargo" ${statusSelection === "embargo" ? "selected" : ""}>Upcoming under embargo</option>
+        <option value="in-development" ${statusSelection === "in-development" ? "selected" : ""}>In development</option>
+        <option value="sunsetting" ${statusSelection === "sunsetting" ? "selected" : ""}>Sunsetting</option>
+        <option value="discontinued" ${statusSelection === "discontinued" ? "selected" : ""}>Discontinued</option>
       </select></label>
       <p class="standard-status-note">Status colors are shared across product cards and the roadmap.</p>
+      <p class="standard-status-note">Discontinued is linked to End of life. A completed manufacturing end date also marks a product discontinued; changing status keeps its dates.</p>
       <label class="checkbox-label"><input id="fieldVariantEnabled" type="checkbox" ${product.variantLabel ? "checked" : ""}>Show a platform or variant label</label>
       <div id="variantBannerFields" class="${product.variantLabel ? "" : "is-disabled"}">
         <label>Variant label<input id="fieldVariantLabel" value="${escapeHtml(product.variantLabel || "")}" placeholder="PLAYSTATION, XBOX, SUNSETTING…"></label>
@@ -5837,11 +5870,11 @@ function renderInspector() {
       <div class="roadmap-section-grid">
         <label class="full">Product family<input id="fieldRoadmapFamily" value="${escapeHtml(product.roadmap.family)}" placeholder="Cloud, Stinger, Jet…"></label>
         <label>Status<select id="fieldRoadmapStatus">
-          <option value="launched" ${product.roadmap.status === "launched" ? "selected" : ""}>Launched</option>
-          <option value="in-development" ${product.roadmap.status === "in-development" ? "selected" : ""}>In development</option>
-          <option value="in-planning" ${product.roadmap.status === "in-planning" ? "selected" : ""}>In planning</option>
-          <option value="embargo" ${product.roadmap.status === "embargo" ? "selected" : ""}>Under embargo</option>
-          <option value="end-of-life" ${product.roadmap.status === "end-of-life" ? "selected" : ""}>End of life</option>
+          <option value="launched" ${lifecycleSelection === "launched" ? "selected" : ""}>Launched</option>
+          <option value="in-development" ${lifecycleSelection === "in-development" ? "selected" : ""}>In development</option>
+          <option value="in-planning" ${lifecycleSelection === "in-planning" ? "selected" : ""}>In planning</option>
+          <option value="embargo" ${lifecycleSelection === "embargo" ? "selected" : ""}>Under embargo</option>
+          <option value="end-of-life" ${lifecycleSelection === "end-of-life" ? "selected" : ""}>End of life</option>
         </select></label>
         <label>Confidence<select id="fieldRoadmapConfidence">
           <option value="low" ${product.roadmap.confidence === "low" ? "selected" : ""}>Low</option>
@@ -6014,10 +6047,7 @@ function renderInspector() {
     const imageAssetId = value ? createUrlImageAsset(value, product.name) : "";
     await setProductImageAsset(product.id, imageAssetId);
   });
-  bindValue("#fieldStatus", "change", (value) => updateProduct(product.id, {
-    statusType: normalizeCardStatusType(value),
-    statusLabel: standardizedStatus(value).label,
-  }, true));
+  bindValue("#fieldStatus", "change", (value) => updateProduct(product.id, productStatusPatch(product, value), true));
   $("#fieldVariantEnabled").onchange = (event) => updateProduct(product.id, {
     variantLabel: event.target.checked ? (product.variantLabel || "VARIANT") : "",
   }, true);
@@ -6029,7 +6059,7 @@ function renderInspector() {
     field.scrollIntoView({ block: "center", behavior: "smooth" });
     field.focus({ preventScroll: true });
   };
-  bindValue("#fieldRoadmapStatus", "change", (value) => updateRoadmap(product.id, { status: value }));
+  bindValue("#fieldRoadmapStatus", "change", (value) => updateProduct(product.id, roadmapStatusPatch(product, value), true));
   bindValue("#fieldRoadmapConfidence", "change", (value) => updateRoadmap(product.id, { confidence: value }));
   bindValue("#fieldRoadmapPredecessor", "change", (value) => updateRoadmap(product.id, { predecessorId: value }));
   bindValue("#fieldRoadmapSuccessor", "change", (value) => updateRoadmap(product.id, { successorId: value }));
@@ -7554,11 +7584,11 @@ function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
         id: category.id, name: category.name || category.id,
         products: roadmapGroupsForProducts(PortfolioModel.catalogProducts(targetBoard.products, targetBoard.settings), targetBoard, definition).flatMap(group => group.products.map(product => {
           const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
-          const status = standardizedStatus(product.statusType);
+          const status = standardizedStatus(product.statusType), discontinued = PortfolioModel.isDiscontinued(product);
           return { id: product.id, name: product.name, family: group.family, startMonth: roadmap?.startMonth || roadmap?.launchMonth || "", endMonth: roadmap?.endMonth || "",
             ...(isFfsRoadmap() ? { ffs: globalThis.PortfolioFfsRoadmap.period(product), nameProvisional: product.nameProvisional === true } : {}),
-            fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), status: roadmap?.status || "",
-            statusLabel: isFfsRoadmap() ? ffsRoadmapStageLabel(product) : status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
+            fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)), status: discontinued ? "end-of-life" : roadmap?.status || "",
+            statusLabel: discontinued ? "End of life" : isFfsRoadmap() ? ffsRoadmapStageLabel(product) : status.label || splitRoadmapStatusLabel(roadmap?.status), priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "" };
         })),
       }));
       const options = roadmapOptions || { mode: "categories", startMonth: portfolio.settings.timeline.startMonth, endMonth: portfolio.settings.timeline.endMonth, overflow: "ask" };

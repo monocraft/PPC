@@ -118,7 +118,7 @@ for (const [stage, accent] of [["in-planning", "#FFC63B"], ["in-development", "#
 }
 
 // Secondary actions follow saved lifecycle evidence without mutating product
-// facts. A stage-only EOL is not a confirmed EOM.
+// facts. Explicit Discontinued and roadmap EOL need no fabricated EOM.
 const actionStyleNames = ["neutral", "in-planning", "in-development", "embargo", "discontinued"];
 assert.ok(Object.isFrozen(theme.productActionStyles), "action palettes cannot be changed by a card consumer");
 assert.deepEqual(Object.keys(theme.productActionStyles).sort(), [...actionStyleNames].sort());
@@ -140,16 +140,17 @@ for (const name of actionStyleNames) {
   assert.ok(style.divider.trim().length, `${name} provides its own subdued divider`);
 }
 const actionFixtures = [];
-for (const statusType of [undefined, "none", "new", "embargo", "in-development", "sunsetting", "unknown"]) {
+for (const statusType of [undefined, "none", "new", "embargo", "in-development", "sunsetting", "discontinued", "unknown"]) {
   for (const stage of [undefined, "launched", "in-development", "in-planning", "embargo", "end-of-life", "unknown"]) {
     const product = { id: `action-${actionFixtures.length}`, statusType, roadmap: { status: stage }, color: "#80958F", endManufacturingDate: "9999-12-31", imageAssetId: "retained-hero" };
     actionFixtures.push(product);
     const before = JSON.stringify(product);
-    const expected = statusType === "embargo" || stage === "embargo" ? "embargo"
+    const expected = statusType === "discontinued" || stage === "end-of-life" ? "discontinued"
+      : statusType === "embargo" || stage === "embargo" ? "embargo"
       : statusType === "in-development" ? "in-development"
         : ["in-development", "in-planning"].includes(stage) ? stage : "neutral";
     assert.equal(theme.productActionStyle(product), theme.productActionStyles[expected], `${statusType}/${stage} chooses the existing lifecycle scheme`);
-    assert.equal(theme.productCardStage(product), expected === "neutral" ? "" : expected, `${statusType}/${stage} chooses the corresponding native card palette`);
+    assert.equal(theme.productCardStage(product), ["neutral", "discontinued"].includes(expected) ? "" : expected, `${statusType}/${stage} chooses the corresponding native card palette`);
     assert.equal(theme.productActionStyle(product, false), theme.productActionStyles[expected]);
     assert.equal(theme.productActionStyle(product, true), theme.productActionStyles.discontinued, `confirmed EOM wins over ${statusType}/${stage}`);
     assert.equal(JSON.stringify(product), before, "action styling never rewrites lifecycle, merchandise color or artwork evidence");
@@ -236,6 +237,16 @@ for (const failure of [() => { throw new Error("font unavailable"); }, () => Pro
 }
 
 for (const file of ["js/portfolio-model.js", "js/card-specs.js", "js/pptx-editable.js"]) vm.runInContext(await read(file), sandbox);
+for (const product of [
+  { statusType: "discontinued", roadmap: { status: "embargo" } },
+  { statusType: "embargo", roadmap: { status: "end-of-life" } },
+  { statusType: "in-development", roadmap: { status: "in-planning" }, endManufacturingDate: "2000-01-01" },
+]) {
+  const before = JSON.stringify(product);
+  assert.equal(theme.productCardStage(product), "", "discontinued status, EOL and date evidence suppress stale active card palettes after model initialization");
+  assert.equal(theme.productActionStyle(product), theme.productActionStyles.discontinued);
+  assert.equal(JSON.stringify(product), before, "runtime theme derivation preserves saved product status, dates and metadata");
+}
 const pptxFont = "HP Forma DJR Office";
 assert.equal(sandbox.PPTXEditable.FONT_FACE, pptxFont, "all PowerPoint exports use the supplied HP family");
 assert.equal(theme.fontFace, "Jost", "the PowerPoint-only font change preserves the website font");

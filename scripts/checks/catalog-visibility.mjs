@@ -27,6 +27,9 @@ const cases = [
   [stage("in-development"), today, "unreleased", "explicit development"],
   [stage("embargo"), today, "unreleased", "roadmap embargo"],
   [stage("end-of-life"), today, "eol", "explicit EOL without a date"],
+  [{ statusType: "discontinued" }, today, "eol", "explicit product Discontinued without a date"],
+  [{ statusType: "discontinued", ...stage("embargo"), endManufacturingDate: "9999-12-31" }, today, "eol", "Discontinued precedes stale Embargo and future EOM"],
+  [{ statusType: "discontinued" }, new Date(NaN), "eol", "explicit Discontinued needs no clock"],
   [{ statusType: "in-development", ...stage("launched") }, today, "unreleased", "development flag takes precedence"],
   [{ statusType: "embargo", ...stage("launched") }, today, "unreleased", "embargo flag takes precedence"],
   [{ statusType: "new" }, today, "unknown", "New is not launch evidence"],
@@ -92,11 +95,11 @@ assert.equal(model.catalogProducts(products, { catalogGroup: "all", hideDisconti
 for (const [group, expected] of [["launched", ["launched"]], ["unreleased", ["unreleased"]], ["eol", ["dated-eol", "stage-eol"]]]) {
   for (const legacy of [false, true]) assert.deepEqual(model.catalogProducts(products, { catalogGroup: group, hideDiscontinued: legacy }, today).map(p => p.id), expected);
 }
-assert.deepEqual(model.catalogProducts(products, { hideDiscontinued: true }, today).map(p => p.id), ["launched", "unreleased", "stage-eol", "unknown"], "legacy checkbox keeps its original date-only meaning");
+assert.deepEqual(model.catalogProducts(products, { hideDiscontinued: true }, today).map(p => p.id), ["launched", "unreleased", "unknown"], "legacy checkbox follows the same explicit EOL and date evidence as the cards");
 assert.equal(model.catalogProducts(products, { hideDiscontinued: "true" }, today), products);
 for (const value of [null, false, "unknown", "ALL", "constructor", {}, []]) {
   assert.equal(model.catalogProducts(products, { catalogGroup: value }, today), products, "invalid model preference fails safely without dropping cards");
-  assert.equal(model.catalogProducts(products, { catalogGroup: value, hideDiscontinued: true }, today).length, 4, "invalid mode cannot bypass an old explicit hide");
+  assert.equal(model.catalogProducts(products, { catalogGroup: value, hideDiscontinued: true }, today).length, 3, "invalid mode cannot bypass an old explicit hide");
 }
 assert.deepEqual(model.catalogLifecycleCounts(products, today), { all: 5, launched: 1, unreleased: 1, eol: 2, unknown: 1 });
 assert.deepEqual(model.catalogLifecycleCounts(null, today), { all: 0, launched: 0, unreleased: 0, eol: 0, unknown: 0 });
@@ -128,6 +131,7 @@ for (const [product, expected] of [
   [{ statusType: "in-development", ...stage("embargo") }, "embargo"],
   [{ statusType: "embargo", ...stage("in-development") }, "embargo"],
   [{ statusType: "embargo", ...stage("end-of-life") }, "eol"],
+  [{ statusType: "discontinued", ...stage("embargo") }, "eol"],
   [{ ...stage("in-development"), endManufacturingDate: "2000-01-01" }, "eol"],
   [gaQuarter(2026, 4), "unknown"],
   [gaQuarter(2099, 1), "unreleased"],
@@ -138,7 +142,7 @@ for (const [product, expected] of [
 assert.deepEqual(model.catalogVisibilitySelection({ catalogGroups: [] }), []);
 assert.deepEqual(model.catalogVisibilitySelection({ catalogGroups: ["all"], catalogGroup: "eol", hideDiscontinued: true }), ["all"]);
 assert.deepEqual(model.catalogVisibilitySelection({ catalogGroup: "unreleased" }), ["in-development", "in-planning", "embargo", "unreleased"], "older Unreleased choice retains the whole upcoming parent group");
-assert.equal(model.catalogVisibilitySelection({ hideDiscontinued: true }), null, "date-only legacy hide retains its distinct meaning");
+assert.equal(model.catalogVisibilitySelection({ hideDiscontinued: true }), null, "legacy hide remains compatible while following current discontinuation evidence");
 assert.equal(model.catalogProducts(detailProducts, { catalogGroups: ["all"] }, today), detailProducts, "All retains unknown lifecycle products and object identities");
 assert.deepEqual(model.catalogProducts(detailProducts, { catalogGroups: [] }, today), [], "explicit empty imported selection displays no products");
 for (let mask = 0; mask < 64; mask++) {
