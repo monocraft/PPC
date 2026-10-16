@@ -1,6 +1,13 @@
-/* Search suggestions sit above the board without taking up toolbar space. */
-.portfolio-search-shell { position: relative; flex: 0 1 auto; width: min(310px, 32vw); min-width: 160px; max-width: 100%; }
-.portfolio-search-shell > .search-shell { width: 100%; min-width: 0; }
+/* Keep idle search to a magnifier; engagement reveals the native input. */
+.portfolio-search-shell { --search-idle-width: 36px; position: relative; flex: 0 0 var(--search-idle-width); width: var(--search-idle-width); min-width: 0; max-width: 100%; transition: flex-basis 180ms ease, width 180ms ease; }
+.portfolio-search-shell:is(.is-engaged, :focus-within) { flex: 0 1 360px; width: 360px; }
+.portfolio-search-shell > .search-shell { width: 100%; min-width: 0; gap: 0; min-height: 32px; cursor: text; background: var(--color-surface); transition: background-color 180ms ease; }
+.portfolio-search-shell > .search-shell > span { flex: 0 0 18px; margin-left: 8px; padding: 0; pointer-events: none; }
+.portfolio-search-shell .search-input { flex: 1 1 0; width: 0; min-width: 0; padding-inline: 0; opacity: 0; transition: opacity 120ms ease; }
+.portfolio-search-shell:is(.is-engaged, :focus-within) > .search-shell { background: var(--color-input); }
+.portfolio-search-shell:is(.is-engaged, :focus-within) .search-input { padding-right: 8px; opacity: 1; }
+.portfolio-search-shell:focus-within > .search-shell { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.portfolio-search-shell .search-input:focus-visible { outline: none; }
 .portfolio-search-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 55; width: max(100%, 380px); max-width: calc(100vw - 40px); max-height: min(320px, var(--portfolio-search-height, 320px)); padding: 0 0 5px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); box-shadow: var(--shadow-overlay); color: var(--color-text, #D5D7DC); }
 .portfolio-search-panel[hidden], .portfolio-search-panel [hidden] { display: none; }
 .portfolio-search-header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 9px 11px; border-bottom: 1px solid transparent; background: var(--color-header); font-size: 10px; line-height: 1.4; }
@@ -22,12 +29,19 @@
 .portfolio-search-more { display: block; width: calc(100% - 16px); min-height: 29px; margin: 3px 8px; padding: 5px 8px; border-color: transparent; background: var(--color-surface); color: var(--color-text); font-size: 10px; }
 .portfolio-search-more:focus-visible { outline-offset: -3px; }
 @media (max-width: 700px) {
-  .portfolio-search-shell { flex: 1 1 135px; width: auto; min-width: 135px; }
+  .portfolio-search-shell:is(.is-engaged, :focus-within) { flex: 1 0 100%; width: 100%; }
   /* Anchor the horizontal bounds to the viewport while the static vertical
      position stays directly below its input, wherever the toolbar wraps it. */
   .portfolio-search-panel { position: fixed; top: auto; left: 12px; right: 12px; width: auto; max-width: none; margin-top: 5px; }
 }
 @media (max-width: 480px) {
-  .portfolio-search-shell { flex-basis: 110px; min-width: 110px; }
   .portfolio-search-current { font-size: 8px; }
+}
+@media (pointer: coarse) {
+  .portfolio-search-shell { --search-idle-width: 44px; }
+  .portfolio-search-shell > .search-shell, .portfolio-search-shell .search-input { min-height: 44px; }
+  .portfolio-search-shell > .search-shell > span { margin-left: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .portfolio-search-shell, .portfolio-search-shell > .search-shell, .portfolio-search-shell .search-input { transition: none; }
 }

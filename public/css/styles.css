@@ -1056,9 +1056,6 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
   .workspace-controls #workspaceSelection { max-width: min(230px, 35vw); }
   #timelineRangeSummary { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 }
-@media (min-width: 701px) and (max-width: 1120px) {
-  .workspace-controls .portfolio-search-shell { flex: 0 1 auto; width: min(220px, 24vw); min-width: 160px; }
-}
 @media (max-width: 980px) {
   .topbar { flex-wrap: wrap; gap: 6px 12px; padding: 6px 12px; }
   .topbar .brand-block { flex: 1 1 0; min-width: 0; }
@@ -1177,7 +1174,7 @@ select:not([multiple]):not([size]), select:not([multiple])[size="0"], select:not
 .roadmap-context-tools, .roadmap-editing-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
 .roadmap-context-tools { grid-column: 1; grid-row: 1; }
 .roadmap-editing-tools { grid-column: 1; grid-row: 2; }
-.roadmap-context-tools > .search-shell, .roadmap-context-tools > .portfolio-search-shell { flex: 1 1 180px; width: min(230px, 24vw); min-width: 160px; max-width: 280px; }
+.roadmap-context-tools > .search-shell { flex: 1 1 180px; width: min(230px, 24vw); min-width: 160px; max-width: 280px; }
 .roadmap-context-tools .search-shell { width: 100%; min-width: 0; }
 .roadmap-navigation-tools { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-start; gap: 6px; min-width: 0; max-width: 100%; }
 #roadmapNavigationTools .view-tools-shell { flex: 0 0 auto; margin: 0; }
@@ -1205,7 +1202,7 @@ select:not([multiple]):not([size]), select:not([multiple])[size="0"], select:not
 }
 @media (max-width: 700px) {
   #roadmapContextTools { gap: 6px; }
-  #roadmapContextTools > .search-shell, #roadmapContextTools > .portfolio-search-shell { flex: 1 0 100%; width: 100%; max-width: none; }
+  #roadmapContextTools > .search-shell { flex: 1 0 100%; width: 100%; max-width: none; }
   #roadmapContextTools .roadmap-basis-control { min-width: 0; }
   #roadmapContextTools .roadmap-basis-control button { padding-inline: 8px; font-size: 10px; }
   #roadmapNavigationTools .view-tools .view-tool { padding-inline: 6px; }

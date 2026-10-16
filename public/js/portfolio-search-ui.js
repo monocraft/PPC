@@ -32,12 +32,16 @@
     const search = (query, limit, offset = 0) => model.search(adapter.getPortfolio?.(), query, {
       activeCategoryId: adapter.getActiveCategoryId?.(), limit, offset, completeIndex: true,
     });
+    function syncEngagement(slot) {
+      slot.shell.classList.toggle("is-engaged", Boolean(slot.open || text(slot.input.value) || slot.shell.contains(doc.activeElement)));
+    }
     function close(slot) {
       slot.open = false; slot.activeIndex = -1;
       slot.panel.hidden = true;
       slot.input.setAttribute("aria-expanded", "false");
       slot.input.removeAttribute("aria-activedescendant");
       for (const node of slot.optionNodes) node.setAttribute("aria-selected", "false");
+      syncEngagement(slot);
     }
     function fitPanel(slot) {
       const height = doc.defaultView?.innerHeight || root.innerHeight;
@@ -95,6 +99,7 @@
       fitPanel(slot);
     }
     function refreshSlot(slot, { open = false, reset = false, message = "" } = {}) {
+      syncEngagement(slot);
       if (destroyed || navigating || !visible(slot)) { close(slot); return false; }
       const query = text(slot.input.value);
       if (!query) { close(slot); slot.query = ""; slot.results = []; slot.total = 0; return false; }
@@ -107,6 +112,7 @@
       slot.query = query; slot.results = found.results || []; slot.total = found.total || 0;
       slot.message = message; slot.open = true; slot.panel.hidden = false;
       slot.input.setAttribute("aria-expanded", "true");
+      syncEngagement(slot);
       render(slot, keepActiveKey);
       if (doc.activeElement === slot.more && slot.more.hidden) focusInput(slot);
       return true;
@@ -170,6 +176,7 @@
       const input = doc.getElementById(id), label = input?.parentNode;
       if (!input || !label?.parentNode) continue;
       const shell = make("div", "portfolio-search-shell"), panel = make("div", "portfolio-search-panel");
+      shell.setAttribute("title", input.getAttribute("aria-label") || "Search products");
       const header = make("div", "portfolio-search-header"), heading = make("span", "portfolio-search-heading"), summary = make("span", "portfolio-search-summary");
       const list = make("ul", "portfolio-search-results"), feedback = make("p", "portfolio-search-feedback");
       const more = make("button", "portfolio-search-more", "Show more"), bound = make("p", "portfolio-search-bound");
@@ -184,10 +191,12 @@
       input.setAttribute("aria-controls", list.id); input.setAttribute("aria-haspopup", "listbox"); input.setAttribute("aria-expanded", "false");
       const slot = { input, label, shell, panel, header, heading, summary, list, feedback, more, bound, attributes, view, open: false, activeIndex: -1, query: "", results: [], total: 0, message: "", optionNodes: [], dynamicListeners: [] };
       slots.push(slot);
+      syncEngagement(slot);
       listen(input, "input", () => refreshSlot(slot, { open: true, reset: true }));
-      listen(input, "search", () => { if (!text(input.value)) close(slot); });
-      listen(input, "focus", () => { if (!slot.suppressFocus) refreshSlot(slot, { open: true }); });
+      listen(input, "search", () => { if (!text(input.value)) close(slot); else syncEngagement(slot); });
+      listen(input, "focus", () => { syncEngagement(slot); if (!slot.suppressFocus) refreshSlot(slot, { open: true }); });
       listen(input, "keydown", (event) => keydown(slot, event));
+      listen(shell, "focusin", () => syncEngagement(slot));
       listen(shell, "focusout", (event) => {
         if (event.relatedTarget && shell.contains(event.relatedTarget)) return;
         close(slot);
@@ -199,8 +208,15 @@
         }
       });
     }
-    listen(doc, "pointerdown", (event) => { for (const slot of slots) if (slot.open && !slot.shell.contains(event.target)) close(slot); });
-    listen(doc, "click", (event) => { for (const slot of slots) if (slot.open && !slot.shell.contains(event.target)) close(slot); });
+    const dismissOutside = (event) => {
+      for (const slot of slots) if (!slot.shell.contains(event.target)) {
+        close(slot);
+        if (slot.shell.contains(doc.activeElement)) doc.activeElement.blur?.();
+        syncEngagement(slot);
+      }
+    };
+    listen(doc, "pointerdown", dismissOutside);
+    listen(doc, "click", dismissOutside);
     const refresh = () => { if (!destroyed) for (const slot of slots) refreshSlot(slot); };
     listen(eventTarget, "portfolio:render", refresh);
     listen(eventTarget, "resize", () => { for (const slot of slots) if (slot.open) fitPanel(slot); });

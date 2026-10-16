@@ -15,7 +15,17 @@ function createDocument() {
     set textContent(value) { this._text = String(value); this.replaceChildren(); }
     set innerHTML(_) { throw new Error("Search must use textContent for user-provided content."); }
     get isConnected() { return this === doc.body || Boolean(this.parentNode?.isConnected); }
-    get classList() { return { contains: (value) => this.className.split(/\s+/).includes(value) }; }
+    get classList() {
+      return {
+        contains: (value) => this.className.split(/\s+/).includes(value),
+        toggle: (value, force) => {
+          const names = new Set(this.className.split(/\s+/).filter(Boolean));
+          const present = force === undefined ? !names.has(value) : Boolean(force);
+          if (present) names.add(value); else names.delete(value);
+          this.className = [...names].join(" "); return present;
+        },
+      };
+    }
     append(...nodes) { for (const node of nodes) { node.remove(); node.parentNode = this; this.children.push(node); } }
     insertBefore(node, reference) { node.remove(); const index = this.children.indexOf(reference); assert.ok(index >= 0); node.parentNode = this; this.children.splice(index, 0, node); }
     replaceChildren(...nodes) { for (const node of this.children) node.parentNode = null; this.children = []; this.append(...nodes); }
@@ -41,6 +51,13 @@ function createDocument() {
       const previous = doc.activeElement; doc.activeElement = this;
       previous?.fire("focusout", { relatedTarget: this });
       this.fire("focus", { bubbles: false });
+      this.fire("focusin", { relatedTarget: previous });
+    }
+    blur() {
+      if (doc.activeElement !== this) return;
+      doc.activeElement = doc.body;
+      this.fire("blur", { bubbles: false, relatedTarget: null });
+      this.fire("focusout", { relatedTarget: null });
     }
     getBoundingClientRect() { return { left: 12, bottom: 140 }; }
     scrollIntoView(options) { this.lastScroll = options; }
@@ -59,13 +76,14 @@ function createDocument() {
 }
 const product = (id, name, sku = "", extra = {}) => ({ id, name, laneId: "wireless", partSkus: sku ? [{ id: `${id}-sku`, code: sku }] : [], variantGroups: [], ...extra });
 const category = (id, name, products) => ({ id, name, board: { products, lanes: [{ id: "wireless", name: "Wireless" }] } });
-function fixture(products = null) {
+function fixture(products = null, prepareInput = null) {
   const document = createDocument(), controls = document.createElement("section"), roadmapControls = document.createElement("section");
   controls.id = "productControls"; roadmapControls.id = "roadmapControls"; roadmapControls.className = "hidden";
   const inputs = ["searchInput", "roadmapSearch"].map((id, index) => {
     const label = document.createElement("label"), input = document.createElement("input");
-    label.className = "search-shell"; input.id = id; input.type = "search"; input.setAttribute("aria-label", index ? "Search roadmap" : "Search products");
-    label.append(input); [controls, roadmapControls][index].append(label); return input;
+    label.className = "search-shell"; input.className = "search-input"; input.id = id; input.type = "search"; input.setAttribute("aria-label", index ? "Search roadmap" : "Search products");
+    const icon = document.createElement("span"); icon.textContent = "⌕"; icon.setAttribute("aria-hidden", "true");
+    label.append(icon, input); prepareInput?.(input, label, index); [controls, roadmapControls][index].append(label); return input;
   });
   const outside = document.createElement("button"); document.body.append(controls, roadmapControls, outside);
   let portfolio = { categories: products || [
@@ -78,22 +96,40 @@ function fixture(products = null) {
   const adapter = { getPortfolio: () => portfolio, getActiveCategoryId: () => activeCategory, getActiveView: () => view,
     openResult(result) { calls.push(result); outside.focus(); }, saveChanges() { throw new Error("Search must not save."); } };
   const controller = globalThis.PortfolioSearchUI.createController({ adapter, document, eventTarget: document });
+  const shell = (index = 0) => inputs[index].parentNode.parentNode;
   const panel = (index = 0) => inputs[index].parentNode.parentNode.querySelector(".portfolio-search-panel");
   const options = (index = 0) => panel(index).querySelectorAll("li");
   const type = (query, index = 0) => { inputs[index].value = query; inputs[index].fire("input"); };
   const setView = (next) => { view = next; controls.className = next === "products" ? "" : "hidden"; roadmapControls.className = next === "products" ? "hidden" : ""; document.fire("portfolio:render"); };
-  return { document, adapter, controller, inputs, outside, calls, panel, options, type, setView, localFilter: () => localFilter, localListener,
+  return { document, adapter, controller, inputs, outside, calls, shell, panel, options, type, setView, localFilter: () => localFilter, localListener,
     getPortfolio: () => portfolio, setPortfolio(next) { portfolio = next; }, setCategory(id) { activeCategory = id; document.fire("portfolio:render"); } };
 }
 
 const basic = fixture(), input = basic.inputs[0];
+const unchangedPortfolio = JSON.stringify(basic.getPortfolio());
 assert.equal(input.oninput, basic.localListener, "The existing local filter listener is preserved.");
 assert.equal(input.type, "search"); assert.equal(input.getAttribute("role"), "combobox");
 assert.equal(input.getAttribute("aria-label"), "Search products");
 assert.equal(input.getAttribute("aria-autocomplete"), "list"); assert.equal(input.getAttribute("aria-haspopup"), "listbox");
 assert.equal(basic.panel().hidden, true);
+assert.equal(basic.shell().classList.contains("is-engaged"), false, "An empty, unfocused product search starts compact.");
+assert.equal(basic.shell(1).classList.contains("is-engaged"), false, "The inactive roadmap search also starts compact.");
 input.focus(); assert.equal(basic.panel().hidden, true, "An empty search never opens suggestions.");
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "Keyboard or pointer focus expands an empty search.");
+assert.equal(input.getAttribute("aria-expanded"), "false", "Expansion of the input is distinct from suggestion visibility.");
+basic.document.body.fire("pointerdown");
+assert.equal(basic.shell().classList.contains("is-engaged"), false, "Clicking blank canvas releases an empty search and compacts it.");
+assert.equal(basic.document.activeElement, basic.document.body);
+input.focus(); basic.outside.fire("click");
+assert.equal(basic.shell().classList.contains("is-engaged"), false, "An outside click also compacts an empty search.");
+input.focus(); basic.outside.focus();
+assert.equal(basic.shell().classList.contains("is-engaged"), false, "Tabbing away compacts an empty search.");
+input.focus(); basic.type("   ");
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "Whitespace does not interrupt focused editing.");
+basic.outside.focus();
+assert.equal(basic.shell().classList.contains("is-engaged"), false, "Whitespace alone does not keep an unfocused search expanded.");
 basic.type("HP001");
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "A query keeps its input expanded while showing results.");
 assert.equal(basic.localFilter(), "HP001"); assert.equal(input.getAttribute("aria-expanded"), "true");
 assert.equal(basic.controller.getState("searchInput").results[0].productId, "exact", "An exact SKU in another category outranks a prefix in the current category.");
 assert.match(basic.options()[0].textContent, /Cloud exact.*Exact SKU.*HP001.*Console Gaming Audio.*Wireless/);
@@ -109,35 +145,54 @@ input.fire("keydown", { key: "ArrowUp" }); assert.equal(basic.controller.getStat
 input.fire("keydown", { key: "ArrowDown" }); assert.equal(basic.controller.getState("searchInput").activeIndex, 0);
 input.fire("keydown", { key: "Enter" }); assert.equal(basic.calls.length, 1); assert.equal(basic.calls[0].productId, "exact");
 assert.equal(basic.panel().hidden, true); assert.equal(basic.document.activeElement, basic.outside, "Navigation controls the destination focus.");
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "Following a result preserves the visible active query.");
 input.fire("keydown", { key: "Enter" }); assert.equal(basic.calls.length, 1, "A hidden dropdown cannot navigate twice.");
 basic.type("Cloud"); input.focus(); const saved = input.value;
 event = input.fire("keydown", { key: "Escape" });
 assert.equal(event.defaultPrevented, true); assert.equal(input.value, saved); assert.equal(basic.localFilter(), saved); assert.equal(basic.panel().hidden, true);
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "Escape dismisses suggestions while the query remains expanded.");
 basic.document.fire("portfolio:render"); assert.equal(basic.panel().hidden, true, "A render does not reopen cancelled results.");
 input.fire("keydown", { key: "ArrowDown" }); assert.equal(basic.panel().hidden, false);
 basic.type(""); assert.equal(basic.panel().hidden, true); assert.equal(input.getAttribute("aria-expanded"), "false");
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "Clearing a focused query leaves room to continue editing.");
+basic.outside.focus();
+assert.equal(basic.shell().classList.contains("is-engaged"), false, "Clearing and leaving search restores its compact state.");
 basic.type("not a product"); assert.match(basic.panel().textContent, /All categories · 0 products.*No products found/);
 basic.type("BK"); assert.match(basic.panel().textContent, /Variant · BK/); assert.doesNotMatch(basic.panel().textContent, /Exact SKU|HP SKU/);
 basic.type("Cloud"); basic.outside.fire("pointerdown"); assert.equal(basic.panel().hidden, true);
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "Outside pointer dismissal preserves the readable active query.");
 basic.type("Cloud"); basic.outside.fire("click"); assert.equal(basic.panel().hidden, true);
-basic.type("Cloud"); basic.outside.focus(); assert.equal(basic.panel().hidden, true, "Moving focus outside closes suggestions.");
+assert.equal(basic.shell().classList.contains("is-engaged"), true);
+basic.type("Cloud"); input.focus(); basic.outside.focus(); assert.equal(basic.panel().hidden, true, "Moving focus outside closes suggestions.");
+assert.equal(basic.shell().classList.contains("is-engaged"), true, "A nonempty search remains expanded after focus leaves.");
 basic.type("Cloud"); basic.setView("roadmap"); assert.equal(basic.panel().hidden, true);
 basic.inputs[0].fire("keydown", { key: "ArrowDown" }); assert.equal(basic.panel().hidden, true, "The hidden view cannot reopen search.");
 basic.type("HP001", 1); assert.equal(basic.panel(1).hidden, false); basic.inputs[1].fire("keydown", { key: "Enter" });
 assert.equal(basic.calls.length, 2); assert.equal(basic.calls[1].productId, "exact", "Roadmap search also finds other categories.");
 basic.type("Cloud", 1); basic.setView("split"); assert.equal(basic.panel(1).hidden, false, "Roadmap and its details view share the visible input.");
+assert.equal(basic.shell(1).classList.contains("is-engaged"), true);
+basic.type("", 1); basic.outside.focus(); basic.type(""); basic.setView("products");
+assert.equal(basic.shell().classList.contains("is-engaged"), false, "Returning to an empty, unfocused product search restores its compact state.");
+assert.equal(basic.shell(1).classList.contains("is-engaged"), false, "View changes close and compact the empty inactive search.");
+basic.setView("roadmap"); basic.inputs[1].focus();
+assert.equal(basic.shell(1).classList.contains("is-engaged"), true, "An empty roadmap search expands on focus too.");
+assert.equal(basic.inputs[1].getAttribute("aria-expanded"), "false");
+basic.outside.focus(); assert.equal(basic.shell(1).classList.contains("is-engaged"), false);
+assert.equal(JSON.stringify(basic.getPortfolio()), unchangedPortfolio, "Search engagement, navigation and filtering never change portfolio metadata.");
 
 const paging = fixture([category("pc", "PC", Array.from({ length: 19 }, (_, index) => product(`item-${index}`, `Many ${String(index).padStart(3, "0")}`)))]);
 paging.type("Many"); paging.inputs[0].focus();
 assert.equal(paging.options().length, 8); assert.match(paging.panel().textContent, /All categories · 19 products.*8 shown/);
 let more = paging.panel().querySelector(".portfolio-search-more"); more.focus();
 assert.equal(paging.panel().hidden, false, "Moving focus into the dropdown keeps it available.");
+assert.equal(paging.shell().classList.contains("is-engaged"), true, "The dropdown's Show more button belongs to the expanded search interaction.");
 more.fire("click"); assert.equal(paging.options().length, 16); assert.match(paging.panel().textContent, /16 shown/);
 assert.equal(paging.document.activeElement, more);
 more.fire("click"); assert.equal(paging.options().length, 19); assert.equal(more.hidden, true); assert.equal(paging.document.activeElement, paging.inputs[0]);
 assert.equal(paging.controller.getState("searchInput").activeIndex, 16);
 paging.type("Many"); more = paging.panel().querySelector(".portfolio-search-more"); more.focus(); more.fire("keydown", { key: "Escape" });
 assert.equal(paging.panel().hidden, true); assert.equal(paging.document.activeElement, paging.inputs[0]); assert.equal(paging.inputs[0].value, "Many");
+assert.equal(paging.shell().classList.contains("is-engaged"), true, "Escape from Show more returns focus to an expanded search.");
 const large = fixture([category("pc", "PC", Array.from({ length: 507 }, (_, index) => product(`large-${index}`, `Large ${String(index).padStart(3, "0")}`)))]);
 large.type("Large");
 for (let index = 0; index < 70; index++) large.panel().querySelector(".portfolio-search-more").fire("click");
@@ -166,22 +221,43 @@ const replacement = fixture(); replacement.type("HP001");
 replacement.setPortfolio({ categories: [category("new", "New Category", [product("new", "New HP product", "HP001")])] }); replacement.document.fire("portfolio:render");
 assert.equal(replacement.options().length, 1); assert.match(replacement.options()[0].textContent, /New HP product.*New Category/);
 replacement.type("Cloud"); replacement.inputs[0].value = ""; replacement.document.fire("portfolio:render"); assert.equal(replacement.panel().hidden, true, "Programmatic filter clears are reflected on render.");
+assert.equal(replacement.shell().classList.contains("is-engaged"), false, "A programmatic clear compacts an unfocused search on render.");
+replacement.inputs[0].focus(); replacement.type("HP001"); replacement.inputs[0].value = ""; replacement.document.fire("portfolio:render");
+assert.equal(replacement.shell().classList.contains("is-engaged"), true, "A programmatic clear preserves the focused editing state.");
+replacement.outside.focus(); assert.equal(replacement.shell().classList.contains("is-engaged"), false);
+replacement.type("Cloud"); replacement.controller.close(); replacement.inputs[0].value = ""; replacement.inputs[0].fire("search");
+assert.equal(replacement.shell().classList.contains("is-engaged"), false, "A native search-field clear compacts an unfocused query even after suggestions close.");
 
-const clean = fixture(); clean.type("Cloud");
-const detachedRow = clean.options()[0], originalLabel = clean.inputs[0].parentNode;
+const restoredAttributes = new Map([["role", "searchbox"], ["aria-autocomplete", "none"], ["aria-controls", "original-results"], ["aria-haspopup", "false"], ["aria-expanded", "false"], ["aria-activedescendant", "original-option"]]);
+const clean = fixture(null, (input, label, index) => {
+  if (index) return;
+  for (const [name, value] of restoredAttributes) input.setAttribute(name, value);
+  label.setAttribute("title", "Original search hint"); input.setAttribute("placeholder", "Original search placeholder");
+}); clean.type("Cloud");
+const detachedRow = clean.options()[0], originalLabel = clean.inputs[0].parentNode, detachedShell = clean.shell(), originalLabelChildren = [...originalLabel.children];
 assert.equal(clean.controller.destroy(), true); assert.equal(clean.controller.destroy(), false);
 assert.equal(clean.document.body.querySelectorAll(".portfolio-search-shell").length, 0);
 assert.equal(clean.inputs[0].parentNode, originalLabel); assert.equal(originalLabel.parentNode.id, "productControls");
-assert.equal(clean.inputs[0].getAttribute("role"), null); assert.equal(clean.inputs[0].getAttribute("aria-controls"), null);
+for (const [name, value] of restoredAttributes) assert.equal(clean.inputs[0].getAttribute(name), value, `The original ${name} attribute is restored.`);
+assert.equal(clean.inputs[1].getAttribute("role"), null); assert.equal(clean.inputs[1].getAttribute("aria-controls"), null);
+assert.equal(originalLabel.getAttribute("title"), "Original search hint"); assert.equal(clean.inputs[0].getAttribute("placeholder"), "Original search placeholder");
+assert.equal(originalLabel.className, "search-shell"); assert.equal(clean.inputs[0].className, "search-input");
+assert.deepEqual(originalLabel.children, originalLabelChildren, "The native label, magnifier and input retain their original order.");
 assert.equal(clean.inputs[0].oninput, clean.localListener);
 assert.ok([...clean.inputs[0].events.values()].every((listeners) => listeners.length === 0));
+assert.ok([...detachedShell.events.values()].every((listeners) => listeners.length === 0), "Shell engagement listeners are removed during cleanup.");
 assert.ok([...clean.document.events.values()].every((listeners) => listeners.length === 0));
 clean.type("HP001"); assert.equal(clean.localFilter(), "HP001"); clean.document.fire("portfolio:render"); detachedRow.fire("click");
 assert.equal(clean.calls.length, 0); assert.equal(clean.controller.getState().destroyed, true);
 
 const css = await readFile(new URL("../../public/css/portfolio-search.css", import.meta.url), "utf8");
 const source = await readFile(new URL("../../public/js/portfolio-search-ui.js", import.meta.url), "utf8");
+assert.match(css, /\.portfolio-search-shell\s*\{[^}]*--search-idle-width:\s*36px[^}]*flex:\s*0 0 var\(--search-idle-width\)[^}]*width:\s*var\(--search-idle-width\)/s, "Idle desktop search reserves only a compact magnifier target.");
+assert.match(css, /\.portfolio-search-shell:is\(\.is-engaged,\s*:focus-within\)\s*\{[^}]*flex:\s*0 1 360px[^}]*width:\s*360px/s, "Engagement reveals a comfortably wide desktop field.");
+assert.match(css, /@media \(max-width: 700px\)\s*\{\s*\.portfolio-search-shell:is\(\.is-engaged,\s*:focus-within\)\s*\{[^}]*flex:\s*1 0 100%[^}]*width:\s*100%/s, "Engaged mobile search gets a full toolbar row.");
+assert.match(css, /@media \(pointer: coarse\)\s*\{[\s\S]*?\.portfolio-search-shell\s*\{[^}]*--search-idle-width:\s*44px[^}]*\}[\s\S]*?\.portfolio-search-shell[^}]*min-height:\s*44px/s, "Coarse pointers receive a touch-sized search target.");
+assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.portfolio-search-shell[^}]*\.search-input[^}]*transition:\s*none/s, "Reduced motion removes the search expansion and input fade transitions.");
 assert.match(css, /portfolio-search-panel\s*\{[^}]*position:\s*absolute[^}]*max-width:\s*calc\(100vw - 40px\)[^}]*max-height:\s*min\(320px[^}]*overflow:\s*auto/s);
 assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.portfolio-search-panel\s*\{[^}]*position:\s*fixed[^}]*left:\s*12px[^}]*right:\s*12px[^}]*width:\s*auto/);
 assert.doesNotMatch(source, /\.innerHTML\s*=|\bfetch\s*\(|localStorage|saveChanges\s*\(/);
-console.log("Portfolio search UI checks passed: cross-category name/SKU lookup, additive local filters, accessible keyboard selection, cancellation, current result validation, literal text rendering, counts and bounded paging, outside/focus dismissal, view switching, and full listener cleanup.");
+console.log("Portfolio search UI checks passed: compact idle and expanded focus/query states, cross-category name/SKU lookup, additive local filters, accessible keyboard selection, cancellation, current result validation, literal text rendering, counts and bounded paging, outside/focus dismissal, view switching, metadata immutability, and full listener cleanup.");
