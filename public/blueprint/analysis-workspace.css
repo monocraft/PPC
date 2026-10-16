@@ -354,3 +354,53 @@ html[data-embedded="true"] .unified-analysis .explorer-pane-selection { flex:1 1
   .unified-analysis #analysis-overlay * { transition:none!important; animation:none!important; }
   .unified-analysis #analysis-overlay { animation:none!important; }
 }
+
+/* Recessed workspace controls retain their chart-associated selection ink. */
+.unified-analysis .analysis-actions,
+.unified-analysis .analysis-metrics,
+.unified-analysis .analysis-scale,
+.unified-analysis .analysis-connectivity,
+.unified-analysis .analysis-overlay-tabs { gap:4px; }
+.unified-analysis .analysis-actions button,
+.unified-analysis .analysis-metrics button,
+.unified-analysis .analysis-scale button,
+.unified-analysis .analysis-connectivity button,
+.unified-analysis .analysis-overlay-tabs button { min-height:var(--ui-control-height,32px); padding:5px 9px; border-radius:var(--ui-radius,4px); background-color:#ffffff04; }
+.unified-analysis .analysis-actions button:hover,
+.unified-analysis .analysis-scale button:hover,
+.unified-analysis .analysis-overlay-tabs button:hover { background-color:#ffffff0a; }
+.unified-analysis .analysis-actions button[aria-expanded="true"],
+.unified-analysis .analysis-scale button[aria-pressed="true"],
+.unified-analysis .analysis-overlay-tabs button[aria-pressed="true"] { background-color:var(--raised,#333538); }
+.unified-analysis .analysis-controls .hx-category-tile { border-radius:var(--ui-radius,4px); }
+.unified-analysis .analysis-overlay-body input:not([type="range"]):not([type="checkbox"]),
+.unified-analysis .analysis-overlay-body select,
+.unified-analysis .analysis-overlay-body textarea,
+.unified-analysis #scope-explorer .drill-toolbar .search-input,
+.unified-analysis .analysis-product-toolbar select { min-height:var(--ui-control-height,32px); padding:5px 8px; border-radius:var(--ui-radius,4px); background-color:var(--page,#1A1B1C); box-shadow:inset 0 0 0 1px var(--ui-border,#4D5054); }
+.unified-analysis .analysis-overlay-body input[type="number"] { padding-inline:5px; }
+.unified-analysis .analysis-overlay-body .button,
+.unified-analysis #drill-sort-direction,
+.unified-analysis .analysis-case-toolbar button { min-height:var(--ui-control-height,32px); padding:5px 9px; border-radius:var(--ui-radius,4px); background:var(--raised,#333538); box-shadow:none; }
+.unified-analysis #analysis-overlay-close { min-height:var(--ui-control-height,32px); padding:5px 8px; border-radius:var(--ui-radius,4px); }
+.unified-analysis .analysis-control-strip :focus-visible,
+.unified-analysis .analysis-actions button:focus-visible,
+.unified-analysis #scope-explorer input:focus-visible,
+.unified-analysis #scope-explorer select:focus-visible,
+.unified-analysis #analysis-overlay :focus-visible { outline:2px solid var(--ui-focus-color,#63C0F9); outline-offset:-2px; }
+.unified-analysis .analysis-controls .hx-category-tile:focus-visible { outline:2px solid var(--ui-focus-color,#63C0F9); outline-offset:-2px; }
+@media(pointer:coarse) {
+  .unified-analysis .analysis-actions button,
+  .unified-analysis .analysis-metrics button,
+  .unified-analysis .analysis-scale button,
+  .unified-analysis .analysis-connectivity button,
+  .unified-analysis .analysis-overlay-tabs button,
+  .unified-analysis #analysis-overlay-close,
+  .unified-analysis .analysis-overlay-body .button,
+  .unified-analysis .analysis-case-toolbar button,
+  .unified-analysis #drill-sort-direction,
+  .unified-analysis .analysis-overlay-body input:not([type="range"]):not([type="checkbox"]),
+  .unified-analysis .analysis-overlay-body select,
+  .unified-analysis #scope-explorer .drill-toolbar .search-input,
+  .unified-analysis .analysis-product-toolbar select { min-height:44px; }
+}

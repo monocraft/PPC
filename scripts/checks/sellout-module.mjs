@@ -350,6 +350,81 @@ for (const id of ["productAll", "productClear"]) {
 assert.ok(!/<input\b[^>]*\bid="productAll"/.test(html) && !/\bdata-clear="products"/.test(html), "SKU master actions must not retain duplicate checkbox/All controls.");
 
 // Exercise the actual shaded Reporting table and native cell interactions.
+// Run the actual popup placement/dismissal code. Mobile sheets must discard
+// desktop inline offsets; closing a filter must preserve the user's selection.
+const popupFactsBefore = JSON.stringify(filterFixture.snapshot);
+let popupFocus = null, popupGeometryReads = 0;
+const popupListeners = new Map(), popupNodes = new Map();
+function popupMenu(id) {
+  const menu = { id, open: false, contains: node => node?.owner === menu,
+    getBoundingClientRect() { popupGeometryReads++; return { left: 1000 }; },
+    querySelector: selector => selector === "summary" ? menu.summary : menu.content,
+  };
+  menu.summary = { owner: menu, focus() { popupFocus = menu.summary; } };
+  menu.field = { owner: menu };
+  menu.content = { style: { removeProperty(name) { delete this[name === "max-width" ? "maxWidth" : name]; } },
+    getBoundingClientRect() { popupGeometryReads++; return { width: 340 }; },
+  };
+  popupNodes.set(id, menu); return menu;
+}
+const productPopup = popupMenu("productPicker"), advancedPopup = popupMenu("moreFilters");
+for (const [id, menu] of [["closeProductPicker", productPopup], ["closeMoreFilters", advancedPopup]]) popupNodes.set(id, { owner: menu });
+popupNodes.set("chartTooltip", { hidden: false });
+const popupSandbox = { $: id => popupNodes.get(id), root: { innerWidth: 1280 },
+  app: { querySelectorAll(selector) { return [productPopup, advancedPopup].filter(menu => menu.open && selector.includes(menu === productPopup ? ".so-picker[open]" : ".so-more-filters[open]")); } },
+  document: { documentElement: { clientWidth: 1280 }, get activeElement() { return popupFocus; }, addEventListener(name, callback) { popupListeners.set(name, callback); } },
+};
+vm.createContext(popupSandbox);
+vm.runInContext(["positionProductMenu", "closeFilterMenus"].map(pickerDefinition).join("\n"), popupSandbox);
+for (const id of ["closeMoreFilters", "closeProductPicker"]) {
+  const callback = uiSource.split(/\r?\n/).find(line => line.startsWith(`  $("${id}").onclick = `));
+  assert.ok(callback, `The visible ${id} control has a real close callback`);
+  vm.runInContext(callback, popupSandbox);
+}
+for (const event of ["click", "keydown"]) {
+  const callback = uiSource.split(/\r?\n/).find(line => line.startsWith(`  document.addEventListener("${event}",`) && line.includes("closeFilterMenus"));
+  assert.ok(callback, `The actual ${event} listener routes filter menu dismissal`);
+  vm.runInContext(callback, popupSandbox);
+}
+productPopup.open = advancedPopup.open = true; popupFocus = advancedPopup.field;
+popupListeners.get("click")({ target: advancedPopup.field });
+assert.equal(productPopup.open, false, "Clicking inside advanced filters closes the other product menu");
+assert.equal(advancedPopup.open, true, "An interaction inside the advanced sheet does not close it");
+assert.equal(popupFocus, advancedPopup.field, "Inside and outside clicks never steal native focus");
+const outsideFilterControl = { id: "external-filter-control" }; popupFocus = outsideFilterControl;
+popupListeners.get("click")({ target: outsideFilterControl });
+assert.equal(advancedPopup.open, false, "Clicking outside closes advanced filters too");
+assert.equal(popupFocus, outsideFilterControl);
+for (const [menu, closeId] of [[productPopup, "closeProductPicker"], [advancedPopup, "closeMoreFilters"]]) {
+  menu.open = true; popupFocus = menu.field;
+  popupListeners.get("keydown")({ key: "Enter" });
+  assert.equal(menu.open, true, "Unrelated keys retain the current filter interaction");
+  popupListeners.get("keydown")({ key: "Escape" });
+  assert.equal(menu.open, false, "Escape dismisses either filter sheet");
+  assert.equal(popupFocus, menu.summary, "Escape returns keyboard focus to the sheet's own summary");
+  assert.equal(popupNodes.get("chartTooltip").hidden, true, "The existing tooltip Escape behavior is retained");
+  menu.open = true; popupFocus = popupNodes.get(closeId);
+  popupNodes.get(closeId).onclick();
+  assert.equal(menu.open, false, "The visible mobile Close action dismisses its menu");
+  assert.equal(popupFocus, menu.summary, "The visible Close action restores summary focus");
+}
+popupFocus = outsideFilterControl;
+popupListeners.get("keydown")({ key: "Escape" });
+assert.equal(popupFocus, outsideFilterControl, "Escape with no open sheet leaves current focus alone");
+productPopup.open = true; popupSandbox.positionProductMenu();
+assert.equal(productPopup.content.style.maxWidth, "1244px");
+assert.equal(productPopup.content.style.left, "-78px", "Desktop positioning still keeps the product popup inside the right edge");
+assert.equal(productPopup.content.style.right, "auto");
+for (const width of [390, 700]) {
+  productPopup.content.style.left = "-200px"; productPopup.content.style.right = "auto"; productPopup.content.style.maxWidth = "354px";
+  popupSandbox.document.documentElement.clientWidth = width; popupGeometryReads = 0; popupSandbox.positionProductMenu();
+  assert.equal(productPopup.content.style.left, undefined, "Mobile CSS owns the fixed sheet's horizontal inset");
+  assert.equal(productPopup.content.style.right, undefined);
+  assert.equal(productPopup.content.style.maxWidth, undefined, "A stale desktop width cannot shrink or displace the sheet");
+  assert.equal(popupGeometryReads, 0, "Mobile placement does not read geometry or overwrite the CSS sheet bounds");
+}
+assert.equal(JSON.stringify(filterFixture.snapshot), popupFactsBefore, "Popup dismissal never changes imported source facts");
+
 const reportSnapshot = { schemaVersion: 1, periods: ["2026-09-20", "2026-09-27", "2026-10-04", "2026-10-11", "2026-10-18"].map(date => ({ date, quarter: "FY26Q4" })), rows: [
   { store: "Retailer A", sku: "REPORT-A", product: "Alpha", category: "Audio", lifetime: 125, values: [100, 25, null, null, null] },
   { store: "Retailer B", sku: "REPORT-B", product: "Beta", category: "Audio", lifetime: 21, values: [25, null, -4, null, null] },

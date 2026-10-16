@@ -212,3 +212,16 @@
 @media (prefers-reduced-motion: reduce) {
   .portfolio-explorer * { transition: none !important; animation: none !important; }
 }
+
+/* Legacy timeline controls share the shell chrome without changing plotted colors. */
+.portfolio-explorer .hx-timeline-controls button { height:var(--ui-control-height,32px); border-radius:var(--ui-radius,4px); background:var(--surface,#242527); border-color:var(--ui-border,#4D5054); }
+.portfolio-explorer .hx-timeline-controls button:hover:enabled { background:var(--raised,#333538); border-color:var(--secondary,#BBBCC0); }
+.portfolio-explorer .hx-timeline-controls button[aria-pressed=true] { background:var(--raised,#333538); border-color:var(--secondary,#BBBCC0); color:var(--text,#D5D7DC); }
+.portfolio-explorer .hx-timeline-scale-button { min-height:var(--ui-control-height,32px); border-radius:var(--ui-radius,4px); }
+.portfolio-explorer .hx-timeline-scale-button[aria-pressed=true] { background:var(--raised,#333538); border-color:var(--ui-border,#4D5054); color:var(--text,#D5D7DC); }
+.portfolio-explorer button:focus-visible,.portfolio-explorer input:focus-visible { outline-color:var(--ui-focus-color,#63C0F9); }
+@media(pointer:coarse) {
+  .portfolio-explorer .hx-timeline-controls button { height:44px; min-height:44px; }
+  .portfolio-explorer .hx-timeline-controls .hx-timeline-step { width:44px; }
+  .portfolio-explorer .hx-timeline-scale-button { min-height:44px; }
+}

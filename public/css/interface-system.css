@@ -1,0 +1,124 @@
+/* Shared workspace chrome. Data, lifecycle and chart palettes remain local. */
+:root {
+  --ui-control-height: 32px;
+  --ui-dialog-gap: 12px;
+  --ui-panel-padding: 16px;
+  --ui-title-size: 15px;
+  --ui-font-control: 12px;
+  --ui-radius: 4px;
+  --ui-panel-radius: 8px;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-focus-color: #63C0F9;
+  --ui-field: #1A1B1C;
+  --ui-border: #4D5054;
+  --ui-overlay-shadow: 0 16px 48px rgb(0 0 0 / .34);
+  --ui-backdrop: rgb(8 9 10 / .7);
+}
+
+button, input, select, textarea {
+  font-family: var(--font-ui, "Jost", Arial, sans-serif);
+  font-size: var(--ui-font-control);
+  border-radius: var(--ui-radius);
+}
+button:where(:not([role="slider"], .so-time-handle, .nav-handle, .product-card-action, .category-choice, .category-dock-step)) {
+  min-height: var(--ui-control-height);
+}
+input:where(:not([type="checkbox"], [type="radio"], [type="range"], [type="hidden"], [type="file"], [type="color"])), select, textarea {
+  min-height: var(--ui-control-height);
+  padding: 6px 9px;
+  background: var(--ui-field);
+  border: 1px solid var(--ui-border);
+  color: var(--color-text, #D5D7DC);
+  line-height: 1.45;
+}
+input::placeholder, textarea::placeholder { color: var(--color-text-secondary, #BBBCC0); opacity: .8; }
+textarea { resize: vertical; }
+input[type="file"] {
+  width: 100%;
+  min-width: 0;
+  padding: 3px;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-field);
+  color: var(--color-text-secondary, #BBBCC0);
+  line-height: 1.5;
+}
+input[type="file"]::file-selector-button {
+  min-height: 26px;
+  margin-inline-end: 8px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: var(--ui-radius);
+  background: var(--color-header, #333538);
+  color: var(--color-text, #D5D7DC);
+  font: inherit;
+  cursor: pointer;
+}
+input[type="color"] { min-height: 32px; padding: 3px; border: 1px solid var(--ui-border); background: var(--ui-field); }
+input:where([type="checkbox"], [type="radio"]) {
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--color-accent, #D5D7DC);
+}
+select:not([multiple]):where(:not([size]), [size="0"], [size="1"]) {
+  appearance: none;
+  padding-right: 28px;
+  background-image: var(--dropdown-chevron, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='m3 4.5 3 3 3-3' stroke='%23BBBCC0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"));
+  background-position: right 9px center;
+  background-size: 12px;
+  background-repeat: no-repeat;
+}
+:is(button, input, select, textarea, summary, a[href], [tabindex]):focus-visible {
+  outline: 2px solid var(--ui-focus-color);
+  outline-offset: 2px;
+}
+:where(button, input, select, textarea):disabled { cursor: not-allowed; }
+button { touch-action: manipulation; }
+button, summary, select { transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
+dialog { max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px); box-shadow: var(--ui-overlay-shadow); }
+dialog::backdrop, dialog[class]::backdrop, .modal-backdrop { background: var(--ui-backdrop); backdrop-filter: blur(2px); }
+:where(dialog, [role="dialog"], [role="alertdialog"]) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-border) transparent;
+}
+:where(dialog, [role="dialog"], [role="alertdialog"]) :where(h2) {
+  font-size: var(--ui-title-size);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -.01em;
+}
+:where(dialog, [role="dialog"], [role="alertdialog"]) :where(p, label, input, select, textarea) { overflow-wrap: anywhere; }
+.so-auth-page { padding: 16px; }
+.so-auth-page main {
+  width: min(420px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-panel-radius);
+  background: var(--color-surface, #242527);
+  text-align: left;
+  box-shadow: var(--ui-overlay-shadow);
+}
+.so-auth-page main h1 { margin: 0 0 8px; font-size: var(--ui-title-size); font-weight: 600; }
+.so-auth-page main p { margin: 0; color: var(--color-text-secondary, #BBBCC0); font-size: 12px; line-height: 1.6; }
+
+@media (max-width: 600px) {
+  :root { --ui-panel-padding: 12px; }
+  .modal-backdrop { padding: 12px; }
+}
+@media (pointer: coarse) {
+  input[type="file"]::file-selector-button { min-height: 38px; }
+  :where(dialog, [role="dialog"], [role="alertdialog"]) :is(button:not([role="slider"], .so-time-handle, .nav-handle), summary, select,
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="hidden"], [type="file"], [type="color"])) { min-height: 44px; }
+  :where(dialog, [role="dialog"], [role="alertdialog"]) :is(label:has(> input[type="checkbox"]), label:has(> input[type="radio"])) { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  button, summary, select { transition: none; }
+}
+@media (forced-colors: active) {
+  :is(button, input, select, textarea, summary, a[href], [tabindex]):focus-visible { outline-color: Highlight; }
+  select:not([multiple]):where(:not([size]), [size="0"], [size="1"]) { appearance: auto; background-image: none; }
+}

@@ -50,3 +50,22 @@ body[data-analysis-module=blueprint] .workflow-analytics-tools{margin-left:0}
 @media(max-width:480px){.analysis-header{padding-inline:14px}.analysis-modules button{gap:8px}.analysis-contextbar{padding-inline:14px}.analysis-local{font-size:9px}.analysis-source-label{max-width:170px}#blueprintViews button{padding:6px 8px;font-size:10px}}
 @media(max-width:760px){body[data-analysis-module=blueprint] .analysis-header{gap:7px 10px}body[data-analysis-module=blueprint] .analysis-heading{flex:1 1 200px;gap:8px}body[data-analysis-module=blueprint] .analysis-heading h1{font-size:20px}body[data-analysis-module=blueprint] .analysis-modules{order:0;gap:2px;flex:0 0 auto;margin:0}body[data-analysis-module=blueprint] .analysis-modules button{flex:0 0 auto;padding:6px 8px;font-size:12px}body[data-analysis-module=blueprint] .workflow-analytics-tools{flex:1 1 100%;justify-content:flex-end;gap:6px}body[data-analysis-module=blueprint] .workflow-analytics-tools button{padding:5px 8px}}
 @media(prefers-reduced-motion:reduce){.analysis-panel{animation:none}.analysis-header button{transition:none}}
+
+/* The hub uses the same compact chrome as the Portfolio workspace. */
+.analysis-header{gap:12px;padding-block:8px}
+.analysis-brand>span:first-child{border-radius:var(--ui-radius,4px)}
+.analysis-brand>span[aria-hidden="true"]{display:none}
+.analysis-modules{align-self:center;gap:4px}
+.analysis-modules button{min-height:var(--ui-control-height,32px);padding:5px 10px;border-radius:var(--ui-radius,4px);font-size:12px}
+.analysis-modules button[aria-selected=true]{box-shadow:inset 0 -2px var(--color-text-secondary,#BBBCC0)}
+.analysis-header .workflow-analytics-tools{gap:4px}
+.analysis-header .workflow-analytics-tools button,
+#blueprintViews button,.analysis-source-actions button{border-radius:var(--ui-radius,4px)}
+.analysis-contextbar{min-height:44px;gap:12px;padding-block:6px}
+.analysis-source-actions{gap:8px}
+.analysis-header button:focus-visible,.analysis-header a:focus-visible,
+.analysis-contextbar button:focus-visible{outline-color:var(--ui-focus-color,#63C0F9);outline-offset:2px}
+@media(pointer:coarse){
+  .analysis-header button,#blueprintViews button,.analysis-source-actions button{min-height:44px}
+  .analysis-brand{min-height:44px}
+}

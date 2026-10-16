@@ -1,22 +1,23 @@
-.product-issues-dialog { color: var(--color-text); background: var(--color-surface); border: 1px solid transparent; border-radius: var(--corner-control); width: min(760px, calc(100vw - 36px)); max-height: min(86vh, 900px); padding: 0; box-shadow: var(--shadow-overlay); }
+.product-issues-dialog { box-sizing: border-box; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--ui-panel-radius,8px); width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; box-shadow: var(--shadow-overlay); }
+.product-issues-dialog[open] { display: flex; flex-direction: column; }
 .product-issues-dialog::backdrop { background: #050a08ad; backdrop-filter: blur(4px); }
-.product-issues-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 26px 16px;  background: var(--color-header);  margin-bottom: 14px; }
-.product-issues-header h2 { margin: 6px 0 0; font-size: 24px; line-height: 1.25; }
+.product-issues-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 12px var(--ui-panel-padding,16px); background: var(--color-header); margin-bottom: 12px; }
+.product-issues-header h2 { margin: 4px 0 0; font-size: var(--ui-title-size,15px); line-height: 1.4; }
 .product-issues-count { display: inline-block; vertical-align: middle; border-radius: var(--corner-control); padding: 3px 9px; background: var(--color-surface); color: var(--color-text); font-size: 14px; }
-.product-issues-summary { margin: 0; padding: 0 26px 14px; color: var(--color-text-secondary); font-size: 13px; line-height: 1.6; }
-.product-issues-feedback { margin: 0; padding: 0 26px; color: var(--color-danger-text); font-size: 13px; line-height: 1.5; }
+.product-issues-summary { flex: 0 0 auto; margin: 0; padding: 0 var(--ui-panel-padding,16px) 12px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; }
+.product-issues-feedback { flex: 0 0 auto; margin: 0; padding: 0 var(--ui-panel-padding,16px); color: var(--color-danger-text); font-size: 12px; line-height: 1.5; }
 .product-issues-feedback:not(:empty) { padding-bottom: 14px; }
-.product-issues-list { overflow: auto; padding: 0 26px 22px; max-height: min(58vh, 610px); overscroll-behavior: contain; }
-.product-issue-card { padding: 18px; border: 1px solid transparent; border-radius: var(--corner-control); margin-top: 14px; background: var(--color-surface); }
+.product-issues-list { min-height: 0; overflow: auto; padding: 0 var(--ui-panel-padding,16px) 12px; max-height: min(58dvh, 540px); overscroll-behavior: contain; }
+.product-issue-card { padding: 12px; border: 1px solid var(--color-border); border-radius: var(--ui-radius,4px); margin-top: 10px; background: var(--color-surface); }
 .product-issue-card:first-child { margin-top: 0; }
-.product-issue-heading h3 { margin: 7px 0 9px; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+.product-issue-heading h3 { margin: 5px 0 7px; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .product-issue-severity { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; color: var(--color-text-secondary); }
 .product-issue-card.is-error .product-issue-severity { color: var(--color-danger-text); }
 .product-issue-card.is-warning .product-issue-severity { color: var(--color-danger-text); }
 .product-issue-card p { margin: 8px 0; color: var(--color-text-secondary); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
 .product-issue-card .product-issue-guidance { color: var(--color-text-secondary); }
 .product-issue-locations { list-style: none; padding: 0; margin: 16px 0 0; }
-.product-issue-locations li { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid transparent; padding: 13px 0; }
+.product-issue-locations li { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--color-border); padding: 9px 0; }
 .product-issue-locations li:last-child { padding-bottom: 0; }
 .product-issue-locations li > div { min-width: 0; }
 .product-issue-locations strong, .product-issue-locations span, .product-issue-locations small { display: block; overflow-wrap: anywhere; }
@@ -25,21 +26,22 @@
 .product-issue-locations small { color: var(--color-text-secondary); margin-top: 4px; }
 .product-issue-locations button { flex-shrink: 0; }
 .product-issue-locations button span { display: inline; margin: 0; color: inherit; }
-.product-issues-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px solid transparent; padding: 17px 26px; background: var(--color-surface); }
+.product-issues-footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); padding: 10px var(--ui-panel-padding,16px); background: var(--color-surface); }
 .product-issues-footer > span { margin-right: auto; max-width: 350px; color: var(--color-text-secondary); font-size: 11px; line-height: 1.5; }
-.product-issues-empty { padding: 40px 24px; text-align: center; color: var(--color-text-secondary); }
+.product-issues-empty { padding: 24px 16px; text-align: center; color: var(--color-text-secondary); }
 .product-issues-empty > span { display: inline-grid; place-items: center; width: 42px; height: 42px; background: var(--color-surface); color: var(--color-text); border-radius: 50%; font-size: 22px; }
 .product-issues-empty h3 { font-size: 18px; margin: 16px 0 8px; color: var(--color-text); }
 .product-issues-empty p { font-size: 13px; line-height: 1.6; }
 .product-issue-focus, .product-issue-target { outline: 2px solid var(--color-accent) !important; outline-offset: 4px; border-radius: var(--corner-control); box-shadow: var(--shadow-overlay); }
 @media (max-width: 560px) {
   .product-issues-dialog { width: calc(100vw - 22px); max-height: 92vh; border-radius: var(--corner-control); }
-  .product-issues-header { padding: 20px 18px 14px;  background: var(--color-header);  margin-bottom: 14px; }
+  .product-issues-header { padding: 12px; background: var(--color-header); margin-bottom: 10px; }
   .product-issues-summary, .product-issues-feedback { padding-left: 18px; padding-right: 18px; }
   .product-issues-list { padding-left: 18px; padding-right: 18px; max-height: 61vh; }
   .product-issue-card { padding: 14px; }
-  .product-issue-locations li { align-items: flex-start; gap: 10px; }
+  .product-issue-locations li { flex-wrap: wrap; align-items: flex-start; gap: 10px; }
   .product-issue-locations button { font-size: 11px; padding: 8px; }
   .product-issues-footer { flex-wrap: wrap; padding: 14px 18px; }
   .product-issues-footer > span { width: 100%; max-width: none; }
 }
+@media (pointer: coarse) { .product-issues-dialog button { min-height:44px; }.product-issues-header .icon-button { min-width:44px; } }

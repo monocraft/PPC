@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="css/planning-intake.css">
   <link rel="stylesheet" href="css/saved-views.css">
   <script src="js/reference-theme.js"></script>
+  <link rel="stylesheet" href="css/interface-system.css">
 </head>
 <body>
   <aside id="workspaceOpeningStatus" class="workspace-opening-status hidden" role="status" aria-live="polite">
@@ -417,7 +418,7 @@
   <div id="appMessageDialog" class="modal-backdrop app-message-backdrop hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="appMessageTitle" aria-describedby="appMessageText" tabindex="-1">
     <section class="app-message-panel">
       <h2 id="appMessageTitle">Notice</h2>
-      <p id="appMessageText" class="app-message-text"></p>
+      <p id="appMessageText" class="app-message-text" tabindex="0"></p>
       <div class="app-message-actions"><button id="appMessageCancel" type="button">Cancel</button><button id="appMessageAccept" class="primary-button" type="button">OK</button></div>
     </section>
   </div>

@@ -107,9 +107,19 @@
   function positionProductMenu() {
     const picker = $("productPicker"); if (!picker.open) return;
     const menu = picker.querySelector(".so-picker-menu"), viewport = document.documentElement.clientWidth || root.innerWidth;
+    if (viewport <= 700) { for (const property of ["max-width", "left", "right"]) menu.style.removeProperty(property); return; }
     menu.style.maxWidth = `${Math.max(0, viewport - 36)}px`;
     const box = picker.getBoundingClientRect(), width = menu.getBoundingClientRect().width;
     menu.style.left = `${Math.max(18, Math.min(box.left, viewport - width - 18)) - box.left}px`; menu.style.right = "auto";
+  }
+  function closeFilterMenus(target = null, restoreFocus = false) {
+    let summary = null;
+    app.querySelectorAll(".so-picker[open], .so-more-filters[open]").forEach(picker => {
+      if (target && picker.contains(target)) return;
+      if (restoreFocus && picker.contains(document.activeElement)) summary = picker.querySelector("summary");
+      picker.open = false;
+    });
+    summary?.focus();
   }
   function filters() {
     let products = state.productsNone ? ["__no_products_selected__"] : [...state.products];
@@ -875,6 +885,8 @@
   $("openSource").onclick = $("editPrices").onclick = $("sourceFooterButton").onclick = $("reportInfo").onclick = $("coverageNotice").onclick = openSource;
   $("productSearch").oninput = renderProductOptions;
   $("productPicker").ontoggle = positionProductMenu;
+  $("closeMoreFilters").onclick = () => closeFilterMenus(null, true);
+  $("closeProductPicker").onclick = () => closeFilterMenus(null, true);
   root.addEventListener("resize", positionProductMenu);
   $("storeOptions").onclick = e => { const button = e.target.closest?.("button[data-store]"); if (!button || !$("storeOptions").contains(button) || !state.snapshot) return; const store = button.dataset.store, selected = !state.storesNone && (!state.stores.length || state.stores.includes(store)); stopTimeline(); setFilterSelection("stores", store, !selected); controls(); update(true); };
   $("productOptions").onchange = e => { const sku = e.target.dataset.product; if (!sku) return; setFilterSelection("products", sku, e.target.checked); productSelectionChanged(); controls(); update(true); };
@@ -922,8 +934,8 @@
     } catch (error) { if (run === privateRun) $("privateStatus").textContent = error.message; }
     finally { if (run === privateRun) { $("privateKey").value = ""; $("privateAction").disabled = false; } }
   };
-  document.addEventListener("click", e => { app.querySelectorAll(".so-picker[open]").forEach(d => { if (!d.contains(e.target)) d.open = false; }); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { $("chartTooltip").hidden = true; app.querySelectorAll(".so-picker[open]").forEach(d => d.open = false); } });
+  document.addEventListener("click", e => closeFilterMenus(e.target));
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { $("chartTooltip").hidden = true; closeFilterMenus(null, true); } });
   let dragDepth = 0;
   root.addEventListener("dragenter", e => { if (active && [...e.dataTransfer?.types || []].includes("Files")) { e.preventDefault(); dragDepth++; $("dropOverlay").hidden = false; } }); root.addEventListener("dragleave", () => { if (active && --dragDepth <= 0) { dragDepth = 0; $("dropOverlay").hidden = true; } }); root.addEventListener("dragover", e => { if (active && [...e.dataTransfer?.types || []].includes("Files")) e.preventDefault(); }); root.addEventListener("drop", e => { if (active && e.dataTransfer?.files.length) { e.preventDefault(); dragDepth = 0; $("dropOverlay").hidden = true; readImport(e.dataTransfer.files[0]); } });
   app.querySelectorAll(".so-sidebar nav a").forEach(a => a.onclick = event => { event.preventDefault(); showView(a.hash.slice(1)); });
