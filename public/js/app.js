@@ -160,7 +160,6 @@ const boardNavigator = $("#boardNavigator");
 const navRange = $("#navRange");
 const navLeft = $("#navLeft");
 const navRight = $("#navRight");
-const navPosition = $("#navPosition");
 const inspector = $("#inspector");
 const viewerInfo = $("#viewerInfo");
 const viewerInfoOutline = $("#viewerInfoOutline");
@@ -200,14 +199,12 @@ const roadmapNavigator = $("#roadmapNavigator");
 const roadmapNavRange = $("#roadmapNavRange");
 const roadmapNavLeft = $("#roadmapNavLeft");
 const roadmapNavRight = $("#roadmapNavRight");
-const roadmapNavPosition = $("#roadmapNavPosition");
 const splitRoadmapCanvas = $("#splitRoadmapCanvas");
 const splitRoadmapScroll = $("#splitRoadmapScroll");
 const splitRoadmapNavigator = $("#splitRoadmapNavigator");
 const splitRoadmapNavRange = $("#splitRoadmapNavRange");
 const splitRoadmapNavLeft = $("#splitRoadmapNavLeft");
 const splitRoadmapNavRight = $("#splitRoadmapNavRight");
-const splitRoadmapNavPosition = $("#splitRoadmapNavPosition");
 const horizontalNavigators = new Map();
 const splitProduct = $("#splitProduct");
 const roadmapMenuButton = $("#roadmapMenuButton");
@@ -3713,11 +3710,11 @@ function renderRoadmaps() {
 }
 
 function roadmapNavigatorRefs() {
-  return { element: roadmapNavigator, range: roadmapNavRange, left: roadmapNavLeft, right: roadmapNavRight, position: roadmapNavPosition };
+  return { element: roadmapNavigator, range: roadmapNavRange, left: roadmapNavLeft, right: roadmapNavRight };
 }
 
 function splitRoadmapNavigatorRefs() {
-  return { element: splitRoadmapNavigator, range: splitRoadmapNavRange, left: splitRoadmapNavLeft, right: splitRoadmapNavRight, position: splitRoadmapNavPosition };
+  return { element: splitRoadmapNavigator, range: splitRoadmapNavRange, left: splitRoadmapNavLeft, right: splitRoadmapNavRight };
 }
 
 function syncRoadmapNavigator(targetScroll, refs) {
@@ -3729,7 +3726,6 @@ function syncRoadmapNavigator(targetScroll, refs) {
   refs.range.value = String(Math.round(current));
   refs.left.disabled = !hasOverflow || current <= 1;
   refs.right.disabled = !hasOverflow || current >= max - 1;
-  refs.position.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
   syncHorizontalOverview(targetScroll, refs.element, true);
 }
 
@@ -4657,7 +4653,6 @@ function syncBoardNavigator() {
   navRange.value = String(Math.round(current));
   navLeft.disabled = !hasOverflow || current <= 1;
   navRight.disabled = !hasOverflow || current >= max - 1;
-  navPosition.textContent = hasOverflow ? `${Math.round((current / max) * 100)}%` : "0%";
   syncHorizontalOverview(canvasScroll, boardNavigator);
 }
 

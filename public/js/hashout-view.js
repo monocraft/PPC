@@ -104,8 +104,7 @@
     const navRange = node("input", "nav-range");
     navRange.type = "range"; navRange.min = navRange.max = navRange.value = "0";
     navRange.setAttribute("aria-label", "Hashout horizontal position");
-    const navPosition = node("span", "nav-position", "Scroll");
-    navigator.append(navLeft, navRange, navRight, navPosition);
+    navigator.append(navLeft, navRange, navRight);
     stage.append(canvas, laneHoverClip, selectionGuide, selectionEffects, rail, empty, card, ring);
     shell.append(toolbar, stage, navigator, live);
     host.append(shell);

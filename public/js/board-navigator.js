@@ -5,7 +5,6 @@
   const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
   function create(element, options) {
     const range = element.querySelector(".nav-range");
-    const position = element.querySelector(".nav-position");
     const abort = new AbortController();
     const make = (tag, className) => { const value = document.createElement(tag); value.className = className; return value; };
     const overview = make("div", "nav-overview");
@@ -53,7 +52,6 @@
       range.disabled = value.total <= value.visible + 2;
       overview.classList.toggle("is-fit", range.disabled);
       overview.classList.toggle("is-narrow", span * overview.clientWidth < 32);
-      if (position) { position.textContent = "Scroll"; position.title = description; }
       for (const [index, handle] of handles.entries()) {
         handle.setAttribute("aria-valuemin", "0");
         handle.setAttribute("aria-valuemax", "100");
@@ -98,6 +96,7 @@
       const inside = x >= initial.left && x <= initial.left + initial.visible;
       gesture = { id: event.pointerId, edge, initial, rect, offset: inside ? x - initial.left : initial.visible / 2 };
       event.preventDefault();
+      overview.classList.add("is-pointer-focused");
       if (edge) handles[edge === "left" ? 0 : 1].focus({ preventScroll: true });
       else range.focus({ preventScroll: true });
       overview.setPointerCapture(event.pointerId);
@@ -120,6 +119,7 @@
     }
     for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) listen(overview, event, finish);
     listen(overview, "keydown", event => {
+      overview.classList.remove("is-pointer-focused");
       if (event.key === "Escape") { finish(event); return; }
       const edge = event.target.dataset.edge;
       if (!edge || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -131,7 +131,8 @@
       const fraction = event.key === "Home" ? 0 : event.key === "End" ? 1 : edge === "left" ? (initial.left + initial.visible) / initial.total - span : initial.left / initial.total + span;
       resize(edge, fraction, initial);
     });
-    listen(root, "blur", finish);
+    listen(overview, "focusout", event => { if (!overview.contains(event.relatedTarget)) overview.classList.remove("is-pointer-focused"); });
+    listen(root, "blur", event => { finish(event); overview.classList.remove("is-pointer-focused"); });
     return Object.freeze({ update, destroy() { finish({}); destroyed = true; abort.abort(); overview.before(range); overview.remove(); element.classList.remove("has-overview"); range.removeAttribute("aria-describedby"); } });
   }
   root.PortfolioNavigator = Object.freeze({ create });
