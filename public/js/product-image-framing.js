@@ -60,6 +60,52 @@
   const mouseProfile = assetName => mouseProfiles.get(String(assetName).match(/^.+-([a-f0-9]{20})\.png$/)?.[1]);
   const usesMouseFraming = (categoryId, assetName = "") => categoryId === "mice" && Boolean(mouseProfile(assetName));
 
+  // Reviewed flat keyfaces use a common body height and fixed right edge.
+  // Wider layouts may leave the card on the left. The source crop records that
+  // presentation directly, so canvas and editable exports use identical pixels.
+  const keyboardProfiles = new Map([
+    ["1183581840a8ecc86f5d", { imageWidth: 800, imageHeight: 600, bounds: { x: 154, y: 205, width: 505, height: 186 } }],
+    ["1729e6c84cf82f34f4f7", { imageWidth: 800, imageHeight: 600, bounds: { x: 151, y: 215, width: 497, height: 161 } }],
+    ["1b3b0e3f94aaf95f9030", { imageWidth: 800, imageHeight: 600, bounds: { x: 218, y: 215, width: 365, height: 161 } }],
+    ["28e20945a3588b895873", { imageWidth: 800, imageHeight: 600, bounds: { x: 153, y: 214, width: 495, height: 173 } }],
+    ["5cca091d9439ebd25678", { imageWidth: 800, imageHeight: 600, bounds: { x: 213, y: 232, width: 373, height: 137 } }],
+    ["62f2f17274a3ae9eea3a", { imageWidth: 800, imageHeight: 600, bounds: { x: 156, y: 205, width: 488, height: 187 } }],
+    ["7cc528d2a3439906b48c", { imageWidth: 800, imageHeight: 600, bounds: { x: 218, y: 214, width: 365, height: 162 } }],
+    ["c2de56fd269b8e18f3fc", { imageWidth: 800, imageHeight: 600, bounds: { x: 152, y: 215, width: 495, height: 155 } }],
+    ["e96930ebe62d2095abcd", { imageWidth: 800, imageHeight: 600, bounds: { x: 184, y: 216, width: 432, height: 161 } }],
+    ["ef613d5da697a76f227c", { imageWidth: 800, imageHeight: 600, bounds: { x: 153, y: 214, width: 495, height: 149 } }],
+    ["f44cfd84f8d86580f401", { imageWidth: 800, imageHeight: 600, bounds: { x: 213, y: 232, width: 374, height: 137 } }],
+    ["fc61d8ec11bbbbb2636e", { imageWidth: 800, imageHeight: 600, bounds: { x: 173, y: 212, width: 454, height: 166 } }],
+    ["fd3ed8b9b1e16f54d526", { imageWidth: 800, imageHeight: 600, bounds: { x: 153, y: 196, width: 495, height: 189 } }],
+  ]);
+  const keyboardProfile = assetName => keyboardProfiles.get(String(assetName).match(/^.+-([a-f0-9]{20})\.png$/)?.[1]);
+  const usesKeyboardFraming = (categoryId, assetName = "") => categoryId === "keyboards" && Boolean(keyboardProfile(assetName));
+
+  function keyboardPlacement(image, box, bounds) {
+    const imageWidth = image?.naturalWidth, imageHeight = image?.naturalHeight;
+    if (!(imageWidth > 0 && imageHeight > 0 && box?.width > 0 && box?.height > 0 && bounds)) return null;
+    const values = [bounds.x, bounds.y, bounds.width, bounds.height, box.x, box.y, box.width, box.height];
+    if (!values.every(Number.isFinite) || bounds.x < 0 || bounds.y < 0 || bounds.width <= 0 || bounds.height <= 0 || bounds.x + bounds.width > imageWidth || bounds.y + bounds.height > imageHeight) return null;
+    const height = Math.min(112, box.height), scale = height / bounds.height;
+    const availableWidth = box.width + 18;
+    const width = Math.min(bounds.width * scale, availableWidth);
+    const sourceWidth = width / scale;
+    return {
+      source: { x: bounds.x + bounds.width - sourceWidth, y: bounds.y, width: sourceWidth, height: bounds.height },
+      x: box.x + box.width - width, y: box.y + (box.height - height) / 2, width, height,
+    };
+  }
+
+  function drawKeyboard(context, image, box, { assetName = "" } = {}) {
+    const reviewed = keyboardProfile(assetName);
+    if (!reviewed || image?.naturalWidth !== reviewed.imageWidth || image?.naturalHeight !== reviewed.imageHeight) return false;
+    const frame = keyboardPlacement(image, box, reviewed.bounds);
+    if (!frame) return false;
+    const s = frame.source;
+    context.drawImage(image, s.x, s.y, s.width, s.height, frame.x, frame.y, frame.width, frame.height);
+    return true;
+  }
+
   // Measure transparent padding once per decoded image. Pixels and saved assets
   // remain unchanged; the result is only a presentation source rectangle.
   function boundsFromPixels(data, width, height) {
@@ -137,5 +183,5 @@
     return true;
   }
 
-  root.PortfolioImageFraming = Object.freeze({ usesAudioFraming, usesMouseFraming, boundsFromPixels, measure, placement, draw, drawMouse });
+  root.PortfolioImageFraming = Object.freeze({ usesAudioFraming, usesMouseFraming, usesKeyboardFraming, boundsFromPixels, measure, placement, keyboardPlacement, draw, drawMouse, drawKeyboard });
 })(globalThis);
