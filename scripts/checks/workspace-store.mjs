@@ -502,4 +502,38 @@ for (const operation of ['choose-saved', 'restore-archive']) {
   assert.throws(() => store.acknowledgeReconciled(first), { code: 'WORKSPACE_RECONCILE_STALE' }); assert.equal(store.acknowledgeReconciled(second), true);
   mark('adoption recovery requires valid JSON baseline before any transaction and shares normal receipt sequencing');
 }
+for (const selection of [[], ['all'], ['launched', 'in-development'], ['embargo', 'in-planning', 'embargo']]) {
+  for (const factSide of ['current', 'proposed']) {
+    const base = viewFixture(), latest = clone(base), mine = clone(base);
+    const views = factSide === 'current' ? mine : latest, facts = factSide === 'current' ? latest : mine;
+    views.categories[0].board.settings.catalogGroups = selection;
+    facts.categories[0].board.products[0].name = 'Accepted concurrent fact';
+    const h = await diverged(base, latest), receipt = await h.second.save(JSON.stringify(mine), { reconcileViews: true });
+    const expected = clone(facts); expected.categories[0].board.settings.catalogGroups = selection;
+    assert.deepEqual(JSON.parse(receipt.serialized), expected, 'bounded multi-selection is a view leaf, while every concurrent fact survives exactly');
+    assert.equal(await h.second.read(), receipt.serialized);
+  }
+  mark('multi-select ' + JSON.stringify(selection) + ' reconciles with business edits in either direction');
+}
+for (const malformed of [null, false, 'launched', {}, ['unknown'], ['all', 'launched'], [null], Array(33).fill('launched')]) {
+  for (const target of ['baseline', 'proposed', 'current']) {
+    const base = viewFixture(), latest = clone(base), mine = clone(base);
+    ({ baseline: base, proposed: mine, current: latest })[target].categories[0].board.settings.catalogGroups = malformed;
+    latest.categories[0].board.products[0].name = 'Concurrent accepted fact';
+    mine.settings.hashoutLabelMode = 'on';
+    const h = await diverged(base, latest);
+    await assert.rejects(h.second.save(JSON.stringify(mine), { reconcileViews: true }), { code: 'WORKSPACE_CONFLICT' });
+    assert.equal(h.d.state.stores.get('workspaces').get('production').serialized, JSON.stringify(latest), 'invalid selections cannot bypass the complete-fact CAS guard');
+  }
+  mark('invalid multi-select ' + JSON.stringify(malformed) + ' refuses reconciliation from every snapshot side');
+}
+{
+  const base = viewFixture(); base.categories[0].board.settings.catalogGroups = ['launched', 'in-development'];
+  const latest = clone(base), mine = clone(base); latest.categories[0].board.products[0].name = 'Accepted source';
+  delete mine.categories[0].board.settings.catalogGroups;
+  const h = await diverged(base, latest), output = JSON.parse((await h.second.save(JSON.stringify(mine), { reconcileViews: true })).serialized);
+  const expected = clone(latest); delete expected.categories[0].board.settings.catalogGroups;
+  assert.deepEqual(output, expected, 'deliberately removing a new selection restores legacy absence without altering facts');
+  mark('multi-select absence remains distinct from explicit none during concurrent saves');
+}
 console.log('Workspace store checks passed: ' + cases.length + ' bounded durability, quota, atomic images, opt-in view reconciliation/adoption, full-fact CAS, both-copy local recovery/adoption, recovery rollback, archive-aware transactional image cleanup and retry cases.');

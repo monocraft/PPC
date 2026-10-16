@@ -304,7 +304,7 @@
         horizon = nextHorizon;
         viewport = wasFit ? { start: horizon.start, end: horizon.end + 1 } : boundViewport(viewport);
       }
-      if (options.getSelectedKey) selectedKey = options.getSelectedKey() || selectedKey;
+      if (options.getSelectedKey) selectedKey = options.getSelectedKey() || null;
       const nextSeasonalSignature = `${horizon.start}:${horizon.end}`;
       if (nextSeasonalSignature !== seasonalSignature) {
         seasonalSignature = nextSeasonalSignature;
@@ -328,12 +328,14 @@
       pickerPanel.replaceChildren();
       const allRow = node("label", "hashout-category-option hashout-category-all");
       const allInput = node("input"); allInput.type = "checkbox"; allInput.checked = ids.size === allCategories.length; allInput.indeterminate = ids.size > 0 && ids.size < allCategories.length;
+      allInput.setAttribute("aria-label", "All Hashout categories");
       allRow.append(allInput, node("span", "", "All categories"));
       listen(allInput, "change", () => chooseScope(allInput.checked ? null : []));
       pickerPanel.append(allRow);
       for (const category of allCategories) {
         const label = node("label", "hashout-category-option");
         const input = node("input"); input.type = "checkbox"; input.checked = ids.has(category.id); input.value = category.id;
+        input.setAttribute("aria-label", `${category.name}, ${category.count} visible ${category.count === 1 ? "product" : "products"}`);
         label.append(input, node("span", "hashout-category-name", category.name), node("small", "", String(category.count)));
         listen(input, "change", () => { const current = new Set(scopeIds()); if (input.checked) current.add(category.id); else current.delete(category.id); chooseScope(current.size === allCategories.length ? null : [...current]); });
         pickerPanel.append(label);

@@ -15,6 +15,32 @@
   }
   const number = (value, min, max) => typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : undefined;
   const clean = value => Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+  function catalogGroups(value) {
+    const groups = ['all','launched','in-development','in-planning','embargo','unreleased','eol'];
+    if (!Array.isArray(value) || value.length > 32 || Array.from(value).some(group => !groups.includes(group))) return undefined;
+    const unique = new Set(value);
+    return unique.has('all') && unique.size > 1 ? undefined : groups.filter(group => unique.has(group));
+  }
+  function categoryVisibility(value) {
+    if (!Array.isArray(value)) return undefined;
+    const seen = new Set(), groups = ['all','launched','unreleased','eol'];
+    return value.slice(0, 200).flatMap(entry => {
+      if (!object(entry) || !Object.hasOwn(entry, 'categoryId')) return [];
+      const categoryId = text(entry.categoryId);
+      const hasSelection = Object.hasOwn(entry, 'catalogGroups') && entry.catalogGroups !== undefined;
+      const selection = hasSelection ? catalogGroups(entry.catalogGroups) : undefined;
+      const hasGroup = Object.hasOwn(entry, 'catalogGroup') && entry.catalogGroup !== undefined;
+      const hasLegacy = Object.hasOwn(entry, 'hideDiscontinued') && entry.hideDiscontinued !== undefined;
+      if (!categoryId?.trim() || seen.has(categoryId) || !hasSelection && !hasGroup && !hasLegacy
+        || hasSelection && selection === undefined
+        || !hasSelection && (hasGroup && !groups.includes(entry.catalogGroup) || hasLegacy && typeof entry.hideDiscontinued !== 'boolean')) return [];
+      seen.add(categoryId);
+      if (hasSelection) return [{ categoryId, catalogGroups: selection }];
+      // A group is authoritative. Do not retain a contradictory legacy flag;
+      // boolean-only entries preserve older per-category visibility exactly.
+      return [{ categoryId, ...(hasGroup ? { catalogGroup: entry.catalogGroup } : { hideDiscontinued: entry.hideDiscontinued }) }];
+    });
+  }
   function sanitizePreferences(kind, value) {
     if (!kinds.includes(kind) || !object(value)) return null;
     if (kind === 'portfolio') {
@@ -27,9 +53,11 @@
         showSkus: typeof value.display.showSkus === 'boolean' ? value.display.showSkus : undefined,
         hideDiscontinued: typeof value.display.hideDiscontinued === 'boolean' ? value.display.hideDiscontinued : undefined,
         catalogGroup: choice(value.display.catalogGroup, ['all','launched','unreleased','eol']),
+        catalogGroups: catalogGroups(value.display.catalogGroups),
       }) : undefined;
       return clean({ view: choice(value.view, ['products','roadmap','split']), basis: choice(value.basis, ['lifecycle','ffs']),
         categoryIds: ids(value.categoryIds, 200), activeCategoryId: text(value.activeCategoryId),
+        categoryVisibility: categoryVisibility(value.categoryVisibility),
         dateRange: object(value.dateRange) ? clean({ start: date(value.dateRange.start, true), end: date(value.dateRange.end, true) }) : undefined,
         search: text(value.search, 200), display });
     }
