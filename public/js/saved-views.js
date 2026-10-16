@@ -21,6 +21,10 @@
     const unique = new Set(value);
     return unique.has('all') && unique.size > 1 ? undefined : groups.filter(group => unique.has(group));
   }
+  function catalogExcludedGroups(value) {
+    const groups = catalogGroups(value);
+    return groups && !groups.includes('all') ? groups : undefined;
+  }
   function categoryVisibility(value) {
     if (!Array.isArray(value)) return undefined;
     const seen = new Set(), groups = ['all','launched','unreleased','eol'];
@@ -29,16 +33,20 @@
       const categoryId = text(entry.categoryId);
       const hasSelection = Object.hasOwn(entry, 'catalogGroups') && entry.catalogGroups !== undefined;
       const selection = hasSelection ? catalogGroups(entry.catalogGroups) : undefined;
+      const hasExclusions = Object.hasOwn(entry, 'catalogExcludedGroups') && entry.catalogExcludedGroups !== undefined;
+      const excluded = hasExclusions ? catalogExcludedGroups(entry.catalogExcludedGroups) : undefined;
       const hasGroup = Object.hasOwn(entry, 'catalogGroup') && entry.catalogGroup !== undefined;
       const hasLegacy = Object.hasOwn(entry, 'hideDiscontinued') && entry.hideDiscontinued !== undefined;
       if (!categoryId?.trim() || seen.has(categoryId) || !hasSelection && !hasGroup && !hasLegacy
         || hasSelection && selection === undefined
+        || hasExclusions && excluded === undefined
         || !hasSelection && (hasGroup && !groups.includes(entry.catalogGroup) || hasLegacy && typeof entry.hideDiscontinued !== 'boolean')) return [];
       seen.add(categoryId);
-      if (hasSelection) return [{ categoryId, catalogGroups: selection }];
+      const exclusions = hasExclusions ? { catalogExcludedGroups: excluded } : {};
+      if (hasSelection) return [{ categoryId, catalogGroups: selection, ...exclusions }];
       // A group is authoritative. Do not retain a contradictory legacy flag;
       // boolean-only entries preserve older per-category visibility exactly.
-      return [{ categoryId, ...(hasGroup ? { catalogGroup: entry.catalogGroup } : { hideDiscontinued: entry.hideDiscontinued }) }];
+      return [{ categoryId, ...(hasGroup ? { catalogGroup: entry.catalogGroup } : { hideDiscontinued: entry.hideDiscontinued }), ...exclusions }];
     });
   }
   function sanitizePreferences(kind, value) {
@@ -54,6 +62,7 @@
         hideDiscontinued: typeof value.display.hideDiscontinued === 'boolean' ? value.display.hideDiscontinued : undefined,
         catalogGroup: choice(value.display.catalogGroup, ['all','launched','unreleased','eol']),
         catalogGroups: catalogGroups(value.display.catalogGroups),
+        catalogExcludedGroups: catalogExcludedGroups(value.display.catalogExcludedGroups),
       }) : undefined;
       return clean({ view: choice(value.view, ['products','roadmap','split']), basis: choice(value.basis, ['lifecycle','ffs']),
         categoryIds: ids(value.categoryIds, 200), activeCategoryId: text(value.activeCategoryId),

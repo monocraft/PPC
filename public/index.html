@@ -46,8 +46,8 @@
     <div class="workspace-main">
       <header class="topbar">
         <div class="brand-block">
-          <span class="brand-mark" aria-hidden="true">P</span>
-          <label class="category-switcher"><select id="categorySelect" class="category-select" aria-label="Product category"></select></label>
+          <div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>
+          <span id="categoryContext" class="visually-hidden">Product Portfolio</span>
           <h1 id="boardTitle" class="visually-hidden"></h1>
         </div>
         <div class="view-switch" role="tablist" aria-label="Portfolio view">
@@ -73,7 +73,7 @@
           <details class="workspace-tool-menu workspace-sort-menu"><summary aria-label="Product sorting options">Sort</summary><div class="workspace-tool-menu-panel"><label class="inline-field"><span>Product order</span><select id="sortMode"><option value="custom">Custom order</option><option value="name-asc">Name A–Z</option><option value="price-asc">Price low–high</option><option value="price-desc">Price high–low</option><option value="status">Status</option><option value="sku-count">Most SKUs</option></select></label><button id="applySort" class="quiet-button">Apply order</button></div></details>
           <button id="productLayoutEditToggle" class="compact-button card-reorder-start" type="button" aria-expanded="false" aria-controls="productReorderActions" title="Drag products to change their order or lane">Reorder products</button>
           <div id="catalogVisibility" class="catalog-visibility" role="group" aria-label="Show lifecycle groups" aria-describedby="catalogVisibilityHelp">
-            <span id="catalogVisibilityHelp" class="visually-hidden">Choose multiple lifecycle groups. All resets the selection. Arrow keys move focus; Space toggles a group.</span>
+            <span id="catalogVisibilityHelp" class="visually-hidden">Choose multiple lifecycle groups. Ctrl-click or Command-click a group to show all except that group; repeat to restore it. All resets the selection. Arrow keys move focus; Space toggles a group.</span>
             <button type="button" data-catalog-group="all" aria-label="All products" aria-pressed="true"><span class="catalog-filter-icon" aria-hidden="true"></span><span class="catalog-group-count" aria-hidden="true">0</span><span class="catalog-group-tooltip" aria-hidden="true">All products</span></button>
             <button type="button" data-catalog-group="launched" aria-label="Launched products" aria-pressed="false"><span class="catalog-filter-icon" aria-hidden="true"></span><span class="catalog-group-count" aria-hidden="true">0</span><span class="catalog-group-tooltip" aria-hidden="true">Launched</span></button>
             <button type="button" data-catalog-group="in-development" aria-label="In development" aria-pressed="false"><span class="catalog-filter-icon" aria-hidden="true"></span><span class="catalog-group-count" aria-hidden="true">0</span><span class="catalog-group-tooltip" aria-hidden="true">In development</span></button>
@@ -462,6 +462,7 @@
   <script src="js/workflow-model.js"></script>
   <script src="js/planning-intake.js"></script>
   <script src="js/planning-intake-ui.js"></script>
+  <script src="js/category-navigation.js"></script>
   <script src="js/app.js"></script>
   <script src="js/package-ui.js"></script>
   <script src="js/workspace-ui.js"></script>

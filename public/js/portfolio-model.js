@@ -101,6 +101,12 @@
     return CATALOG_VISIBILITY_GROUPS.filter(group => unique.has(group));
   }
 
+  function normalizeCatalogExcludedGroups(value) {
+    if (!Array.isArray(value) || value.length > 32 || Array.from(value).some(group => group === "all" || !CATALOG_VISIBILITY_GROUPS.includes(group))) return null;
+    const unique = new Set(value);
+    return CATALOG_VISIBILITY_GROUPS.filter(group => group !== "all" && unique.has(group));
+  }
+
   function catalogVisibilitySelection(settings = {}) {
     const selected = normalizeCatalogGroups(settings?.catalogGroups);
     if (selected !== null) return selected;
@@ -110,6 +116,10 @@
     // The old checkbox hides only date-confirmed discontinuations, including
     // neither unknown records nor stage-only EOL. No detail union is identical.
     return settings?.hideDiscontinued === true ? null : ["all"];
+  }
+
+  function catalogVisibilityExclusions(settings = {}) {
+    return catalogVisibilitySelection(settings)?.includes("all") ? normalizeCatalogExcludedGroups(settings?.catalogExcludedGroups) || [] : [];
   }
 
   // Catalogue groups describe saved evidence; absent stages must never inherit
@@ -140,7 +150,12 @@
   function catalogProducts(products, settings = {}, now = new Date()) {
     const rows = Array.isArray(products) ? products : [];
     const selection = catalogVisibilitySelection(settings);
-    if (selection !== null) return selection.includes("all") ? rows : rows.filter(product => selection.includes(catalogVisibilityGroup(product, now)));
+    if (selection !== null) {
+      if (!selection.includes("all")) return rows.filter(product => selection.includes(catalogVisibilityGroup(product, now)));
+      const excluded = catalogVisibilityExclusions(settings);
+      // Excluding a known group must retain unknown and future lifecycle facts.
+      return excluded.length ? rows.filter(product => !excluded.includes(catalogVisibilityGroup(product, now))) : rows;
+    }
     // Older workspaces retain their checkbox until an explicit group is saved.
     return settings?.hideDiscontinued === true ? rows.filter(product => !isDiscontinued(product, now)) : rows;
   }
@@ -323,5 +338,5 @@
     });
   }
 
-  root.PortfolioModel = Object.freeze({ endManufacturingDay, isDiscontinued, CATALOG_GROUPS, CATALOG_VISIBILITY_GROUPS, normalizeCatalogGroups, catalogVisibilitySelection, catalogVisibilityGroup, catalogVisibilityCounts, catalogLifecycle, catalogProducts, catalogLifecycleCounts, DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, productLabelColor, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
+  root.PortfolioModel = Object.freeze({ endManufacturingDay, isDiscontinued, CATALOG_GROUPS, CATALOG_VISIBILITY_GROUPS, normalizeCatalogGroups, normalizeCatalogExcludedGroups, catalogVisibilitySelection, catalogVisibilityExclusions, catalogVisibilityGroup, catalogVisibilityCounts, catalogLifecycle, catalogProducts, catalogLifecycleCounts, DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, productLabelColor, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
 })(globalThis);

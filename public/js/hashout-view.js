@@ -28,13 +28,6 @@
     shell.style.setProperty("--hashout-selection-halo", root.PortfolioTheme?.alpha?.(HASHOUT_SELECTION, .14) || "#2dd4bf24");
     shell.setAttribute("aria-label", "Hashout roadmap by category");
     const toolbar = node("div", "hashout-toolbar");
-    const picker = node("details", "hashout-category-picker");
-    const pickerSummary = node("summary", "hashout-category-summary", "All categories");
-    pickerSummary.setAttribute("aria-label", "Choose Hashout categories");
-    const pickerPanel = node("div", "hashout-category-panel");
-    pickerPanel.setAttribute("role", "group");
-    pickerPanel.setAttribute("aria-label", "Hashout categories");
-    picker.append(pickerSummary, pickerPanel);
     const searchShell = node("div", "hashout-search-shell");
     const searchIcon = node("span", "hashout-search-icon", "⌕");
     searchIcon.setAttribute("aria-hidden", "true");
@@ -73,7 +66,7 @@
     }
     windowsPanel.append(node("p", "", "Each shaded window spans the ideal FFS month through the on-shelf target: February through May for spring, July through October for fall. Product positions use their own FFS estimates."), node("p", "", "Being inside a shaded window does not confirm readiness. The ideal FFS targets remain February for May on-shelf and July for October on-shelf; later FFS estimates are not automatically on time. A quarter or broader estimate may only overlap the ideal FFS target."), node("p", "hashout-windows-exceptions", "Retailer-specific exceptions apply. Amazon and Micro Center use flexible timing. Walmart fall and Target spring are special-case launches."));
     windowsKey.append(windowsSummary, windowsPanel); windowsControl.append(windowsToggle, windowsKey);
-    toolbar.append(picker, searchShell, labelControl, windowsControl, back, scopeCount);
+    toolbar.append(searchShell, labelControl, windowsControl, back, scopeCount);
     const stage = node("div", "hashout-stage");
     const canvas = node("canvas", "hashout-canvas");
     canvas.tabIndex = 0;
@@ -117,7 +110,7 @@
     let entries = [], allCategories = [], layout = null, horizon = null, viewport = null;
     let width = 0, height = 0, leftWidth = 166, renderFrame = 0, animationFrame = 0, destroyed = false;
     let selectedKey = options.getSelectedKey?.() || null, hovered = null, hoverMemberKey = null, pinned = false, cardAnchor = null, cardEntries = [], hideTimer = 0, keyboardIndex = -1, drag = null, suppressClick = false;
-    let railSignature = "", pickerSignature = "", searchSignature = "", viewportSignature = "";
+    let railSignature = "", searchSignature = "", viewportSignature = "";
     let labelSignature = "", capsuleExpanded = false;
     let hoveredCategoryId = null, lanePointer = null, laneHoverFrame = 0;
     let ringState = null, ringCloseTimer = 0, previousViewport = null;
@@ -312,34 +305,9 @@
         seasonalBands = root.PortfolioHashoutLayout.seasonalBands?.(horizon) || [];
       }
       if (selectedKey && !getEntry(selectedKey)) { hovered = null; if (pinned) closeCard(); }
-      updatePicker();
       updateSearch();
       scopeCount.textContent = `${entries.length} ${entries.length === 1 ? "product" : "products"}`;
       scopeCount.setAttribute("aria-label", `${entries.length} products in ${entries.categories?.length ?? scopeIds().length} selected categories`);
-    }
-
-    function updatePicker() {
-      const ids = new Set(scopeIds());
-      pickerSummary.textContent = scope === null || ids.size === allCategories.length ? "All categories" : ids.size === 1 ? allCategories.find((item) => ids.has(item.id))?.name || "1 category" : `${ids.size} categories`;
-      pickerSummary.title = "Choose one or multiple categories";
-      const signature = JSON.stringify([allCategories, [...ids]]);
-      if (signature === pickerSignature) return;
-      pickerSignature = signature;
-      pickerPanel.replaceChildren();
-      const allRow = node("label", "hashout-category-option hashout-category-all");
-      const allInput = node("input"); allInput.type = "checkbox"; allInput.checked = ids.size === allCategories.length; allInput.indeterminate = ids.size > 0 && ids.size < allCategories.length;
-      allInput.setAttribute("aria-label", "All Hashout categories");
-      allRow.append(allInput, node("span", "", "All categories"));
-      listen(allInput, "change", () => chooseScope(allInput.checked ? null : []));
-      pickerPanel.append(allRow);
-      for (const category of allCategories) {
-        const label = node("label", "hashout-category-option");
-        const input = node("input"); input.type = "checkbox"; input.checked = ids.has(category.id); input.value = category.id;
-        input.setAttribute("aria-label", `${category.name}, ${category.count} visible ${category.count === 1 ? "product" : "products"}`);
-        label.append(input, node("span", "hashout-category-name", category.name), node("small", "", String(category.count)));
-        listen(input, "change", () => { const current = new Set(scopeIds()); if (input.checked) current.add(category.id); else current.delete(category.id); chooseScope(current.size === allCategories.length ? null : [...current]); });
-        pickerPanel.append(label);
-      }
     }
 
     function searchText(entry) {
@@ -1148,7 +1116,6 @@
     listen(document, "pointerdown", (event) => {
       if (event.pointerType === "touch") coarseInput = true;
       else if (event.pointerType === "mouse" && !root.matchMedia?.("(pointer: coarse)")?.matches) coarseInput = false;
-      if (!picker.contains(event.target)) picker.open = false;
       if (!windowsControl.contains(event.target)) windowsKey.open = false;
       if (!searchShell.contains(event.target)) { results.hidden = true; search.setAttribute("aria-expanded", "false"); }
       const insideCard = card.contains(event.target);
@@ -1252,7 +1219,7 @@
     if (document.fonts?.addEventListener) listen(document.fonts, "loadingdone", refreshFontMeasurements);
     refreshData(); requestRender();
     return Object.freeze({
-      render, fit, zoomBy, today, focusProduct, exportPng,
+      render, fit, zoomBy, today, focusProduct, exportPng, setScope: chooseScope,
       closeOverlay() { closeCard(); closeRing(); clearLaneHover(); },
       getViewport() { return viewport ? { ...viewport, zoom: horizon.count / (viewport.end - viewport.start) } : null; },
       setSearch(value) { search.value = String(value || ""); searchSignature = ""; updateSearch(); },

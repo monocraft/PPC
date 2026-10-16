@@ -7,7 +7,7 @@
   const trigger = get("workspaceSettingsButton");
   const tabs = [...document.querySelectorAll("[data-settings-tab]")];
   const panels = [...document.querySelectorAll("[data-settings-panel]")];
-  const select = get("categorySelect");
+  const categoryContext = get("categoryContext");
   const app = document.querySelector(".app-shell");
   const header = document.querySelector(".topbar");
   const controls = document.querySelector(".workspace-controls");
@@ -65,7 +65,7 @@
       if (selected && focus) tab.focus();
     }
     for (const panel of panels) panel.classList.toggle("hidden", panel.dataset.settingsPanel !== activeTab);
-    get("settingsActiveCategory").textContent = select.selectedOptions[0]?.textContent || "Active category";
+    get("settingsActiveCategory").textContent = snapshot?.categories?.find(category => category.id === snapshot.activeCategoryId)?.name || categoryContext?.textContent || "Active category";
   }
 
   function openSettings(tabName = activeTab) {
@@ -99,8 +99,8 @@
 
   function refresh(detail = snapshot) {
     if (detail) snapshot = detail;
-    const activeId = detail?.activeCategoryId || select.value;
-    const categories = detail?.categories || [...select.options].map((option) => ({ id: option.value, name: option.textContent, count: null }));
+    const activeId = detail?.activeCategoryId;
+    const categories = detail?.categories || [];
     const active = categories.find((category) => category.id === activeId);
     const total = detail?.productCount ?? active?.count;
     const selected = detail?.selectedName;
@@ -112,7 +112,7 @@
     controls.classList.toggle("hidden", emptyPortfolio);
     get("statusbar").classList.toggle("hidden", emptyPortfolio);
 
-    get("settingsActiveCategory").textContent = active?.name || select.selectedOptions[0]?.textContent || "Active category";
+    get("settingsActiveCategory").textContent = active?.name || categoryContext?.textContent || "Active category";
     const visible = detail?.visibleCount;
     get("workspaceSummary").textContent = total == null ? "Portfolio" : `${visible != null && visible < total ? `${visible} of ` : ""}${total} ${total === 1 ? "product" : "products"}`;
     if (detail) {
@@ -183,8 +183,6 @@
   get("roadmapEnd").addEventListener("change", updateTimelineSummary);
   new MutationObserver(() => { get("quickEditSelected").disabled = get("editSelected").disabled; })
     .observe(get("editSelected"), { attributes: true, attributeFilter: ["disabled"] });
-  new MutationObserver(() => { if (!snapshot) refresh(); })
-    .observe(select, { childList: true, subtree: true });
 
   window.PortfolioWorkspaceUI = Object.freeze({ openSettings, closeSettings, refresh, closeToolMenus });
   refresh();
