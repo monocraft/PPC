@@ -103,18 +103,22 @@ for (const surface of [theme.colors.page, theme.colors.surface, theme.colors.hea
 }
 for (const series of theme.chartSeries) assert.ok(contrast(series, theme.colors.page) >= 3 && contrast(series, theme.colors.surface) >= 3, "the main reference colors remain distinguishable on dark chart surfaces");
 assert.ok(Object.isFrozen(theme.productCardStyles));
-for (const [stage, accent] of [["in-planning", "#FFC63B"], ["in-development", "#4DA1F7"]]) {
+assert.deepEqual({ ...theme.productCardStyles.embargo }, {
+  accent: "#A52F3F", surface: "#3D282D", footer: "#4C2C33", outline: "#9E4B5A", muted: "#FFB8C2", label: "#FFFFFF", selection: "#FFB8C2",
+}, "Embargo has its own complete opaque card palette and a white banner label");
+for (const [stage, accent] of [["in-planning", "#FFC63B"], ["in-development", "#4DA1F7"], ["embargo", "#A52F3F"]]) {
   const style = theme.productCardStyles[stage];
   assert.ok(Object.isFrozen(style)); assert.equal(style.accent, accent);
   for (const surface of [style.surface, style.footer]) {
     assert.ok(contrast(theme.colors.text, surface) >= 4.5, "stage card text stays readable across body and footer shades");
     assert.ok(contrast(style.muted, surface) >= 4.5, "stage card accents stay readable");
   }
-  assert.ok(contrast(theme.colors.page, accent) >= 4.5, "bright stage banners support dark labels");
+  assert.ok(contrast(style.label || theme.colors.page, accent) >= 4.5, `${stage} banners retain readable labels on their actual fill`);
+  if (style.selection) for (const adjacent of [style.surface, style.footer, style.accent]) assert.ok(contrast(style.selection, adjacent) >= 3, `${stage} selection remains visible across the complete card`);
 }
 
-// Secondary actions follow the saved lifecycle evidence without recoloring the
-// native card or mutating product facts. A stage-only EOL is not a confirmed EOM.
+// Secondary actions follow saved lifecycle evidence without mutating product
+// facts. A stage-only EOL is not a confirmed EOM.
 const actionStyleNames = ["neutral", "in-planning", "in-development", "embargo", "discontinued"];
 assert.ok(Object.isFrozen(theme.productActionStyles), "action palettes cannot be changed by a card consumer");
 assert.deepEqual(Object.keys(theme.productActionStyles).sort(), [...actionStyleNames].sort());
@@ -145,6 +149,7 @@ for (const statusType of [undefined, "none", "new", "embargo", "in-development",
       : statusType === "in-development" ? "in-development"
         : ["in-development", "in-planning"].includes(stage) ? stage : "neutral";
     assert.equal(theme.productActionStyle(product), theme.productActionStyles[expected], `${statusType}/${stage} chooses the existing lifecycle scheme`);
+    assert.equal(theme.productCardStage(product), expected === "neutral" ? "" : expected, `${statusType}/${stage} chooses the corresponding native card palette`);
     assert.equal(theme.productActionStyle(product, false), theme.productActionStyles[expected]);
     assert.equal(theme.productActionStyle(product, true), theme.productActionStyles.discontinued, `confirmed EOM wins over ${statusType}/${stage}`);
     assert.equal(JSON.stringify(product), before, "action styling never rewrites lifecycle, merchandise color or artwork evidence");
@@ -329,6 +334,33 @@ for (const [stage, cardStyle] of Object.entries(theme.productCardStyles)) {
 }
 sandbox.productPresentation = neutralPresentation;
 
+// Exercise real saved Embargo evidence through the production presentation and
+// canvas recorder, rather than supplying a mocked neutral product presentation.
+vm.runInContext(appSource.slice(appSource.indexOf("const STANDARD_CARD_STATUSES"), appSource.indexOf("const PRODUCT_TIER_OPTIONS")) +
+  ["normalizeCardStatusType", "standardizedStatus", "productPresentation"].map(definition).join("\n"), sandbox);
+const embargoProduct = { ...microphone, id: "embargo-mic", statusType: "in-development", variantLabel: "PLAYSTATION", roadmap: { status: "embargo" } };
+const embargoBefore = JSON.stringify(embargoProduct);
+const embargoPresentation = sandbox.productPresentation(embargoProduct);
+assert.equal(embargoPresentation.cardStage, "embargo");
+assert.equal(embargoPresentation.primaryLabel, "UPCOMING UNDER EMBARGO", "roadmap Embargo evidence wins over a conflicting development preset");
+const previousFooterLayout = sandbox.variantFooterLayout, previousFooter = sandbox.drawVariantFooter;
+sandbox.activeHeroVariant = () => null;
+sandbox.variantFooterLayout = () => ({ height: 52, groups: [{ type: "part", label: "SKU", columns: 1, rows: 1, displayItems: [{ code: "TEST123" }] }] });
+vm.runInContext(["drawVariantFooter", "truncate"].map(definition).join("\n"), sandbox);
+const embargoElements = sandbox.recordCardElementsForPptx(canvas(), embargoProduct, layout);
+for (const fill of ["#3D282D", "#A52F3F", "#4C2C33"]) assert.ok(embargoElements.some(element => element.kind === "shape" && element.fill?.toUpperCase() === fill), `actual Embargo records the native ${fill} surface`);
+for (const label of ["UPCOMING UNDER EMBARGO", "PLAYSTATION"]) {
+  assert.ok(embargoElements.some(element => element.kind === "text" && element.text === label && element.color?.toUpperCase() === "#FFFFFF"), `actual Embargo ${label} records white editable text`);
+}
+assert.ok(contrast("#FFFFFF", embargoPresentation.primaryColor) >= 4.5, "the actual Embargo header exceeds AA small-text contrast");
+const embargoSelection = [], selectedEmbargoContext = canvas().getContext("2d");
+selectedEmbargoContext.stroke = () => embargoSelection.push({ color: selectedEmbargoContext.strokeStyle, width: selectedEmbargoContext.lineWidth });
+sandbox.drawCard(selectedEmbargoContext, embargoProduct, 0, 0, true, layout, false);
+assert.ok(embargoSelection.some(stroke => stroke.color === "#FFB8C2" && stroke.width === 1.25), "actual selected Embargo cards use the accessible pink outline");
+assert.equal(JSON.stringify(embargoProduct), embargoBefore, "native Embargo recording preserves flags, artwork, swatches, specs and SKU metadata");
+sandbox.variantFooterLayout = previousFooterLayout; sandbox.drawVariantFooter = previousFooter;
+sandbox.productPresentation = neutralPresentation;
+
 vm.runInContext(await read("vendor/pptxgen.bundle.js"), sandbox, { timeout: 5000 });
 const deck = new sandbox.PptxGenJS(); deck.layout = "LAYOUT_WIDE";
 assert.ok(/pptx\.theme = \{ headFontFace: UI_FONT_FACE, bodyFontFace: UI_FONT_FACE, lang: "en-US" \}/.test(appSource), "new PowerPoint text inherits the same resolved presentation font");
@@ -336,6 +368,7 @@ assert.ok(appSource.includes("UI_FONT_FACE = PPTXEditable.FONT_FACE;") && appSou
 deck.theme = { headFontFace: pptxFont, bodyFontFace: pptxFont, lang: "en-US" };
 const nativeSlide = sandbox.addPptxPortfolioSlide(deck, "Microphones", { data: canvas().toDataURL(), width: 700, height: 800, products: [{ kind: "card", id: microphone.id, name: microphone.name, x: 10, y: 10, width: 246, height: 552, elements }] });
 nativeSlide.addNotes("PowerPoint-only font verification");
+sandbox.addPptxPortfolioSlide(deck, "Embargo", { data: canvas().toDataURL(), width: 700, height: 800, products: [{ kind: "card", id: embargoProduct.id, name: embargoProduct.name, x: 10, y: 10, width: 246, height: 552, elements: embargoElements }] });
 const bytes = await sandbox.PPTXEditable.serialize(deck);
 const archive = await sandbox.JSZip.loadAsync(bytes, { checkCRC32: true });
 const slide = await archive.file("ppt/slides/slide1.xml").async("string");
@@ -346,6 +379,13 @@ assert.ok(nativeCardLines.every((line) => /^<a:ln>\s*<\/a:ln>$/.test(line) || /<
 assert.ok(slide.includes(`<a:latin typeface="${pptxFont}"`), "actual PPTX native text uses HP while website font remains Jost");
 assert.ok(slide.includes('<a:srgbClr val="1A1B1C"') && slide.includes('<a:srgbClr val="242527"') && slide.includes('<a:srgbClr val="D5D7DC"'));
 assert.ok(slide.includes("<a:t>USB-C</a:t>") && slide.includes("<a:t>TEST123</a:t>") && slide.includes("<p:pic>"));
+const embargoSlide = await archive.file("ppt/slides/slide2.xml").async("string");
+assert.match(embargoSlide, /<p:grpSp>/, "native Embargo exports remain editable product groups");
+for (const color of ["3D282D", "A52F3F", "4C2C33", "FFFFFF"]) assert.ok(embargoSlide.includes(`<a:srgbClr val="${color}"`), `serialized Embargo exports preserve ${color}`);
+for (const label of ["UPCOMING UNDER EMBARGO", "PLAYSTATION"]) {
+  const textRun = [...embargoSlide.matchAll(/<a:r>[\s\S]*?<\/a:r>/g)].map(match => match[0]).find(run => run.includes(`<a:t>${label}</a:t>`));
+  assert.ok(textRun?.includes('<a:srgbClr val="FFFFFF"'), `${label} remains white native text in the delivered PPTX`);
+}
 const declarations = [...(await archive.file("[Content_Types].xml").async("string")).matchAll(/PartName="([^"]+)"/g)].map((match) => match[1].slice(1));
 assert.ok(declarations.every((part) => archive.file(part)), "the actual serializer emits no missing declared presentation parts");
 const exportedTheme = await archive.file("ppt/theme/theme1.xml").async("string");
