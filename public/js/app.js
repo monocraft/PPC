@@ -278,6 +278,7 @@ let initialVerticalFitPending = true;
 let productLayoutEditing = false;
 let productReorderSession = null;
 const categoryZoomPreferences = globalThis.PortfolioViewRuntime?.preferences({ key: `${STORAGE_KEY}-view-state-v1`, storage: () => localStorage });
+const categoryViewTransition = globalThis.PortfolioViewRuntime?.categoryTransition?.(productView);
 const workspaceNavigation = globalThis.PortfolioViewRuntime?.navigation?.({ key: `${STORAGE_KEY}-navigation-v1`, storage: () => sessionStorage, fallbackStorage: () => localStorage });
 const queueImageViewRender = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && !pptxExportInProgress) renderActiveView(); });
 const queueBoardScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && activeView === "products" && !pptxExportInProgress) renderBoard(); });
@@ -1613,6 +1614,7 @@ function assertLocalCopyOwner(owner, expected) {
 function activateCategory(categoryId, { render = true, fitVertical = true } = {}) {
   const category = portfolio?.categories?.find((item) => item.id === categoryId) || portfolio?.categories?.[0];
   if (!category) throw new Error("The portfolio contains no usable categories.");
+  const categoryChanged = activeCategoryId !== category.id;
   roadmapLaneHovers.forEach((hover) => hover.clear({ immediate: true }));
   finishProductReorder({ render: false });
 
@@ -1628,6 +1630,14 @@ function activateCategory(categoryId, { render = true, fitVertical = true } = {}
     viewerInfoOutline.style.width = "0px";
   }
 
+  if (categoryChanged) {
+    if (typeof categoryViewTransition !== "undefined") categoryViewTransition?.cancel();
+    // Reset before any incoming-board paint: an old viewport layer can otherwise
+    // keep a smaller board's scroll extent pinned far beyond its first products.
+    // Equal assignments intentionally stop an outgoing native smooth reveal.
+    canvasScroll.scrollLeft = 0;
+    canvasScroll.scrollTop = 0;
+  }
   activeCategoryId = category.id;
   portfolio.activeCategoryId = category.id;
   board = ensureBoardSchema(category.board, categoryDefinition(category.id));
@@ -1664,6 +1674,7 @@ function activateCategory(categoryId, { render = true, fitVertical = true } = {}
       initialVerticalFitPending = false;
       fitProductLanesVertically();
     }
+    if (categoryChanged && activeView === "products" && typeof categoryViewTransition !== "undefined" && !workspaceOpening) categoryViewTransition?.reveal();
   }
 }
 
@@ -4855,6 +4866,7 @@ function syncRoadmapDetailsVisibility() {
 }
 
 function setView(view, { focusSelected = false } = {}) {
+  if (typeof categoryViewTransition !== "undefined") categoryViewTransition?.cancel();
   if (typeof hashoutViewController !== "undefined") hashoutViewController?.closeOverlay?.();
   closePopupMenus();
   roadmapLaneHovers.forEach((hover) => hover.clear({ immediate: true }));

@@ -107,7 +107,7 @@ function harness({ view = "products", transform } = {}) {
   const split = makeSurface("split");
   const tabs = [Object.assign(element(), { dataset: { view: "products" } }), Object.assign(element(), { dataset: { view: "roadmap" } })];
   const context = {
-    portfolio, board: portfolio.categories[0].board, activeCategoryId: "pc", activeView: view, selectedId: "pc-cloud", packageOperationInProgress: false,
+    portfolio, board: portfolio.categories[0].board, activeCategoryId: "pc", activeView: view, selectedId: "pc-cloud", packageOperationInProgress: false, canvasScroll: { scrollLeft: 0, scrollTop: 0 },
     searchQuery: "filter that hides every product", roadmapSearchQuery: "another hidden selection", productLayoutEditing: true, hoveredHeroVariant: { productId: "pc-cloud" },
     viewerInfo: viewer, splitProduct: split, viewerInfoOutline: element(), viewerInfoProgress: 1, viewerInfoProductId: "pc-cloud", viewerInfoOpen: true, viewerInfoAnimationFrame: null,
     roadmapDetailsOpen: view === "split", roadmapDragState: null, roadmapDraft: null, roadmapPanState: null, roadmapInteractionMode: "dates", roadmapLaneHovers: new Map(), initialVerticalFitPending: false,

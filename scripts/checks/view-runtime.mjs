@@ -118,7 +118,7 @@ assert.deepEqual(JSON.parse(sharedNavigation.get('tab-nav')),oldNavigation,'Lega
 const categories = ["audio", "mics", "new"].map(id => ({ id, board: { products: [{ id: `${id}-one` }], lanes: [] } }));
 const categoryData = { categories, activeCategoryId: "audio", metadata: { preserve: true } };
 const controls = new Map();
-const categoryContext = { portfolio: categoryData, categoryZoomPreferences: restarted, zoom: 1, roadmapMonthWidth: 82,
+const categoryContext = { portfolio: categoryData, activeCategoryId: "audio", canvasScroll: { scrollLeft: 0, scrollTop: 0 }, categoryZoomPreferences: restarted, zoom: 1, roadmapMonthWidth: 82,
   ROADMAP_DEFAULT_MONTH_WIDTH: 82, roadmapLaneHovers: new Map(), viewerInfoOutline: null, productCardHover: null,
   finishProductReorder() {}, closeViewerInfo() {}, categoryDefinition: id => ({ id }), ensureBoardSchema: value => value,
   PortfolioModel: { syncTimelineSettings() {} }, closeInspector() {}, updateProductLayoutEditControls() {},
