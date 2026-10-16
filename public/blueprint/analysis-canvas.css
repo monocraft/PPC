@@ -128,3 +128,10 @@
 @media(max-width:620px){.hac-readout{padding:2px 0 5px}.hac-legend{gap:17px}.hac-year-buttons button{min-width:30px;padding-inline:3px}.hac-notice{font-size:11px}.hac-empty-label{font-size:11px}}
 @media(pointer:coarse){.hac-legend-row{min-height:32px}.hac-entity-header{min-height:30px}.hac-entity-evidence{min-height:30px}}
 @media(prefers-reduced-motion:reduce){.hx-analysis-canvas *,.hac-view-controls,.hac-view-controls *{transition:none!important;animation:none!important}}
+
+/* Touch targets grow around the data; the plotted rail and handles keep their geometry. */
+@media(pointer:coarse){
+  .hac-legend-row,.hac-entity-header,.hac-entity-evidence,.hac-view-reset{min-height:44px}
+  .hac-year-buttons{height:44px}
+  .hac-year-buttons button{min-height:44px;min-width:44px}
+}

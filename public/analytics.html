@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="css/workflow-ui.css">
   <link rel="stylesheet" href="css/saved-views.css">
   <script src="js/reference-theme.js"></script>
+  <link rel="stylesheet" href="css/interface-system.css">
 </head>
 <body>
 <header class="analysis-header">
@@ -40,8 +41,9 @@
     <section id="overview" class="so-heading" hidden><div><p class="so-eyebrow">PPC ANALYTICS</p><h1>Retail <em>pulse.</em></h1><p id="headingContext" class="so-subtitle">All retailers</p></div><div class="so-heading-summary"><strong id="windowLabel">Choose a report</strong><small id="windowDetail">Weekly units</small></div></section>
     <section class="so-filterbar" aria-label="Dashboard filters">
       <div class="so-retailer-filter"><span class="so-filter-label">Retailers</span><div id="storeOptions" class="so-retailer-toggles" role="group" aria-label="Retailers"></div></div>
-      <details id="productPicker" class="so-picker"><summary>Products <strong id="productLabel">All</strong></summary><div class="so-picker-menu so-wide-menu"><label for="productSearch" class="so-filter-label">Search products</label><input id="productSearch" type="search" placeholder="Product or SKU"><div class="so-picker-actions"><button id="productAll" type="button">Select all</button><button id="productClear" type="button">Clear</button><span id="productSelectionCount" aria-live="polite">0 selected</span></div><div id="productOptions" class="so-options-scroll"></div></div></details>
+      <details id="productPicker" class="so-picker"><summary>Products <strong id="productLabel">All</strong></summary><div class="so-picker-menu so-wide-menu"><div class="so-filter-menu-heading"><strong>Products</strong><button id="closeProductPicker" type="button" aria-label="Close products filter">Close</button></div><label for="productSearch" class="so-filter-label">Search products</label><input id="productSearch" type="search" placeholder="Product or SKU"><div class="so-picker-actions"><button id="productAll" type="button">Select all</button><button id="productClear" type="button">Clear</button><span id="productSelectionCount" aria-live="polite">0 selected</span></div><div id="productOptions" class="so-options-scroll"></div></div></details>
       <details id="moreFilters" class="so-more-filters"><summary>More filters <span id="advancedCount"></span></summary><div class="so-more-menu">
+        <div class="so-filter-menu-heading"><strong>More filters</strong><button id="closeMoreFilters" type="button" aria-label="Close advanced filters">Close</button></div>
         <label>Category<select id="categoryFilter"><option value="">All categories</option></select></label>
         <label>USD MSRP<select id="bandFilter"><option value="">All bands</option><option>Under $50</option><option>$50–99</option><option>$100–149</option><option>$150–199</option><option>$200+</option><option>Unmapped</option></select></label>
         <label>Compare<select id="comparison"><option value="year">Year ago</option><option value="previous">Previous period</option><option value="none">Off</option></select></label>

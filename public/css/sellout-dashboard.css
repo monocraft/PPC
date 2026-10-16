@@ -115,3 +115,65 @@
 #productOptions small{font-size:10px;opacity:.8}
 @media(max-width:700px){.so-retailer-filter{flex:1 1 100%}.so-retailer-toggles{gap:5px}.so-retailer-toggles button{flex:1 1 auto;gap:5px;padding:7px 8px;font-size:11px}.so-retailer-icon{width:16px;height:16px}#productPicker{flex:1 1 190px;min-width:0}#productPicker .so-picker-menu{left:0;right:auto}}
 @media(prefers-reduced-motion:reduce){.so-retailer-toggles button{transition:none}}
+
+/* Module layout and overlay density; shared control tokens come from the app shell. */
+.so-retailer-toggles button,.so-view-buttons button,.so-preset-buttons button,
+.so-more-filters summary,.so-picker summary strong{min-height:var(--ui-control-height,32px);border-radius:var(--ui-radius,4px);padding-block:5px}
+.so-retailer-toggles button{line-height:20px}
+.so-filterbar .so-reset,.so-filterbar .so-more-filters summary{min-height:var(--ui-control-height,32px);height:auto;padding-block:5px}
+#productPicker summary strong{min-height:var(--ui-control-height,32px);padding-block:5px;border-radius:var(--ui-radius,4px)}
+.so-data-toolbar input,.so-data-toolbar select,.so-data-toolbar .so-actions,
+.so-link-form button{min-height:var(--ui-control-height,32px)}
+.so-picker-menu,#productPicker .so-picker-menu,.so-more-menu{max-height:min(480px,calc(100dvh - 120px));overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:var(--ui-dialog-gap,12px);border:1px solid var(--ui-border,#4D5054);border-radius:var(--ui-panel-radius,8px)}
+.so-more-menu{gap:var(--ui-dialog-gap,12px);width:min(340px,calc(100vw - 32px))}
+.so-filter-menu-heading{display:none}
+#productPicker .so-picker-menu{width:min(340px,calc(100vw - 32px))}
+#productSearch{min-height:var(--ui-control-height,32px);border-radius:var(--ui-radius,4px)}
+#productOptions label{border-radius:var(--ui-radius,4px)}
+.so-dialog{width:min(720px,calc(100vw - 24px));max-height:min(720px,calc(100dvh - 32px));border-radius:var(--ui-panel-radius,8px)}
+.so-import-dialog,.so-link-dialog{width:min(520px,calc(100vw - 24px))}
+.so-dialog-head{position:sticky;top:0;z-index:1;gap:var(--ui-dialog-gap,12px);padding:12px var(--ui-panel-padding,16px);background:var(--so-panel)}
+.so-dialog-head h2{margin:0;font-size:var(--ui-title-size,15px);line-height:1.35;font-weight:600}
+.so-dialog-head .so-eyebrow{margin-bottom:3px}
+.so-dialog-head button{display:grid;place-items:center;flex:0 0 var(--ui-control-height,32px);width:var(--ui-control-height,32px);min-height:var(--ui-control-height,32px);padding:0;font-size:20px;line-height:1}
+.so-dialog-body{padding:var(--ui-panel-padding,16px)}
+.so-dialog-body>p{font-size:12px;line-height:1.6;margin:0 0 12px}
+.so-dialog-body h3{margin:16px 0 8px;font-size:13px}
+.so-dialog-body .so-actions{gap:8px;flex-wrap:wrap}
+.so-price-table{max-height:min(330px,45dvh);margin:12px 0}
+.so-link-form{gap:var(--ui-dialog-gap,12px)}
+.so-pagination{gap:8px;margin-top:12px}
+.so-tooltip{padding:10px 12px;border-radius:var(--ui-panel-radius,8px)}
+.so-empty{padding:40px 20px;border-radius:var(--ui-panel-radius,8px)}
+.so-auth-page h1{font-size:var(--ui-title-size,15px);letter-spacing:0}
+.so-dialog :focus-visible,.so-filterbar :focus-visible,
+.so-chart-toolbar :focus-visible,.so-data-toolbar :focus-visible,
+.so-pagination button:focus-visible{outline:2px solid var(--ui-focus-color,#63C0F9);outline-offset:2px}
+@media(max-width:520px){
+  .so-dialog-head{padding-block:10px}
+  .so-dialog-body .so-actions{align-items:stretch}
+  .so-dialog-body .so-actions>label{flex:1 1 100%;margin:0}
+  .so-more-menu{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:700px){
+  #productPicker,.so-more-filters{position:static}
+  #productPicker .so-picker-menu,.so-more-menu{position:fixed;top:auto;bottom:12px;left:12px;right:12px;width:calc(100vw - 24px);max-width:420px;max-height:calc(100dvh - 24px);margin:0 auto;overflow:auto;z-index:40}
+  .so-filter-menu-heading{display:flex;grid-column:1/-1;align-items:center;justify-content:space-between;gap:12px;margin:0;padding-bottom:8px;border-bottom:1px solid var(--so-line)}
+  .so-filter-menu-heading strong{font-size:12px;font-weight:500}
+  .so-filter-menu-heading button{width:auto;min-height:var(--ui-control-height,32px);margin:0;padding:5px 8px;font-size:12px;background:var(--so-raised)}
+  .analysis-panel:has(.so-picker[open],.so-more-filters[open]){animation:none}
+}
+@media(pointer:coarse){
+  .so-retailer-toggles button,.so-view-buttons button,.so-preset-buttons button,
+  .so-filterbar .so-reset,.so-more-filters summary,#productPicker summary strong,
+  .so-dialog button,.so-dialog input:not([type=checkbox],[type=radio],[type=range]),
+  .so-dialog select,.so-data-toolbar input,.so-data-toolbar select,
+  .so-pagination button,.so-filter-menu-heading button,
+  #productSearch,.so-more-menu input,.so-more-menu select{min-height:44px}
+  .so-dialog-head button{flex-basis:44px;width:44px}
+  .so-time-step button{min-height:44px;min-width:44px}
+  .so-topbar .so-actions button,.so-planning-toolbar button,
+  .so-footer button,.so-data-toolbar button{min-height:44px}
+  .so-sidebar nav a{min-height:44px;display:flex;align-items:center}
+  .so-time-controls{flex-wrap:wrap;gap:8px}
+}

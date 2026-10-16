@@ -9122,7 +9122,7 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
     if (kind === "ascm") return openAscmImport(file);
     if (kind === "package") return globalThis.PortfolioPackageUI?.openImport(file);
     if (kind === "data") {
-      const confirmed = await PortfolioDialogs.confirm(`Open ${file.name} as portfolio data? This replaces products and workspace settings on this device. Separate image files are not included. Export a complete package first if you need a backup.`, { title: "Replace workspace data", confirmText: "Replace workspace data" });
+      const confirmed = await PortfolioDialogs.confirm(`Open ${file.name} as portfolio data? This replaces products and workspace settings on this device. Separate image files are not included. Export a complete package first if you need a backup.`, { title: "Replace workspace data", confirmLabel: "Replace workspace data" });
       if (confirmed) return importJson(file);
       return { status: "cancelled" };
     }

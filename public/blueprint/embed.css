@@ -27,3 +27,9 @@ html[data-embedded="true"] .detail-dialog.is-host-positioned{position:fixed;top:
 .category-comparison svg{width:100%;height:auto;max-width:1000px;max-height:none;display:block;margin-inline:auto}
 .chart-wrap:has(.category-comparison){display:block}
 @media(max-width:480px){.comparison-legend{gap:8px 16px}.comparison-legend-item{font-size:10px;gap:6px}.comparison-legend-item strong{font-size:11px}}
+
+/* Host positioning remains authoritative when the embedded dialog is open. */
+html[data-embedded="true"] .detail-dialog.is-host-positioned{width:min(680px,calc(100% - 24px));border-radius:var(--ui-panel-radius,8px)}
+.blueprint-empty{padding:40px 20px;border-radius:var(--ui-panel-radius,8px);margin-bottom:16px}
+.blueprint-empty h2{font-size:var(--ui-title-size,15px);margin:10px 0}
+.blueprint-empty p{margin-bottom:16px;line-height:1.6}
