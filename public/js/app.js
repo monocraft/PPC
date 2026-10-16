@@ -23,7 +23,8 @@ const DETAILS_TOP_OFFSET = 66;
 const PLACEHOLDER_IMAGE = "assets/headset-placeholder.svg";
 
 const ROADMAP_LEFT_WIDTH = 190;
-const ROADMAP_HEADER_HEIGHT = 88;
+const ROADMAP_CALENDAR_TOP = 40;
+const ROADMAP_HEADER_HEIGHT = ROADMAP_CALENDAR_TOP + 88;
 const ROADMAP_GROUP_HEADER_HEIGHT = 28;
 const ROADMAP_ROW_HEIGHT = 38;
 const ROADMAP_BOTTOM_PADDING = 24;
@@ -281,6 +282,7 @@ const queueImageViewRender = globalThis.PortfolioViewRuntime?.frameTask(() => { 
 const queueBoardScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => { if (!workspaceOpening && activeView === "products" && !pptxExportInProgress) renderBoard(); });
 const queuedRoadmapRenders = new Map();
 const roadmapHeaderOverlays = new Map();
+const roadmapTodayMarkers = new Map();
 let lastWorkspaceRenderSignature = "";
 let productCardHover = null;
 let productCardActionLayer = null;
@@ -3497,22 +3499,6 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
 
   // Selection stays on the product bar and one quiet launch-month marker.
 
-  // Today marker over the timeline body.
-  const todayIndex = monthIndex(monthStringFromDate());
-  if (todayIndex >= range.start && todayIndex <= range.end) {
-    const today = new Date();
-    const fraction = Math.min(.98, Math.max(.02, (today.getDate() - 1) / new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()));
-    const x = timelineX + (todayIndex - range.start + fraction) * roadmapMonthWidth;
-    context.strokeStyle = UI_PALETTE.amaranth;
-    context.lineWidth = 1;
-    context.setLineDash([4, 4]);
-    context.beginPath();
-    context.moveTo(x, ROADMAP_HEADER_HEIGHT - 8);
-    context.lineTo(x, height);
-    context.stroke();
-    context.setLineDash([]);
-  }
-
   // Sticky family rail.
   context.fillStyle = UI_PALETTE.inkBlack;
   context.fillRect(stickyX, ROADMAP_HEADER_HEIGHT, ROADMAP_LEFT_WIDTH, height - ROADMAP_HEADER_HEIGHT);
@@ -3657,12 +3643,12 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
       // Keep the outgoing title pinned; its year seam clips it as the next title arrives.
       context.save();
       context.beginPath();
-      context.rect(visibleYearLeft, stickyY, visibleYearRight - visibleYearLeft, 38);
+      context.rect(visibleYearLeft, stickyY + ROADMAP_CALENDAR_TOP, visibleYearRight - visibleYearLeft, 38);
       context.clip();
       context.fillStyle = UI_PALETTE.whiteSmoke;
       context.font = `800 26px ${UI_FONT_FACE}`;
       context.textAlign = "left";
-      context.fillText(String(year), visibleYearLeft + 10, stickyY + 31);
+      context.fillText(String(year), visibleYearLeft + 10, stickyY + ROADMAP_CALENDAR_TOP + 31);
       context.restore();
     }
     cursor = yearEnd + 1;
@@ -3677,13 +3663,13 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     context.fillStyle = UI_PALETTE.greyOlive;
     context.font = `600 10px ${UI_FONT_FACE}`;
     context.textAlign = "center";
-    context.fillText(`Q${quarter}`, x + quarterWidth / 2, stickyY + 52);
+    context.fillText(`Q${quarter}`, x + quarterWidth / 2, stickyY + ROADMAP_CALENDAR_TOP + 52);
     if (quarterCursor % 12 !== 0 && quarterCursor % 3 === 0) {
       context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .14);
       context.lineWidth = 1;
       context.beginPath();
-      context.moveTo(Math.round(x) + .5, stickyY + 42);
-      context.lineTo(Math.round(x) + .5, stickyY + 57);
+      context.moveTo(Math.round(x) + .5, stickyY + ROADMAP_CALENDAR_TOP + 42);
+      context.lineTo(Math.round(x) + .5, stickyY + ROADMAP_CALENDAR_TOP + 57);
       context.stroke();
     }
     quarterCursor = quarterEnd + 1;
@@ -3702,10 +3688,10 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
     context.font = `${roadmapMonthWidth >= 60 ? "11px" : "10px"} ${UI_FONT_FACE}`;
     context.textAlign = "center";
     const labelSpan = narrow ? Math.min(3 - month % 3, range.count - i) : 1;
-    context.fillText(monthText, x + labelSpan * roadmapMonthWidth / 2, stickyY + 74);
+    context.fillText(monthText, x + labelSpan * roadmapMonthWidth / 2, stickyY + ROADMAP_CALENDAR_TOP + 74);
   }
 
-  drawYearSeamSegment(stickyY + 7, stickyY + ROADMAP_HEADER_HEIGHT, .38);
+  drawYearSeamSegment(stickyY + ROADMAP_CALENDAR_TOP + 7, stickyY + ROADMAP_HEADER_HEIGHT, .38);
   if (selectedGuides?.launchVisible) {
     const launchX = timelineX + (selectedGuides.launch - range.start) * roadmapMonthWidth;
     context.fillStyle = UI_PALETTE.silver;
@@ -3719,19 +3705,19 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.textAlign = "left";
   context.fillStyle = UI_PALETTE.midGrey;
   context.font = `700 9px ${UI_FONT_FACE}`;
-  context.fillText(ffsMode ? "HASHOUT ROADMAP" : "LIFECYCLE ROADMAP", stickyX + 14, stickyY + 20);
+  context.fillText(ffsMode ? "HASHOUT ROADMAP" : "LIFECYCLE ROADMAP", stickyX + 14, stickyY + ROADMAP_CALENDAR_TOP + 20);
   context.fillStyle = UI_PALETTE.starDust;
   context.font = `700 14px ${UI_FONT_FACE}`;
-  context.fillText(roadmapSpanLabel(range.count), stickyX + 14, stickyY + 42);
+  context.fillText(roadmapSpanLabel(range.count), stickyX + 14, stickyY + ROADMAP_CALENDAR_TOP + 42);
   context.fillStyle = UI_PALETTE.greyOlive;
   context.font = `10px ${UI_FONT_FACE}`;
   if (ffsMode) {
-    context.fillText("Hover for full product and timing", stickyX + 14, stickyY + 66);
+    context.fillText("Hover for full product and timing", stickyX + 14, stickyY + ROADMAP_CALENDAR_TOP + 66);
   } else if (selectedGuides) {
-    context.fillText(`Launch · ${roadmapLabel(selectedGuides.roadmap.startMonth)}`, stickyX + 14, stickyY + 62);
-    context.fillText(`End · ${roadmapLabel(selectedGuides.roadmap.endMonth)}`, stickyX + 14, stickyY + 77);
+    context.fillText(`Launch · ${roadmapLabel(selectedGuides.roadmap.startMonth)}`, stickyX + 14, stickyY + ROADMAP_CALENDAR_TOP + 62);
+    context.fillText(`End · ${roadmapLabel(selectedGuides.roadmap.endMonth)}`, stickyX + 14, stickyY + ROADMAP_CALENDAR_TOP + 77);
   } else {
-    context.fillText("Launch → lifecycle end", stickyX + 14, stickyY + 66);
+    context.fillText("Launch → lifecycle end", stickyX + 14, stickyY + ROADMAP_CALENDAR_TOP + 66);
   }
   context.strokeStyle = globalThis.PortfolioTheme.alpha(UI_PALETTE.silver, .18);
   context.lineWidth = 1;
@@ -3739,6 +3725,17 @@ function drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, includeS
   context.moveTo(stickyX, stickyY + ROADMAP_HEADER_HEIGHT - .5);
   context.lineTo(timelineX + timelineWidth, stickyY + ROADMAP_HEADER_HEIGHT - .5);
   context.stroke();
+
+  if (exportMode && globalThis.PortfolioTodayMarker?.drawStatic) {
+    const now = new Date();
+    const today = globalThis.PortfolioTodayMarker.currentMonthPosition(now);
+    globalThis.PortfolioTodayMarker.drawStatic(context, {
+      x: timelineX + (today - range.start) * roadmapMonthWidth,
+      left: timelineX, right: calendarRight, yearTop: ROADMAP_CALENDAR_TOP,
+      bodyTop: ROADMAP_HEADER_HEIGHT, width, height,
+      colors: globalThis.PortfolioTheme.colors, fontFamily: globalThis.PortfolioTheme.cssFontFamily,
+    }, now);
+  }
 
   roadmapHitRegions.set(targetCanvas, regions);
   if (includeSelection && !exportMode) {
@@ -3760,6 +3757,7 @@ function renderRoadmapFor(targetCanvas, targetScroll, navigator) {
   if (targetScroll.scrollTop !== previousTop) targetScroll.scrollTop = previousTop;
   drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
   if (typeof roadmapHeaderOverlays !== "undefined") roadmapHeaderOverlays.get(targetCanvas)?.sync();
+  if (typeof roadmapTodayMarkers !== "undefined") roadmapTodayMarkers.get(targetCanvas)?.sync();
   requestAnimationFrame(() => syncRoadmapNavigator(targetScroll, navigator));
 }
 
@@ -3767,6 +3765,7 @@ function renderRoadmaps() {
   roadmapMonthWidth = snappedViewZoom(roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MIN_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH, ROADMAP_MAX_MONTH_WIDTH / ROADMAP_DEFAULT_MONTH_WIDTH) * ROADMAP_DEFAULT_MONTH_WIDTH;
   const previousView = activeView;
   syncRoadmapDetailsVisibility();
+  if (typeof roadmapTodayMarkers !== "undefined") roadmapTodayMarkers.forEach(marker => marker.sync());
   syncViewZoomControls();
   updateRoadmapEditControls();
   syncFfsRoadmapControls();
@@ -3830,9 +3829,10 @@ function scrollRoadmapSelected(targetScroll, smooth = true) {
 function scrollRoadmapToday(targetScroll) {
   if (hasDedicatedHashoutView()) { ensureHashoutView()?.today(); return; }
   const range = roadmapRange();
-  const today = monthIndex(monthStringFromDate());
-  const x = ROADMAP_LEFT_WIDTH + (today - range.start + .5) * roadmapMonthWidth;
-  targetScroll.scrollTo({ left: Math.max(0, x - targetScroll.clientWidth / 2), behavior: "smooth" });
+  const today = globalThis.PortfolioTodayMarker.currentMonthPosition(new Date());
+  const x = ROADMAP_LEFT_WIDTH + (today - range.start) * roadmapMonthWidth;
+  const visibleCenter = ROADMAP_LEFT_WIDTH + Math.max(0, targetScroll.clientWidth - ROADMAP_LEFT_WIDTH) / 2;
+  targetScroll.scrollTo({ left: Math.max(0, x - visibleCenter), behavior: "smooth" });
 }
 
 function fitRoadmapTimeline() {
@@ -4018,6 +4018,24 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
   let frame = null;
   const headerOverlay = globalThis.PortfolioViewRuntime?.stickyHeader(targetCanvas, targetScroll, ROADMAP_HEADER_HEIGHT);
   if (headerOverlay) roadmapHeaderOverlays.set(targetCanvas, headerOverlay);
+  const todayMarker = globalThis.PortfolioTodayMarker?.create({
+    host: targetScroll.parentElement,
+    eventTarget: targetScroll,
+    isActive: () => Boolean(board && !workspaceOpening && !targetCanvas.closest(".hidden")),
+    getGeometry(now) {
+      const range = roadmapRange();
+      const today = globalThis.PortfolioTodayMarker.currentMonthPosition(now);
+      return {
+        x: ROADMAP_LEFT_WIDTH + (today - range.start) * roadmapMonthWidth - targetScroll.scrollLeft,
+        left: ROADMAP_LEFT_WIDTH,
+        right: Math.min(targetScroll.clientWidth, ROADMAP_LEFT_WIDTH + range.count * roadmapMonthWidth - targetScroll.scrollLeft),
+        yearTop: ROADMAP_CALENDAR_TOP, bodyTop: ROADMAP_HEADER_HEIGHT,
+        width: targetScroll.clientWidth, height: targetScroll.clientHeight,
+        offsetLeft: targetScroll.offsetLeft, offsetTop: targetScroll.offsetTop,
+      };
+    },
+  });
+  if (todayMarker) roadmapTodayMarkers.set(targetCanvas, todayMarker);
   const queueScrollPaint = globalThis.PortfolioViewRuntime?.frameTask(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory()))
     || (() => requestAnimationFrame(() => renderRoadmapFor(targetCanvas, targetScroll, navigatorRefsFactory())));
   if (typeof queuedRoadmapRenders !== "undefined") queuedRoadmapRenders.set(targetCanvas, queueScrollPaint);
@@ -4041,6 +4059,7 @@ function bindRoadmapCanvas(targetCanvas, targetScroll, navigatorRefsFactory) {
     const context = viewportCanvasContext(targetCanvas, targetScroll, dimensions);
     drawRoadmapTo(context, dimensions, targetCanvas, targetScroll, true, false);
     headerOverlay?.sync();
+    todayMarker?.sync();
     syncRoadmapNavigator(targetScroll, navigatorRefsFactory());
   }
 
