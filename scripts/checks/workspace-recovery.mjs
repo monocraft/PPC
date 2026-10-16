@@ -93,3 +93,29 @@ for(const laterSurvivorEdit of [false,true]){
 const main=html.indexOf('<main class="app-shell">');for(const id of ['workspaceRecoveryExport','workspaceRecoveryFile','workspaceRecoveryKey','workspaceRecoveryReview','workspaceRecoveryRestore'])assert.ok(html.indexOf(`id="${id}"`)<main,`${id} remains accessible outside the inert workspace`);
 assert.match(app,/await workspaceStorage\.recover\(plan\.serialized/);assert.match(app,/await workspaceStorage\.rollbackRecovery\(receipt\)/);assert.match(app,/await showWorkspaceRecovery\(\);/);
 console.log('Workspace recovery checks passed: exact raw export outside inert shell, reviewed complete backups, no-write preview, explicit validated replacement, quota/activation/rollback faults, cross-tab and legacy stale refusal, missing-image/duplicate validation, isolated retry queues, preserved merge undo/deleted-record images and stale-edit guards, retained canonical baselines, credentials and protected prior records.');
+
+// Image cleanup must retain pixels for every native restore/undo path.
+const imageFunctions=['imageAssetById','referencedImageAssetIds','removeImageAssetIfUnused'].map(name=>app.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`,'m'))[0]).join('\n');
+for(const retainedBy of ['removed','merge-keeper','merge-source','discard-undo','variant']){
+ const retained={id:'restorable',imageAssetId:'original-image',variantGroups:[]};
+ const current={categories:[{board:{products:[{id:'active',imageAssetId:'new-image'}]}}],imageAssets:[{id:'original-image',sourceType:'local'},{id:'new-image',sourceType:'local'}]};
+ const undo=new Map(),deleted=[],writes=[];
+ if(retainedBy==='removed')current.masterLocalRemovedProducts={restorable:retained};
+ if(retainedBy==='merge-keeper')current.masterLocalMerges=[{keeperProduct:retained}];
+ if(retainedBy==='merge-source')current.masterLocalMerges=[{sourceProduct:retained}];
+ if(retainedBy==='discard-undo')undo.set('undo',{previous:{categories:[{board:{products:[retained]}}]}});
+ if(retainedBy==='variant')current.masterLocalRemovedProducts={restorable:{id:'restorable',variantGroups:[{items:[{imageAssetId:'original-image'}]}]}};
+ const context={portfolio:current,discardedDrafts:undo,Set,Map,Object,JSON,
+  productVariantGroups:product=>product.variantGroups||[],persistPortfolioStorage:async value=>writes.push(value),
+  imageStoreDelete:async value=>deleted.push(value),revokeImageAssetUrl(){},scheduleSave(){},reportWorkspaceSaveFailure:error=>{throw error;}};
+ vm.createContext(context);vm.runInContext(imageFunctions,context);
+ await context.removeImageAssetIfUnused('original-image');
+ assert.equal(deleted.length,0,retainedBy+' retains original image pixels');
+ assert.equal(writes.length,0,retainedBy+' retains original image metadata');
+ assert.equal(current.imageAssets.length,2);
+ delete current.masterLocalRemovedProducts;delete current.masterLocalMerges;undo.clear();
+ await context.removeImageAssetIfUnused('original-image');
+ assert.deepEqual(deleted,['original-image'],'unreferenced pixels remain collectible after restore history expires');
+ assert.equal(current.imageAssets.some(asset=>asset.id==='original-image'),false);
+}
+console.log('Workspace recovery checks passed, including retained deletion, merge and discard-undo image references and collection after restore history expires.');

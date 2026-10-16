@@ -303,6 +303,25 @@ for (const [status, body, code] of [[401, { error: "private key details" }, "INV
     assert.equal(operations.includes("presence"), false, "GitHub storage never writes heartbeat data");
   } finally { globalThis.PortfolioMasterGitHub = priorGitHub; }
 }
+{
+  const previousGitHub=globalThis.PortfolioMasterGitHub, previousTimeout=globalThis.setTimeout, previousClear=globalThis.clearTimeout;
+  const timers=new Map();let timerId=0,finishTransfer;
+  globalThis.setTimeout=(callback,delay)=>{timers.set(++timerId,{callback,delay});return timerId;};
+  globalThis.clearTimeout=id=>timers.delete(id);
+  globalThis.PortfolioMasterGitHub={createTransport:()=>({disconnect(){},request:({signal})=>new Promise((resolve,reject)=>{
+    finishTransfer=()=>signal?.aborted?reject(new DOMException('Aborted','AbortError')):resolve({snapshot:{...initial(),source:'github'}});
+  })})};
+  try{
+    const h=harness(),session=client.createSession({source:{mode:'github'},adapter:h.adapter});
+    session.markImported(initial().products,key);
+    const pending=session.refresh();
+    assert.equal(typeof finishTransfer,'function');
+    // A valid 90-second transfer is within the transport's two-minute budget.
+    for(const timer of [...timers.values()])if(timer.delay<=90000)timer.callback();
+    finishTransfer();await pending;
+    assert.equal(session.getState().connected,true,'The session must not cancel a transfer still within the GitHub transport allowance');
+  }finally{globalThis.PortfolioMasterGitHub=previousGitHub;globalThis.setTimeout=previousTimeout;globalThis.clearTimeout=previousClear;}
+}
 await assert.rejects(client.request({ endpoint, operation: "latest", key, fetchImpl: async () => { throw new Error("secret credentials"); } }), (error) => !error.message.includes("secret"));
 await assert.rejects(client.request({ endpoint, operation: "latest", key, fetchImpl: async () => new Response("<html>Sign in</html>") }), /could not be read/);
 await assert.rejects(client.request({ endpoint, operation: "latest", key, fetchImpl: async () => new Response("{}", { headers: { "Content-Length": String(13 * 1024 * 1024) } }) }), /could not be read/);

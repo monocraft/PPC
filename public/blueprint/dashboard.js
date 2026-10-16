@@ -492,7 +492,7 @@
     notifyParent();
   }
   function fillIcons() { $$('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); }); }
-  function setView(view) { if (!views[view]) return; timelineControl?.stop();if(workspaceControl){state.view='performance';state.overlay=({products:'decisions',investment:'decisions',scenarios:'scenarios',source:'source'})[view]||null;if(view==='scenarios')state.scenarioEnabled=true;workspaceControl.update();notifyParent();return;} state.view = view; $('#navigation').closest('.sidebar').classList.remove('open'); $('#menu-button').setAttribute('aria-expanded', 'false'); location.hash = scopeFragment(view); draw(); window.scrollTo({ top: 0, behavior: 'auto' }); }
+  function setView(view, { replaceHistory = false } = {}) { if (!views[view]) return; timelineControl?.stop();if(workspaceControl){state.view='performance';state.overlay=({products:'decisions',investment:'decisions',scenarios:'scenarios',source:'source'})[view]||null;if(view==='scenarios')state.scenarioEnabled=true;workspaceControl.update();notifyParent();return;} state.view = view; $('#navigation').closest('.sidebar').classList.remove('open'); $('#menu-button').setAttribute('aria-expanded', 'false'); if (replaceHistory) history.replaceState(null, '', `#${scopeFragment(view)}`); else location.hash = scopeFragment(view); draw(); window.scrollTo({ top: 0, behavior: 'auto' }); }
   function evidence(refs) { if (!refs.length) return '<p class="formula-note">Cell-level source references were not supplied for this measure. Review the workbook inventory and mapping before treating this value as verified.</p>'; return refs.slice(0, 100).map(ref => { if (typeof ref === 'string') return `<div class="source-evidence">${escape(ref)}</div>`; return `<div class="source-evidence"><div class="source-ref"><strong>${escape(ref.sheet || ref.sheetName || 'Workbook')}!${escape(ref.cell || ref.address || ref.range || '')}</strong><span>${escape(ref.label || ref.role || '')}</span></div>${ref.formula ? `<pre class="source-formula">${escape(ref.formula)}</pre>` : ''}<p>Saved value: <strong>${escape(ref.value ?? ref.cached ?? ref.cachedValue ?? ref.result ?? 'Unavailable')}</strong></p>${ref.note ? `<p>${escape(ref.note)}</p>` : ''}</div>`; }).join(''); }
   function openDialog(title, content, eyebrow = 'SOURCE DETAIL') { if(workspaceControl&&document.body.classList.contains('unified-analysis')){workspaceControl.showDetail(title,content,eyebrow);fillIcons();return;} $('#dialog-title').textContent = title; $('#dialog-eyebrow').textContent = eyebrow; $('#dialog-content').innerHTML = content; fillIcons(); const dialog = $('#detail-dialog'); if (dialog.open) return; if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', ''); if(embedded&&window.parent!==window)window.parent.postMessage({type:'ppc:blueprint:dialog',open:true},location.origin); }
   function metricDetail(key, period = state.period, category = null, scope = {}) {
@@ -535,18 +535,26 @@
     else if (!periods.some(period => String(period) === String(state.period))) state.period = periods.find(period => /^(2026|26|FY26|FY2026)$/.test(String(period))) || periods.at(-1);
     refreshDrillScope(true);
   }
-  function applyPreferences(preferences = {}) {
+  function applyPreferences(preferences = {}, { replace = false } = {}) {
+    if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) return false;
     const get = key => preferences instanceof URLSearchParams ? preferences.get(key) : preferences[key];
     const has = key => preferences instanceof URLSearchParams ? preferences.has(key) : Object.hasOwn(preferences, key);
-    if (has('year') && (typeof get('year') === 'string' || typeof get('year') === 'number')) state.period = String(get('year')).slice(0, 20);
+    if (replace) Object.assign(state, { period: null, category: ['all'], comparisonScale: 'values', groupId: null, projectId: null, skuId: null, compareIds: [], revenueGrowth: 0, marginChange: 0, budgetChange: 0,
+      metrics: ['revenue'], connectivity: ['all'], productSort: 'revenue', sortDirection: 'desc', overlay: null, scenarioEnabled: false, scenarioStart: null });
+    const year = get('year');
+    if ((typeof year === 'string' || typeof year === 'number') && /^\d{4}$/.test(String(year)) && Number(year) >= 1900 && Number(year) <= 2200) state.period = String(year);
     if (has('category') && typeof get('category') === 'string' && get('category').length <= 1200 && !/[\u0000-\u001f\u007f]/.test(get('category'))) state.category = get('category').split(',').map(value => value.trim()).filter(Boolean);
     if (has('scale')) state.comparisonScale = get('scale') === 'trend' ? 'trend' : 'values';
     for (const key of ['groupId', 'projectId', 'skuId']) if (has(key)) state[key] = scopeId(get(key));
     if (has('compare')) state.compareIds = parseCompare(get('compare'));
     if (has('workspace')) applyWorkspace(get('workspace'));
-    for (const [parameter, key, min, max] of [['revenue', 'revenueGrowth', -30, 30], ['margin', 'marginChange', -10, 10], ['spend', 'budgetChange', -30, 30]]) if (has(parameter) && get(parameter) !== null && Number.isFinite(Number(get(parameter)))) state[key] = Math.max(min, Math.min(max, Number(get(parameter))));
+    for (const [parameter, key, min, max] of [['revenue', 'revenueGrowth', -30, 30], ['margin', 'marginChange', -10, 10], ['spend', 'budgetChange', -30, 30]]) {
+      const raw = get(parameter), numeric = typeof raw === 'number' || typeof raw === 'string' && raw.trim() !== '';
+      if (has(parameter) && numeric && Number.isFinite(Number(raw))) state[key] = Math.max(min, Math.min(max, Number(raw)));
+    }
     state.drillQuery = '';
     if (hasSource()) loadFilters(true);
+    return true;
   }
   function selectPeriod(period) {
     const matched=getPeriods().find(p=>String(p)===String(period));
@@ -639,7 +647,13 @@
   window.addEventListener('hx-data-updated', () => { loadFilters(sourceWasLoaded); sourceWasLoaded = true; draw(); });
   window.addEventListener('message', event => {
     if (!embedded || event.source !== window.parent || event.origin !== location.origin || !event.data || typeof event.data !== 'object') return;
-    if (event.data.type === 'ppc:blueprint:navigate' && Object.hasOwn(views, event.data.view)) { if (event.data.preferences && typeof event.data.preferences === 'object') applyPreferences(event.data.preferences); if(event.data.preferences?.workspace&&['performance','overview'].includes(event.data.view)){state.view='performance';draw();}else setView(event.data.view); }
+    if (event.data.type === 'ppc:blueprint:navigate' && Object.hasOwn(views, event.data.view)) {
+      const restoring = Object.hasOwn(event.data, 'preferences');
+      const complete = restoring && ['year','category','scale','revenue','margin','spend'].every(key => Object.hasOwn(event.data.preferences || {}, key));
+      if (restoring && !applyPreferences(event.data.preferences, { replace: complete })) return;
+      if(event.data.preferences?.workspace&&['performance','overview'].includes(event.data.view)){state.view='performance';draw();}
+      else setView(event.data.view, { replaceHistory: restoring });
+    }
     else if (event.data.type === 'ppc:blueprint:import') requestImport();
     else if (event.data.type === 'ppc:blueprint:suspend') { timelineControl?.stop();workspaceControl?.close(); if($('#detail-dialog').open)$('#detail-dialog').close(); }
     else if (event.data.type === 'ppc:blueprint:viewport' && Number.isFinite(event.data.top) && event.data.top>=0 && Number.isFinite(event.data.height) && event.data.height>=100 && event.data.height<=3000) {
@@ -660,8 +674,8 @@
     else window.addEventListener('resize', sendHeight);
     requestAnimationFrame(sendHeight);
   }
-  window.addEventListener('hashchange', () => { const view = fragmentView(); if (views[view]) { timelineControl?.stop(); applyPreferences(locationPreferences()); state.view = view; draw(); } });
-  window.addEventListener('popstate', () => { const view = fragmentView(); timelineControl?.stop(); applyPreferences(locationPreferences()); if (views[view]) state.view = view; draw(); });
+  window.addEventListener('hashchange', () => { const view = fragmentView(); if (views[view]) { timelineControl?.stop(); applyPreferences(locationPreferences(), { replace: true }); state.view = view; draw(); } });
+  window.addEventListener('popstate', () => { const view = fragmentView() || 'overview'; timelineControl?.stop(); applyPreferences(locationPreferences(), { replace: true }); if (views[view]) state.view = view; draw(); });
   let viewportWidth = window.innerWidth, resizeTimer;
   window.addEventListener('resize', () => {
     if (window.innerWidth === viewportWidth) return;

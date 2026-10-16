@@ -446,6 +446,122 @@ assert.equal(comparisonLink.window.location.searchParams.has('workspace'), false
 const routedWorkspace = JSON.parse(scopeParams(comparisonLink.window.location).get('workspace'));
 assert.deepEqual(routedWorkspace.metrics, workspaceSelection.metrics); assert.deepEqual(routedWorkspace.connectivity, ['wired', 'wireless']); assert.equal(routedWorkspace.overlay, 'scenarios');
 assert.ok(!JSON.stringify(routedWorkspace).includes('EXCLUDED'), 'The host accepts only explicit workspace preferences, without financial rows or credentials.');
+// Run the complete child controller and real analysis engine against synthetic
+// source facts and an inert DOM. Assertions observe its actual state and the
+// state acknowledgment produced by draw(), not a mirror of its preference code.
+const childSource = dashboardSource;
+const childEngine = await read("public/blueprint/analytics.js");
+async function blueprintFixture(url, { deferSource = false } = {}) {
+  const handlers = new Map(), nodes = new Map(), messages = [];
+  const node = selector => {
+    if (!nodes.has(selector)) nodes.set(selector, {
+      dataset: {}, style: { setProperty() {} }, classList: { add() {}, remove() {}, toggle() {} }, hidden: false,
+      setAttribute() {}, removeAttribute() {}, addEventListener() {}, appendChild() {},
+      querySelector(selector) { return node(`child-${selector}`); }, querySelectorAll() { return []; },
+      closest() { return this; }, getBoundingClientRect() { return { height: 600 }; },
+    });
+    return nodes.get(selector);
+  };
+  const source = {
+    source: { name: "Synthetic navigation source" }, periods: [2025, 2026, 2027, 2028], categories: ["Headsets", "Mice"],
+    products: ["Headsets", "Mice"].map((category, index) => ({ id: `fixture-${index}`, name: `Synthetic ${category}`, category,
+      revenueByYear: { 2025: 100, 2026: 200, 2027: 300, 2028: 400 }, gmByYear: { 2025: 30, 2026: 60, 2027: 90, 2028: 120 }, unitsByYear: { 2025: 10, 2026: 20, 2027: 30, 2028: 40 } })),
+    investments: [], published: [], npi: [], tam: [], sheets: [], quality: { issues: [] },
+  };
+  const location = new URL(url), controller = { stop() {}, update() {} };
+  const historyOperations = { hashAssignments: [], replacements: [] }, hashProperty = Object.getOwnPropertyDescriptor(URL.prototype, "hash");
+  Object.defineProperty(location, "hash", {
+    get() { return hashProperty.get.call(this); },
+    set(value) { historyOperations.hashAssignments.push(value); hashProperty.set.call(this, value); },
+  });
+  let restoreSource;
+  const window = {
+    location, innerWidth: 1100, parent: { postMessage(message, origin) { messages.push({ message: structuredClone(message), origin }); } },
+    history: { replaceState(_state, _title, target) { historyOperations.replacements.push(String(target)); location.href = new URL(target, location).href; } },
+    addEventListener(name, callback) { if (!handlers.has(name)) handlers.set(name, []); handlers.get(name).push(callback); },
+    matchMedia() { return { matches: true }; }, scrollTo() {},
+    HX_DATA: deferSource ? null : source,
+    HX_SOURCE_READY: deferSource ? new Promise(resolve => { restoreSource = () => resolve({ snapshot: source }); }) : Promise.resolve({ snapshot: source }),
+    HX_SOURCE_STORE: { validate(value) { return value; } },
+    HX_TIMELINE: { mount() { return controller; } }, HX_CATEGORY_STRIP: { mount() { return controller; } },
+  };
+  const document = {
+    querySelector(selector) { return selector === ".category-comparison" ? null : node(selector); }, querySelectorAll() { return []; },
+    addEventListener() {}, body: node("body"), createElement(tag) { return node(`created-${tag}-${nodes.size}`); },
+  };
+  const context = vm.createContext({ window, document, location, history: window.history, URL, URLSearchParams, console,
+    setTimeout, clearTimeout, ResizeObserver: class { observe() {} }, requestAnimationFrame(callback) { callback(); return 1; } });
+  vm.runInContext(childEngine, context, { filename: "blueprint/analytics.js" });
+  vm.runInContext(childSource, context, { filename: "blueprint/dashboard.js" });
+  await new Promise(resolve => setImmediate(resolve));
+  const emit = (name, event) => { for (const callback of handlers.get(name) || []) callback(event); };
+  return { window, messages, restoreSource, historyOperations,
+    emit,
+    receive(data, { origin = location.origin, sender = window.parent } = {}) { emit("message", { data, origin, source: sender }); },
+    state() { const s = window.HX_DASHBOARD.state; return { view: s.view, year: s.period === null ? null : Number(s.period), category: Array.from(s.category), scale: s.comparisonScale, revenue: s.revenueGrowth, margin: s.marginChange, spend: s.budgetChange }; },
+  };
+}
+function relayNavigation(shell, child) {
+  const commands = shell.posts.splice(0);
+  for (const { message } of commands) child.receive(message);
+  for (const { message } of child.messages.splice(0)) shell.message(message);
+  return commands;
+}
+
+const browserHistory = workspaceFixture("https://example.test/PPC/analytics.html?analysis=blueprint&year=2026&category=Headsets&scale=trend&revenue=0&margin=0&spend=0#blueprint/performance");
+const child = await blueprintFixture(browserHistory.frame.src);
+browserHistory.frame.emit("load"); relayNavigation(browserHistory, child);
+const overviewRoute = browserHistory.window.location.href;
+const assignmentsBeforeParentView = child.historyOperations.hashAssignments.length;
+browserHistory.window.PPCAnalyticsWorkspace.showBlueprintView("performance"); relayNavigation(browserHistory, child);
+assert.equal(child.historyOperations.hashAssignments.length, assignmentsBeforeParentView, "The parent owns a shell navigation entry; its child must not create an additional joint-history entry.");
+Object.assign(child.window.HX_DASHBOARD.state, { period: 2027, category: ["Mice"], comparisonScale: "values", revenueGrowth: 10, marginChange: -2, budgetChange: 12,
+  metrics: ['units','budget'], connectivity: ['wireless'], productSort: 'units', sortDirection: 'asc', overlay: 'scenarios', scenarioEnabled: true, scenarioStart: '2027' });
+child.window.HX_DASHBOARD.setView("performance"); relayNavigation(browserHistory, child);
+assert.equal(child.historyOperations.hashAssignments.length, assignmentsBeforeParentView + 1, "An ordinary navigation initiated in the child retains its existing hash navigation behavior.");
+const performanceRoute = browserHistory.window.location.href;
+const assignmentsBeforeBack = child.historyOperations.hashAssignments.length;
+browserHistory.window.location = new URL(overviewRoute); browserHistory.emit("popstate"); relayNavigation(browserHistory, child);
+assert.deepEqual(child.state(), { view: "performance", year: 2026, category: ["Headsets"], scale: "trend", revenue: 0, margin: 0, spend: 0 }, "Back restores historical source filters and zero assumptions before acknowledging the route.");
+assert.equal(browserHistory.window.location.href, overviewRoute, "The child acknowledgment cannot overwrite Back with later filters or workspace assumptions.");
+assert.equal(child.historyOperations.hashAssignments.length, assignmentsBeforeBack, "Restoration uses replaceState so Forward remains available.");
+assert.deepEqual(Array.from(child.window.HX_DASHBOARD.state.metrics), ['revenue']);
+assert.deepEqual(Array.from(child.window.HX_DASHBOARD.state.connectivity), ['all']);
+assert.equal(child.window.HX_DASHBOARD.state.scenarioEnabled, false);
+browserHistory.window.location = new URL(performanceRoute); browserHistory.emit("popstate"); relayNavigation(browserHistory, child);
+assert.deepEqual(child.state(), { view: "performance", year: 2027, category: ["Mice"], scale: "values", revenue: 10, margin: -2, spend: 12 }, "Forward restores the later entry independently.");
+assert.deepEqual(Array.from(child.window.HX_DASHBOARD.state.metrics), ['units','budget'], "The newer multi-measure workspace preferences survive history restoration.");
+assert.deepEqual(Array.from(child.window.HX_DASHBOARD.state.connectivity), ['wireless']);
+assert.equal(child.window.HX_DASHBOARD.state.overlay, 'scenarios');
+assert.equal(child.window.HX_DASHBOARD.state.scenarioStart, '2027');
+assert.equal(child.historyOperations.hashAssignments.length, assignmentsBeforeBack);
+browserHistory.window.location = new URL('https://example.test/PPC/analytics.html?analysis=blueprint#blueprint/overview'); browserHistory.emit('popstate'); relayNavigation(browserHistory, child);
+assert.deepEqual(child.state(), { view: 'overview', year: 2026, category: ['all'], scale: 'values', revenue: 0, margin: 0, spend: 0 }, 'Omitted route preferences reset to modern defaults instead of retaining future state.');
+assert.equal(child.window.HX_DASHBOARD.state.overlay, null); assert.equal(child.window.HX_DASHBOARD.state.scenarioEnabled, false);
+assert.deepEqual(Array.from(child.window.HX_DASHBOARD.state.metrics), ['revenue']);
+assert.equal(browserHistory.window.PPCAnalyticsWorkspace.captureView().revenue, '0');
+const foreignState = child.state(); child.messages.length = 0;
+const restoreMessage = { type: 'ppc:blueprint:navigate', view: 'investment', preferences: { year: 2028, category: 'Mice', scale: 'trend', revenue: 0, margin: -99, spend: '0', sourceRows: [{ private: 'excluded' }], privateKey: 'excluded' } };
+child.receive(restoreMessage, { origin: 'https://other.test' }); child.receive(restoreMessage, { sender: {} }); child.receive({ ...restoreMessage, preferences: [] });
+assert.deepEqual(child.state(), foreignState); assert.equal(child.messages.length, 0, 'Wrong senders and malformed preference containers cannot change or receive private source state.');
+child.receive(restoreMessage);
+assert.deepEqual(child.state(), { view: 'investment', year: 2028, category: ['Mice'], scale: 'trend', revenue: 0, margin: -10, spend: 0 });
+assert.ok(child.messages.every(({ message, origin }) => origin === child.window.location.origin && !JSON.stringify(message).includes('excluded')));
+child.window.location.href = 'https://example.test/PPC/blueprint/index.html?embedded=1&year=2025&category=Headsets&revenue=-5#source'; child.emit('popstate');
+assert.deepEqual(child.state(), { view: 'source', year: 2025, category: ['Headsets'], scale: 'values', revenue: -5, margin: 0, spend: 0 }, 'Frame-owned history also restores the complete preference snapshot.');
+child.window.location.href = 'https://example.test/PPC/blueprint/index.html?embedded=1'; child.emit('popstate');
+assert.deepEqual(child.state(), { view: 'overview', year: 2026, category: ['all'], scale: 'values', revenue: 0, margin: 0, spend: 0 });
+const waitingFrame = workspaceFixture('https://example.test/PPC/analytics.html?analysis=blueprint&year=2025&category=Headsets#blueprint/overview');
+waitingFrame.window.PPCAnalyticsWorkspace.showBlueprintView('products'); waitingFrame.frame.emit('load');
+assert.equal(waitingFrame.posts.at(-1).message.view, 'products'); assert.equal(waitingFrame.posts.at(-1).message.preferences.year, '2025');
+browserHistory.window.location = new URL('https://example.test/PPC/analytics.html?analysis=retail'); browserHistory.emit('popstate'); relayNavigation(browserHistory, child);
+browserHistory.tabs[1].emit('click'); relayNavigation(browserHistory, child);
+assert.deepEqual(child.state(), { view: 'performance', year: 2026, category: ['all'], scale: 'values', revenue: 0, margin: 0, spend: 0 }, 'Returning through Retail cannot resurrect future Blueprint filters or assumptions; its complete workspace retains the current Performance route.');
+const delayedChild = await blueprintFixture('https://example.test/PPC/blueprint/index.html?embedded=1&year=2025&category=Headsets&revenue=20#overview', { deferSource: true });
+delayedChild.receive({ type: 'ppc:blueprint:navigate', view: 'performance', preferences: { year: '2027', category: 'Mice', scale: 'values', revenue: 0 } });
+delayedChild.restoreSource(); await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(delayedChild.state(), { view: 'performance', year: 2027, category: ['Mice'], scale: 'values', revenue: 0, margin: 0, spend: 0 }, 'Late source restoration honors the latest route, including explicit zero assumptions.');
+
 const capability = "a".repeat(64), pricingLink = workspaceFixture(`https://example.test/PPC/analytics.html#ppc-link=${capability}`);
 assert.equal(pricingLink.window.location.hash, `#ppc-link=${capability}`, "The existing pricing bridge consumes its own temporary capability.");
 pricingLink.tabs[1].emit("click");
@@ -506,4 +622,4 @@ assert.equal(sourceWrites, 1, "Rejected imports never replace an existing source
 assert.equal(JSON.stringify(await sourceWindow.HX_SOURCE_STORE.restore()), syntheticBefore);
 assert.deepEqual(openedDatabases, [{ name: "ppc-blueprint-analytics-v1", version: 1 }], "Blueprint opens only its own independent source database.");
 
-console.log(`Analytics workspace checks passed: ${closure.size} local assets, single PPC destination, retained module routing, trusted messages, scenario preservation, playback lifecycle and isolated source storage.`);
+console.log(`Analytics workspace checks passed: ${closure.size} local assets, single PPC destination, full browser-history filter/scenario/workspace restoration, trusted messages, retained playback lifecycle and isolated source storage.`);

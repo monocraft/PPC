@@ -16,7 +16,7 @@ const assertSimpleCopy = (ui) => {
   assert.doesNotMatch(generatedCopy, /GitHub|Supabase|master(?:\s+(?:file|package|copy))?|public\/data|master_ppc\.pkg|https?:\/\//i, "normal package messages must not reveal providers or internal file locations");
 };
 
-function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg", endpoint: "" }, masterSource = null) {
+function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg", endpoint: "" }, masterSource = null, clock = null) {
   const listeners = new Map();
   const elements = new Map();
   const calls = { downloads: [], imports: [], exports: [], generated: 0 };
@@ -61,9 +61,10 @@ function createUi(config = { mode: "static", packageUrl: "./data/master_ppc.pkg"
   const sandbox = {
     document,
     window: { addEventListener: (name, handler) => listeners.set(`window:${name}`, handler) },
-    Blob, DOMException, AbortController, setTimeout, clearTimeout,
+    Blob, DOMException, AbortController, setTimeout: clock?.setTimeout || setTimeout, clearTimeout: clock?.clearTimeout || clearTimeout,
     PPC_PACKAGE_SOURCE: config,
     PPC_MASTER_SOURCE: masterSource,
+    PortfolioMasterGitHub: { normalizeConfig: value => ({ owner: value.owner || 'fixture', repo: value.repo || 'PPC', branch: 'main', path: 'public/data/master_ppc.pkg' }) },
     PortfolioPackage: { ...codec, generateKey: () => { calls.generated += 1; return codec.generateKey(); } },
     PortfolioPackageClient: {
       normalizePackageUrl(value = "./data/master_ppc.pkg") {
@@ -182,6 +183,24 @@ cancelledUi.elements.get("packageKey").value = key;
 await cancelledUi.submit();
 assert.equal(cancelledUi.calls.downloads.length, 2, "cancelled download bytes must not be retained after closing");
 
+{
+  const timers=new Map();let timerId=0,finish;
+  const clock={setTimeout(callback,delay){timers.set(++timerId,{callback,delay});return timerId;},clearTimeout(id){timers.delete(id);}};
+  const ui=createUi({mode:'github'},null,clock);
+  ui.setDownload(()=>new Promise(resolve=>{finish=resolve;}));
+  ui.ui.open('pull');ui.elements.get('packageKey').value=key;
+  const pending=ui.submit();
+  assert.equal(ui.calls.downloads.length,1);
+  for(const timer of [...timers.values()])if(timer.delay<=90000)timer.callback();
+  assert.equal(ui.calls.downloads[0].signal.aborted,false,'A valid GitHub transfer may continue past one minute');
+  finish(encrypted);await pending;
+  assert.equal(ui.calls.imports.length,1);
+  await ui.submit();ui.ui.open('pull');ui.elements.get('packageKey').value=key;
+  const cancelled=ui.submit();ui.ui.close();
+  assert.equal(ui.calls.downloads[1].signal.aborted,true,'Explicit cancellation still aborts a GitHub download');
+  finish(encrypted);await cancelled;
+  assert.equal(ui.calls.imports.length,1,'A cancelled GitHub pull never imports its bytes');
+}
 const invalidSource = createUi({ mode: "static", packageUrl: "https://other.example/master.pkg", endpoint: "" });
 invalidSource.ui.open("pull");
 assert.equal(invalidSource.elements.get("confirmPackage").disabled, true);

@@ -39,6 +39,11 @@
 
   function readRoute() {
     const url = new URL(root.location.href);
+    // Every history entry is a complete presentation snapshot. Missing fields
+    // restore defaults instead of retaining selections from a later entry.
+    for (const key of preferences) delete blueprintState[key];
+    blueprintState.view = 'overview';
+    blueprintState.scale = 'values';
     for (const key of scopeKeys) blueprintState[key] = '';
     blueprintState.compare = '[]';
     const [route, scopeQuery = ''] = url.hash.split('?');
@@ -53,8 +58,8 @@
       else if (key === 'compare' && comparisonPreference(value) !== null) blueprintState.compare = comparisonPreference(value);
       else if (key === 'workspace' && workspacePreference(value) !== null) blueprintState.workspace = workspacePreference(value);
       else if (key === 'scale' && ['trend','values'].includes(value)) blueprintState.scale = value;
-      else if (key === 'year' && /^\d{4}$/.test(value)) blueprintState[key] = value;
-      else if (bounds[key] && Number.isFinite(Number(value))) blueprintState[key] = String(Math.max(bounds[key][0], Math.min(bounds[key][1], Number(value))));
+      else if (key === 'year' && /^\d{4}$/.test(value) && Number(value) >= 1900 && Number(value) <= 2200) blueprintState[key] = value;
+      else if (bounds[key] && value.trim() && Number.isFinite(Number(value))) blueprintState[key] = String(Math.max(bounds[key][0], Math.min(bounds[key][1], Number(value))));
     }
     return url.searchParams.get('analysis') === 'blueprint' || views.has(view) ? 'blueprint' : 'retail';
   }
@@ -66,6 +71,7 @@
     for (const key of preferences) {
       if (privatePreferences.includes(key)) url.searchParams.delete(key);
       else if (blueprintState[key] !== undefined) url.searchParams.set(key, blueprintState[key]);
+      else url.searchParams.delete(key);
     }
     const scopedRoute = new URLSearchParams(privatePreferences.filter(key => blueprintState[key] && blueprintState[key] !== '[]').map(key => [key, blueprintState[key]])).toString();
     url.hash = currentModule === 'blueprint' ? `blueprint/${blueprintState.view}${scopedRoute ? '?' + scopedRoute : ''}` : '';
@@ -76,8 +82,7 @@
   }
   function navigationMessage(view) {
     return { type: 'ppc:blueprint:navigate', view, preferences: Object.fromEntries(preferences
-      .filter(key => blueprintState[key] !== undefined)
-      .map(key => [key, blueprintState[key]])) };
+      .map(key => [key, blueprintState[key] ?? null])) };
   }
   function positionBlueprintDialog() {
     if (!blueprintDialogOpen || currentModule !== 'blueprint') return;

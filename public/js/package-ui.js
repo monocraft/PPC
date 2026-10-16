@@ -198,7 +198,7 @@
         let bytes = source.packageUrl ? downloadedBytes : null;
         if (!bytes) {
           controller = new AbortController();
-          const timeout = setTimeout(() => controller?.abort(), 60000);
+          const timeout = source.github ? null : setTimeout(() => controller?.abort(), 60000);
           status.textContent = "Loading your portfolio…";
           try {
             bytes = await globalThis.PortfolioPackageClient.downloadLatest({ ...source, ...(source.endpoint ? { key } : {}), signal: controller.signal,

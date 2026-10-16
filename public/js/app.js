@@ -172,6 +172,7 @@ const imageAssetUrlCache = new Map();
 const imageAssetLoadPromises = new Map();
 const missingImageAssetIds = new Set();
 const pendingLegacyImageBlobs = [];
+const discardedDrafts = new Map();
 let imageAssetGeneration = 0;
 let packageOperationInProgress = false;
 const workspaceStorage = globalThis.PortfolioWorkspaceStore.create({ databaseName: IMAGE_DB_NAME, databaseVersion: IMAGE_DB_VERSION, imageStoreName: IMAGE_STORE_NAME, workspaceKey: STORAGE_KEY });
@@ -382,16 +383,26 @@ function imageAssetById(assetId) {
 
 function referencedImageAssetIds() {
   const references = new Set();
-  portfolio?.categories?.forEach((category) => {
-    category.board?.products?.forEach((product) => {
-      if (product.imageAssetId) references.add(product.imageAssetId);
-      productVariantGroups(product).forEach((group) => {
-        group.items.forEach((item) => {
-          if (item.imageAssetId) references.add(item.imageAssetId);
-        });
+  const collectProduct = (product) => {
+    if (!product) return;
+    if (product.imageAssetId) references.add(product.imageAssetId);
+    productVariantGroups(product).forEach((group) => {
+      group.items.forEach((item) => {
+        if (item.imageAssetId) references.add(item.imageAssetId);
       });
     });
-  });
+  };
+  const collectPortfolio = (saved) => {
+    saved?.categories?.forEach((category) => category.board?.products?.forEach(collectProduct));
+    Object.values(saved?.masterLocalRemovedProducts || {}).forEach(collectProduct);
+    (saved?.masterLocalMerges || []).forEach((merge) => {
+      collectProduct(merge.keeperProduct);
+      collectProduct(merge.sourceProduct);
+    });
+  };
+  collectPortfolio(portfolio);
+  // Discard and merge undo can restore these products after a later image edit.
+  discardedDrafts.forEach((record) => collectPortfolio(record.previous));
   return references;
 }
 
@@ -8433,7 +8444,6 @@ window.addEventListener("resize", () => { if (workspaceOpening) return; closeVar
 window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
 // Draft actions keep complete records and images until the user saves or discards.
-const discardedDrafts = new Map();
 function localizeSharedProduct(record, previous = null) {
   const product = JSON.parse(JSON.stringify(record));
   const aliases = portfolio.masterLocalAssetIds || {};

@@ -217,15 +217,9 @@
       }
       return githubTransport;
     }
-    async function githubCall(operation) {
-      const controller = new AbortController(), timer = root.setTimeout(() => controller.abort(), 60000);
-      try { return await operation(controller.signal); }
-      catch (error) { if (controller.signal.aborted) throw errorOf("GitHub took too long to respond. Your local changes are safe; reconnect to check the master before trying again.", "UNAVAILABLE"); throw error; }
-      finally { root.clearTimeout(timer); }
-    }
     async function send(operation, payload = {}) {
       if (mode !== "github") return request({ endpoint, operation, key, editorToken, team, fetchImpl, ...payload });
-      const result = await githubCall((signal) => transport().request({ operation, key, signal, ...payload }));
+      const result = await transport().request({ operation, key, ...payload });
       return { ...result, snapshot: normalizeSnapshot(result.snapshot || result) };
     }
     function seed(products) {
@@ -795,7 +789,7 @@
         resetGitHubAccess(); githubToken = String(value || "").trim(); accessVersion += 1;
         const operationVersion = accessVersion, selectedTransport = transport();
         try {
-          const verified = await githubCall((signal) => selectedTransport.getIdentity({ signal }));
+          const verified = await selectedTransport.getIdentity();
           if (accessVersion !== operationVersion || githubTransport !== selectedTransport || !githubToken) throw errorOf("The GitHub connection changed while your account was being checked. Your current workspace and access were kept.", "GITHUB_CONNECTION_CHANGED");
           identity = verified; return clone(identity);
         } catch (error) {
