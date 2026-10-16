@@ -371,8 +371,9 @@ vm.runInContext(
 for (const stage of ["launched", "in-development", "in-planning", "embargo", "end-of-life"]) {
   const item = { statusType: "none", variantLabel: "Custom label", variantColor: "#ff0000", roadmap: { status: stage } };
   const presentation = presentationSandbox.productPresentation(item);
-  assert.equal(presentation.primaryColor, presentationSandbox.roadmapStatusColor(item), "cards and timeline share the selected manual stage tone");
-  assert.equal(presentation.primaryColor, model.lifecycleTone(stage));
+  const style = globalThis.PortfolioTheme.productCardStyles[stage];
+  assert.equal(presentation.primaryColor, style?.accent || model.lifecycleTone(stage), "active planning/development cards use their dedicated chart-derived palette");
+  assert.equal(presentationSandbox.roadmapStatusColor(item), model.lifecycleTone(stage), "card styling does not recolor timeline stage bars");
   assert.equal(item.variantColor, "#ff0000", "old custom fields remain stored without affecting the shared palette");
 }
 for (const [statusType, label, expected] of standardStatusCases) {
@@ -381,8 +382,27 @@ for (const [statusType, label, expected] of standardStatusCases) {
   assert.equal(presentationSandbox.normalizeCardStatusType(` ${statusType.toUpperCase()} `), statusType, "imported preset names normalize without losing their status");
   assert.equal(presentationSandbox.standardizedStatus(statusType).label, label, "preset labels use the same wording in every category");
   assert.equal(presentationSandbox.standardizedStatus(statusType).color, expected, "preset colors are fixed rather than inherited from a roadmap stage");
-  assert.equal(presentationSandbox.productPresentation(item).primaryColor, expected);
+  assert.equal(presentationSandbox.productPresentation(item).primaryColor, statusType === "embargo" ? expected : "#4DA1F7", "saved development stage colors the card while retaining preset wording");
+  assert.equal(presentationSandbox.productPresentation(item).status.label, label);
   assert.equal(presentationSandbox.roadmapStatusColor(item), expected, "theme accents must match between product cards and roadmap");
+}
+for (const [item, stage, label] of [
+  [{ statusType: "none", roadmap: { status: "in-planning" } }, "in-planning", "IN-PLANNING"],
+  [{ statusType: "none", roadmap: { status: "in-development" } }, "in-development", "IN-DEVELOPMENT"],
+  [{ statusType: "in-development", roadmap: { status: "in-planning" } }, "in-development", "IN-DEVELOPMENT"],
+  [{ statusType: "new", roadmap: { status: "in-planning" } }, "in-planning", "NEW PRODUCT"],
+  [{ statusType: "sunsetting", roadmap: { status: "in-development" } }, "in-development", "SUNSETTING"],
+  [{ statusType: "none", roadmap: { status: "unverified" } }, "", ""],
+  [{ statusType: "none" }, "", ""],
+  [{ statusType: "embargo", roadmap: { status: "in-planning" } }, "", "UPCOMING UNDER EMBARGO"],
+  [{ statusType: "in-development", roadmap: { status: "embargo" } }, "", "IN-DEVELOPMENT"],
+  [{ statusType: "in-development", roadmap: { status: "in-planning" }, endManufacturingDate: "2000-01-01" }, "", "Discontinued"],
+]) {
+  const before = JSON.stringify(item), result = presentationSandbox.productPresentation(item);
+  assert.equal(result.cardStage, stage);
+  assert.equal(result.status.label, label);
+  assert.equal(result.cardStyle, globalThis.PortfolioTheme.productCardStyles[stage] || null);
+  assert.equal(JSON.stringify(item), before, "stage presentation never rewrites saved flags, dates or metadata");
 }
 for (const invalidStatus of [undefined, null, "", "unknown", "constructor", "toString", "__proto__"]) {
   assert.equal(presentationSandbox.normalizeCardStatusType(invalidStatus), "none", "unknown and inherited object keys never become built-in statuses");
@@ -429,12 +449,13 @@ const consoleContext = { save() {}, restore() {}, beginPath() {}, moveTo() {}, l
   measureText: (text) => ({ width: text.length * 5 }), fillText: (text) => { consoleText.push(text); consoleTextColors.push(consoleContext.fillStyle); } };
 const consoleLayout = { cardHeight: 300, imageSlotTop: 34, imageSlotHeight: 110, titleBlockTop: 150, detailsTopOffset: 65 };
 for (const [statusType, label, color] of standardStatusCases) {
+  const cardColor = statusType === "embargo" ? color : "#4DA1F7";
   for (const variantLabel of ["", "PLAYSTATION", "XBOX", label, label.toLowerCase()]) {
     consoleProduct = { name: "Console headset", statusType, variantLabel, specs: [], roadmap: { status: "in-development" } };
     const before = JSON.stringify(consoleProduct);
     const presentation = presentationSandbox.productPresentation(consoleProduct);
     assert.equal(presentation.primaryLabel, label, "platforms cannot replace the shared status banner");
-    assert.equal(presentation.primaryColor, color);
+    assert.equal(presentation.primaryColor, cardColor);
     assert.equal(presentation.secondaryLabel, variantLabel && variantLabel.toUpperCase() !== label ? variantLabel : "", "identical status/variant labels are never duplicated, regardless of case");
     for (const detailed of [false, true]) {
       consoleText.length = 0;
@@ -442,11 +463,11 @@ for (const [statusType, label, color] of standardStatusCases) {
       consoleShapes.length = 0;
       presentationSandbox.drawCard(consoleContext, consoleProduct, 0, 0, false, { ...consoleLayout, detailed }, false);
       assert.equal(consoleText[0], label, "both compact and detailed cards start with the shared status label");
-      assert.equal(consoleShapes[1][6], color, "the main banner uses the theme accent");
+      assert.equal(consoleShapes[1][6], cardColor, "the main banner uses the card stage accent");
       assert.equal(consoleTextColors[0], statusType === "embargo" ? "#1A1B1C" : "#111111", "Compact, detailed, and exported cards share the same readable embargo label color.");
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
-        assert.equal(consoleShapes[2][6], color, "the variant badge matches the status banner color");
+        assert.equal(consoleShapes[2][6], cardColor, "the variant badge matches the status banner color");
         assert.equal(consoleShapes[2][7], undefined, "the variant badge uses its fill without a decorative border");
         assert.equal(consoleTextColors[1], consoleTextColors[0], "status and variant labels share readable text contrast");
         assert.ok(consoleShapes[2][1] + consoleShapes[2][3] < 246 - 54 - 8, "the platform badge leaves room for Details");
@@ -456,7 +477,7 @@ for (const [statusType, label, color] of standardStatusCases) {
     assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`>${label}</div>`), "roadmap details retain the same primary status");
     assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#1A1B1C" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
     assert.equal(presentationSandbox.splitProduct.innerHTML.includes('class="split-platform-label"'), Boolean(presentation.secondaryLabel));
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${color};--product-label-color:${statusType === "embargo" ? "#1A1B1C" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${cardColor};--product-label-color:${statusType === "embargo" ? "#1A1B1C" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
     assert.equal(JSON.stringify(consoleProduct), before, "presentation never changes the saved manual status or platform label");
   }
 }

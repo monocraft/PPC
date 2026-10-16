@@ -102,6 +102,16 @@ for (const surface of [theme.colors.page, theme.colors.surface, theme.colors.hea
   assert.ok(contrast(theme.colors.text, surface) >= 4.5, "values retain readable contrast");
 }
 for (const series of theme.chartSeries) assert.ok(contrast(series, theme.colors.page) >= 3 && contrast(series, theme.colors.surface) >= 3, "the main reference colors remain distinguishable on dark chart surfaces");
+assert.ok(Object.isFrozen(theme.productCardStyles));
+for (const [stage, accent] of [["in-planning", "#FFC63B"], ["in-development", "#4DA1F7"]]) {
+  const style = theme.productCardStyles[stage];
+  assert.ok(Object.isFrozen(style)); assert.equal(style.accent, accent);
+  for (const surface of [style.surface, style.footer]) {
+    assert.ok(contrast(theme.colors.text, surface) >= 4.5, "stage card text stays readable across body and footer shades");
+    assert.ok(contrast(style.muted, surface) >= 4.5, "stage card accents stay readable");
+  }
+  assert.ok(contrast(theme.colors.page, accent) >= 4.5, "bright stage banners support dark labels");
+}
 assert.ok(contrast(theme.colors.text, theme.colors.input) >= 4.5);
 assert.ok(contrast(theme.colors.alertText, theme.colors.alertSurface) >= 4.5);
 assert.ok(contrast(theme.colors.text, theme.colors.input) >= 3, "focus outline remains visible against inputs");
@@ -229,6 +239,18 @@ for (const detailed of [false, true]) {
   assert.deepEqual(strokes, [{ color: theme.colors.text, width: 1.25 }], "the selected product retains one clear outline in both layouts");
 }
 assert.equal(JSON.stringify(microphone), productBefore, "rendering never rewrites full specifications, lane, product color, image or SKU bindings");
+
+const neutralPresentation = sandbox.productPresentation;
+for (const [stage, cardStyle] of Object.entries(theme.productCardStyles)) {
+  sandbox.productPresentation = () => ({ primaryLabel: stage, primaryColor: cardStyle.accent, secondaryLabel: "", cardStyle });
+  sandbox.contrastTextColor = () => theme.colors.page;
+  const recorded = sandbox.recordCardElementsForPptx(canvas(), microphone, layout);
+  assert.ok(recorded.some(element => element.kind === "shape" && element.fill?.toUpperCase() === cardStyle.surface), "editable card recording includes the opaque stage surface");
+  assert.ok(recorded.some(element => element.kind === "shape" && element.fill?.toUpperCase() === cardStyle.accent), "editable card recording includes the stage banner");
+  assert.ok(recorded.some(element => element.kind === "text" && element.text === "Reference microphone"), "colored cards retain editable product names");
+  assert.ok(recorded.some(element => element.kind === "image"), "colored cards retain separate product artwork");
+}
+sandbox.productPresentation = neutralPresentation;
 
 vm.runInContext(await read("vendor/pptxgen.bundle.js"), sandbox, { timeout: 5000 });
 const deck = new sandbox.PptxGenJS(); deck.layout = "LAYOUT_WIDE";

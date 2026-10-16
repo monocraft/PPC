@@ -152,6 +152,7 @@
       if (immediate) { frame.classList.add("is-immediate"); release(); }
       frame.style.transform = `translate3d(${card.x * zoom - scroll.scrollLeft}px, ${card.y * zoom - scroll.scrollTop}px, 0)`;
       frame.style.width = `${card.width * zoom}px`; frame.style.height = `${card.height * zoom}px`;
+      frame.style.borderColor = !card.discontinued && root.PortfolioTheme?.productCardStyles?.[card.cardStage]?.muted || "";
       if (immediate || (changed && card.discontinued)) void frame.offsetHeight;
       if (changed && card.discontinued) frame.classList.add("is-disintegrating");
       frame.style.opacity = card.discontinued ? ".4" : "1"; productId = card.productId; frame.dataset.productId = productId;
