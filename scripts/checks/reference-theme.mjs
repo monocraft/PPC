@@ -112,6 +112,83 @@ for (const [stage, accent] of [["in-planning", "#FFC63B"], ["in-development", "#
   }
   assert.ok(contrast(theme.colors.page, accent) >= 4.5, "bright stage banners support dark labels");
 }
+
+// Secondary actions follow the saved lifecycle evidence without recoloring the
+// native card or mutating product facts. A stage-only EOL is not a confirmed EOM.
+const actionStyleNames = ["neutral", "in-planning", "in-development", "embargo", "discontinued"];
+assert.ok(Object.isFrozen(theme.productActionStyles), "action palettes cannot be changed by a card consumer");
+assert.deepEqual(Object.keys(theme.productActionStyles).sort(), [...actionStyleNames].sort());
+assert.equal(typeof theme.productActionStyle, "function");
+const actionColors = {
+  neutral: { surface: "#2B2D30", ink: "#8B8E94", hover: "#333538", hoverInk: "#D5D7DC", active: "#404246", focus: "#D5D7DC" },
+  "in-planning": { surface: "#4B412D", ink: "#BFA45F", hover: "#564A31", hoverInk: "#FFD569", active: "#625334", focus: "#FFD569" },
+  "in-development": { surface: "#2C3F54", ink: "#65A4CE", hover: "#304D6B", hoverInk: "#A3E0FC", active: "#365A7D", focus: "#63C0F9" },
+  embargo: { surface: "#33282A", ink: "#AC7E7E", hover: "#403033", hoverInk: "#FF8A8A", active: "#493537", focus: "#FF8A8A" },
+};
+actionColors.discontinued = { ...actionColors.neutral, ink: "#FFFFFF", hoverInk: "#FFFFFF", focus: "#FFFFFF" };
+for (const name of actionStyleNames) {
+  const style = theme.productActionStyles[name];
+  assert.ok(Object.isFrozen(style), `${name} action colors stay immutable`);
+  assert.deepEqual(Object.keys(style).sort(), ["name", "surface", "ink", "hover", "hoverInk", "active", "focus", "divider"].sort());
+  assert.equal(style.name, name);
+  for (const [property, value] of Object.entries(actionColors[name])) assert.equal(style[property], value, `${name} keeps its reviewed ${property} tone`);
+  assert.equal(typeof style.divider, "string");
+  assert.ok(style.divider.trim().length, `${name} provides its own subdued divider`);
+}
+const actionFixtures = [];
+for (const statusType of [undefined, "none", "new", "embargo", "in-development", "sunsetting", "unknown"]) {
+  for (const stage of [undefined, "launched", "in-development", "in-planning", "embargo", "end-of-life", "unknown"]) {
+    const product = { id: `action-${actionFixtures.length}`, statusType, roadmap: { status: stage }, color: "#80958F", endManufacturingDate: "9999-12-31", imageAssetId: "retained-hero" };
+    actionFixtures.push(product);
+    const before = JSON.stringify(product);
+    const expected = statusType === "embargo" || stage === "embargo" ? "embargo"
+      : statusType === "in-development" ? "in-development"
+        : ["in-development", "in-planning"].includes(stage) ? stage : "neutral";
+    assert.equal(theme.productActionStyle(product), theme.productActionStyles[expected], `${statusType}/${stage} chooses the existing lifecycle scheme`);
+    assert.equal(theme.productActionStyle(product, false), theme.productActionStyles[expected]);
+    assert.equal(theme.productActionStyle(product, true), theme.productActionStyles.discontinued, `confirmed EOM wins over ${statusType}/${stage}`);
+    assert.equal(JSON.stringify(product), before, "action styling never rewrites lifecycle, merchandise color or artwork evidence");
+  }
+}
+for (const product of [undefined, null, {}, { statusType: "new" }, { statusType: "sunsetting" }, { roadmap: null }]) {
+  assert.equal(theme.productActionStyle(product), theme.productActionStyles.neutral, "absent stage evidence keeps the neutral treatment");
+  assert.equal(theme.productActionStyle(product, true), theme.productActionStyles.discontinued);
+}
+for (const mutation of [
+  'PortfolioTheme.productActionStyles.neutral.ink = "#000000";',
+  'PortfolioTheme.productActionStyles.neutral = {};',
+  'delete PortfolioTheme.productActionStyles.embargo;',
+  'PortfolioTheme.productActionStyle({ statusType: "in-development" }).surface = "#000000";',
+]) assert.throws(() => vm.runInContext(`"use strict"; ${mutation}`, sandbox), (error) => error.name === "TypeError", "individual cards cannot mutate shared action palettes");
+for (const name of actionStyleNames.filter(name => name !== "discontinued")) {
+  const style = theme.productActionStyles[name];
+  const cardSurface = theme.productCardStyles[name]?.surface || theme.colors.surface;
+  assert.ok(contrast(style.ink, style.surface) >= 3, `${name} resting utility glyphs remain distinguishable`);
+  assert.ok(contrast(style.hoverInk, style.hover) >= 3, `${name} hovered utility glyphs remain distinguishable`);
+  assert.ok(contrast(style.hoverInk, style.active) >= 3, `${name} pressed utility glyphs remain distinguishable`);
+  for (const adjacent of [cardSurface, style.surface, style.hover, style.active]) assert.ok(contrast(style.focus, adjacent) >= 3, `${name} focus remains visible against the card and every action state`);
+}
+const composite = (foreground, background, opacity) => `#${foreground.slice(1).match(/../g).map((channel, index) =>
+  Math.round(parseInt(channel, 16) * opacity + parseInt(background.slice(1).match(/../g)[index], 16) * (1 - opacity)).toString(16).padStart(2, "0")).join("")}`;
+const fadedActions = theme.productActionStyles.discontinued;
+// The completed canvas card fades onto the workspace first. The native DOM
+// action row then fades onto that card; test the resulting pixels, not raw white.
+for (const workspaceSurface of ["#000000", theme.colors.page, theme.colors.surface]) {
+  const fadedCard = composite(theme.colors.surface, workspaceSurface, .4);
+  const fadedFocus = composite(fadedActions.focus, fadedCard, .4);
+  for (const [state, foreground, background] of [
+    ["rest", fadedActions.ink, fadedActions.surface],
+    ["hover", fadedActions.hoverInk, fadedActions.hover],
+    ["pressed", fadedActions.hoverInk, fadedActions.active],
+  ]) {
+    const fadedForeground = composite(foreground, fadedCard, .4);
+    const fadedBackground = composite(background, fadedCard, .4);
+    assert.ok(contrast(fadedForeground, fadedBackground) >= 3, `EOL ${state} glyphs survive both 40% composition layers over ${workspaceSurface}`);
+    assert.ok(contrast(fadedFocus, fadedBackground) >= 3, `EOL focus stays distinct from its ${state} action surface`);
+  }
+  assert.ok(contrast(fadedFocus, fadedCard) >= 3, "EOL focus remains visible outside the recess on the faded card");
+}
+assert.equal(JSON.stringify(sampleWorkspace), snapshot, "resolving action themes preserves the entire workspace");
 assert.ok(contrast(theme.colors.text, theme.colors.input) >= 4.5);
 assert.ok(contrast(theme.colors.alertText, theme.colors.alertSurface) >= 4.5);
 assert.ok(contrast(theme.colors.text, theme.colors.input) >= 3, "focus outline remains visible against inputs");

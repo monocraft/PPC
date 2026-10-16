@@ -5,6 +5,12 @@
   const bindings = new WeakMap();
   let sequence = 0;
   const day = 24 * 60 * 60 * 1000;
+  const popupThemeProperties = Object.freeze([
+    "--color-page", "--color-shell", "--color-surface", "--color-header",
+    "--color-surface-raised", "--color-surface-hover", "--color-input", "--color-accent",
+    "--color-border", "--color-border-strong", "--color-control-border", "--color-emphasis-deep",
+  ]);
+  const popupThemeOwner = '.viewer-info[data-card-stage="in-planning"], .viewer-info[data-card-stage="in-development"], .split-product-card[data-card-stage="in-planning"], .split-product-card[data-card-stage="in-development"]';
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
   const plural = (count, unit) => `${count} ${unit}${count === 1 ? "" : "s"}`;
   const timestamp = (value) => {
@@ -179,9 +185,20 @@
       popup.style.left = `${Math.round(left)}px`;
       popup.style.top = `${Math.round(top)}px`;
     }
+    function refreshTheme() {
+      if (!popup?.style?.setProperty || !window.getComputedStyle) return;
+      const owner = anchor?.closest?.(popupThemeOwner);
+      const theme = owner ? window.getComputedStyle(owner) : null;
+      for (const name of popupThemeProperties) {
+        const value = String(theme?.getPropertyValue?.(name) || "").trim();
+        if (value) popup.style.setProperty(name, value);
+        else popup.style.removeProperty?.(name);
+      }
+    }
     function refresh() {
       if (!popup || !anchor) return;
       if (!anchor.isConnected || !container.isConnected) { close(); return; }
+      refreshTheme();
       const field = anchor.getAttribute("data-date-history-field");
       const factsOptions = { now: adapter.now?.() ?? Date.now(), locale: adapter.locale, source: adapter.getSource?.(field), draft: adapter.getDraft?.(field) };
       if (adapter.getValue) factsOptions.value = adapter.getValue(field);
@@ -238,6 +255,9 @@
       popup.id = `date-history-popup-${++sequence}`;
       popup.setAttribute("role", "tooltip");
       popup.setAttribute("popover", "manual");
+      // The body portal keeps its originating card's palette without copying
+      // arbitrary styles, merchandise colors, or semantic warning colors.
+      refreshTheme();
       document.body.append(popup);
       try { popup.showPopover?.(); } catch (_) { popup.removeAttribute("popover"); /* Use the fixed portal if the top layer is unavailable. */ }
       const descriptions = String(anchor.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
