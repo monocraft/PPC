@@ -102,8 +102,11 @@
     const all = makeRecord("*", true);
     all.button.dataset.categoryIcon = "all"; all.name.textContent = "All";
     items.append(all.button);
+    listen(doc, "keydown", event => {
+      if (event.key !== "Escape" || tooltip.hidden) return;
+      event.preventDefault(); event.stopPropagation(); tooltipDismissed = true; hideTooltip();
+    }, true);
     listen(items, "keydown", event => {
-      if (event.key === "Escape" && !tooltip.hidden) { event.preventDefault(); event.stopPropagation(); tooltipDismissed = true; hideTooltip(); return; }
       if (state.disabled || event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       const available = visibleRecords().filter(record => !record.button.disabled), current = available.findIndex(record => record.button.contains(event.target));
       if (current < 0 || !available.length) return;

@@ -9,7 +9,7 @@ function fixture({ observer = true, reduce = false } = {}) {
   class Element {
     constructor(tag) {
       this.tagName = tag; this.ownerDocument = document; this.children = []; this.parentNode = null;
-      this.className = ""; this.dataset = {}; this.attributes = new Map(); this.listeners = new Map();
+      this.className = ""; this.dataset = {}; this.attributes = new Map(); this.listeners = new Map(); this.captureListeners = new Map();
       this.hidden = false; this.disabled = false; this.tabIndex = -1; this._text = "";
       this.scrollWidth = 300; this.clientWidth = 300; this.scrollLeft = 0; this.scrolls = []; this.appends = 0;
       this.bounds = { left: 80, right: 120, top: 30, bottom: 70, width: 40, height: 40 };
@@ -31,10 +31,15 @@ function fixture({ observer = true, reduce = false } = {}) {
     contains(element) { return element === this || this.children.some(child => child.contains(element)); }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
-    addEventListener(type, callback) { const entries = this.listeners.get(type) || []; entries.push(callback); this.listeners.set(type, entries); }
-    removeEventListener(type, callback) { this.listeners.set(type, (this.listeners.get(type) || []).filter(entry => entry !== callback)); }
+    addEventListener(type, callback, options) { const map = options === true || options?.capture ? this.captureListeners : this.listeners; const entries = map.get(type) || []; entries.push(callback); map.set(type, entries); }
+    removeEventListener(type, callback, options) { const map = options === true || options?.capture ? this.captureListeners : this.listeners; map.set(type, (map.get(type) || []).filter(entry => entry !== callback)); }
     fire(type, data = {}) {
       const event = { target: this, key: "", defaultPrevented: false, propagationStopped: false, bubbles: true, preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.propagationStopped = true; }, ...data };
+      const path = []; for(let current=this;current;current=current.parentNode)path.push(current);
+      for(const current of path.slice().reverse()) {
+        event.currentTarget = current; for(const listener of [...(current.captureListeners.get(type)||[])])listener(event);
+        if(event.propagationStopped)return event;
+      }
       for (let current = this; current; current = event.bubbles && !event.propagationStopped ? current.parentNode : null) {
         event.currentTarget = current; for (const listener of [...(current.listeners.get(type) || [])]) listener(event);
       }
@@ -51,7 +56,9 @@ function fixture({ observer = true, reduce = false } = {}) {
     querySelectorAll(selector) { return this.children.flatMap(child => [child, ...child.querySelectorAll("*")]).filter(child => selector === "*" || selector.startsWith(".") && child.classList.contains(selector.slice(1)) || child.tagName === selector); }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   }
-  document.createElement = tag => new Element(tag); document.body = new Element("body"); document.activeElement = document.body;
+  document.createElement = tag => new Element(tag); const documentEvents = new Element("document");
+  document.addEventListener = documentEvents.addEventListener.bind(documentEvents); document.removeEventListener = documentEvents.removeEventListener.bind(documentEvents);
+  document.body = new Element("body"); document.body.parentNode = documentEvents; document.activeElement = document.body;
   const window = { innerWidth: 600, innerHeight: 400, matchMedia: () => ({ matches: reduce }),
     addEventListener(type, callback) { windowListeners.set(type, callback); }, removeEventListener(type, callback) { if (windowListeners.get(type) === callback) windowListeners.delete(type); },
   };
@@ -131,6 +138,20 @@ far.bounds = { left:240,right:280,top:30,bottom:70,width:40,height:40 }; f.scrol
 assert.equal(f.tooltip.hidden,false,"returning the focused button fully into view restores its tooltip");
 checks += 10;
 
+// Pointer tooltips belong to the dock even when keyboard focus remains on the
+// canvas or search. Capture Escape before the application's document shortcut.
+const outsideFocus = f.document.createElement("input"); f.document.body.append(outsideFocus); outsideFocus.focus();
+let outsideSelection = "selected-product", documentEscapes = 0;
+const outsideEscape = event => { if(event.key === "Escape") { outsideSelection = null; documentEscapes++; } };
+f.document.addEventListener("keydown",outsideEscape);
+far.fire("pointerenter"); assert.equal(f.tooltip.hidden,false); assert.equal(f.document.activeElement,outsideFocus);
+const hoverEscape=outsideFocus.fire("keydown",{key:"Escape"});
+assert.equal(hoverEscape.defaultPrevented,true); assert.equal(hoverEscape.propagationStopped,true);
+assert.equal(f.tooltip.hidden,true); assert.equal(f.document.activeElement,outsideFocus); assert.equal(outsideSelection,"selected-product"); assert.equal(documentEscapes,0);
+const normalEscape=outsideFocus.fire("keydown",{key:"Escape"});
+assert.equal(normalEscape.defaultPrevented,false); assert.equal(normalEscape.propagationStopped,false); assert.equal(outsideSelection,null); assert.equal(documentEscapes,1);
+f.document.removeEventListener("keydown",outsideEscape); checks += 4;
+
 f.controller.update({ categories, mode: "multiple", selectedIds: [ids[1], ids[3]] });
 assert.equal(f.button("*").hidden, false); assert.equal(f.button("*").getAttribute("aria-pressed"), "mixed");
 assert.match(f.items.getAttribute("aria-description"), /All toggles every category on or off/);
@@ -192,7 +213,7 @@ assert.equal(empty.summary.textContent,"No categories selected"); empty.controll
 
 const detachedButton = f.button("unknown"), finalCalls = f.chosen.length;
 f.controller.destroy(); assert.equal(f.observers[0].disconnected, true); assert.equal(f.dock.isConnected, false); assert.equal(f.unrelated.isConnected, true);
-assert.ok(f.allNodes.every(node => [...node.listeners.values()].every(listeners => listeners.length === 0)), "every dynamic, delegated and scroll listener is removed");
+assert.ok(f.allNodes.every(node => [...node.listeners.values(),...node.captureListeners.values()].every(listeners => listeners.length === 0)), "every document-capture, dynamic, delegated and scroll listener is removed");
 detachedButton.fire("click"); f.controller.update({ categories }); f.controller.destroy(); assert.equal(f.chosen.length, finalCalls); assert.equal(f.host.querySelector(".category-dock"), null); checks += 5;
 assert.equal(JSON.stringify(categories),originalCategories,"navigation never changes caller category metadata");
 for(const token of ["all","grid"])assert.match(await readFile(new URL(`../../public/assets/icons/category-${token}.svg`,import.meta.url),"utf8"),/^<svg\b/);
