@@ -235,4 +235,84 @@ assert.equal(simpleKeyboard[8], detailKeyboard[8], "The actual drawCard path kee
 assert.equal(simpleKeyboard[6], 34);
 assert(simpleKeyboard[6] + simpleKeyboard[8] < simpleKeyboardLayout.titleBlockTop);
 assert(detailKeyboard[6] + detailKeyboard[8] < detailKeyboardLayout.titleBlockTop);
-console.log("Product image framing checks passed: unchanged headset/mouse fitting, flat keyboard body scale and deliberate left-only crop, source/dimension guards, export parity and immutable pixels/data.");
+// Real source dimensions expose the main/color padding mismatches. Compare the
+// visible subject axis rather than the padded source rectangle or filename size.
+const micFamilies = [
+  { ratio: 174 / 268, images: [
+    ["4P5P8AA-17a2f0cc9d64fa9d9480.png", 800, 600, 497],
+    ["w11.png", 462, 1007, 961, "pkg-1d38f631-e8fa-4697-9a86-d0b590239b1b"],
+  ] },
+  { ratio: .56, images: [
+    ["AR0A0AA-64d862154db457578c84.png", 800, 600, 485],
+    ["w22.png", 151, 434, 434, "pkg-33404cfd-8785-42f4-a2cc-31604fd8fb75"],
+  ] },
+  { ratio: 1, images: [
+    ["872V1AA-ae161b7b369993443b11.png", 591, 1395, 1364],
+    ["AN1D9AA-d77bf028282ab94ac326.png", 800, 600, 464],
+  ] },
+  { ratio: 250 / 268, images: [
+    ["w6.png", 620, 1505, 1457, "pkg-bd34077f-b8e7-4a80-aa0e-1f0d9afd4ffc"],
+    ["w66.png", 628, 1523, 1465, "pkg-019125dd-984b-44ca-abaa-07ad9917a5fd"],
+    ["4P5P7AA-5e0d6e2e781cb9d9a860.png", 800, 600, 506],
+  ] },
+];
+const renderScaled = (categoryId, item, height = 210) => {
+  const [assetName, naturalWidth, naturalHeight, subjectSpan, assetId = ""] = item;
+  const calls = [], image = { naturalWidth, naturalHeight };
+  const savedImage = JSON.stringify(image);
+  assert.equal(api.usesScaledFraming(categoryId, assetName, assetId), true);
+  assert.equal(api.drawScaled({ drawImage: (...args) => calls.push(args) }, image, { x: 18, y: 34, width: 210, height }, { categoryId, assetName, assetId }), true);
+  assert.equal(JSON.stringify(image), savedImage, "Framing never rewrites original image objects.");
+  const call = calls[0];
+  assert.equal(call.length, 9, "The common source-rectangle draw is used by cards, PNG and editable PPTX.");
+  assert(Math.abs(call[7] / call[8] - call[3] / call[4]) < 1e-10, "The complete subject keeps its native aspect ratio.");
+  assert(call[5] >= 18 && call[6] >= 34 && call[5] + call[7] <= 228 && call[6] + call[8] <= 34 + height, "Reviewed art remains within its own image slot.");
+  return { call, visibleSpan: categoryId === "microphones" ? subjectSpan * call[8] / call[4] : subjectSpan * call[7] / call[3] };
+};
+for (const height of [112, 210]) for (const family of micFamilies) {
+  const expected = Math.min(202, height - 8) * family.ratio;
+  const renders = family.images.map(item => renderScaled("microphones", item, height));
+  for (const render of renders) assert(Math.abs(render.visibleSpan - expected) < 1e-9, "Main and color variants have the same visible body height, independent of padding, resolution or crop margins.");
+}
+const quadHeight = renderScaled("microphones", micFamilies[2].images[0]).visibleSpan;
+const soloHeight = renderScaled("microphones", micFamilies[0].images[0]).visibleSpan;
+assert(Math.abs(soloHeight / quadHeight - 174 / 268) < 1e-10, "A compact SoloCast cannot be enlarged to the QuadCast 2 height.");
+const controllerSources = [
+  ["6L366AA-2db451605aeda694ba38.png", 800, 600, 438],
+  ["7D6H2AA-ed1608ead2e4e59d3caa.png", 800, 600, 439],
+  ["B11DBAA-e3c7bad57f48a6ec48fb.png", 800, 600, 446],
+  ["B11D9AA-0596eb465a771dab0862.png", 800, 600, 487],
+  ["8B1S0AA-4369df6f55e6e63a477e.png", 800, 600, 370],
+];
+for (const height of [112, 210]) {
+  const widths = controllerSources.map(item => renderScaled("controllers", item, height).visibleSpan);
+  assert(Math.abs(widths[0] - widths[1]) < 1e-9, "Gladiate finishes share the same visible horizontal scale.");
+  assert(Math.abs(widths[4] / widths[0] - 130.3 / 155) < 1e-10, "Tanto Mini remains smaller than a full-size gamepad.");
+  assert(Math.abs(widths[2] / widths[3] - 156 / 299.9) < 1e-10, "The wider Tachi and Talon use physical horizontal body spans, not source padding or device thickness.");
+}
+const rejectedScaled = [], rejectedContext = { drawImage: (...args) => rejectedScaled.push(args) };
+for (const options of [
+  { categoryId: "mice", assetName: micFamilies[0].images[0][0] },
+  { categoryId: "microphones", assetName: "unreviewed.png" },
+  { categoryId: "microphones", assetName: "w11.png" },
+  { categoryId: "microphones", assetName: "w11.png", assetId: "different-owner-original" },
+  { categoryId: "microphones", assetName: micFamilies[0].images[0][0] + ".backup" },
+]) assert.equal(api.drawScaled(rejectedContext, image, box, options), false);
+assert.equal(api.drawScaled(rejectedContext, { naturalWidth: 400, naturalHeight: 300 }, box, { categoryId: "microphones", assetName: micFamilies[0].images[0][0] }), false);
+assert.equal(rejectedScaled.length, 0, "Unknown assets, unrelated categories, wrong owner IDs and mismatched decoded dimensions retain ordinary contain rendering.");
+const validProfile = { bounds: { x: 20, y: 20, width: 60, height: 160 }, body: { x: 22, y: 22, width: 56, height: 156 }, relativeSize: .7, axis: "height" };
+for (const broken of [
+  { ...validProfile, relativeSize: Infinity }, { ...validProfile, relativeSize: 0 },
+  { ...validProfile, axis: "thickness" }, { ...validProfile, body: { ...validProfile.body, y: -1 } },
+  { ...validProfile, bounds: { ...validProfile.bounds, height: 500 } },
+]) assert.equal(api.scaledPlacement({ naturalWidth: 100, naturalHeight: 200 }, box, broken), null);
+assert.equal(api.scaledPlacement(image, { ...box, x: NaN }, validProfile), null);
+assert.equal(api.scaledPlacement(image, { ...box, height: 8 }, validProfile), null);
+const actualScaled = [];
+sandbox.drawContainedImage({ drawImage: (...args) => actualScaled.push(args) }, image, 18, 34, 210, 210, { categoryId: "microphones", assetName: micFamilies[0].images[0][0] });
+sandbox.drawContainedImage({ drawImage: (...args) => actualScaled.push(args) }, { naturalWidth: 462, naturalHeight: 1007 }, 18, 34, 210, 210, { categoryId: "microphones", assetName: "w11.png", assetId: micFamilies[0].images[1][4] });
+assert.equal(actualScaled[0].length, 9);
+assert.equal(actualScaled[1].length, 9, "The actual app hook forwards exact owner identity for legacy color artwork.");
+sandbox.drawContainedImage({ drawImage: (...args) => actualScaled.push(args) }, image, 18, 34, 210, 210, { categoryId: "microphones", assetName: "unreviewed.png" });
+assert.equal(actualScaled[2].length, 5, "New unreviewed files keep the native fallback.");
+console.log("Product image framing checks passed: unchanged headset/mouse/keyboard fitting; microphone color/body scale; controller relative span; source, dimension and owner guards; export parity and immutable pixels/data.");

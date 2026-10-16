@@ -2270,11 +2270,12 @@ function loadImage(src) {
   return record;
 }
 
-function drawContainedImage(context, image, x, y, width, height, { categoryId = "", assetName = "", product = null } = {}) {
+function drawContainedImage(context, image, x, y, width, height, { categoryId = "", assetName = "", assetId = "", product = null } = {}) {
   const framing = globalThis.PortfolioImageFraming;
   if (framing?.usesAudioFraming(categoryId, product) && framing.draw(context, image, { x, y, width, height }, { assetName })) return;
   if (framing?.usesMouseFraming?.(categoryId, assetName) && framing.drawMouse(context, image, { x, y, width, height }, { assetName })) return;
   if (framing?.usesKeyboardFraming?.(categoryId, assetName) && framing.drawKeyboard(context, image, { x, y, width, height }, { assetName })) return;
+  if (framing?.usesScaledFraming?.(categoryId, assetName, assetId) && framing.drawScaled(context, image, { x, y, width, height }, { categoryId, assetName, assetId })) return;
   const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
   const drawWidth = image.naturalWidth * scale;
   const drawHeight = image.naturalHeight * scale;
@@ -2651,7 +2652,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   const naturalAudio = framing?.usesAudioFraming(layout.categoryId) && !framing.usesAudioFraming(layout.categoryId, product);
   const imageHeight = headset ? HEADSET_IMAGE_HEIGHT : naturalAudio ? (layout.detailed ? FULL_SPEC_IMAGE_HEIGHT : IMAGE_SLOT_HEIGHT) : layout.imageSlotHeight;
   const imageInset = headset ? (CARD_WIDTH - HEADSET_IMAGE_WIDTH) / 2 : 18;
-  if (imageRecord.ready) drawContainedImage(context, imageRecord.image, x + imageInset, imageTop + (layout.imageSlotHeight - imageHeight) / 2, CARD_WIDTH - imageInset * 2, imageHeight, { categoryId: layout.categoryId, product, assetName: typeof productImageAssetName === "function" ? productImageAssetName(product) : "" });
+  if (imageRecord.ready) drawContainedImage(context, imageRecord.image, x + imageInset, imageTop + (layout.imageSlotHeight - imageHeight) / 2, CARD_WIDTH - imageInset * 2, imageHeight, { categoryId: layout.categoryId, product, assetName: typeof productImageAssetName === "function" ? productImageAssetName(product) : "", assetId: typeof productDisplayImageAssetId === "function" ? productDisplayImageAssetId(product) : "" });
 
   if (presentation.secondaryLabel) {
     const label = presentation.secondaryLabel.toUpperCase();
