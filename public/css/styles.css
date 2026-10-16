@@ -384,14 +384,14 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 @keyframes discontinued-edge-dissolve { 0%, 100% { opacity: 0; } 25%, 55% { opacity: .8; } }
 .product-card-actions { position: absolute; z-index: 7; inset: 0; pointer-events: none; }
 .product-card-action-row { position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: flex-end; min-height: 34px; pointer-events: none; }
-.product-card-action-group { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 2px; border-radius: 7px; background: #2B2D30; pointer-events: none; }
+.product-card-action-group { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 2px; border-radius: 7px; background: var(--card-action-surface, #2B2D30); pointer-events: none; }
 .product-card-action-row.is-discontinued { opacity: .4; }
 .product-card-actions[hidden], .product-card-action-row[hidden] { display: none; }
-.product-card-action-row button { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; min-width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #8B8E94; pointer-events: auto; transition: background-color 130ms ease, color 130ms ease; }
-.product-card-action-row button + button::before { content: ""; position: absolute; left: -2px; top: 10px; width: 1px; height: 10px; background: #44464A; pointer-events: none; }
-.product-card-action-row button:hover, .product-card-action-row button.is-active, .product-card-action-row button[aria-pressed="true"] { background: var(--color-header); color: var(--color-text); }
-.product-card-action-row button:active { background: #404246; color: var(--color-text); }
-.product-card-action-row button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.product-card-action-row button { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; min-width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--card-action-ink, #8B8E94); pointer-events: auto; transition: background-color 130ms ease, color 130ms ease; }
+.product-card-action-row button + button::before { content: ""; position: absolute; left: -2px; top: 10px; width: 1px; height: 10px; background: var(--card-action-divider, #44464A); pointer-events: none; }
+.product-card-action-row button:hover, .product-card-action-row button.is-active, .product-card-action-row button[aria-pressed="true"] { background: var(--card-action-hover, var(--color-header)); color: var(--card-action-hover-ink, var(--color-text)); }
+.product-card-action-row button:active { background: var(--card-action-active, #404246); color: var(--card-action-hover-ink, var(--color-text)); }
+.product-card-action-row button:focus-visible { outline: 2px solid var(--card-action-focus, var(--color-accent)); outline-offset: 1px; }
 .product-card-action-label { display: none; }
 .product-card-action-icon { display: block; flex: 0 0 15px; width: 15px; height: 15px; }
 .product-card-action-icon > svg { display: block; width: 100%; height: 100%; }
@@ -757,6 +757,27 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .hero-image-badge { position: absolute; top: 6px; right: 6px; color: var(--color-text-secondary); font-size: 7px; line-height: 1; }
 .viewer-info { position: absolute; z-index: 11; left: 0; top: 0; width: var(--viewer-info-width, 500px); height: var(--viewer-info-height, 0px); max-height: var(--viewer-info-height, 0px); min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; opacity: 1; transform: none; transform-origin: left center; clip-path: inset(0 100% 0 0); will-change: clip-path; border: 0; border-radius: 0 var(--corner-panel) var(--corner-panel) 0; background: linear-gradient(var(--viewer-info-band-color, var(--color-surface)), var(--viewer-info-band-color, var(--color-surface))) top / 100% var(--viewer-info-band-height, 0px) no-repeat, var(--product-card-surface, var(--color-surface)); box-shadow: none; }
 .viewer-info[data-card-stage="in-planning"] .product-detail-tabs button[aria-selected="true"], .viewer-info[data-card-stage="in-development"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-stage="in-planning"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-stage="in-development"] .product-detail-tabs button[aria-selected="true"] { color: var(--product-card-accent); background: var(--product-card-footer); }
+/* Scope the complete reading surface, including nested tables, SKU cards and
+   menus. The global workspace palette and merchandise colors stay independent. */
+.viewer-info[data-card-stage="in-planning"], .viewer-info[data-card-stage="in-development"],
+.split-product-card[data-card-stage="in-planning"], .split-product-card[data-card-stage="in-development"],
+.variant-popover[data-card-stage="in-planning"], .variant-popover[data-card-stage="in-development"] {
+  --color-page: color-mix(in srgb, var(--product-card-surface) 84%, #000000);
+  --color-shell: var(--product-card-surface);
+  --color-surface: var(--product-card-surface);
+  --color-header: var(--product-card-footer);
+  --color-surface-raised: var(--product-card-footer);
+  --color-surface-hover: var(--product-card-footer);
+  --color-input: color-mix(in srgb, var(--product-card-footer) 85%, var(--color-text));
+  --color-accent: var(--product-card-accent);
+  --color-on-accent: #1A1B1C;
+  --color-border: var(--product-card-footer);
+  --color-border-strong: color-mix(in srgb, var(--product-card-accent) 40%, var(--product-card-surface));
+  --color-control-border: color-mix(in srgb, var(--product-card-accent) 65%, var(--product-card-surface));
+  --color-emphasis-deep: var(--color-border-strong);
+}
+.viewer-info[data-card-theme="embargo"], .split-product-card[data-card-theme="embargo"], .variant-popover[data-card-theme="embargo"] { --color-accent: var(--product-card-accent); }
+.viewer-info[data-card-theme="embargo"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-theme="embargo"] .product-detail-tabs button[aria-selected="true"] { color: var(--product-card-accent); }
 .viewer-info.is-open { visibility: visible; }
 .viewer-info[data-stacked="true"] { border-radius: 0 0 var(--corner-panel) var(--corner-panel); }
 .viewer-info-outline { position: absolute; z-index: 12; display: none; pointer-events: none; border: 1.25px solid var(--color-selection); border-radius: var(--corner-panel); }

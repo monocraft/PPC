@@ -51,6 +51,20 @@
     const stage = product?.roadmap?.status;
     return Object.hasOwn(productCardStyles, stage) ? stage : "";
   }
+  // Utilities follow the card's hue while remaining quieter than its banner.
+  const neutralActions = { name: "neutral", surface: "#2B2D30", ink: "#8B8E94", hover: colors.header, hoverInk: colors.text, active: "#404246", focus: colors.text, divider: "#44464A" };
+  const productActionStyles = Object.freeze({
+    neutral: Object.freeze(neutralActions),
+    "in-planning": Object.freeze({ name: "in-planning", surface: productCardStyles["in-planning"].footer, ink: "#BFA45F", hover: "#564A31", hoverInk: chartPalette.yellow[40], active: "#625334", focus: chartPalette.yellow[40], divider: "#78663D" }),
+    "in-development": Object.freeze({ name: "in-development", surface: productCardStyles["in-development"].footer, ink: "#65A4CE", hover: "#304D6B", hoverInk: chartPalette.blue[20], active: "#365A7D", focus: chartPalette.blue[40], divider: "#406384" }),
+    embargo: Object.freeze({ name: "embargo", surface: "#33282A", ink: "#AC7E7E", hover: "#403033", hoverInk: colors.alertText, active: "#493537", focus: colors.alertText, divider: "#664345" }),
+    discontinued: Object.freeze({ ...neutralActions, name: "discontinued", ink: "#FFFFFF", hoverInk: "#FFFFFF", focus: "#FFFFFF" }),
+  });
+  function productActionStyle(product, discontinued = false) {
+    if (discontinued) return productActionStyles.discontinued;
+    if (product?.statusType === "embargo" || product?.roadmap?.status === "embargo") return productActionStyles.embargo;
+    return productActionStyles[productCardStage(product)] || productActionStyles.neutral;
+  }
   const chartCssVariables = Object.freeze(Object.fromEntries([
     ...Object.entries(chartPalette).flatMap(([name, tones]) => Object.entries(tones)
       .map(([tone, value]) => [`--chart-${name}-${tone}`, value])),
@@ -111,6 +125,6 @@
   }
 
   root.PortfolioTheme = Object.freeze({ colors, stageColors, accents, lifecycleTones, uiPalette,
-    chartPalette, chartSeries, productCardStyles, productCardStage, cssVariables, get fontFace() { return fontFace; }, get cssFontFamily() { return fontFace === "Arial" ? "Arial, sans-serif" : cssVariables["--font-ui"]; }, alpha, apply, fontsReady });
+    chartPalette, chartSeries, productCardStyles, productCardStage, productActionStyles, productActionStyle, cssVariables, get fontFace() { return fontFace; }, get cssFontFamily() { return fontFace === "Arial" ? "Arial, sans-serif" : cssVariables["--font-ui"]; }, alpha, apply, fontsReady });
   apply();
 })(globalThis);
