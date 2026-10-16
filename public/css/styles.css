@@ -571,6 +571,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .split-status.status-embargo { background: var(--color-embargo); color: var(--color-on-accent); }
 .split-product-hero { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 9px; min-height: 98px; padding: 8px; border-bottom: 1px solid transparent; }
 .split-product-image { display: block; width: 80px; height: 80px; padding: 3px; object-fit: contain; }
+.split-product-card.is-discontinued .split-product-image { opacity: .42; }
 .split-product-title { min-width: 0; }
 .split-product-title h2 { margin: 4px 0 0; font-size: 16px; font-weight: 650; letter-spacing: -.025em; line-height: 1.2; overflow-wrap: anywhere; }
 .split-platform-label { display: inline-block; width: fit-content; margin: 6px 0 0; padding: 3px 6px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--product-highlight, #242527); color: var(--product-label-color, #D5D7DC); font-size: 9px; font-weight: 700; line-height: 1.2; }
