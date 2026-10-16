@@ -254,8 +254,30 @@ const manyHistory = copy(manifest);
 manyHistory.masterSync = { history: Array.from({ length: 1000 }, (_, index) => ({ path: "specs/large/value", before: "x".repeat(16000), after: "y".repeat(16000), index })) };
 const historyResult = save(manyHistory, { name: "History cap" });
 assert.ok(historyResult.manifest.masterSync.history.length < 1000);
-assert.ok(JSON.stringify(historyResult.manifest.masterSync.history).length * 2 < 530000);
+const historyBytes = (records) => records.reduce((total, record) => total + JSON.stringify(record).length * 2, 0);
+assert.ok(historyBytes(historyResult.manifest.masterSync.history) <= 512 * 1024);
 assert.equal(historyResult.manifest.masterSync.history.at(-1).after, "History cap");
+
+const historyContext = { actor: "Fixture editor", team: "Team", reason: "Attribution metadata", now: "2026-10-07T17:00:00Z", requestId: "annotated-history" };
+const historyPatch = change({ name: "Annotated product", codename: "Annotated codename", price: 109.99, tier: "Core", statusLabel: "Checked" });
+const unannotatedHistory = model.mergeChanges(manifest, [historyPatch], historyContext);
+const annotatedHistory = model.mergeChanges(manifest, [historyPatch], { ...historyContext, actorSource: "self-reported" });
+assert.equal(annotatedHistory.history.length, 5);
+assert(annotatedHistory.history.every((record) => record.actorSource === "self-reported"));
+assert.deepEqual(annotatedHistory.manifest.categories, unannotatedHistory.manifest.categories, "attribution does not alter saved product records");
+assert.deepEqual(model.snapshot(annotatedHistory.manifest).products, model.snapshot(unannotatedHistory.manifest).products, "attribution does not alter canonical values or field revisions");
+assert(unannotatedHistory.history.every((record) => !Object.hasOwn(record, "actorSource")), "ordinary model callers keep their existing history shape");
+for (const actorSource of ["verified", "server-verified", { source: "self-reported" }, true]) {
+  assert.deepEqual(model.mergeChanges(manifest, [historyPatch], { ...historyContext, actorSource }), unannotatedHistory, "only the literal self-reported context is supported");
+}
+const annotatedNoOp = model.mergeChanges(annotatedHistory.manifest, [historyPatch], { ...historyContext, actorSource: "self-reported" });
+assert.equal(annotatedNoOp.manifest, annotatedHistory.manifest);
+assert.equal(annotatedNoOp.savedFields, 0);
+assert.deepEqual(annotatedNoOp.history, []);
+const annotatedConflict = model.mergeChanges(launch.manifest, [change({ generalAvailabilityDate: "2026-08-15" })], { ...historyContext, actorSource: "self-reported" });
+assert.equal(annotatedConflict.manifest, launch.manifest);
+assert.equal(annotatedConflict.savedFields, 0);
+assert.deepEqual(annotatedConflict.history, []);
 
 const canonicalJson = (value) => JSON.stringify((function stable(item) { return Array.isArray(item) ? item.map(stable) : item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, stable(item[key])])) : item; })(value));
 assert.equal(model.productVersion(product), createHash("sha256").update(canonicalJson(product)).digest("hex"), "the full-record version must be a standard SHA-256 fingerprint");
@@ -325,6 +347,18 @@ assert.equal(deletedSnapshot.tombstones[0].productId, "p1");
 assert.ok(deletedSnapshot.tombstones[0].revisions["@product"] > 0);
 assert.deepEqual(deleted.manifest.masterSync.products.p1.archivedProduct, product, "private deletion metadata keeps the complete stored record for explicit restoration");
 assert.equal(Object.hasOwn(deletedSnapshot.tombstones[0], "archivedProduct"), false, "public snapshots must not return the archived private product record");
+const largeHistoryValues = { ...base, name: "Large history fixture", specs: Array.from({ length: 20 }, (_, index) => ({ id: `large-${index}`, label: "Large value", value: "x".repeat(16000) })), partSkus: [], variantGroups: [] };
+const largeCreated = model.mergeChanges(manifest, [createProduct("large-history-product", largeHistoryValues)], { ...historyContext, requestId: "large-history-create", actorSource: "self-reported" });
+const largeEntry = model.snapshot(largeCreated.manifest).products.find((entry) => entry.productId === "large-history-product");
+const largeDeleted = model.mergeChanges(largeCreated.manifest, [deleteProduct(largeEntry)], { ...historyContext, requestId: "large-history-delete", actorSource: "self-reported" });
+for (const result of [largeCreated, largeDeleted]) {
+  assert(historyBytes(result.history) > 512 * 1024, "the fixture requires a copied, truncated lifecycle record");
+  assert.equal(result.history[0].actorSource, "self-reported");
+  const retained = result.manifest.masterSync.history.at(-1);
+  assert.equal(retained.valueTruncated, true);
+  assert.equal(retained.actorSource, "self-reported", "oversized create/delete retained copies preserve attribution");
+  assert(historyBytes(result.manifest.masterSync.history) <= 512 * 1024);
+}
 assert.equal(model.mergeChanges(deleted.manifest, [deleteProduct()], { requestId: "other-delete" }).savedProducts, 0, "concurrent deletions converge once the product is removed");
 const editAfterDelete = save(deleted.manifest, { name: "Keep my name" });
 assert.equal(editAfterDelete.conflicts[0].reason, "product-removed");

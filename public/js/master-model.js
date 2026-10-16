@@ -1311,6 +1311,8 @@
       history.push({ productId: related.productId, productName: related.productName, kind: "update", path: field, label: LABELS[field], before, after, beforeExists: true, afterExists: true, revision: metadata.revision, at: now, actor: String(context.actor || "Team member").slice(0, 160), requestId: String(context.requestId || "").slice(0, 180) });
       savedFields += 1;
     }
+    // Include gateway attribution in the retained size and any truncated copy.
+    if (context.actorSource === "self-reported") for (const record of history) record.actorSource = "self-reported";
     metadata.history = boundedHistory([...metadata.history, ...history]);
     metadata.packageInfoRevision = metadata.revision;
     metadata.packageInfoRequestId = String(context.requestId || "").slice(0, 180);

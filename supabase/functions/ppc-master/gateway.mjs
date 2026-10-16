@@ -254,7 +254,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       let merged;
       try { merged = model.mergeChanges(state.manifest, body.changes, {
         actor: displayName || `Editor ${sessionId.replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase()}`,
-        team: 'Team', reason: body.reason || '', requestId: body.requestId, now: now(),
+        actorSource: 'self-reported', team: 'Team', reason: body.reason || '', requestId: body.requestId, now: now(),
       }); }
       catch { throw problem(400, 'INVALID_CHANGE', 'These changes could not be saved. Check the product details and try again.'); }
       if (merged.conflicts.length) {
@@ -266,9 +266,6 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
         return response;
       }
       const changed = merged.savedFields > 0;
-      if (changed) {
-        for (const entry of merged.history) entry.actorSource = 'self-reported';
-      }
       if (encodedSize(merged.manifest) > MAX_MANIFEST_BYTES) throw problem(413, 'MASTER_TOO_LARGE', 'The updated master exceeds its data limit.');
       if (changed) requireReadableManifest(merged.manifest);
       const committed = await database('commit', {
