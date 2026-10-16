@@ -106,6 +106,68 @@
     return true;
   }
 
+  // Product-height references guide assembled microphone art; standless models
+  // use reviewed visual ratios. These presentation ratios are not saved specs.
+  // Controller ratios use horizontal body span, never thickness or cable length.
+  // Owner originals without a content filename also require their exact asset ID.
+  const scaledProfiles = new Map([
+    ["microphones:4P5P8AA-17a2f0cc9d64fa9d9480.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":289,"y":52,"width":222,"height":501},"body":{"x":291,"y":54,"width":218,"height":497},"axis":"height","relativeSize":0.6492537313432836}],
+    ["microphones:w11.png",{"imageWidth":462,"imageHeight":1007,"bounds":{"x":20,"y":32,"width":423,"height":965},"body":{"x":22,"y":34,"width":419,"height":961},"axis":"height","relativeSize":0.6492537313432836,"assetIds":["pkg-1d38f631-e8fa-4697-9a86-d0b590239b1b"]}],
+    ["microphones:AR0A0AA-64d862154db457578c84.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":313,"y":55,"width":174,"height":489},"body":{"x":315,"y":57,"width":170,"height":485},"axis":"height","relativeSize":0.56}],
+    ["microphones:w22.png",{"imageWidth":151,"imageHeight":434,"bounds":{"x":0,"y":0,"width":151,"height":434},"body":{"x":0,"y":0,"width":151,"height":434},"axis":"height","relativeSize":0.56,"assetIds":["pkg-33404cfd-8785-42f4-a2cc-31604fd8fb75"]}],
+    ["microphones:C96GRAA-79d798443c31b71ade32.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":309,"y":56,"width":182,"height":488},"body":{"x":311,"y":58,"width":178,"height":484},"axis":"height","relativeSize":0.6}],
+    ["microphones:4P5E2AA-ec5aaff715eb4041b0f2.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":285,"y":54,"width":230,"height":493},"body":{"x":287,"y":56,"width":226,"height":489},"axis":"height","relativeSize":0.753731343283582}],
+    ["microphones:872V1AA-ae161b7b369993443b11.png",{"imageWidth":591,"imageHeight":1395,"bounds":{"x":14,"y":19,"width":572,"height":1368},"body":{"x":16,"y":21,"width":568,"height":1364},"axis":"height","relativeSize":1}],
+    ["microphones:AN1D9AA-d77bf028282ab94ac326.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":301,"y":66,"width":197,"height":468},"body":{"x":303,"y":68,"width":193,"height":464},"axis":"height","relativeSize":1}],
+    ["microphones:w6.png",{"imageWidth":620,"imageHeight":1505,"bounds":{"x":5,"y":29,"width":596,"height":1461},"body":{"x":7,"y":31,"width":592,"height":1457},"axis":"height","relativeSize":0.9328358208955224,"assetIds":["pkg-bd34077f-b8e7-4a80-aa0e-1f0d9afd4ffc","pkg-3d57ec7d-e09b-4d73-8608-0969726a8b46"]}],
+    ["microphones:w66.png",{"imageWidth":628,"imageHeight":1523,"bounds":{"x":15,"y":18,"width":598,"height":1469},"body":{"x":17,"y":20,"width":594,"height":1465},"axis":"height","relativeSize":0.9328358208955224,"assetIds":["pkg-019125dd-984b-44ca-abaa-07ad9917a5fd"]}],
+    ["microphones:4P5P7AA-5e0d6e2e781cb9d9a860.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":295,"y":43,"width":210,"height":510},"body":{"x":297,"y":45,"width":206,"height":506},"axis":"height","relativeSize":0.9328358208955224}],
+    ["microphones:9A273AA-cb2beb0ad82b56d04496.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":303,"y":54,"width":194,"height":492},"body":{"x":305,"y":56,"width":190,"height":488},"axis":"height","relativeSize":1}],
+    ["microphones:B2CM1AA-488f089962197e0c09d0.png",{"imageWidth":454,"imageHeight":1036,"bounds":{"x":0,"y":9,"width":426,"height":963},"body":{"x":0,"y":11,"width":424,"height":959},"axis":"height","relativeSize":0.84}],
+    ["controllers:6L366AA-2db451605aeda694ba38.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":179,"y":76,"width":442,"height":396},"body":{"x":181,"y":78,"width":438,"height":392},"axis":"width","relativeSize":0.5168389463154385}],
+    ["controllers:7D6H2AA-ed1608ead2e4e59d3caa.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":179,"y":72,"width":443,"height":400},"body":{"x":181,"y":74,"width":439,"height":396},"axis":"width","relativeSize":0.5168389463154385}],
+    ["controllers:B11DBAA-e3c7bad57f48a6ec48fb.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":175,"y":136,"width":450,"height":328},"body":{"x":177,"y":138,"width":446,"height":324},"axis":"width","relativeSize":0.5201733911303769}],
+    ["controllers:B11D9AA-0596eb465a771dab0862.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":154,"y":93,"width":491,"height":371},"body":{"x":156,"y":95,"width":487,"height":367},"axis":"width","relativeSize":1}],
+    ["controllers:8B1S0AA-4369df6f55e6e63a477e.png",{"imageWidth":800,"imageHeight":600,"bounds":{"x":213,"y":92,"width":374,"height":348},"body":{"x":215,"y":94,"width":370,"height":344},"axis":"width","relativeSize":0.4344781593864622}],
+  ]);
+
+  function scaledProfile(categoryId, assetName, assetId) {
+    const profile = scaledProfiles.get(`${categoryId}:${assetName}`);
+    return profile && (!profile.assetIds || profile.assetIds.includes(assetId)) ? profile : null;
+  }
+
+  const usesScaledFraming = (categoryId, assetName = "", assetId = "") => Boolean(scaledProfile(categoryId, assetName, assetId));
+
+  function scaledPlacement(image, box, profile) {
+    const imageWidth = image?.naturalWidth, imageHeight = image?.naturalHeight;
+    if (!(imageWidth > 0 && imageHeight > 0 && box?.width > 8 && box?.height > 8 && profile)) return null;
+    const { bounds: source, body, axis, relativeSize } = profile;
+    if (!source || !body || !["height", "width"].includes(axis) || !(relativeSize > 0 && relativeSize <= 1)) return null;
+    const values = [source.x, source.y, source.width, source.height, body.x, body.y, body.width, body.height, box.x, box.y, box.width, box.height, relativeSize];
+    if (!values.every(Number.isFinite) || source.x < 0 || source.y < 0 || source.width <= 0 || source.height <= 0 || source.x + source.width > imageWidth || source.y + source.height > imageHeight || body.x < source.x || body.y < source.y || body.width <= 0 || body.height <= 0 || body.x + body.width > source.x + source.width || body.y + body.height > source.y + source.height) return null;
+    // One common reference span per category keeps model ratios independent of
+    // image padding and color. The wider Tachi is the controller reference.
+    const referenceSpan = axis === "height" ? Math.min(202, box.height - 8, (box.width - 8) * 2)
+      : Math.min(202, box.width - 8, (box.height - 8) * 1.30);
+    const scale = referenceSpan * relativeSize / body[axis];
+    const width = source.width * scale, height = source.height * scale;
+    const x = box.x + box.width / 2 - (body.x - source.x + body.width / 2) * scale;
+    const y = axis === "height" ? box.y + box.height - 4 - (body.y - source.y + body.height) * scale
+      : box.y + box.height / 2 - (body.y - source.y + body.height / 2) * scale;
+    if (x < box.x || y < box.y || x + width > box.x + box.width || y + height > box.y + box.height) return null;
+    return { source, x, y, width, height };
+  }
+
+  function drawScaled(context, image, box, { categoryId = "", assetName = "", assetId = "" } = {}) {
+    const profile = scaledProfile(categoryId, assetName, assetId);
+    if (!profile || image?.naturalWidth !== profile.imageWidth || image?.naturalHeight !== profile.imageHeight) return false;
+    const frame = scaledPlacement(image, box, profile);
+    if (!frame) return false;
+    const s = frame.source;
+    context.drawImage(image, s.x, s.y, s.width, s.height, frame.x, frame.y, frame.width, frame.height);
+    return true;
+  }
+
   // Measure transparent padding once per decoded image. Pixels and saved assets
   // remain unchanged; the result is only a presentation source rectangle.
   function boundsFromPixels(data, width, height) {
@@ -183,5 +245,5 @@
     return true;
   }
 
-  root.PortfolioImageFraming = Object.freeze({ usesAudioFraming, usesMouseFraming, usesKeyboardFraming, boundsFromPixels, measure, placement, keyboardPlacement, draw, drawMouse, drawKeyboard });
+  root.PortfolioImageFraming = Object.freeze({ usesAudioFraming, usesMouseFraming, usesKeyboardFraming, usesScaledFraming, boundsFromPixels, measure, placement, keyboardPlacement, scaledPlacement, draw, drawMouse, drawKeyboard, drawScaled });
 })(globalThis);
