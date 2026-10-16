@@ -49,9 +49,14 @@
 .hashout-scope-count { margin-left: auto; color: var(--color-text-muted); white-space: nowrap; font-size: 11px; }
 .hashout-back-view { min-height: 28px; padding: 4px 8px; border-radius: 4px; background: var(--color-header); font-size: 10px; white-space: nowrap; }
 .hashout-back-view[hidden] { display: none; }
-.hashout-stage { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.hashout-stage { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.hashout-stage::-webkit-scrollbar { width: 0; }
+.hashout-stage-viewport { position: sticky; top: 0; width: 100%; min-height: 0; overflow: hidden; }
+.hashout-stage-viewport > .portfolio-today-marker { z-index: 3; }
+.hashout-scroll-space { width: 1px; pointer-events: none; }
+.hashout-vertical-navigator { --roadmap-vertical-top: 0px; --roadmap-vertical-bottom: 0px; position: absolute; z-index: 3; top: var(--hashout-header-height, 46px); right: 2px; bottom: 8px; width: 24px; }
 .hashout-navigator { flex: 0 0 auto; margin-left: var(--hashout-plot-left, 166px); }
-.hashout-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.hashout-canvas { display: block; width: 100%; height: 100%; touch-action: pan-y; cursor: grab; }
 .hashout-canvas:focus-visible { outline-offset: -3px; }
 .hashout-lane-hover-clip { position: absolute; z-index: 2; inset: var(--hashout-header-height, 46px) 0 0; overflow: hidden; pointer-events: none; contain: layout paint; }
 .hashout-lane-hover-frame { position: absolute; inset: 0 1px auto; border-radius: 3px; background: #bbbcc009; box-shadow: inset 0 1px 0 #bbbcc018, inset 0 -1px 0 #bbbcc018; opacity: 0; pointer-events: none; transition: transform 160ms cubic-bezier(.22, 1, .36, 1), height 160ms cubic-bezier(.22, 1, .36, 1), opacity 120ms ease; }

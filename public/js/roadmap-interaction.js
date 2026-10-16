@@ -12,6 +12,18 @@
   };
   const familyOf = (product) => product?.roadmap?.family || product?.family || "Other";
 
+  function stickyLabelBounds(bar, { left, right, padding = 8 } = {}) {
+    if (!bar || ![bar.x, bar.width, left, right].every(Number.isFinite) || bar.width <= 0 || right <= left) return null;
+    const end = bar.x + bar.width;
+    if (!Number.isFinite(end)) return null;
+    const inset = Number.isFinite(padding) ? Math.max(0, padding) : 8;
+    // A shared viewport edge keeps neighboring names aligned during panning.
+    // The label remains inside its own visible bar and never flips sides.
+    const x = Math.max(bar.x, left) + inset;
+    const width = Math.min(end, right) - inset - x;
+    return width >= 20 ? { x, width } : null;
+  }
+
   function labelLines(value, width, measure, maxLines = 2) {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     if (!text || !(width > 0) || typeof measure !== "function") return [];
@@ -132,5 +144,5 @@
     throw new RangeError(`Unknown roadmap drag mode: ${mode}`);
   }
 
-  root.RoadmapInteraction = Object.freeze({ sortProducts, dropTarget, reorderProducts, draftDates, labelLines });
+  root.RoadmapInteraction = Object.freeze({ sortProducts, dropTarget, reorderProducts, draftDates, labelLines, stickyLabelBounds });
 })(globalThis);

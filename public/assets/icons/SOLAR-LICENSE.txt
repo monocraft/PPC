@@ -8,3 +8,6 @@ https://creativecommons.org/licenses/by/4.0/
 
 Retrieved through the Iconify API. Original vector paths are unchanged.
 The application renders the icons as local CSS masks using its UI colors.
+
+Roadmap vertical scale: align-vertical-spacing-linear from the same Solar set.
+Local file: roadmap-vertical-scale.svg. Original vector paths are unchanged.

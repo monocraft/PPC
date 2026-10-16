@@ -87,3 +87,33 @@ assert.deepEqual(interaction.labelLines("Cloud Jet Wireless",117,measureLabel), 
 assert.deepEqual(interaction.labelLines("Cloud Jet Wireless Headset",117,measureLabel), ["Cloud Jet Wireless", "Headset"]);
 assert.deepEqual(interaction.labelLines("",117,measureLabel), []);
 assert.deepEqual(interaction.labelLines("Cloud",0,measureLabel), []);
+
+const stickyView = Object.freeze({ left: 100, right: 500 });
+const visibleBar = Object.freeze({ x: 160, width: 200, productId: "unchanged", y: 72 });
+assert.deepEqual(interaction.stickyLabelBounds(visibleBar, stickyView), { x: 168, width: 184 }, "a fully visible bar keeps its name at the bar's leading inset");
+assert.deepEqual(visibleBar, { x: 160, width: 200, productId: "unchanged", y: 72 }, "label layout does not alter product or vertical geometry");
+assert.deepEqual(stickyView, { left: 100, right: 500 }, "label layout leaves viewport geometry unchanged");
+
+for (const x of [80, 30, -100]) {
+  const bounds = interaction.stickyLabelBounds({ x, width: 700 }, stickyView);
+  assert.equal(bounds.x, 108, "a partially visible bar keeps the same viewport-aligned name while panning");
+  assert.equal(bounds.x + bounds.width, 492, "names stay inside the visible right edge without side flips");
+}
+const neighborNames = [{ x: 70, width: 230 }, { x: 20, width: 500 }, { x: -120, width: 800 }]
+  .map(bar => interaction.stickyLabelBounds(bar, stickyView));
+assert.deepEqual(neighborNames.map(bounds => bounds.x), [108, 108, 108], "neighboring bars entering from the left share one name alignment");
+for (const left of [100, 160, 220]) {
+  const bounds = interaction.stickyLabelBounds({ x: 50, width: 900 }, { left, right: left + 400 });
+  assert.equal(bounds.x - left, 8, "world-coordinate panning keeps the label at a fixed screen inset");
+}
+assert.deepEqual(interaction.stickyLabelBounds({ x: 440, width: 160 }, stickyView), { x: 448, width: 44 }, "right-clipped bars bound label width without shifting its left anchor");
+assert.deepEqual(interaction.stickyLabelBounds({ x: 464, width: 160 }, stickyView), { x: 472, width: 20 }, "the minimum readable label width is included");
+assert.equal(interaction.stickyLabelBounds({ x: 465, width: 160 }, stickyView), null, "a narrow visible fragment leaves no detached name");
+assert.equal(interaction.stickyLabelBounds({ x: 200, width: 35 }, stickyView), null);
+assert.deepEqual(interaction.stickyLabelBounds({ x: 200, width: 20 }, { ...stickyView, padding: 0 }), { x: 200, width: 20 }, "callers may choose a different inset for narrow marks");
+for (const bar of [{ x: 20, width: 70 }, { x: 500, width: 100 }, { x: 600, width: 100 }, { x: 100, width: 0 }, { x: 100, width: -10 }, { x: NaN, width: 100 }, { x: 100, width: Infinity }, null]) {
+  assert.equal(interaction.stickyLabelBounds(bar, stickyView), null, "outside or invalid bars cannot leave floating names");
+}
+assert.equal(interaction.stickyLabelBounds(visibleBar, { left: 500, right: 100 }), null);
+assert.equal(interaction.stickyLabelBounds(visibleBar, { left: 100, right: Infinity }), null);
+console.log("Sticky label checks passed: deterministic leading-edge names, neighboring alignment, pan stability, clipping and immutable geometry.");
