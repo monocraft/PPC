@@ -95,8 +95,19 @@
     const ring = node("section", "hashout-ring-overlay"); ring.hidden = true; ring.tabIndex = -1; ring.setAttribute("role", "group"); ring.setAttribute("aria-label", "Expanded roadmap products");
     const live = node("span", "visually-hidden");
     live.setAttribute("role", "status");
+    const navigator = node("nav", "board-navigator hashout-navigator hidden");
+    navigator.id = `${host.id || "hashout"}Navigator`;
+    navigator.setAttribute("aria-label", "Hashout horizontal navigation");
+    const navLeft = node("button", "nav-step", "‹"), navRight = node("button", "nav-step", "›");
+    navLeft.type = navRight.type = "button";
+    navLeft.setAttribute("aria-label", "Scroll Hashout left"); navRight.setAttribute("aria-label", "Scroll Hashout right");
+    const navRange = node("input", "nav-range");
+    navRange.type = "range"; navRange.min = navRange.max = navRange.value = "0";
+    navRange.setAttribute("aria-label", "Hashout horizontal position");
+    const navPosition = node("span", "nav-position", "Scroll");
+    navigator.append(navLeft, navRange, navRight, navPosition);
     stage.append(canvas, laneHoverClip, selectionGuide, selectionEffects, rail, empty, card, ring);
-    shell.append(toolbar, stage, live);
+    shell.append(toolbar, stage, navigator, live);
     host.append(shell);
 
     let scope = options.getScope?.() ?? null;
@@ -110,6 +121,7 @@
     let labelSignature = "", capsuleExpanded = false;
     let hoveredCategoryId = null, lanePointer = null, laneHoverFrame = 0;
     let ringState = null, ringCloseTimer = 0, previousViewport = null;
+    let navigatorProjection = [], navigatorProjectionEntries = null, navigatorProjectionSignature = "";
     let coarseInput = Boolean(root.matchMedia?.("(pointer: coarse)")?.matches), revealGeneration = 0, revealTimers = [], revealFrames = [];
     const listen = (element, event, handler, config = {}) => element.addEventListener(event, handler, { ...config, signal: abort.signal });
     const theme = () => root.PortfolioTheme?.colors || { page: "#1A1B1C", surface: "#242527", header: "#333538", input: "#4D5054", text: "#D5D7DC", label: "#BBBCC0", alert: "#FF2525", borderStrong: "#676A70" };
@@ -207,6 +219,52 @@
         else { animationFrame = 0; viewport = target; notifyViewport(); }
       };
       animationFrame = requestAnimationFrame(tick);
+    }
+
+    function navigatorState() {
+      const visible = Math.max(1, width - leftWidth), plotHeight = Math.max(1, height - headerHeight());
+      if (!horizon || !viewport) return { total: visible, visible, left: 0, height: plotHeight, scale: 1, minScale: 1, maxScale: 1, items: [] };
+      const scale = horizon.count / (viewport.end - viewport.start);
+      const signature = JSON.stringify([horizon, visible, plotHeight, layout?.lanes.map((lane) => [lane.categoryId, lane.y, lane.height]), selectedKey]);
+      if (navigatorProjectionEntries !== entries || navigatorProjectionSignature !== signature) {
+        navigatorProjectionEntries = entries; navigatorProjectionSignature = signature;
+        const lanes = new Map((layout?.lanes || []).map((lane) => [lane.categoryId, lane]));
+        navigatorProjection = entries.flatMap((entry) => {
+          const lane = lanes.get(entry.categoryId);
+          const shape = lane && root.PortfolioFfsRoadmap.geometry(entry.product, horizon, 0, { leftWidth: 0, monthWidth: visible / horizon.count, rowHeight: 20 });
+          if (!shape) return [];
+          return [{ x: shape.x, width: shape.width, y: lane.y - headerHeight() + lane.height * .35, height: Math.max(2, lane.height * .3), selected: entry.key === selectedKey }];
+        });
+      }
+      return { total: visible * scale, visible, left: (viewport.start - horizon.start) * visible / (viewport.end - viewport.start), height: plotHeight,
+        scale, minScale: 1, maxScale: horizon.count / Math.min(Math.max(3, horizon.count / 20), horizon.count),
+        items: navigatorProjection.map((item) => ({ ...item, x: item.x * scale, width: item.width * scale })) };
+    }
+
+    function panNavigator(left) {
+      if (!horizon || !viewport) return;
+      const span = viewport.end - viewport.start, start = horizon.start + left / Math.max(1, width - leftWidth) * span;
+      closeCard(); closeRing(); setViewport({ start, end: start + span });
+    }
+
+    function resizeNavigator({ scale, edge, anchor }) {
+      if (!horizon || !viewport) return;
+      const fixed = horizon.start + anchor / Math.max(1, width - leftWidth) * horizon.count, span = horizon.count / scale;
+      closeCard(); closeRing();
+      setViewport(edge === "left" ? { start: fixed - span, end: fixed } : { start: fixed, end: fixed + span });
+    }
+
+    const overview = root.PortfolioNavigator?.create(navigator, { getState: navigatorState, onPan: panNavigator, onResize: resizeNavigator });
+    listen(navRange, "input", () => panNavigator(Number(navRange.value)));
+    listen(navLeft, "click", () => { const state = navigatorState(); panNavigator(Math.max(0, state.left - state.visible * .85)); });
+    listen(navRight, "click", () => { const state = navigatorState(); panNavigator(Math.min(state.total - state.visible, state.left + state.visible * .85)); });
+
+    function updateNavigator() {
+      const state = navigatorState(), max = Math.max(0, state.total - state.visible);
+      navRange.max = String(max); navRange.value = String(clamp(state.left, 0, max));
+      navLeft.disabled = state.left <= .5; navRight.disabled = state.left >= max - .5;
+      overview?.update();
+      navigator.classList.toggle("hidden", !layout?.lanes.length || !state.items.length && max <= 2);
     }
 
     function chooseScope(ids) {
@@ -626,6 +684,7 @@
       canvas.dataset.viewportStart = String(viewport.start); canvas.dataset.viewportEnd = String(viewport.end);
       canvas.dataset.labelMode = labelMode; canvas.dataset.labelCount = String(labelLayout.labels.length);
       updateSelectionWave(); syncLaneHover();
+      updateNavigator();
       empty.hidden = layout.lanes.length > 0;
       empty.textContent = allCategories.length ? "Choose categories to map your products." : "Add products to build your Hashout roadmap.";
       if (!card.hidden && cardAnchor) positionCard();
@@ -1191,7 +1250,7 @@
           counts: layout?.counts || {}, entries, layout, labelMode, labelLayout, windowsVisible, seasonalWindows, seasonalBands, windowMatches: Object.fromEntries(entries.map((entry) => [entry.key, targetMatches(entry.period)])), hoveredCategoryId, sourcePulseKey: selectionWave.hidden ? null : selectionWave.dataset.productKey, sourceGuideKey: selectionGuide.hidden ? null : selectionGuide.dataset.productKey, focusKeys: focused ? [...focused] : null, previousViewport: previousViewport ? { ...previousViewport } : null,
           ring: ringState ? { ...ringState.geometry, open: true, page: ringState.page, pageSize: ringState.pageSize, radius: ringState.radius, activeKey: ringState.activeKey, selectedKey: ringState.selectedKey, animationDuration: ringState.animationDuration, staggerMs: RING_STAGGER_MS, motionMs: RING_MOTION_MS, memberKeys: ringState.entries.map((entry) => entry.key) } : { open: false } };
       },
-      destroy() { destroyed = true; clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); abort.abort(); shell.remove(); },
+      destroy() { destroyed = true; clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); overview?.destroy(); abort.abort(); shell.remove(); },
     });
   }
 
