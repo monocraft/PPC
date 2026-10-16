@@ -11,8 +11,9 @@ const functionNames = [
   "openViewerInfo", "closeViewerInfo", "visibleProducts", "visibleRoadmapProducts", "productDetailsModel",
   "normalizeAscmProductMetadata", "normalizeAscmRecord", "normalizeProductInfoDate", "formatProductInfoDate",
   "normalizePartSku", "productPartSkus", "productVariantGroups", "productTier", "monthIndex", "roadmapLabel", "splitRoadmapStatusLabel",
+  "displayColorVariant", "standardColorByKey", "inferStandardColor", "parseHexColor",
 ];
-const functions = functionNames.map((name) => {
+const functions = appSource.slice(appSource.indexOf("const STANDARD_PRODUCT_COLORS"), appSource.indexOf("const COMMON_KEYBOARD_LAYOUTS")) + functionNames.map((name) => {
   const definition = appSource.match(new RegExp(`^function ${name}\\([^]*?^\\}`, "m"));
   assert.ok(definition, `workspace integration must exercise the actual ${name} function`);
   return definition[0];

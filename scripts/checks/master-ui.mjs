@@ -12,7 +12,7 @@ const byClass = (node, name) => all(node).filter((entry) => String(entry.classNa
 const byTag = (node, tag) => all(node).filter((entry) => entry.tagName === tag.toUpperCase());
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
 
-function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null, mode = "service" } = {}) {
+function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null, mode = "service", describeChanges = model.describeChanges } = {}) {
   const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, adoptions: 0, discards: [], undos: [], beforeSaves: 0, packageOpens: [] };
   const notificationEvents = [], messageStore = globalThis.PortfolioNotifications.createStore({ acknowledgmentStorage });
   const syncNotices = () => { notices.clear(); for (const item of messageStore.getState().items) notices.set(item.id, item); };
@@ -64,7 +64,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
     async undoDiscard(undoId) { calls.undos.push(undoId); state.pending.push(...discardedPending); discardedPending = []; return true; },
   };
   const sandbox = { document, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
-    PortfolioMasterClient: { createSession: () => session }, PortfolioMasterModel: model,
+    PortfolioMasterClient: { createSession: () => session }, PortfolioMasterModel: { ...model, describeChanges },
     PortfolioPackageUI: { open: mode => calls.packageOpens.push(mode) },
     PortfolioProductMergeAdapter: { getImageSource: (id) => id === "local-image" ? "blob:local-preview" : id === "latest-image" ? "blob:latest-preview" : "" },
     PortfolioNotifications: { publish(notice) { const result = messageStore.publish(notice); syncNotices(); return result; }, resolve: messageStore.resolve, show() {} },
@@ -134,6 +134,41 @@ byTag(cancelled.dialog, "button").find((button) => button.textContent === "Keep 
 await cancelledFlow;
 assert.equal(cancelled.calls.saves.length, 0); assert.equal(cancelled.state.pending.length, 1);
 assert.equal(cancelled.calls.disconnects, 0, "keeping the draft never clears access");
+
+for (const failurePoint of ["before-save", "review-details", "review-dialog"]) {
+  let failDetails = failurePoint === "review-details";
+  const prepared = createUi(Array.from({ length: 103 }, (_, index) => ({ ...structuredClone(edited), productId: `preparation-${index}`, productName: `Preparation ${index}` })), {
+    describeChanges(...args) {
+      if (failDetails) throw new Error("Private review failure at https://private.example/?key=secret");
+      return model.describeChanges(...args);
+    },
+  });
+  await flush();
+  const before = structuredClone(prepared.state.pending), beforeSave = prepared.adapter.beforeSave, showModal = prepared.dialog.showModal;
+  if (failurePoint === "before-save") prepared.adapter.beforeSave = () => { throw new Error("Private layout failure at https://private.example/?key=secret"); };
+  if (failurePoint === "review-dialog") prepared.dialog.showModal = () => { throw new Error("Private dialog failure at https://private.example/?key=secret"); };
+  await assert.doesNotReject(prepared.api.save(), `${failurePoint} is handled by the public save action`);
+  assert.deepEqual(prepared.state.pending, before, `${failurePoint} keeps all 103 pending product drafts`);
+  assert.equal(prepared.calls.saves.length, 0); assert.equal(prepared.calls.connects.length, 0);
+  assert.equal(prepared.calls.discards.length, 0); assert.equal(prepared.calls.adoptions, 0); assert.equal(prepared.calls.disconnects, 0);
+  assert.equal(prepared.dialog.open, false, "a failed review is closed and its resolver is retired");
+  assert.equal(prepared.saveButton.textContent, "Save changes (103)");
+  assert.equal(prepared.saveButton.disabled, false, "preparation failure never strands the save action in its busy state");
+  const notice = prepared.notices.get("master-sync-error");
+  assert.equal(notice.title, "Changes still need saving"); assert.equal(notice.dismissible, false);
+  assert.match(notice.message, /Could not save.*changes are safe/);
+  assert.doesNotMatch(notice.message, /private|secret|layout failure|review failure|dialog failure/i);
+  assert.equal(notice.actions[0].label, "Review and try again");
+  prepared.adapter.beforeSave = beforeSave; prepared.dialog.showModal = showModal; failDetails = false;
+  const retryCancelled = notice.actions[0].onClick();
+  assert.equal(prepared.dialog.open, true, "a preparation error leaves the next review usable");
+  byTag(prepared.dialog, "button").find(button => button.textContent === "Keep editing").dispatchEvent({ type: "click" }); await retryCancelled;
+  assert.deepEqual(prepared.state.pending, before); assert.equal(prepared.calls.saves.length, 0);
+  assert.equal(prepared.notices.has("master-sync-error"), true, "cancelling a retry preserves the unsaved failure notice");
+  const retrySaved = prepared.notices.get("master-sync-error").actions[0].onClick(); prepared.submit(); await retrySaved;
+  assert.equal(prepared.calls.saves.length, 1); assert.equal(prepared.state.pending.length, 0);
+  assert.equal(prepared.notices.has("master-sync-error"), false, "a later accepted save clears the preparation failure");
+}
 
 const failed = createUi([edited]); await flush();
 failed.setSave(async () => { throw new Error("GitHub failed to publish public/data/master_ppc.pkg at https://private.example/?key=secret"); });

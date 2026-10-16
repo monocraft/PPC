@@ -569,9 +569,10 @@ const appModelSandbox = {
   activeCategoryRecord: () => ({ name: "PC Gaming Audio" }),
   categoryDefinition: () => ({ name: "PC Gaming Audio" }),
 };
-Object.assign(appModelSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
+Object.assign(appModelSandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace, UI_PALETTE: globalThis.PortfolioTheme.uiPalette });
 vm.createContext(appModelSandbox);
-const adapterFunctions = ["productDetailsModel", "normalizeAscmProductMetadata", "normalizeAscmRecord", "normalizeProductInfoDate", "formatProductInfoDate", "normalizePartSku", "productPartSkus", "productVariantGroups", "productTier", "monthIndex", "roadmapLabel", "splitRoadmapStatusLabel"];
+vm.runInContext(appSource.slice(appSource.indexOf("const STANDARD_PRODUCT_COLORS"), appSource.indexOf("const COMMON_KEYBOARD_LAYOUTS")), appModelSandbox);
+const adapterFunctions = ["productDetailsModel", "normalizeAscmProductMetadata", "normalizeAscmRecord", "normalizeProductInfoDate", "formatProductInfoDate", "normalizePartSku", "productPartSkus", "productVariantGroups", "displayColorVariant", "standardColorByKey", "inferStandardColor", "parseHexColor", "normalizeHexColor", "productTier", "monthIndex", "roadmapLabel", "splitRoadmapStatusLabel"];
 for (const name of adapterFunctions) {
   const definition = appSource.match(new RegExp(`^function ${name}\\([^]*?^\\}`, "m"));
   assert.ok(definition, `date/mapping integration requires the actual ${name} adapter`);

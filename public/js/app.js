@@ -746,27 +746,36 @@ function defaultVariantGroupForDefinition(definition = categoryDefinition()) {
   return variantGroup("color", definition.defaultVariantLabel || "COLOR SKU", [colorVariant("BK", "black")]);
 }
 
-function normalizeColorVariant(item) {
+// Fallback swatches are a reading projection. Loading a named color must never
+// turn its inferred preview into a newly edited shared product fact.
+function displayColorVariant(item) {
   const nameParts = String(item.colorName || "").split(/\s*(?:\/|\+|&|,)\s*/).filter(Boolean);
   const codeParts = String(item.code || "").split(/\s*(?:\/|\+|&|,)\s*/).filter(Boolean);
   const primaryName = nameParts[0] || codeParts[0] || item.colorName;
   const secondaryName = item.colorName2 || nameParts[1] || codeParts[1] || "";
   const primaryPreset = standardColorByKey(item.colorKey) || inferStandardColor(primaryName, item.colorHex);
   const secondaryPreset = standardColorByKey(item.colorKey2) || inferStandardColor(secondaryName, item.colorHex2);
-  const primaryKey = primaryPreset?.key || "custom";
-  const secondaryKey = item.colorHex2 || item.colorKey2 ? (secondaryPreset?.key || "custom") : "";
+  const primaryHex = parseHexColor(item.colorHex) ? String(item.colorHex).trim() : primaryPreset?.hex || "#777777";
+  const secondaryPresent = Boolean(item.colorHex2 || item.colorKey2 || secondaryName);
+  const secondaryHex = secondaryPresent ? (parseHexColor(item.colorHex2) ? String(item.colorHex2).trim() : secondaryPreset?.hex || "#ffffff") : "";
+  const primaryKey = primaryPreset && primaryHex.toLowerCase() === primaryPreset.hex.toLowerCase() && item.colorKey !== "custom" ? primaryPreset.key : "custom";
+  const secondaryKey = secondaryPresent ? (secondaryPreset && secondaryHex.toLowerCase() === secondaryPreset.hex.toLowerCase() && item.colorKey2 !== "custom" ? secondaryPreset.key : "custom") : "";
   return {
     ...item,
-    id: item.id || id(),
     code: String(item.code || primaryPreset?.code || "SKU"),
     colorKey: primaryKey,
-    colorName: primaryPreset?.label || String(item.colorName || "Custom"),
-    colorHex: primaryPreset?.hex || normalizeHexColor(item.colorHex, "#777777"),
+    colorName: String(nameParts.length > 1 ? primaryName : item.colorName || primaryPreset?.label || "Custom"),
+    colorHex: primaryHex,
     colorKey2: secondaryKey,
-    colorName2: secondaryKey ? (secondaryPreset?.label || String(item.colorName2 || "Custom")) : "",
-    colorHex2: secondaryKey ? (secondaryPreset?.hex || normalizeHexColor(item.colorHex2, "#ffffff")) : "",
+    colorName2: secondaryKey ? String(item.colorName2 || secondaryPreset?.label || secondaryName || "Custom") : "",
+    colorHex2: secondaryHex,
     imageAssetId: String(item.imageAssetId || ""),
   };
+}
+
+function normalizeColorVariant(item) {
+  if (item.id) return { ...item, imageAssetId: String(item.imageAssetId || "") };
+  return { ...displayColorVariant(item), id: id() };
 }
 
 function normalizeLayoutVariant(item) {
@@ -785,15 +794,16 @@ function normalizeVariantGroup(group, definition = categoryDefinition()) {
     ...group,
     id: group?.id || id(),
     type,
-    label: String(group?.label || defaultLabel).trim() || defaultLabel,
+    label: group?.id ? String(group.label ?? "") : String(group?.label || defaultLabel).trim() || defaultLabel,
     items: Array.isArray(group?.items)
       ? group.items.map((item) => type === "layout" ? normalizeLayoutVariant(item) : normalizeColorVariant(item))
       : [],
   };
 }
 
-function productVariantGroups(product) {
-  return Array.isArray(product?.variantGroups) ? product.variantGroups : [];
+function productVariantGroups(product, { display = false } = {}) {
+  const groups = Array.isArray(product?.variantGroups) ? product.variantGroups : [];
+  return display ? groups.map((group) => ({ ...group, items: (group.items || []).map((item) => group.type === "color" ? displayColorVariant(item) : { ...item }) })) : groups;
 }
 
 function productVariantItems(product) {
@@ -1202,19 +1212,23 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     product.featuredVariantId = String(product.featuredVariantId || "");
     if (!colorVariantWithImage(product, product.featuredVariantId)) product.featuredVariantId = "";
     delete product.skus;
-    const launchMonth = normalizeMonth(existing.launchMonth || existing.startMonth || existing.launchDate || existing.startDate, fallback.startMonth);
+    const hasLaunchMonth = Object.hasOwn(existing, "startMonth") || Object.hasOwn(existing, "launchMonth");
+    const hasEndMonth = Object.hasOwn(existing, "endMonth");
+    const launchMonth = hasLaunchMonth
+      ? normalizeMonth(existing.startMonth || existing.launchMonth, "")
+      : normalizeMonth(existing.launchDate || existing.startDate, fallback.startMonth);
     product.roadmap = {
       ...fallback,
       ...existing,
       family: existing.family || fallback.family,
       startMonth: launchMonth,
       launchMonth,
-      endMonth: normalizeMonth(existing.endMonth || existing.endDate, fallback.endMonth),
+      endMonth: normalizeMonth(hasEndMonth ? existing.endMonth : existing.endDate, hasEndMonth ? "" : fallback.endMonth),
       status: normalizeRoadmapStatus(existing.status || fallback.status),
       predecessorId: existing.predecessorId || "",
       successorId: existing.successorId || "",
     };
-    if (monthIndex(product.roadmap.endMonth) < monthIndex(product.roadmap.startMonth)) product.roadmap.endMonth = product.roadmap.startMonth;
+    if (!hasEndMonth && monthIndex(product.roadmap.endMonth) < monthIndex(product.roadmap.startMonth)) product.roadmap.endMonth = product.roadmap.startMonth;
     product.roadmap.launchMonth = product.roadmap.startMonth;
   });
   return target;
@@ -2320,7 +2334,7 @@ function drawSkuSwatch(context, x, y, width, height, primary, secondary = "") {
 }
 
 function variantFooterLayout(product) {
-  const allGroups = productVariantGroups(product).filter((group) => group.items.length);
+  const allGroups = productVariantGroups(product, { display: true }).filter((group) => group.items.length);
   const groups = allGroups.slice(0, 2).map((group) => ({ ...group }));
   if (!groups.length) return { height: 0, groups: [], hiddenGroupCount: 0, hiddenGroups: [] };
 
@@ -4471,6 +4485,8 @@ function splitRoadmapStatusLabel(status) {
 }
 
 function productDetailsModel(product) {
+  const displayGroups = productVariantGroups(product, { display: true });
+  const displayProduct = { ...product, variantGroups: displayGroups };
   const source = normalizeAscmProductMetadata(product.ascm);
   const roadmap = product.roadmap || {};
   const lane = board.lanes.find((item) => item.id === product.laneId);
@@ -4500,7 +4516,7 @@ function productDetailsModel(product) {
       { key: "stage", label: "Stage", value: splitRoadmapStatusLabel(roadmap.status) },
       { key: "confidence", label: "Confidence", value: roadmap.confidence || "Not set" },
     ],
-    skus: productPartSkus(product).map((sku) => ({ code: sku.code, colors: PortfolioModel.resolveSkuColors(sku, product) })),
+    skus: productPartSkus(product).map((sku) => ({ code: sku.code, colors: PortfolioModel.resolveSkuColors(sku, displayProduct) })),
     specs: globalThis.PortfolioLaunchRecords?.specifications(product) || product.specs,
     launch: globalThis.PortfolioLaunchRecords?.details(product) || null,
     priceText: globalThis.PortfolioModel?.msrpText(product) || product.price || "",
@@ -4511,11 +4527,11 @@ function productDetailsModel(product) {
       { label: "Tier", value: productTier(product), empty: !product.tier },
       { label: "Family", value: roadmap.family || "Not set" },
     ],
-    variants: productVariantGroups(product).flatMap((group) => group.items.map((item) => ({
+    variants: displayGroups.flatMap((group) => group.items.map((item) => ({
       group: group.label, code: item.code, label: group.type === "layout" ? item.label : "",
       colors: group.type === "color" ? [{ ...item, label: [item.colorName, item.colorName2].filter(Boolean).join(" / ") || item.code }] : [],
     }))),
-    colorwaySchedules: productVariantGroups(product).filter((group) => group.type === "color").flatMap((group) => group.items.filter((item) => product.plc?.variantProjects?.[item.id]).map((item) => {
+    colorwaySchedules: displayGroups.filter((group) => group.type === "color").flatMap((group) => group.items.filter((item) => product.plc?.variantProjects?.[item.id]).map((item) => {
       const project = product.plc.variantProjects[item.id];
       return {
         id: item.id, code: item.code, label: [item.colorName, item.colorName2].filter(Boolean).join(" / ") || item.label || item.code,
@@ -5351,7 +5367,7 @@ function imageAssetSummaryHtml(assetId, emptyText = "No image assigned") {
 }
 
 function colorwayHeroImagesEditorHtml(product) {
-  const variants = productColorVariants(product);
+  const variants = productColorVariants(product).map(displayColorVariant);
   if (variants.length < 2) return "";
   const assignedCount = variants.filter((item) => item.imageAssetId).length;
   return `
@@ -5385,6 +5401,7 @@ function colorwayHeroImagesEditorHtml(product) {
 }
 
 function colorVariantEditorHtml(group, item, index) {
+  item = displayColorVariant(item);
   const hasSecondary = Boolean(item.colorKey2 || item.colorHex2);
   const primaryCustom = item.colorKey === "custom";
   const secondaryCustom = item.colorKey2 === "custom";
@@ -5536,6 +5553,7 @@ function positionVariantPopover(clientX, clientY) {
 }
 
 function variantPopoverItemHtml(product, group, item) {
+  if (group.type === "color") item = displayColorVariant(item);
   const code = escapeHtml(item.code || "SKU");
   const label = escapeHtml(item.label || item.colorName || item.code || "Variant");
   if (group.type === "color") {
