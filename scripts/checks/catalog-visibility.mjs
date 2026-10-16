@@ -105,6 +105,61 @@ assert.equal(model.catalogProducts(products, { catalogGroup: "eol" }, today)[0],
 assert.equal(JSON.stringify(products), productBytes, "filter/count operations preserve every field, array, source value, clock, default and image");
 checks += 25;
 
+// Detail groups are exclusive so independent chips compose by union, without
+// counting an In development product twice under an Unreleased parent chip.
+const detailProducts = freeze([
+  { id: "released", ...stage("launched") },
+  { id: "development", ...stage("in-development") },
+  { id: "planning", ...stage("in-planning") },
+  { id: "embargo", statusType: "embargo", ...stage("launched") },
+  { id: "upcoming", generalAvailabilityDate: "2099-01-01" },
+  { id: "eol", ...stage("in-development"), endManufacturingDate: "2000-01-01" },
+  { id: "unconfirmed", statusType: "new" },
+].map(product => ({ ...product, name: product.id, laneId: "main" })));
+const detailBytes = JSON.stringify(detailProducts);
+const detailGroups = ["all", "launched", "in-development", "in-planning", "embargo", "unreleased", "eol"];
+assert.deepEqual(model.CATALOG_VISIBILITY_GROUPS, detailGroups);
+assert.ok(Object.isFrozen(model.CATALOG_VISIBILITY_GROUPS));
+assert.deepEqual(detailProducts.map(product => model.catalogVisibilityGroup(product, today)), [...detailGroups.slice(1), "unknown"]);
+assert.deepEqual(model.catalogVisibilityCounts(detailProducts, today), { all: 7, launched: 1, "in-development": 1, "in-planning": 1, embargo: 1, unreleased: 1, eol: 1, unknown: 1 });
+assert.deepEqual(model.catalogVisibilityCounts(null, today), { all: 0, launched: 0, "in-development": 0, "in-planning": 0, embargo: 0, unreleased: 0, eol: 0, unknown: 0 });
+for (const [product, expected] of [
+  [{ statusType: "in-development", ...stage("in-planning") }, "in-development"],
+  [{ statusType: "in-development", ...stage("embargo") }, "embargo"],
+  [{ statusType: "embargo", ...stage("in-development") }, "embargo"],
+  [{ statusType: "embargo", ...stage("end-of-life") }, "eol"],
+  [{ ...stage("in-development"), endManufacturingDate: "2000-01-01" }, "eol"],
+  [gaQuarter(2026, 4), "unknown"],
+  [gaQuarter(2099, 1), "unreleased"],
+]) {
+  assert.equal(model.catalogVisibilityGroup(freeze(product), today), expected, "exclusive detail group follows factual EOL, embargo and explicit development precedence without manufacturing precision");
+  checks++;
+}
+assert.deepEqual(model.catalogVisibilitySelection({ catalogGroups: [] }), []);
+assert.deepEqual(model.catalogVisibilitySelection({ catalogGroups: ["all"], catalogGroup: "eol", hideDiscontinued: true }), ["all"]);
+assert.deepEqual(model.catalogVisibilitySelection({ catalogGroup: "unreleased" }), ["in-development", "in-planning", "embargo", "unreleased"], "older Unreleased choice retains the whole upcoming parent group");
+assert.equal(model.catalogVisibilitySelection({ hideDiscontinued: true }), null, "date-only legacy hide retains its distinct meaning");
+assert.equal(model.catalogProducts(detailProducts, { catalogGroups: ["all"] }, today), detailProducts, "All retains unknown lifecycle products and object identities");
+assert.deepEqual(model.catalogProducts(detailProducts, { catalogGroups: [] }, today), [], "explicit empty imported selection displays no products");
+for (let mask = 0; mask < 64; mask++) {
+  const selection = detailGroups.slice(1).filter((_group, index) => mask & (1 << index));
+  const expected = detailProducts.filter(product => selection.includes(model.catalogVisibilityGroup(product, today)));
+  const actual = model.catalogProducts(detailProducts, { catalogGroups: selection, catalogGroup: "all", hideDiscontinued: true }, today);
+  assert.deepEqual(actual, expected, `independent selection ${selection.join(" + ") || "none"} uses an exact union in source order`);
+  assert.ok(actual.every(product => detailProducts.includes(product)), "filtering never clones or replaces product facts");
+  checks++;
+}
+const unorderedSelection = ["in-development", "launched", "in-development"];
+assert.deepEqual(model.normalizeCatalogGroups(unorderedSelection), ["launched", "in-development"]);
+assert.deepEqual(unorderedSelection, ["in-development", "launched", "in-development"], "normalization never edits the caller's selection");
+for (const invalid of [null, false, {}, "launched", ["all", "launched"], ["unknown"], ["constructor"], [null]]) {
+  assert.equal(model.normalizeCatalogGroups(invalid), null);
+  assert.deepEqual(model.catalogProducts(detailProducts, { catalogGroups: invalid, catalogGroup: "launched" }, today), [detailProducts[0]], "invalid new selection falls back to the saved valid legacy group");
+  checks++;
+}
+assert.equal(JSON.stringify(detailProducts), detailBytes, "all multi-select combinations preserve every saved product byte");
+checks += 14;
+
 // Exercise the actual pure reconciliation implementation without exposing a new
 // production API or touching a browser database. Existing workspace-store tests
 // separately cover its transaction-completion and stale-save integration.
@@ -181,6 +236,36 @@ for (const invalid of [null, false, true, 0, "", "ALL", "unknown", "constructor"
   assert.deepEqual(reconcile(base, secondCategoryChoice, removed), removed, "view changes never resurrect removed categories");
   checks += 3;
 }
+for (const selection of [["all"], [], ["launched", "in-development"], ["in-planning", "embargo"], ["eol"]]) {
+  const base = fixture(), mine = clone(base), latest = clone(base);
+  mine.categories[0].board.settings.catalogGroups = selection;
+  latest.categories[0].board.products[0].name = "Concurrent accepted product";
+  latest.receipts.push({ exact: "Retained concurrent receipt" });
+  const expected = clone(latest); expected.categories[0].board.settings.catalogGroups = selection;
+  assert.deepEqual(reconcile(base, mine, latest), expected, `selection ${selection} reconciles only its presentation leaf with accepted concurrent facts`);
+  const localFacts = clone(base), otherView = clone(base);
+  localFacts.categories[0].board.products[0].plc.history.push({ exact: "New local source evidence" });
+  otherView.categories[0].board.settings.catalogGroups = selection;
+  const inverse = clone(localFacts); inverse.categories[0].board.settings.catalogGroups = selection;
+  assert.deepEqual(reconcile(base, localFacts, otherView), inverse, "concurrent multi-select choice cannot erase local product evidence");
+  checks += 2;
+}
+for (const invalid of [null, false, true, "launched", {}, ["all", "launched"], ["unknown"], ["constructor"], [null], [false]]) {
+  for (const position of [0, 1, 2]) {
+    const snapshots = [fixture(), fixture(), fixture()];
+    snapshots[position].categories[0].board.settings.catalogGroups = invalid;
+    assert.equal(reconcile(...snapshots), null, "malformed multi-select leaf cannot bypass protected-fact conflict checks");
+    checks++;
+  }
+}
+{
+  const base = fixture(), mine = clone(base), latest = clone(base);
+  mine.categories[0].board.settings.catalogGroups = ["launched", "in-development"];
+  mine.categories[0].board.products[0].name = "Local edited fact";
+  latest.categories[0].board.products[0].name = "Concurrent edited fact";
+  assert.equal(reconcile(base, mine, latest), null, "multi-select view leaves do not permit conflicting product facts to merge");
+  checks++;
+}
 await import("../../public/js/portfolio-search.js");
 await import("../../public/js/pptx-pagination.js");
 await import("../../public/js/saved-views.js");
@@ -192,6 +277,7 @@ const appFunction = name => {
   assert.ok(match, `execute actual application function ${name}`);
   return match[0];
 };
+const legacyGroup = (target, group) => { delete target.settings.catalogGroups; target.settings.catalogGroup = group; };
 const appBoard = { lanes: [{ id: "main", label: "Main", order: 0 }], settings: { hideDiscontinued: true, roadmap: { startMonth: "2026-01", endMonth: "2030-12" } }, products };
 const otherBoard = { ...appBoard, settings: { catalogGroup: "all", hideDiscontinued: false, roadmap: { startMonth: "2026-01", endMonth: "2030-12" } } };
 const otherSettings = JSON.stringify(otherBoard.settings);
@@ -210,9 +296,9 @@ const app = {
   closeViewerInfo(options) { assert.equal(options.render, false); calls.viewerClose++; app.viewerInfoProductId = null; },
 };
 vm.createContext(app);
-vm.runInContext(["selectedProduct", "applyInspectorState", "renderInspector", "clearHiddenCatalogSelection", "catalogFilterCategories", "setCatalogGroup", "setCatalogHideDiscontinued", "updateBoard", "visibleProducts", "visibleRoadmapProducts", "portfolioForSearch", "openPortfolioSearchResult"].map(appFunction).join("\n"), app);
-assert.equal(app.setCatalogGroup("launched"), true);
-assert.equal(appBoard.settings.catalogGroup, "launched"); assert.equal(appBoard.settings.hideDiscontinued, false);
+vm.runInContext(["selectedProduct", "applyInspectorState", "renderInspector", "clearHiddenCatalogSelection", "catalogFilterCategories", "applyCatalogGroups", "setCatalogGroups", "setCatalogGroup", "setCatalogHideDiscontinued", "updateBoard", "visibleProducts", "visibleRoadmapProducts", "portfolioForSearch", "openPortfolioSearchResult"].map(appFunction).join("\n"), app);
+assert.equal(app.setCatalogGroups(["launched"]), true);
+assert.deepEqual(Array.from(appBoard.settings.catalogGroups), ["launched"]); assert.equal(appBoard.settings.hideDiscontinued, false);
 assert.equal(app.selectedId, null, "hidden selection clears the toolbar");
 assert.equal(app.viewerInfoProductId, null, "hidden expanded detail is closed");
 assert.equal(app.inspectorOpen, false, "hidden selected product closes its real inspector state");
@@ -225,22 +311,23 @@ assert.equal(JSON.stringify(products), productBytes);
 checks++;
 
 const actionBefore = JSON.stringify({ portfolio: app.portfolio, calls, scroll: app.canvasScroll, query: app.searchQuery });
-assert.equal(app.setCatalogGroup("launched"), false, "same effective group is a no-op");
+assert.equal(app.setCatalogGroups(["launched"]), false, "same exact selection is a no-op");
 for (const invalid of ["", "ALL", "unknown", null, false, {}, ["all"]]) assert.equal(app.setCatalogGroup(invalid), false, "invalid mode rejected by actual handler");
 assert.equal(JSON.stringify({ portfolio: app.portfolio, calls, scroll: app.canvasScroll, query: app.searchQuery }), actionBefore);
 for (const guard of ["productLayoutEditing", "packageOperationInProgress", "pptxExportInProgress", "roadmapDraft"]) {
   app[guard] = true;
   assert.equal(app.setCatalogGroup("eol"), false, `${guard} locks the actual handler`);
+  assert.equal(app.setCatalogGroups(["launched", "in-development"]), false, `${guard} also locks exact multi-select changes`);
   app[guard] = false;
   assert.equal(JSON.stringify({ portfolio: app.portfolio, calls, scroll: app.canvasScroll, query: app.searchQuery }), actionBefore);
   checks++;
 }
 appBoard.settings.hideDiscontinued = true;
-assert.equal(app.setCatalogGroup("launched"), true, "same mode with stale legacy true is not a no-op");
+assert.equal(app.setCatalogGroups(["launched"]), true, "same selection with stale legacy true is not a no-op");
 assert.equal(appBoard.settings.hideDiscontinued, false);
 app.selectedId = "launched"; app.viewerInfoProductId = "dated-eol";
-appBoard.settings.catalogGroup = "all";
-assert.equal(app.setCatalogGroup("launched"), true);
+legacyGroup(appBoard, "all");
+assert.equal(app.setCatalogGroups(["launched"]), true);
 assert.equal(app.selectedId, "launched", "still-visible selection remains");
 assert.equal(app.viewerInfoProductId, null, "hidden viewer closes independently of a visible selection");
 app.activeView = "roadmap"; app.selectedId = app.viewerInfoProductId = "dated-eol"; app.inspectorOpen = true;
@@ -249,14 +336,44 @@ assert.equal(app.selectedId, null); assert.equal(app.viewerInfoProductId, null);
 app.activeView = "products"; app.selectedId = app.viewerInfoProductId = null;
 checks += 3;
 
+// Execute the real click toggle against a complete set of exclusive groups.
+// Removing the final UI chip returns to All; imported [] remains representable.
+appBoard.products = detailProducts; app.searchQuery = "";
+assert.equal(app.setCatalogGroups(["all"]), true);
+assert.equal(app.setCatalogGroup("launched"), true);
+assert.deepEqual(Array.from(appBoard.settings.catalogGroups), ["launched"]);
+assert.deepEqual(Array.from(app.visibleProducts(), product => product.id), ["released"], "first click from All selects only the requested group");
+assert.equal(app.setCatalogGroup("in-development"), true);
+assert.deepEqual(Array.from(appBoard.settings.catalogGroups), ["launched", "in-development"]);
+assert.deepEqual(Array.from(app.visibleProducts(), product => product.id), ["released", "development"], "Released plus In development is a union, not an intersection");
+app.selectedId = app.viewerInfoProductId = "development";
+assert.equal(app.setCatalogGroup("launched"), true);
+assert.deepEqual(Array.from(app.visibleRoadmapProducts(), product => product.id), ["development"], "deselecting one chip preserves the other group in Roadmap too");
+assert.equal(app.selectedId, "development"); assert.equal(app.viewerInfoProductId, "development", "still-included independent group keeps its selected product and details");
+assert.equal(app.setCatalogGroup("in-development"), true);
+assert.deepEqual(Array.from(appBoard.settings.catalogGroups), ["all"], "last chip removal restores All instead of unexpectedly emptying the workspace");
+assert.equal(app.setCatalogGroups([]), true);
+assert.equal(app.visibleProducts().length, 0, "exact empty imported preference remains a valid recovery state");
+assert.equal(app.selectedId, null); assert.equal(app.viewerInfoProductId, null, "excluding every selected group clears its hidden editor and details");
+assert.equal(app.setCatalogGroup("all"), true);
+assert.equal(app.visibleProducts().length, detailProducts.length, "All recovers every product including unknown lifecycle evidence");
+for (const invalid of [["all", "launched"], ["unknown"], [false], null, false, {}, "launched"]) {
+  const before = JSON.stringify({ portfolio: app.portfolio, calls });
+  assert.equal(app.setCatalogGroups(invalid), false);
+  assert.equal(JSON.stringify({ portfolio: app.portfolio, calls }), before, "invalid selection cannot save, render or change preferences");
+  checks++;
+}
+appBoard.products = products;
+checks += 9;
+
 const idsOf = rows => Array.from(rows, row => row.id);
-appBoard.settings.catalogGroup = "unreleased"; app.searchQuery = "";
+legacyGroup(appBoard, "unreleased"); app.searchQuery = "";
 assert.deepEqual(idsOf(app.visibleProducts()), ["unreleased"]);
 app.searchQuery = "Technical";
 assert.equal(app.visibleProducts().length, 0, "search cannot reintroduce a product excluded by lifecycle");
-appBoard.settings.catalogGroup = "launched";
+legacyGroup(appBoard, "launched");
 assert.deepEqual(idsOf(app.visibleProducts()), ["launched"], "visible lifecycle and source-spec query compose");
-otherBoard.settings.catalogGroup = "unreleased";
+legacyGroup(otherBoard, "unreleased");
 assert.deepEqual(idsOf(app.portfolioForSearch().categories[0].board.products), ["launched"]);
 assert.deepEqual(idsOf(app.portfolioForSearch().categories[1].board.products), ["unreleased"], "all-category lookup respects each category's group");
 assert.equal(app.openPortfolioSearchResult({ categoryId: "one", productId: "dated-eol" }), false, "stale search result cannot reopen a filtered product");
@@ -284,12 +401,24 @@ Object.assign(app, {
 vm.runInContext(["productPagesForPptx", "buildPptxExportPlan", "exportPptx"].map(appFunction).join("\n"), app);
 const category = app.portfolio.categories[0];
 for (const [group, expected] of [["all", products.map(p => p.id)], ["launched", ["launched"]], ["unreleased", ["unreleased"]], ["eol", ["dated-eol", "stage-eol"]]]) {
-  appBoard.settings.catalogGroup = group;
+  legacyGroup(appBoard, group);
   const plan = app.buildPptxExportPlan("products", [category]);
   assert.deepEqual(Array.from(plan).flatMap(page => Array.from(page.page.rows).flatMap(row => idsOf(row.products))), expected, "actual Products export planner uses lifecycle group");
   checks++;
 }
 const allHidden = { id: "hidden", board: { ...appBoard, products: [products[0]], settings: { catalogGroup: "eol" } } };
+const unionCategory = { id: "union", board: { ...appBoard, products: detailProducts, settings: { ...appBoard.settings, catalogGroups: ["launched", "in-development"] } } };
+for (const scope of ["products", "roadmap", "both"]) {
+  const pages = Array.from(app.buildPptxExportPlan(scope, [unionCategory]));
+  const cardIds = pages.filter(page => page.kind === "products").flatMap(page => Array.from(page.page.rows).flatMap(row => idsOf(row.products)));
+  const roadmapIds = pages.filter(page => page.kind === "roadmap").flatMap(page => Array.from(page.groups).flatMap(group => idsOf(group.products)));
+  assert.deepEqual(cardIds, scope === "roadmap" ? [] : ["released", "development"], "Products export contains the exact Released plus In development union");
+  assert.deepEqual(roadmapIds, scope === "products" ? [] : ["released", "development"], "Roadmap export contains the same union without hidden stages");
+  checks++;
+}
+const noSelectionCategory = { ...unionCategory, board: { ...unionCategory.board, settings: { catalogGroups: [] } } };
+assert.equal(app.buildPptxExportPlan("both", [noSelectionCategory]).length, 0, "explicit empty imported selection creates no Product or Roadmap phantom pages");
+checks++;
 const trulyEmpty = { id: "empty", board: { ...appBoard, products: [], settings: {} } };
 assert.equal(app.buildPptxExportPlan("products", [trulyEmpty]).length, 1, "a genuinely empty category retains its existing placeholder slide");
 checks++;
@@ -314,7 +443,7 @@ Object.assign(app, {
 vm.runInContext(appFunction("drawBoardTo"), app);
 const dimensions = { width: 1000, height: 650, includeViewer: false, layout: { cardHeight: 552, laneHeight: 622 }, laneRows: [{ lane: appBoard.lanes[0], top: 34, contentHeight: 552 }] };
 for (const [group, expected] of [["launched", ["launched"]], ["unreleased", ["unreleased"]], ["eol", ["dated-eol", "stage-eol"]]]) {
-  appBoard.settings.catalogGroup = group; painted.length = 0;
+  legacyGroup(appBoard, group); painted.length = 0;
   app.drawBoardTo({ clearRect() {} }, dimensions, false, true);
   assert.deepEqual(painted, expected, "actual PNG board rendering uses the lifecycle group");
   checks++;
@@ -323,8 +452,15 @@ app.board = allHidden.board; painted.length = 0;
 app.drawBoardTo({ clearRect() {} }, dimensions, false, true);
 assert.equal(painted.length, 0, "all-hidden PNG paints no product cards");
 app.board = appBoard;
+app.board = unionCategory.board; painted.length = 0;
+app.drawBoardTo({ clearRect() {} }, dimensions, false, true);
+assert.deepEqual(painted, ["released", "development"], "actual PNG uses the same Released plus In development union");
+app.board = noSelectionCategory.board; painted.length = 0;
+app.drawBoardTo({ clearRect() {} }, dimensions, false, true);
+assert.deepEqual(painted, [], "explicit empty imported selection paints no product cards");
+app.board = appBoard;
 assert.match(appFunction("exportPng"), /if \(isProducts\) drawBoardTo\(/);
-checks++;
+checks += 3;
 
 const savedViews = globalThis.PPCSavedViews;
 for (const group of model.CATALOG_GROUPS) {
@@ -344,7 +480,7 @@ Object.assign(app, {
   document: { querySelector: () => null }, $: () => null,
 });
 vm.runInContext(`var adapter = { ${capture} ${apply} };`, app);
-appBoard.settings.catalogGroup = "unreleased"; appBoard.settings.hideDiscontinued = false; app.searchQuery = "Saved query";
+legacyGroup(appBoard, "unreleased"); appBoard.settings.hideDiscontinued = false; app.searchQuery = "Saved query";
 const captured = clone(app.adapter.captureView());
 assert.equal(captured.display.catalogGroup, "unreleased"); assert.equal(captured.search, "Saved query");
 const unchangedOther = JSON.stringify(otherBoard.settings);
@@ -369,6 +505,20 @@ for (const guard of ["workspaceOpening", "packageOperationInProgress", "pptxExpo
   app[guard] = false;
   checks++;
 }
+const beforeNewSavedViews = app.portfolio.categories.map(category => clone(category.board.settings));
+for (const selection of [["launched", "in-development"], ["in-planning", "embargo"], [], ["all"]]) {
+  const submitted = freeze({ view: "products", activeCategoryId: "one", search: "Keep saved search", display: { catalogGroups: selection, catalogGroup: "eol", hideDiscontinued: true } });
+  app.adapter.applyView(submitted);
+  assert.deepEqual(Array.from(appBoard.settings.catalogGroups), selection, "actual saved-view adapter restores an exact independent selection, including none");
+  assert.equal(appBoard.settings.catalogGroup, undefined); assert.equal(appBoard.settings.hideDiscontinued, false, "new array wins over contradictory old saved fields");
+  const capturedSelection = savedViews.sanitizePreferences("portfolio", app.adapter.captureView());
+  assert.deepEqual(capturedSelection.display.catalogGroups, selection);
+  assert.deepEqual(capturedSelection.categoryVisibility, [{ categoryId: "one", catalogGroups: selection }], "real capture and sanitizer retain the per-category multi-selection");
+  assert.equal(app.searchQuery, "Keep saved search");
+  assert.deepEqual(otherBoard.settings, beforeNewSavedViews[1], "exact saved-view selection never changes another category");
+  checks++;
+}
+app.portfolio.categories.forEach((category, index) => { category.board.settings = beforeNewSavedViews[index]; });
 assert.equal(JSON.stringify(products), productBytes, "all real application filter, saved-view, search and export paths preserve product facts, arrays, images, defaults and clocks");
 checks += 5;
 
@@ -379,13 +529,14 @@ const scopePortfolio = { settings: { roadmapBasis: "ffs", hashoutCategoryIds: ["
 } })).concat({ id: "without-board" }) };
 const scopeCalls = { save: 0, drag: 0, overlay: 0, pan: 0, lane: 0 };
 const attributeNode = () => { const attributes = new Map(); return { textContent: "", classList: { toggle() {} }, setAttribute(key, value) { attributes.set(key, String(value)); }, getAttribute(key) { return attributes.get(key) ?? null; } }; };
-const scopeButtons = model.CATALOG_GROUPS.map(group => { const button = attributeNode(), counter = attributeNode(), tooltip = attributeNode(); return { ...button, dataset: { catalogGroup: group }, disabled: false, querySelector: selector => selector === ".catalog-group-count" ? counter : tooltip }; });
+const scopeButtons = model.CATALOG_VISIBILITY_GROUPS.map(group => { const button = attributeNode(), counter = attributeNode(), tooltip = attributeNode(); return { ...button, dataset: { catalogGroup: group }, disabled: false, focus() { scoped.document.activeElement = this; }, querySelector: selector => selector === ".catalog-group-count" ? counter : tooltip }; });
 const scopeHost = {}, scopeControls = { ...attributeNode(), parentElement: scopeHost, querySelectorAll: () => scopeButtons };
 const recoveryButtons = ["catalogClearSearch", "catalogShowAll"].map(id => ({ ...attributeNode(), id, disabled: true }));
 const scopeEmpty = { ...attributeNode(), querySelectorAll(selector) { assert.equal(selector, "button"); return recoveryButtons; } };
 const scopeNodes = new Map([["catalogVisibility", scopeControls], ["roadmapContextTools", scopeHost], ["productControls", scopeHost], ["hideDiscontinued", {}], ["catalogFilterEmpty", scopeEmpty], ["catalogFilterEmptyText", attributeNode()], ...recoveryButtons.map(button => [button.id, button])]);
 let hashoutOptions;
 const scoped = {
+  Date,
   portfolio: scopePortfolio, board: scopePortfolio.categories[0].board, activeCategoryId: "one", activeView: "roadmap",
   selectedId: null, viewerInfoProductId: null, inspectorOpen: false, searchQuery: "Keep product search", roadmapSearchQuery: "Keep roadmap search",
   productLayoutEditing: false, packageOperationInProgress: false, pptxExportInProgress: false, roadmapDraft: null,
@@ -399,23 +550,23 @@ const scoped = {
   closeViewerInfo() { scoped.viewerInfoProductId = null; },
 };
 vm.createContext(scoped);
-vm.runInContext(["isFfsRoadmap", "hashoutCategoryScope", "hashoutSelectionEntry", "catalogFilterCategories", "setCatalogGroup", "setCatalogHideDiscontinued", "clearHiddenCatalogSelection", "portfolioForSearch", "visibleProducts", "visibleRoadmapProducts", "updateBoard", "syncCatalogFilterControls", "ensureHashoutView"].map(appFunction).join("\n"), scoped);
+vm.runInContext(["isFfsRoadmap", "hashoutCategoryScope", "hashoutSelectionEntry", "catalogFilterCategories", "applyCatalogGroups", "setCatalogGroups", "setCatalogGroup", "setCatalogHideDiscontinued", "clearHiddenCatalogSelection", "portfolioForSearch", "visibleProducts", "visibleRoadmapProducts", "updateBoard", "syncCatalogFilterControls", "ensureHashoutView"].map(appFunction).join("\n"), scoped);
 assert.deepEqual(Array.from(scoped.catalogFilterCategories(), category => category.id), ["one", "two"]);
 scoped.syncCatalogFilterControls();
 assert.ok(recoveryButtons.every(button => !button.disabled), "both empty-state recovery actions are enabled outside edits and exports");
-assert.match(scopeControls.getAttribute("aria-label"), /Mixed lifecycle visibility.*2 selected categories/);
-assert.equal(scopeButtons[0].getAttribute("aria-pressed"), "mixed"); assert.equal(scopeButtons[3].getAttribute("aria-pressed"), "mixed");
+assert.match(scopeControls.getAttribute("aria-label"), /Mixed category selections.*2 selected categories/);
+assert.equal(scopeButtons[0].getAttribute("aria-pressed"), "mixed"); assert.equal(scopeButtons[6].getAttribute("aria-pressed"), "mixed");
 assert.equal(scopeButtons[0].querySelector(".catalog-group-count").textContent, "10", "mixed FFS counts aggregate the exact selected categories");
 const excludedBefore = JSON.stringify(scopePortfolio.categories[2]);
 const factsBefore = JSON.stringify(scopePortfolio.categories.filter(category => category.board).map(category => category.board.products));
-assert.equal(scoped.setCatalogGroup("launched"), true);
-assert.equal(scopePortfolio.categories[0].board.settings.catalogGroup, "launched"); assert.equal(scopePortfolio.categories[1].board.settings.catalogGroup, "launched");
+assert.equal(scoped.setCatalogGroups(["launched"]), true);
+assert.deepEqual(Array.from(scopePortfolio.categories[0].board.settings.catalogGroups), ["launched"]); assert.deepEqual(Array.from(scopePortfolio.categories[1].board.settings.catalogGroups), ["launched"]);
 assert.equal(JSON.stringify(scopePortfolio.categories[2]), excludedBefore, "bulk FFS choice preserves excluded category preferences and facts");
 assert.equal(scopeCalls.save, 1, "one bulk preference action schedules one save");
 assert.equal(scoped.roadmapFilterScrollResetPending, true); assert.equal(scopeCalls.pan, 1); assert.equal(scopeCalls.lane, 1);
 assert.equal(scoped.searchQuery, "Keep product search"); assert.equal(scoped.roadmapSearchQuery, "Keep roadmap search");
 const afterBulk = JSON.stringify({ portfolio: scopePortfolio, calls: scopeCalls });
-assert.equal(scoped.setCatalogGroup("launched"), false, "an already uniform selected scope is a no-op");
+assert.equal(scoped.setCatalogGroups(["launched"]), false, "an already uniform exact selection is a no-op");
 assert.equal(JSON.stringify({ portfolio: scopePortfolio, calls: scopeCalls }), afterBulk);
 scopePortfolio.settings.hashoutCategoryIds = [];
 const beforeEmpty = JSON.stringify({ portfolio: scopePortfolio, calls: scopeCalls });
@@ -429,17 +580,18 @@ assert.equal(scoped.setCatalogGroup("eol"), false, "removed scope identities do 
 scopePortfolio.settings.hashoutCategoryIds = null;
 assert.deepEqual(Array.from(scoped.catalogFilterCategories(), category => category.id), ["one", "two", "excluded"]);
 assert.equal(scoped.setCatalogGroup("all"), true, "null scope means all existing board categories");
-assert.ok(scopePortfolio.categories.filter(category => category.board).every(category => category.board.settings.catalogGroup === "all"));
+assert.ok(scopePortfolio.categories.filter(category => category.board).every(category => JSON.stringify(category.board.settings.catalogGroups) === '["all"]'));
 scopePortfolio.settings.hashoutCategoryIds = ["one", "two"];
 scoped.activeView = "products";
-assert.equal(scoped.setCatalogGroup("unreleased"), true); assert.equal(scopePortfolio.categories[1].board.settings.catalogGroup, "all", "Products applies to its active category even with an FFS multiselection");
+assert.equal(scoped.setCatalogGroups(["unreleased"]), true); assert.deepEqual(Array.from(scopePortfolio.categories[1].board.settings.catalogGroups), ["all"], "Products applies to its active category even with an FFS multiselection");
 scoped.activeView = "roadmap"; scopePortfolio.settings.roadmapBasis = "lifecycle";
-assert.equal(scoped.setCatalogGroup("eol"), true); assert.equal(scopePortfolio.categories[1].board.settings.catalogGroup, "all", "lifecycle Roadmap remains active-category scoped");
+assert.equal(scoped.setCatalogGroups(["eol"]), true); assert.deepEqual(Array.from(scopePortfolio.categories[1].board.settings.catalogGroups), ["all"], "lifecycle Roadmap remains active-category scoped");
 scopePortfolio.settings.roadmapBasis = "ffs";
 for (const guard of ["roadmapDraft", "productLayoutEditing", "packageOperationInProgress", "pptxExportInProgress"]) {
   scoped[guard] = guard === "roadmapDraft" ? { activeEdit: true } : true;
   const before = JSON.stringify({ portfolio: scopePortfolio, calls: scopeCalls });
   assert.equal(scoped.setCatalogGroup("unreleased"), false); assert.equal(scoped.setCatalogHideDiscontinued(true), false);
+  assert.equal(scoped.setCatalogGroups(["launched", "in-development"]), false);
   assert.equal(JSON.stringify({ portfolio: scopePortfolio, calls: scopeCalls }), before, "locked Roadmap preserves every scoped preference");
   scoped.syncCatalogFilterControls();
   assert.ok(scopeButtons.every(button => button.disabled), `${guard} disables every visibility choice`);
@@ -449,8 +601,80 @@ for (const guard of ["roadmapDraft", "productLayoutEditing", "packageOperationIn
   assert.ok(scopeButtons.every(button => !button.disabled), `ending ${guard} restores the visibility choices`);
   assert.ok(recoveryButtons.every(button => !button.disabled), `ending ${guard} restores both empty-state recovery actions`);
 }
+const scopedSettingsBefore = scopePortfolio.categories.filter(category => category.board).map(category => clone(category.board.settings));
+const scopedBoards = scopePortfolio.categories.filter(category => category.board).map(category => category.board);
+scopedBoards[0].products = scopedBoards[1].products = detailProducts;
+scopedBoards[0].settings.catalogGroups = ["launched", "in-development"];
+scopedBoards[1].settings.catalogGroups = ["launched", "eol"];
+scoped.syncCatalogFilterControls();
+assert.equal(scopeButtons[1].getAttribute("aria-pressed"), "true", "a chip selected in every FFS category is checked");
+assert.equal(scopeButtons[2].getAttribute("aria-pressed"), "mixed", "a chip selected in only part of the scope is indeterminate");
+assert.equal(scopeButtons[0].getAttribute("aria-pressed"), "false", "a mixed union does not pretend All is selected");
+for (const button of scopeButtons) assert.equal(button.querySelector(".catalog-group-count").textContent, button.dataset.catalogGroup === "all" ? "14" : "2", `${button.dataset.catalogGroup}: seven chip counts use exclusive source groups across the exact scope`);
+assert.equal(scoped.setCatalogGroup("in-development"), true, "clicking an indeterminate chip adds it across the selected scope");
+assert.deepEqual(Array.from(scopedBoards[0].settings.catalogGroups), ["launched", "in-development"]);
+assert.deepEqual(Array.from(scopedBoards[1].settings.catalogGroups), ["launched", "in-development", "eol"], "adding across scope preserves each category's other groups");
+scoped.syncCatalogFilterControls(); assert.equal(scopeButtons[2].getAttribute("aria-pressed"), "true");
+assert.equal(scoped.setCatalogGroup("in-development"), true, "clicking a fully checked chip removes it across the selected scope");
+assert.deepEqual(Array.from(scopedBoards[0].settings.catalogGroups), ["launched"]);
+assert.deepEqual(Array.from(scopedBoards[1].settings.catalogGroups), ["launched", "eol"], "removing across scope preserves other independent chips");
+scopedBoards[0].settings.catalogGroups = ["in-development"];
+scopedBoards[1].settings.catalogGroups = ["in-development", "eol"];
+assert.equal(scoped.setCatalogGroup("in-development"), true);
+assert.deepEqual(Array.from(scopedBoards[0].settings.catalogGroups), ["all"], "last-removal recovery applies per category, without emptying it");
+assert.deepEqual(Array.from(scopedBoards[1].settings.catalogGroups), ["eol"], "a category with another selected chip retains it rather than resetting All");
+assert.equal(scoped.setCatalogGroup("all"), true);
+assert.ok(scopedBoards.slice(0, 2).every(target => JSON.stringify(target.settings.catalogGroups) === '["all"]'), "All explicitly resets all selected categories");
+const visibilityKeydown = appSource.match(/^\$\("#catalogVisibility"\)\.onkeydown = (event => \{[^]*?^\});/m)?.[1];
+assert.ok(visibilityKeydown, "execute the actual visibility keyboard navigation");
+vm.runInContext(`var handleVisibilityKeydown = ${visibilityKeydown};`, scoped);
+const navigationBefore = JSON.stringify({ portfolio: scopePortfolio, calls: scopeCalls });
+for (const [key, from, to] of [["ArrowRight", 1, 2], ["ArrowLeft", 0, 6], ["Home", 4, 0], ["End", 2, 6]]) {
+  let prevented = false;
+  scoped.handleVisibilityKeydown({ key, target: scopeButtons[from], currentTarget: scopeControls, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true); assert.equal(scoped.document.activeElement, scopeButtons[to]);
+  assert.equal(JSON.stringify({ portfolio: scopePortfolio, calls: scopeCalls }), navigationBefore, "Arrow/Home/End only move focus; selection changes require deliberate activation");
+  checks++;
+}
+scopedBoards.forEach((target, index) => { target.settings = scopedSettingsBefore[index]; if (index < 2) target.products = products; });
 assert.equal(JSON.stringify(scopePortfolio.categories.filter(category => category.board).map(category => category.board.products)), factsBefore);
-checks += 35;
+checks += 47;
+
+// A basis switch can keep activeView === "roadmap". Its renderer must not be
+// relied on to publish the new footer scope through an incidental view change.
+const basisPortfolio = { settings: { roadmapBasis: "lifecycle", hashoutCategoryIds: ["one", "two"] }, categories: [
+  { id: "one", name: "one", board: { ...scopePortfolio.categories[0].board, settings: { catalogGroup: "eol", hideDiscontinued: false }, products } },
+  { id: "two", name: "two", board: { ...scopePortfolio.categories[1].board, settings: { catalogGroup: "all", hideDiscontinued: false }, products: [products[0], products[2]] } },
+] };
+const basisPublications = [], basisOrder = [], basisPreferences = JSON.stringify(basisPortfolio.categories.map(category => category.board.settings));
+const basisFacts = JSON.stringify(basisPortfolio.categories.map(category => category.board.products));
+const basisOverrides = {
+  portfolio: basisPortfolio, board: basisPortfolio.categories[0].board, searchQuery: "", roadmapSearchQuery: "",
+  hasDedicatedHashoutView: undefined, selectedProduct: undefined,
+  roadmapDragState: null, roadmapDetailsOpen: false, roadmapInteractionMode: "pan",
+  renderRoadmaps() { basisOrder.push("roadmaps"); assert.equal(scoped.activeView, "roadmap", "basis rendering keeps the existing Roadmap view"); },
+  renderStatus() { basisOrder.push("status"); scoped.publishWorkspaceState(); },
+  announceRoadmapEdit() {}, scheduleSave() {},
+  window: { dispatchEvent(event) { basisPublications.push(event.detail); } },
+  CustomEvent: class { constructor(type, options) { assert.equal(type, "portfolio:render"); this.detail = options.detail; } },
+};
+const basisOriginals = Object.fromEntries(Object.keys(basisOverrides).map(key => [key, scoped[key]]));
+Object.assign(scoped, basisOverrides);
+vm.runInContext(["hasDedicatedHashoutView", "selectedProduct", "publishWorkspaceState", "setRoadmapBasis"].map(appFunction).join("\n"), scoped);
+for (const [basis, visibleCount, productCount] of [["ffs", 4, 7], ["lifecycle", 2, 5]]) {
+  basisOrder.length = 0;
+  const publicationCount = basisPublications.length;
+  scoped.setRoadmapBasis(basis);
+  assert.deepEqual(basisOrder, ["roadmaps", "status"], "basis switch explicitly refreshes status after its renderer");
+  assert.equal(basisPublications.length, publicationCount + 1, "each direction publishes the new scope once");
+  assert.equal(basisPublications.at(-1).visibleCount, visibleCount, `${basis} footer counts the current filtered scope`);
+  assert.equal(basisPublications.at(-1).productCount, productCount, `${basis} footer uses the corresponding full scope`);
+  assert.equal(scoped.activeView, "roadmap", "footer refresh does not depend on changing the active view");
+  assert.equal(JSON.stringify(basisPortfolio.categories.map(category => category.board.settings)), basisPreferences, "basis switch preserves every category visibility preference");
+  assert.equal(JSON.stringify(basisPortfolio.categories.map(category => category.board.products)), basisFacts, "basis switch preserves all product facts and ordering");
+  checks += 7;
+}
+Object.assign(scoped, basisOriginals);
 
 // Capture the real Hashout adapter callbacks; no fake visibility implementation
 // is substituted for getPortfolio, scope, selection or scope-change behavior.
@@ -517,5 +741,19 @@ const beforeAbsent = JSON.stringify(app.portfolio.categories.map(category => cat
 app.adapter.applyView({ view: "roadmap", activeCategoryId: "one", display: {} });
 assert.equal(JSON.stringify(app.portfolio.categories.map(category => category.board.settings)), beforeAbsent, "old view without any visibility field preserves each current category preference");
 assert.equal(JSON.stringify(products), productBytes);
+checks += 6;
+app.adapter.applyView({ view: "roadmap", basis: "ffs", activeCategoryId: "one", categoryIds: ["one", "two"], categoryVisibility: [
+  { categoryId: "one", catalogGroups: ["in-development", "launched"], catalogGroup: "eol", hideDiscontinued: true },
+  { categoryId: "two", catalogGroups: [] }, { categoryId: "removed", catalogGroups: ["all"] },
+], display: { catalogGroups: ["eol"] } });
+assert.deepEqual(Array.from(appBoard.settings.catalogGroups), ["launched", "in-development"], "category map restores the canonical Released plus In development union over stale legacy/display fields");
+assert.deepEqual(Array.from(otherBoard.settings.catalogGroups), [], "category map restores an intentional imported none preference exactly");
+assert.equal(appBoard.settings.catalogGroup, undefined); assert.equal(appBoard.settings.hideDiscontinued, false);
+assert.equal(otherBoard.settings.catalogGroup, undefined); assert.equal(otherBoard.settings.hideDiscontinued, false);
+assert.deepEqual(savedViews.sanitizePreferences("portfolio", app.adapter.captureView()).categoryVisibility, [
+  { categoryId: "one", catalogGroups: ["launched", "in-development"] }, { categoryId: "two", catalogGroups: [] },
+], "capture and replay retain distinct scoped multi-select choices without inventing missing categories");
+assert.equal(JSON.stringify(excludedViewBoard.settings), excludedViewBefore);
+assert.equal(JSON.stringify(products), productBytes); assert.equal(JSON.stringify(detailProducts), detailBytes);
 checks += 6;
 console.log(`Catalog visibility checks passed: ${checks} model/concurrent-view and actual shared-visibility application cases, local exact/quarter boundaries, scoped FFS and saved-view compatibility, action guards, hidden selection/editor cleanup, immutable Products/Roadmap search and PNG/PPTX filtering.`);

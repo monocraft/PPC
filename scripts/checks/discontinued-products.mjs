@@ -200,5 +200,5 @@ assert.match(source, /confirmPptxExportButton\.disabled = [^\n]+!plan\.length/);
 assert.match(source, /if \(!exportPlan\.length\) throw new Error\("No visible products/);
 const html = await readFile(new URL("../../public/index.html", import.meta.url), "utf8");
 assert.match(html, /id="hideDiscontinued" type="checkbox"/);
-assert.match(html, /filter Products, both Roadmap views, and their exports/);
+assert.match(html, /same selections filter Products, both Roadmaps, and their exports/);
 console.log(`Discontinued Products checks passed: ${cases.length} date cases, local-day boundaries, immutable banner/catalog/search, shared Roadmap filtering and exports, all-hidden PPTX, category setting and saved views.`);

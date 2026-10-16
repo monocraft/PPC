@@ -6,6 +6,38 @@ await import("../../public/js/card-specs.js");
 await import("../../public/js/portfolio-model.js");
 const model = globalThis.PortfolioModel;
 
+// Detailed catalogue visibility is an immutable union over explicit evidence;
+// the original broad lifecycle API remains compatible with older consumers.
+const visibilityNow = new Date(2026, 9, 16, 12);
+const visibilityProducts = Object.freeze([
+  Object.freeze({ id: "live", roadmap: Object.freeze({ status: "launched" }) }),
+  Object.freeze({ id: "dev", statusType: "in-development", roadmap: Object.freeze({ status: "in-planning" }) }),
+  Object.freeze({ id: "plan", roadmap: Object.freeze({ status: "in-planning" }) }),
+  Object.freeze({ id: "secret", statusType: "in-development", roadmap: Object.freeze({ status: "embargo" }) }),
+  Object.freeze({ id: "future", generalAvailabilityDate: "2027-01-01" }),
+  Object.freeze({ id: "ended", statusType: "embargo", endManufacturingDate: "2026-10-16" }),
+  Object.freeze({ id: "unknown", statusType: "new" }),
+]);
+const visibilityBefore = JSON.stringify(visibilityProducts);
+assert.deepEqual(model.CATALOG_GROUPS, ["all", "launched", "unreleased", "eol"]);
+assert.deepEqual(model.CATALOG_VISIBILITY_GROUPS, ["all", "launched", "in-development", "in-planning", "embargo", "unreleased", "eol"]);
+assert.ok(Object.isFrozen(model.CATALOG_VISIBILITY_GROUPS));
+assert.deepEqual(visibilityProducts.map(product => model.catalogVisibilityGroup(product, visibilityNow)), ["launched", "in-development", "in-planning", "embargo", "unreleased", "eol", "unknown"]);
+assert.deepEqual(visibilityProducts.map(product => model.catalogLifecycle(product, visibilityNow)), ["launched", "unreleased", "unreleased", "unreleased", "unreleased", "eol", "unknown"]);
+const selectedVisibility = Object.freeze(["in-development", "launched", "in-development"]);
+assert.deepEqual(model.normalizeCatalogGroups(selectedVisibility), ["launched", "in-development"]);
+assert.deepEqual(selectedVisibility, ["in-development", "launched", "in-development"]);
+assert.deepEqual(model.catalogProducts(visibilityProducts, { catalogGroups: selectedVisibility, catalogGroup: "eol", hideDiscontinued: true }, visibilityNow).map(product => product.id), ["live", "dev"]);
+assert.deepEqual(model.catalogProducts(visibilityProducts, { catalogGroups: [] }, visibilityNow), []);
+assert.equal(model.catalogProducts(visibilityProducts, { catalogGroups: ["all"], hideDiscontinued: true }, visibilityNow), visibilityProducts);
+assert.deepEqual(model.catalogVisibilitySelection({ catalogGroup: "unreleased" }), ["in-development", "in-planning", "embargo", "unreleased"]);
+assert.equal(model.catalogVisibilitySelection({ hideDiscontinued: true }), null);
+assert.deepEqual(model.catalogProducts(visibilityProducts, { catalogGroups: ["bad"], catalogGroup: "launched" }, visibilityNow).map(product => product.id), ["live"]);
+for (const malformed of [null, false, {}, "launched", ["all", "launched"], ["unknown"], [undefined], Array(1), Array(33).fill("all")]) assert.equal(model.normalizeCatalogGroups(malformed), null);
+assert.deepEqual(model.normalizeCatalogGroups([]), []);
+assert.deepEqual(model.catalogVisibilityCounts(visibilityProducts, visibilityNow), { all: 7, launched: 1, "in-development": 1, "in-planning": 1, embargo: 1, unreleased: 1, eol: 1, unknown: 1 });
+assert.equal(JSON.stringify(visibilityProducts), visibilityBefore, "classification, counting and union filtering preserve every product field and array");
+
 // Lifecycle synchronization follows the edited endpoint. Merely opening a
 // package or changing unrelated metadata must preserve its saved planning.
 const datedProduct = Object.freeze({

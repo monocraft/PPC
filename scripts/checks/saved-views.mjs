@@ -75,6 +75,37 @@ oldVisibilityDevice.setItem(api.STORAGE_KEY,JSON.stringify({version:1,views:[{id
 const oldVisibility=api.createStore(oldVisibilityDevice).list()[0].preferences;
 assert.equal(oldVisibility.categoryVisibility,undefined); assert.equal(oldVisibility.display.catalogGroup,'unreleased'); assert.equal(oldVisibility.display.hideDiscontinued,true,'Older saved preferences remain exactly compatible.');
 assert.deepEqual(json(api.sanitizePreferences('portfolio',{view:'roadmap',basis:'ffs'})),{view:'roadmap',basis:'ffs'},'Opening an old view does not manufacture a category-visibility override.');
+// Multi-selection is a bounded preference array, not a product-data envelope.
+const selectionInput = ['embargo','launched','in-development','launched'];
+const multiInput = { view:'roadmap', categoryVisibility:[
+  {categoryId:'audio',catalogGroups:selectionInput,catalogGroup:'eol',hideDiscontinued:true,products:[secret]},
+  {categoryId:'none',catalogGroups:[]}, {categoryId:'reset',catalogGroups:['all']},
+], display:{catalogGroups:selectionInput,catalogGroup:'unreleased',hideDiscontinued:true} };
+const multiBefore = JSON.stringify(multiInput), multi = api.sanitizePreferences('portfolio',multiInput);
+assert.deepEqual(json(multi.categoryVisibility), [
+  {categoryId:'audio',catalogGroups:['launched','in-development','embargo']},
+  {categoryId:'none',catalogGroups:[]}, {categoryId:'reset',catalogGroups:['all']},
+], 'new arrays take precedence and canonicalize without retaining contradictory category flags');
+assert.deepEqual(json(multi.display.catalogGroups),['launched','in-development','embargo']);
+assert.equal(multi.display.catalogGroup,'unreleased','old display properties remain backward compatible alongside the authoritative new array');
+assert.equal(multi.display.hideDiscontinued,true);
+assert.equal(JSON.stringify(multiInput),multiBefore); assert.notEqual(multi.categoryVisibility[0].catalogGroups,selectionInput);
+assert.deepEqual(json(api.sanitizePreferences('portfolio',multi)),json(multi),'multi-selection normalization is idempotent');
+for(const group of globalThis.PortfolioModel.CATALOG_VISIBILITY_GROUPS) {
+  assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'one',catalogGroups:[group]}]}).categoryVisibility),[{categoryId:'one',catalogGroups:[group]}]);
+}
+for(const malformed of [null,false,{},'launched',['unknown'],['all','launched'],[undefined],Array(1),Array(33).fill('all')]) {
+  assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'one',catalogGroups:malformed,catalogGroup:'all'}]}).categoryVisibility),[], 'invalid supplied arrays reject the category entry rather than silently changing its meaning');
+  assert.equal(api.sanitizePreferences('portfolio',{display:{catalogGroups:malformed}}).display.catalogGroups,undefined);
+}
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[
+  {categoryId:'same',catalogGroups:['bad']},{categoryId:'same',catalogGroups:[]},{categoryId:'same',catalogGroups:['all']},
+]}).categoryVisibility),[{categoryId:'same',catalogGroups:[]}], 'the first valid none selection reserves its exact category identity');
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'stale',catalogGroups:['launched'],catalogGroup:'bad',hideDiscontinued:'bad'}]}).categoryVisibility),[{categoryId:'stale',catalogGroups:['launched']}], 'valid new selection is independent of stale older fields');
+const multiDevice=storage(),multiStore=api.createStore(multiDevice),multiRecord=multiStore.save('Released and development','portfolio',multiInput);
+const multiSaved=json(multiRecord.preferences); selectionInput.push('eol'); multiInput.categoryVisibility[1].catalogGroups.push('eol');
+assert.deepEqual(json(api.createStore(multiDevice).list()[0].preferences),multiSaved,'real local persistence preserves independent canonical multi-selection arrays');
+assert.ok(!multiDevice.getItem(api.STORAGE_KEY).includes(secret));
 const preferences = { view: 'roadmap', basis: 'ffs', categoryIds: ['audio','audio','removed'], activeCategoryId: 'audio', dateRange: { start: '2026-01', end: '2028-12' }, search: 'launch',
   display: { labelMode: 'off', showSeasonalWindows: true, detailsOpen: true, showPrices: false, showSkus: true, productZoom: 0.7, roadmapZoom: 1.1, privateKey: secret },
   products: [{ id: secret }], workbook: secret, sourceUrl: secret, accessToken: secret, privateKey: secret };

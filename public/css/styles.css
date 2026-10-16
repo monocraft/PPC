@@ -279,6 +279,9 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .catalog-filter-icon { display: block; width: 18px; height: 18px; background: currentColor; mask: var(--catalog-icon) center / contain no-repeat; }
 [data-catalog-group="all"] { --catalog-icon: url('../assets/icons/catalog-all.svg'); }
 [data-catalog-group="launched"] { --catalog-icon: url('../assets/icons/catalog-launched.svg'); }
+[data-catalog-group="in-development"] { --catalog-icon: url('../assets/icons/catalog-development.svg'); }
+[data-catalog-group="in-planning"] { --catalog-icon: url('../assets/icons/catalog-planning.svg'); }
+[data-catalog-group="embargo"] { --catalog-icon: url('../assets/icons/catalog-embargo.svg'); }
 [data-catalog-group="unreleased"] { --catalog-icon: url('../assets/icons/catalog-unreleased.svg'); }
 [data-catalog-group="eol"] { --catalog-icon: url('../assets/icons/catalog-eol.svg'); }
 .catalog-group-count { font-size: 10px; font-variant-numeric: tabular-nums; }

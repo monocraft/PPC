@@ -1113,6 +1113,7 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
   target.settings = { showPrices: true, showSkus: true, hideDiscontinued: false, ...target.settings, freeMove: false };
   target.settings.hideDiscontinued = target.settings.hideDiscontinued === true;
   if (!["all", "launched", "unreleased", "eol"].includes(target.settings.catalogGroup)) delete target.settings.catalogGroup;
+  if (Object.hasOwn(target.settings, "catalogGroups") && !PortfolioModel.normalizeCatalogGroups(target.settings.catalogGroups)) delete target.settings.catalogGroups;
   target.settings.roadmap = {
     startMonth: "2026-01",
     endMonth: "2030-12",
@@ -1675,6 +1676,7 @@ function setCatalogHideDiscontinued(hidden) {
   if (productLayoutEditing || packageOperationInProgress || pptxExportInProgress || (typeof roadmapDraft !== "undefined" && roadmapDraft)) return false;
   stopProductCardDrag();
   updateBoard(current => {
+    delete current.settings.catalogGroups;
     delete current.settings.catalogGroup;
     current.settings.hideDiscontinued = hidden === true;
     clearHiddenCatalogSelection();
@@ -1689,10 +1691,11 @@ function catalogFilterCategories() {
   return portfolio.categories.filter(category => category.id === activeCategoryId && category.board);
 }
 
-function setCatalogGroup(group) {
-  if (!["all", "launched", "unreleased", "eol"].includes(group) || productLayoutEditing || packageOperationInProgress || pptxExportInProgress || (typeof roadmapDraft !== "undefined" && roadmapDraft)) return false;
-  const categories = catalogFilterCategories();
-  if (!categories.length || categories.every(category => category.board.settings.catalogGroup === group && !category.board.settings.hideDiscontinued)) return false;
+function applyCatalogGroups(categories, selections) {
+  if (productLayoutEditing || packageOperationInProgress || pptxExportInProgress || (typeof roadmapDraft !== "undefined" && roadmapDraft) || !categories.length) return false;
+  const normalized = selections.map(selection => PortfolioModel.normalizeCatalogGroups(selection));
+  if (normalized.some(selection => !selection) || normalized.length !== categories.length) return false;
+  if (categories.every((category, index) => JSON.stringify(category.board.settings.catalogGroups) === JSON.stringify(normalized[index]) && !category.board.settings.hideDiscontinued)) return false;
   stopProductCardDrag();
   if (typeof productCardHover !== "undefined") productCardHover?.clear();
   if (typeof roadmapLaneHovers !== "undefined") roadmapLaneHovers.forEach(hover => hover.clear({ immediate: true }));
@@ -1701,13 +1704,35 @@ function setCatalogGroup(group) {
   canvasScroll.scrollLeft = 0; canvasScroll.scrollTop = 0;
   if (typeof roadmapFilterScrollResetPending !== "undefined") roadmapFilterScrollResetPending = true;
   updateBoard(() => {
-    for (const category of categories) {
-      category.board.settings.catalogGroup = group;
+    categories.forEach((category, index) => {
+      category.board.settings.catalogGroups = [...normalized[index]];
+      delete category.board.settings.catalogGroup;
       category.board.settings.hideDiscontinued = false;
-    }
+    });
     clearHiddenCatalogSelection();
   });
   return true;
+}
+
+function setCatalogGroups(selection) {
+  const normalized = PortfolioModel.normalizeCatalogGroups(selection);
+  if (!normalized) return false;
+  const categories = catalogFilterCategories();
+  return applyCatalogGroups(categories, categories.map(() => normalized));
+}
+
+function setCatalogGroup(group) {
+  if (!PortfolioModel.CATALOG_VISIBILITY_GROUPS.includes(group)) return false;
+  if (group === "all") return setCatalogGroups(["all"]);
+  const categories = catalogFilterCategories();
+  const current = categories.map(category => PortfolioModel.catalogVisibilitySelection(category.board.settings));
+  const remove = current.length > 0 && current.every(selection => selection?.includes(group));
+  const selections = current.map(selection => {
+    const specific = (selection || []).filter(value => value !== "all");
+    const next = remove ? specific.filter(value => value !== group) : [...specific, group];
+    return next.length ? next : ["all"];
+  });
+  return applyCatalogGroups(categories, selections);
 }
 
 function syncCatalogFilterControls() {
@@ -1725,34 +1750,38 @@ function syncCatalogFilterControls() {
   let cache = syncCatalogFilterControls.cache;
   const categoryKey = JSON.stringify(categories.map(category => category.id));
   if (!cache || cache.portfolio !== portfolio || cache.categoryKey !== categoryKey || categories.some((category, index) => cache.products[index] !== category.board.products) || cache.revision !== revision || cache.day !== day) {
-    const counts = { all: 0, launched: 0, unreleased: 0, eol: 0, unknown: 0 };
+    const counts = Object.fromEntries([...PortfolioModel.CATALOG_VISIBILITY_GROUPS, "unknown"].map(key => [key, 0]));
     for (const category of categories) {
-      const current = PortfolioModel.catalogLifecycleCounts(category.board.products, now);
+      const current = PortfolioModel.catalogVisibilityCounts(category.board.products, now);
       for (const key of Object.keys(counts)) counts[key] += current[key];
     }
     cache = { portfolio, categoryKey, products: categories.map(category => category.board.products), revision, day, counts };
     syncCatalogFilterControls.cache = cache;
   }
-  const choices = categories.map(category => ["all", "launched", "unreleased", "eol"].includes(category.board.settings.catalogGroup) ? category.board.settings.catalogGroup : category.board.settings.hideDiscontinued ? "legacy" : "all");
-  const mixed = new Set(choices).size > 1, group = mixed ? "mixed" : choices[0] || "all", legacy = group === "legacy";
-  const labels = { all: "All products", launched: "Launched", unreleased: "Unreleased", eol: "EOL · End of manufacture" };
+  const choices = categories.map(category => PortfolioModel.catalogVisibilitySelection(category.board.settings));
+  const mixed = new Set(choices.map(selection => JSON.stringify(selection))).size > 1;
+  const labels = { all: "All products", launched: "Launched", "in-development": "In development", "in-planning": "In planning", embargo: "Embargoed", unreleased: "Upcoming · Stage unconfirmed", eol: "EOL · End of manufacture" };
   const locked = productLayoutEditing || packageOperationInProgress || pptxExportInProgress || Boolean(typeof roadmapDraft !== "undefined" && roadmapDraft);
   const scopeLabel = scoped ? `across ${categories.length} selected ${categories.length === 1 ? "category" : "categories"}` : "in this category";
-  controls.setAttribute("aria-label", `${mixed ? "Mixed lifecycle visibility" : "Lifecycle visibility"} · ${scopeLabel}`);
+  const summary = mixed ? "Mixed category selections" : choices[0] === null ? "All except discontinued" : choices[0]?.map(value => labels[value]).join(" + ") || "No groups selected";
+  controls.setAttribute("aria-label", `Show lifecycle groups · ${summary} · ${scopeLabel}`);
   const legacyToggle = document.getElementById("hideDiscontinued");
   if (legacyToggle) legacyToggle.disabled = locked;
   for (const button of controls.querySelectorAll("[data-catalog-group]")) {
     const value = button.dataset.catalogGroup, count = cache.counts[value];
-    const pressed = !categories.length ? "false" : mixed ? choices.includes(value) || value === "all" && choices.includes("legacy") ? "mixed" : "false" : value === group ? "true" : legacy && value === "all" ? "mixed" : "false";
+    const selected = choices.filter(selection => selection?.includes(value)).length;
+    const legacyAll = value === "all" && choices.some(selection => selection === null);
+    const pressed = categories.length && selected === categories.length ? "true" : selected || legacyAll ? "mixed" : "false";
     if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
     button.disabled = locked || !categories.length;
-    const summary = legacy && value === "all" ? "All except discontinued · Click to show all" : labels[value];
-    const scopeAction = !categories.length ? "Choose categories to enable visibility filters" : `Apply to ${categories.length === 1 ? "the selected category" : `all ${categories.length} selected categories`}`;
-    const label = `${summary} · ${count} ${scopeLabel}${mixed ? " · Mixed category filters" : ""}${scoped ? ` · ${scopeAction}` : ""}${value === "all" && cache.counts.unknown ? ` · ${cache.counts.unknown} without a confirmed lifecycle appear in All` : ""}${locked ? " · Finish the current edit or export to change visibility" : ""}`;
+    const action = value === "all" ? "Show all lifecycle groups" : pressed === "true" ? "Hide this group; removing the last group returns to All" : "Add this group; choose multiple groups";
+    const scopeAction = !categories.length ? "Choose categories to enable visibility filters" : `${action}${scoped ? ` in ${categories.length === 1 ? "the selected category" : `all ${categories.length} selected categories`}` : ""}`;
+    const label = `${labels[value]} · ${count} ${scopeLabel}${mixed ? " · Mixed category selections" : ""} · ${scopeAction}${legacyAll ? " · Legacy preference excludes discontinued products" : ""}${value === "all" && cache.counts.unknown ? ` · ${cache.counts.unknown} without a confirmed lifecycle appear in All` : ""}${locked ? " · Finish the current edit or export to change visibility" : ""}`;
     if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
     const counter = button.querySelector(".catalog-group-count"), tooltip = button.querySelector(".catalog-group-tooltip");
     if (counter.textContent !== String(count)) counter.textContent = String(count);
-    if (tooltip.textContent !== label) tooltip.textContent = label;
+    const tooltipLabel = locked || !categories.length ? label : `${labels[value]} · ${count} ${scopeLabel} · ${value === "all" ? "Show everything" : pressed === "true" ? "Selected · Click to hide" : "Click to add; multi-select"}${mixed ? " · Mixed selections" : ""}`;
+    if (tooltip.textContent !== tooltipLabel) tooltip.textContent = tooltipLabel;
   }
   const empty = document.getElementById("catalogFilterEmpty");
   const emptyHost = document.querySelector(scoped ? "#hashoutView .hashout-stage" : ".workspace");
@@ -1763,10 +1792,9 @@ function syncCatalogFilterControls() {
   empty?.classList.toggle("hidden", !noMatches);
   if (noMatches) {
     const query = scoped ? "" : activeView === "products" ? searchQuery.trim() : roadmapSearchQuery.trim();
-    const description = { launched: "launched", unreleased: "unreleased", eol: "discontinued" }[group] || "visible";
     document.getElementById("catalogFilterEmptyText").textContent = query
-      ? `No ${group === "all" ? "products" : description + " products"} match your search. Clear the search or choose another visibility group.`
-      : `No ${group === "all" ? "visible" : description} products ${scopeLabel}.${cache.counts.unknown ? " Products without a confirmed lifecycle appear in All." : ""}`;
+      ? "No visible products match your search. Clear the search or change the lifecycle groups."
+      : `No products from the selected lifecycle groups ${scopeLabel}.${cache.counts.unknown ? " Products without a confirmed lifecycle appear in All." : ""}`;
     document.getElementById("catalogClearSearch").classList.toggle("hidden", !query);
   }
   for (const button of empty?.querySelectorAll("button") || []) button.disabled = locked;
@@ -3106,6 +3134,7 @@ function setRoadmapBasis(value) {
   roadmapLaneHovers.forEach(hover => hover.clear({ immediate: true }));
   scheduleSave();
   renderRoadmaps();
+  renderStatus();
   announceRoadmapEdit(value === "ffs" ? "Hashout roadmap" : "Lifecycle roadmap. Placement uses GA and EM.");
 }
 
@@ -6153,7 +6182,7 @@ function syncControls() {
   updateProductLayoutEditControls();
   $("#showPrices").checked = board.settings.showPrices;
   $("#showSkus").checked = board.settings.showSkus;
-  $("#hideDiscontinued").checked = !["all", "launched", "unreleased", "eol"].includes(board.settings.catalogGroup) && board.settings.hideDiscontinued;
+  $("#hideDiscontinued").checked = !PortfolioModel.normalizeCatalogGroups(board.settings.catalogGroups) && !["all", "launched", "unreleased", "eol"].includes(board.settings.catalogGroup) && board.settings.hideDiscontinued;
   $("#roadmapStart").value = board.settings.roadmap.startMonth;
   $("#roadmapEnd").value = board.settings.roadmap.endMonth;
   $("#roadmapSnap").value = board.settings.roadmap.snap;
@@ -8494,7 +8523,7 @@ $("#catalogVisibility").onkeydown = event => {
   if (index < 0) return;
   event.preventDefault();
   const next = event.key === "Home" ? buttons[0] : event.key === "End" ? buttons.at(-1) : buttons[(index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length];
-  next.focus(); setCatalogGroup(next.dataset.catalogGroup);
+  next.focus();
 };
 $("#catalogShowAll").onclick = () => setCatalogGroup("all");
 $("#catalogClearSearch").onclick = () => {
@@ -8839,10 +8868,10 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
   },
   captureView() {
     return { view: activeView, basis: portfolio.settings.roadmapBasis || "lifecycle", activeCategoryId,
-      categoryVisibility: catalogFilterCategories().map(category => ({ categoryId: category.id, catalogGroup: category.board.settings.catalogGroup, hideDiscontinued: category.board.settings.hideDiscontinued === true })),
+      categoryVisibility: catalogFilterCategories().map(category => ({ categoryId: category.id, catalogGroups: category.board.settings.catalogGroups, catalogGroup: category.board.settings.catalogGroup, hideDiscontinued: category.board.settings.hideDiscontinued === true })),
       categoryIds: hashoutCategoryScope() || portfolio.categories.map(category => category.id), dateRange: { start: board.settings.roadmap.startMonth, end: board.settings.roadmap.endMonth },
       search: hasDedicatedHashoutView() && activeView !== "products" ? document.querySelector(".hashout-search")?.value || "" : activeView === "products" ? searchQuery : roadmapSearchQuery,
-      display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus, hideDiscontinued: board.settings.hideDiscontinued, catalogGroup: board.settings.catalogGroup } };
+      display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus, hideDiscontinued: board.settings.hideDiscontinued, catalogGroup: board.settings.catalogGroup, catalogGroups: board.settings.catalogGroups } };
   },
   applyView(value) {
     if (workspaceOpening || packageOperationInProgress || pptxExportInProgress || productLayoutEditing || (typeof roadmapDraft !== "undefined" && roadmapDraft)) throw new Error("Finish the current edit or export before opening a saved view.");
@@ -8861,13 +8890,15 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
       for (const preference of safe.categoryVisibility) {
         const target = portfolio.categories.find(category => category.id === preference.categoryId)?.board;
         if (!target) continue;
-        if (preference.catalogGroup) { target.settings.catalogGroup = preference.catalogGroup; target.settings.hideDiscontinued = false; }
-        else if (typeof preference.hideDiscontinued === "boolean") { delete target.settings.catalogGroup; target.settings.hideDiscontinued = preference.hideDiscontinued; }
+        if (preference.catalogGroups) { target.settings.catalogGroups = [...preference.catalogGroups]; delete target.settings.catalogGroup; target.settings.hideDiscontinued = false; }
+        else if (preference.catalogGroup) { delete target.settings.catalogGroups; target.settings.catalogGroup = preference.catalogGroup; target.settings.hideDiscontinued = false; }
+        else if (typeof preference.hideDiscontinued === "boolean") { delete target.settings.catalogGroups; delete target.settings.catalogGroup; target.settings.hideDiscontinued = preference.hideDiscontinued; }
       }
     } else {
       if (typeof display.hideDiscontinued === "boolean") board.settings.hideDiscontinued = display.hideDiscontinued;
-      if (display.catalogGroup) { board.settings.catalogGroup = display.catalogGroup; board.settings.hideDiscontinued = false; }
-      else if (typeof display.hideDiscontinued === "boolean") delete board.settings.catalogGroup;
+      if (display.catalogGroups) { board.settings.catalogGroups = [...display.catalogGroups]; delete board.settings.catalogGroup; board.settings.hideDiscontinued = false; }
+      else if (display.catalogGroup) { delete board.settings.catalogGroups; board.settings.catalogGroup = display.catalogGroup; board.settings.hideDiscontinued = false; }
+      else if (typeof display.hideDiscontinued === "boolean") { delete board.settings.catalogGroups; delete board.settings.catalogGroup; }
     }
     if (typeof display.detailsOpen === "boolean") roadmapDetailsOpen = display.detailsOpen;
     resetHashoutView(); setView(safe.view || "products"); clearHiddenCatalogSelection();
