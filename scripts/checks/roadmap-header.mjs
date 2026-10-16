@@ -2,20 +2,21 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 await import("../../public/js/reference-theme.js");
+await import("../../public/js/today-marker.js");
 
 const source = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const start = source.indexOf("  // One neutral calendar surface: typography, sparse ticks, and year seams.");
 const end = source.indexOf("\n  roadmapHitRegions.set(targetCanvas, regions);", start);
 assert.ok(start >= 0 && end > start, "The check runs the actual canvas calendar header.");
 const sandbox = {
-  Math, String, ROADMAP_HEADER_HEIGHT: 88, ROADMAP_LEFT_WIDTH: 190, roadmapMonthWidth: 82,
+  Math, String, ROADMAP_CALENDAR_TOP: 40, ROADMAP_HEADER_HEIGHT: 128, ROADMAP_LEFT_WIDTH: 190, roadmapMonthWidth: 82,
   UI_PALETTE: { inkBlack: "#171717", whiteSmoke: "#eeeeec", greyOlive: "#929593", silver: "#c3c8c5", midGrey: "#949896", starDust: "#deded9" },
   drawYearSeamSegment() {}, roadmapSpanLabel: (count) => `${count} MONTH VIEW`, roadmapLabel: (month) => month,
 };
 Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(`function drawHeader(context, { range, stickyX = 0, stickyY = 0, clientWidth = 800, exportMode = false, selectedGuides = null, ffsMode = false }) {
-  const timelineX = ROADMAP_LEFT_WIDTH, timelineWidth = range.count * roadmapMonthWidth, width = timelineX + timelineWidth + 24;
+  const timelineX = ROADMAP_LEFT_WIDTH, timelineWidth = range.count * roadmapMonthWidth, width = timelineX + timelineWidth + 24, height = 500;
   const targetScroll = { clientWidth };
   ${source.slice(start, end)}
 }`, sandbox);
@@ -62,10 +63,10 @@ for (const monthWidth of [8, 17.25, 41.4, 82, 112]) {
       const current = label(result, 2026);
       assert.ok(current, "The partly visible year is drawn until its calendar span ends.");
       near(current.x - left, 200, "A pinned year keeps a stable viewport x, including fractional scroll offsets");
-      near(current.y - top, 31, "The year baseline stays fixed during vertical and diagonal panning");
+      near(current.y - top, 71, "The year baseline stays fixed below the live Today readout during vertical and diagonal panning");
       near(current.clip.left - left, 190, "The title clip starts beside the sticky lane rail");
       assert.ok(current.clip.right <= 190 + span + 1e-8, "An outgoing year never paints into the following year.");
-      assert.equal(current.clip.top - top, 0); assert.equal(current.clip.bottom - top, 38);
+      assert.equal(current.clip.top - top, 40); assert.equal(current.clip.bottom - top, 78);
       assert.ok(result.years.every((record) => record.clip.right <= Math.min(190 + 36 * monthWidth, left + 800) + 1e-8), "Every year is clipped at the viewport or timeline edge.");
     }
   }
@@ -95,49 +96,40 @@ for (const left of [0, firstSpan / 2, firstSpan - 0.125, firstSpan, firstSpan + 
 }
 const grid = paint({ left: 213.25, top: 201.5 });
 const jan = grid.labels.find((record) => record.text === "January" && record.x < 500);
-near(jan.x, 190 + 82 / 2, "Month labels retain their calendar coordinates"); near(jan.y - 201.5, 74, "Month labels retain their fixed baseline");
+near(jan.x, 190 + 82 / 2, "Month labels retain their calendar coordinates"); near(jan.y - 201.5, 114, "Month labels retain their fixed baseline below the Today band");
 const q1 = grid.labels.find((record) => record.text === "Q1" && record.x < 500);
-near(q1.x, 190 + 3 * 82 / 2, "Quarter labels align to their original three-month span"); near(q1.y - 201.5, 52, "Quarter labels retain their fixed baseline");
+near(q1.x, 190 + 3 * 82 / 2, "Quarter labels align to their original three-month span"); near(q1.y - 201.5, 92, "Quarter labels retain their fixed baseline below the Today band");
 
 const exported = paint({ left: 550, top: 140, width: 350, exportMode: true });
 assert.deepEqual(exported.years.map((record) => record.text), ["2026", "2027", "2028"], "Exports render the complete timeline rather than the on-screen viewport.");
 assert.deepEqual(exported.years.map((record) => record.x), [200, 200 + 12 * 82, 200 + 24 * 82]);
-assert.ok(exported.years.every((record) => record.y === 31 && record.clip.top === 0));
+assert.ok(exported.years.every((record) => record.y === 71 && record.clip.top === 40));
 assert.equal(paint({ width: 180 }).years.length, 0, "A viewport narrower than the fixed rail has no visible calendar titles.");
 assert.equal(paint({ left: 4000 }).years.length, 0, "Clipped-off years are not drawn beyond the timeline.");
 
-// Exercise the real Today drawing block independently of wall-clock date.
-const todayStart = source.indexOf("  // Today marker over the timeline body.");
-const todayEnd = source.indexOf("  // Sticky family rail.", todayStart);
-assert.ok(todayStart >= 0 && todayEnd > todayStart);
+// Exercise the actual header/export adapter, with its date independent of the wall clock.
 const fixedDate = new Date(2026, 9, 14, 12);
 class TodayDate extends Date { constructor(...args) { super(...(args.length ? args : [fixedDate.getTime()])); } }
-const todaySandbox = {
-  Date: TodayDate, Math, ROADMAP_HEADER_HEIGHT: 88, roadmapMonthWidth: 82,
-  UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
-  monthIndex: value => Number(value.slice(0, 4)) * 12 + Number(value.slice(5, 7)) - 1,
-  monthStringFromDate: () => "2026-10",
+const staticMarkers = [];
+sandbox.Date = TodayDate;
+sandbox.PortfolioTodayMarker = {
+  currentMonthPosition: globalThis.PortfolioTodayMarker.currentMonthPosition,
+  drawStatic(context, geometry, now) {
+    if (!globalThis.PortfolioTodayMarker.geometry(geometry).visible) return false;
+    staticMarkers.push({ geometry, date: globalThis.PortfolioTodayMarker.dateParts(now) });
+    return true;
+  },
 };
-vm.createContext(todaySandbox);
-vm.runInContext(`function drawToday(context, range, height) { const timelineX = 190; ${source.slice(todayStart, todayEnd)} }`, todaySandbox);
-const todayStrokes = [], todayPath = [];
-const todayContext = {
-  strokeStyle: "", lineWidth: 1, dash: [],
-  setLineDash(value) { this.dash = Array.from(value); },
-  beginPath() { todayPath.length = 0; },
-  moveTo(x, y) { todayPath.push([x, y]); },
-  lineTo(x, y) { todayPath.push([x, y]); },
-  stroke() { todayStrokes.push({ color: this.strokeStyle, width: this.lineWidth, dash: [...this.dash], path: todayPath.map(point => [...point]) }); },
-};
-todaySandbox.drawToday(todayContext, range(month(2026), month(2026, 12)), 500);
-assert.equal(todayStrokes.length, 1);
-assert.equal(todayStrokes[0].color, globalThis.PortfolioTheme.colors.alert, "Today uses the shared alert color without muting it.");
-assert.equal(todayStrokes[0].width, 1, "Today uses a fine one-pixel line.");
-assert.deepEqual(todayStrokes[0].dash, [4, 4], "Today uses a restrained, evenly spaced dash.");
-assert.deepEqual(todayContext.dash, [], "The Today dash cannot leak into later roadmap drawing.");
-near(todayStrokes[0].path[0][0], 190 + (9 + 13 / 31) * 82, "The dashed marker keeps the actual day position");
-assert.deepEqual(todayStrokes[0].path.map(point => point[1]), [80, 500]);
-todaySandbox.drawToday(todayContext, range(month(2027), month(2027, 12)), 500);
-assert.equal(todayStrokes.length, 1, "An outside-range Today marker stays absent.");
+paint({ start: month(2026), end: month(2026, 12), exportMode: false });
+assert.equal(staticMarkers.length, 0, "Interactive canvases leave the marker to the shared overlay.");
+paint({ start: month(2026), end: month(2026, 12), exportMode: true });
+assert.equal(staticMarkers.length, 1, "A static export uses the shared marker instead of the removed canvas line.");
+near(staticMarkers[0].geometry.x, 190 + (9 + 13 / 31) * 82, "The exported marker keeps the actual calendar day position.");
+assert.equal(staticMarkers[0].geometry.yearTop, 40);
+assert.equal(staticMarkers[0].geometry.bodyTop, 128);
+assert.equal(staticMarkers[0].geometry.colors.alert, globalThis.PortfolioTheme.colors.alert);
+assert.equal(staticMarkers[0].date.date, "10/14/2026", "The export readout includes the full MM/DD/YYYY date.");
+paint({ start: month(2027), end: month(2027, 12), exportMode: true });
+assert.equal(staticMarkers.length, 1, "An outside-range Today marker stays absent.");
 
-console.log("Roadmap header checks passed: stable two-axis year anchors, clipped partial years, smooth boundary handoff, unchanged calendar alignment, narrow viewports, complete exports, and an alert-colored Today line at the actual day.");
+console.log("Roadmap header checks passed: stable two-axis year anchors, fractional offsets and zoom levels, clipped partial years, smooth boundary handoff, unchanged month/quarter alignment, narrow viewports, complete exports, and the shared Today marker at the actual calendar day.");
