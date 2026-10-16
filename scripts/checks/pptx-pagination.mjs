@@ -115,7 +115,7 @@ const rendererSandbox = {
   isFfsRoadmap: () => false,
   console, Date, Math,
   PortfolioModel: globalThis.PortfolioModel,
-  ROADMAP_LEFT_WIDTH: 190, ROADMAP_HEADER_HEIGHT: 88, ROADMAP_GROUP_HEADER_HEIGHT: 28,
+  ROADMAP_LEFT_WIDTH: 190, ROADMAP_CALENDAR_TOP: 40, ROADMAP_HEADER_HEIGHT: 128, ROADMAP_GROUP_HEADER_HEIGHT: 28,
   ROADMAP_ROW_HEIGHT: 38, ROADMAP_MIN_MONTH_WIDTH: 8, roadmapMonthWidth: 20,
   activeCategoryId: "active", board: activeBoard, selectedId: "selected",
   searchQuery: "portfolio search", roadmapSearchQuery: "roadmap search", inspectorOpen: true,
@@ -152,7 +152,7 @@ rendererSandbox.roadmapRange = () => {
 rendererSandbox.roadmapDimensions = (groups) => {
   const range = rendererSandbox.roadmapRange();
   const rowsHeight = groups.reduce((total, group) => total + 28 + group.products.length * 38, 0);
-  return { width: 190 + range.count * rendererSandbox.roadmapMonthWidth + 24, height: 88 + Math.max(156, rowsHeight + 24), range, groups };
+  return { width: 190 + range.count * rendererSandbox.roadmapMonthWidth + 24, height: rendererSandbox.ROADMAP_HEADER_HEIGHT + Math.max(156, rowsHeight + 24), range, groups };
 };
 const oneYear = { start: rendererSandbox.monthIndex("2026-01"), end: rendererSandbox.monthIndex("2026-12"), count: 12 };
 const barProduct = (startMonth, endMonth) => ({ roadmap: { startMonth, endMonth } });
@@ -199,8 +199,8 @@ assert.equal(renderedRoadmap.products[1].concept, true);
 assert.ok(renderedRoadmap.products.every((product) => !Object.hasOwn(product, "lineColor")), "ordinary roadmap products carry no decorative outline, including concept and embargo stages");
 assert.equal(renderedRoadmap.products[2].textColor, "#1A1B1C", "The editable roadmap export preserves readable dark labels on the bright red embargo fill.");
 assert.equal(renderedRoadmap.products[0].textColor, "#171717", "Ordinary product labels keep their existing contrast choice.");
-assert.equal(renderedRoadmap.products[0].y, 121);
-assert.equal(renderedRoadmap.products[2].y, 235, "out-of-range rows retain their place in the background layout");
+assert.equal(renderedRoadmap.products[0].y, 161);
+assert.equal(renderedRoadmap.products[2].y, 275, "out-of-range rows retain their place in the background layout");
 assert.equal(JSON.stringify(renderCategory), categoryBeforeRender, "export normalization leaves the saved category untouched");
 for (const property of stateProperties) assert.equal(rendererSandbox[property], stateBeforeRender.get(property), `successful export restores ${property}`);
 failCanvasEncoding = true;

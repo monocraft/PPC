@@ -76,6 +76,8 @@ jobs:
           cp public/js/date-history.js public/js/date-precision.js _site/js/
           cp public/js/ffs-roadmap.js public/js/hashout-layout.js public/js/hashout-view.js _site/js/
           cp public/css/hashout-roadmap.css _site/css/
+          cp public/js/today-marker.js _site/js/
+          cp public/css/today-marker.css _site/css/
           cp public/js/launch-records.js _site/js/
           cp public/js/card-specs.js _site/js/
           cp public/js/product-image-framing.js _site/js/
@@ -118,6 +120,8 @@ jobs:
           test -f _site/js/hashout-layout.js
           test -f _site/js/hashout-view.js
           test -f _site/css/hashout-roadmap.css
+          test -f _site/js/today-marker.js
+          test -f _site/css/today-marker.css
           test -f _site/js/launch-records.js
           test -f _site/js/card-specs.js
           test -f _site/js/product-image-framing.js
