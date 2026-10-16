@@ -1,0 +1,25 @@
+/* A confirmed social event lights the face in the existing alert red. */
+.master-presence-avatar.presence-character[data-reaction="sent"],
+.master-presence-avatar.presence-character[data-reaction="received"] { color: var(--color-danger); }
+.presence-character[data-reaction="sent"] .presence-ring,
+.presence-character[data-reaction="received"] .presence-ring { opacity: 1; animation: presence-reaction-ring 720ms ease-out 1; }
+.presence-character[data-reaction="sent"] .presence-orbit,
+.presence-character[data-reaction="received"] .presence-orbit { color: inherit; }
+.presence-character[data-reaction="sent"].is-editing::after,
+.presence-character[data-reaction="received"].is-editing::after { background: currentColor; }
+.presence-character.is-in-view[data-reaction="received"] .presence-face { animation: presence-reaction-recoil 650ms ease-out 1; }
+@keyframes presence-reaction-ring {
+  0%, 100% { opacity: 1; }
+  35% { opacity: .48; }
+}
+@keyframes presence-reaction-recoil {
+  0% { transform: rotate(var(--presence-tilt, 0deg)); }
+  17% { transform: translateX(1px) rotate(11deg) scale(.84, 1.09); }
+  39% { transform: rotate(-10deg) scale(1.06, .94); }
+  65% { transform: rotate(5deg); }
+  100% { transform: rotate(var(--presence-tilt, 0deg)); }
+}
+.preview-reduced-motion .presence-character[data-reaction] * { animation: none !important; transition: none !important; transform: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .presence-character[data-reaction] * { animation: none !important; transition: none !important; transform: none !important; }
+}

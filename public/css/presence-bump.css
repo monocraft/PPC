@@ -1,0 +1,32 @@
+/* One tiny trip; the source slot remains exactly the same size. */
+.presence-bump-actor { position: fixed; z-index: 46; display: block; margin: 0; padding: 0; border: 0; background: transparent; color: var(--color-text); pointer-events: none; transform-origin: 50% 85%; }
+.presence-bump-actor > .presence-character { display: inline-flex; flex: none; box-sizing: border-box; }
+.presence-bump-actor .presence-character * { animation: none !important; transition: none !important; }
+.presence-bump-actor::before, .presence-bump-actor::after { content: ""; position: absolute; top: calc(100% - 3px); width: 2px; height: 6px; border-radius: 1px; background: currentColor; opacity: .85; transform-origin: 50% 0; animation-duration: 1100ms; animation-timing-function: ease-in-out; animation-iteration-count: 1; }
+.presence-bump-actor::before { left: 35%; animation-name: presence-bump-left-foot; }
+.presence-bump-actor::after { right: 35%; animation-name: presence-bump-right-foot; }
+.master-presence-avatar.presence-character.presence-is-bumped .presence-face { animation: presence-bump-wobble 500ms ease-out 1; }
+@keyframes presence-bump-left-foot {
+  0%, 44%, 57%, 100% { transform: rotate(0); }
+  12%, 69% { transform: rotate(34deg); }
+  24%, 81% { transform: rotate(-27deg); }
+  36%, 93% { transform: rotate(25deg); }
+}
+@keyframes presence-bump-right-foot {
+  0%, 44%, 57%, 100% { transform: rotate(0); }
+  12%, 69% { transform: rotate(-29deg); }
+  24%, 81% { transform: rotate(32deg); }
+  36%, 93% { transform: rotate(-24deg); }
+}
+@keyframes presence-bump-wobble {
+  0%, 100% { transform: rotate(var(--presence-tilt, 0deg)); }
+  20% { transform: translateX(1px) rotate(12deg); }
+  45% { transform: rotate(-9deg); }
+  72% { transform: rotate(4deg); }
+}
+.preview-reduced-motion .presence-bump-actor { display: none !important; }
+.preview-reduced-motion .presence-is-bumped * { animation: none !important; transition: none !important; transform: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .presence-bump-actor { display: none !important; }
+  .presence-is-bumped * { animation: none !important; transition: none !important; transform: none !important; }
+}

@@ -344,6 +344,10 @@ export function createMasterHandler(options = {}) {
   const rates = new Map();
   const presenceRates = new Map();
   const presenceSessions = new Map();
+  // Short-lived delivery receipts are separate from the encrypted master and
+  // survive inbox acknowledgement only long enough to enforce retries/rates.
+  const presencePokes = new Map();
+  const presenceActivities = new Set(['browsing', 'editing', 'roadmap', 'focused', 'idle']);
   let verifiedPresenceSource = null;
 
   function canWrite(request, origin, token) {
@@ -411,6 +415,11 @@ export function createMasterHandler(options = {}) {
       (body.displayName !== undefined && (typeof body.displayName !== 'string' || body.displayName.length > 60)) ||
       (body.editing !== undefined && typeof body.editing !== 'boolean') ||
       (body.leave !== undefined && typeof body.leave !== 'boolean') ||
+      (body.receivePokes !== undefined && typeof body.receivePokes !== 'boolean') ||
+      (body.activity !== undefined && !presenceActivities.has(body.activity)) ||
+      (body.ackPokeIds !== undefined && (!Array.isArray(body.ackPokeIds) || body.ackPokeIds.length > 32 || body.ackPokeIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(id)))) ||
+      (body.poke !== undefined && (!isRecord(body.poke) || Object.keys(body.poke).some(name => !['id', 'targetSessionId'].includes(name)) ||
+        typeof body.poke.id !== 'string' || typeof body.poke.targetSessionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(body.poke.id) || !/^[A-Za-z0-9_-]{8,128}$/.test(body.poke.targetSessionId) || body.leave === true)) ||
       (body.productId !== undefined && (typeof body.productId !== 'string' || body.productId.length > 180)) ||
       (body.categoryId !== undefined && (typeof body.categoryId !== 'string' || body.categoryId.length > 180))) {
       throw problem(400, 'INVALID_PRESENCE', 'The active viewer details are invalid.');
@@ -418,17 +427,24 @@ export function createMasterHandler(options = {}) {
     const now = presenceClock();
     if (!Number.isFinite(now)) throw unavailable();
     for (const [sessionId, entry] of presenceSessions) if (now - entry.touchedAt >= presenceTtlMs) presenceSessions.delete(sessionId);
+    for (const [id, entry] of presencePokes) if (now - entry.createdAt >= 90000) presencePokes.delete(id);
     const current = presenceSessions.get(body.sessionId);
     const productId = body.editing === true ? body.productId || '' : '';
     const requestedCategoryId = body.categoryId || '';
     const authorized = await presenceAuthorization(key, productId, requestedCategoryId, current);
-    if (body.leave) presenceSessions.delete(body.sessionId);
+    const keyScope = createHash('sha256').update(key).digest('hex');
+    if (body.leave) {
+      presenceSessions.delete(body.sessionId);
+      for (const [id, entry] of presencePokes) if (entry.keyScope === keyScope && [entry.fromSessionId, entry.toSessionId].includes(body.sessionId)) presencePokes.delete(id);
+    }
     else {
       if (!current && presenceSessions.size >= presenceMaxUsers) throw problem(429, 'PRESENCE_FULL', 'The active viewer list is full. Try again shortly.');
       presenceSessions.set(body.sessionId, {
         sessionId: body.sessionId,
         displayName: body.displayName === undefined ? current?.displayName || '' : body.displayName.replace(/[\u0000-\u001f\u007f]/g, '').trim(),
         editing: body.editing === true && authorized.knownProduct,
+        activity: body.editing === true && authorized.knownProduct ? 'editing' : body.activity === 'editing' ? 'browsing' : body.activity || 'browsing',
+        receivePokes: body.receivePokes === undefined ? current?.receivePokes !== false : body.receivePokes,
         productId: authorized.knownProduct ? productId : '',
         productName: authorized.productName,
         categoryId: authorized.categoryId,
@@ -436,15 +452,40 @@ export function createMasterHandler(options = {}) {
         requestedCategoryId,
         sourceSignature: authorized.sourceSignature,
         touchedAt: now,
+        keyScope,
       });
     }
-    const users = [...presenceSessions.values()].map(entry => ({
+    const sender = presenceSessions.get(body.sessionId);
+    const acknowledgements = new Set(body.ackPokeIds || []);
+    for (const entry of presencePokes.values()) if (entry.keyScope === keyScope && entry.toSessionId === body.sessionId && (sender?.receivePokes === false || acknowledgements.has(entry.id))) entry.acknowledged = true;
+    let poke;
+    if (body.poke) {
+      const receiptKey = `${keyScope}:${body.poke.id}`;
+      const previous = presencePokes.get(receiptKey);
+      const target = presenceSessions.get(body.poke.targetSessionId);
+      const recent = [...presencePokes.values()].filter(entry => entry.keyScope === keyScope && entry.fromSessionId === body.sessionId && now - entry.createdAt < 60000);
+      const sameTarget = recent.filter(entry => entry.toSessionId === body.poke.targetSessionId && now - entry.createdAt < 5000);
+      if (previous && previous.fromSessionId === body.sessionId && previous.toSessionId !== body.poke.targetSessionId) throw problem(400, 'INVALID_PRESENCE', 'This poke identity was already used.');
+      if (previous) poke = { id: body.poke.id, status: previous.fromSessionId === body.sessionId ? 'duplicate' : 'unavailable' };
+      else if (!sender || !target || target.keyScope !== keyScope || target.sessionId === body.sessionId || target.receivePokes === false || now - target.touchedAt >= presenceTtlMs) poke = { id: body.poke.id, status: 'unavailable' };
+      else if (sameTarget.length || recent.length >= 6) poke = { id: body.poke.id, status: 'throttled', retryAfterSeconds: Math.max(1, Math.ceil(Math.max(sameTarget.length ? 5000 - (now - sameTarget.at(-1).createdAt) : 0, recent.length >= 6 ? 60000 - (now - recent[0].createdAt) : 0) / 1000)) };
+      else if (presencePokes.size >= 4096 || [...presencePokes.values()].filter(entry => entry.keyScope === keyScope && entry.toSessionId === target.sessionId && !entry.acknowledged).length >= 16) poke = { id: body.poke.id, status: 'unavailable' };
+      else {
+        presencePokes.set(receiptKey, { id: body.poke.id, fromSessionId: sender.sessionId, fromDisplayName: sender.displayName,
+          toSessionId: target.sessionId, createdAt: now, keyScope, acknowledged: false });
+        poke = { id: body.poke.id, status: 'queued' };
+      }
+    }
+    const pokes = [...presencePokes.values()].filter(entry => entry.keyScope === keyScope && entry.toSessionId === body.sessionId && !entry.acknowledged && sender?.receivePokes !== false)
+      .slice(0, 16).map(entry => ({ id: entry.id, fromSessionId: entry.fromSessionId, fromDisplayName: entry.fromDisplayName, toSessionId: entry.toSessionId, createdAt: new Date(entry.createdAt).toISOString() }));
+    const users = [...presenceSessions.values()].filter(entry => entry.keyScope === keyScope).map(entry => ({
       sessionId: entry.sessionId, displayName: entry.displayName, editing: entry.editing,
+      activity: entry.activity, receivePokes: entry.receivePokes,
       categoryId: entry.categoryId, categoryName: entry.categoryName,
       ...(entry.productId ? { productId: entry.productId, productName: entry.productName } : {}),
       lastSeen: new Date(entry.touchedAt).toISOString(), lastSeenAt: new Date(entry.touchedAt).toISOString(),
     }));
-    return { users, sessions: users, onlineCount: users.length, ttlSeconds: presenceTtlMs / 1000 };
+    return { users, sessions: users, onlineCount: users.length, ttlSeconds: presenceTtlMs / 1000, capabilities: { pokes: true, activity: true }, pokes, ...(poke ? { poke } : {}) };
   }
 
   function snapshot(source, writable, requiresEditorToken, snapshotFormat) {
@@ -489,7 +530,7 @@ export function createMasterHandler(options = {}) {
       if (!/^application\/json(?:\s*;|$)/i.test(String(request.headers['content-type'] || ''))) throw problem(415, 'INVALID_REQUEST', 'Use a JSON request for the shared master.');
       body = await readBody(request, isPresence ? Math.min(maxBodyBytes, 4096) : maxBodyBytes);
       const save = request.url.endsWith('/save');
-      const allowed = isPresence ? ['key', 'editorToken', 'sessionId', 'displayName', 'editing', 'productId', 'categoryId', 'leave']
+      const allowed = isPresence ? ['key', 'editorToken', 'sessionId', 'displayName', 'editing', 'productId', 'categoryId', 'leave', 'activity', 'receivePokes', 'poke', 'ackPokeIds']
         : isReview ? ['key', 'editorToken', 'sessionId', 'productId', 'sourceProductId', 'snapshotFormat']
         : save ? ['key', 'editorToken', 'requestId', 'changes', 'actor', 'team', 'reason', 'snapshotFormat'] : ['key', 'editorToken', 'snapshotFormat'];
       if (!isRecord(body) || Object.keys(body).some(name => !allowed.includes(name)) || typeof body.key !== 'string' ||

@@ -146,7 +146,18 @@
     if (!response.ok) throw errorOf(response.status === 400 ? "These changes could not be saved. Check your product details and try again." : "The master could not save these changes. Your local changes are safe.", String(data.code || "SAVE_FAILED"), response.status);
     if (operation === "presence") {
       if (!Array.isArray(data.sessions || data.users)) throw errorOf("The shared connection status could not be read.", "INVALID_RESPONSE");
-      return data;
+      const validId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(value);
+      const capabilities = { pokes: data.capabilities?.pokes === true, activity: data.capabilities?.activity === true };
+      const pokes = Array.isArray(data.pokes) ? data.pokes.slice(0, 16).filter((event) => event && validId(event.id) && validId(event.fromSessionId) &&
+        validId(event.toSessionId) && event.toSessionId === payload.sessionId && event.fromSessionId !== event.toSessionId &&
+        typeof event.createdAt === "string" && event.createdAt.length <= 40 && Number.isFinite(Date.parse(event.createdAt)))
+        .map((event) => ({ id: event.id, fromSessionId: event.fromSessionId, toSessionId: event.toSessionId,
+          fromDisplayName: (typeof event.fromDisplayName === "string" ? event.fromDisplayName : "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 60), createdAt: event.createdAt })) : [];
+      const poke = data.poke && validId(data.poke.id) && data.poke.id === payload.poke?.id && ["queued", "duplicate", "throttled", "unavailable"].includes(data.poke.status)
+        ? { id: data.poke.id, status: data.poke.status, ...(data.poke.status === "throttled" ? { retryAfterSeconds: Math.max(1, Math.min(60, Number(data.poke.retryAfterSeconds) || 5)) } : {}) } : undefined;
+      // A legacy endpoint cannot confirm an interaction merely by accepting
+      // a heartbeat. Capability plus its matching receipt are both required.
+      return { ...data, capabilities, pokes: capabilities.pokes ? pokes : [], poke: capabilities.pokes ? poke : undefined };
     }
     return { ...data, snapshot: normalizeSnapshot(data.snapshot || data) };
   }
@@ -178,6 +189,7 @@
     let editorName = "", editorSessionId = root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     try { editorName = String(root.localStorage?.getItem("portfolio.sharedDisplayName") || "").trim().slice(0, 60); } catch {}
     let baseline = new Map(), tombstones = new Map(), snapshot = null, key = "", editorToken = "", githubToken = "", githubTransport = null, identity = null, connected = false, busy = false, generation = 0, accessVersion = 0, pendingRequest = null;
+    let presenceCapabilities = { pokes: false, activity: false };
     const pendingHydration = new Map(), completedHydration = new Map();
     function normalizedAccessKey(value) {
       const text = String(value || "").trim();
@@ -207,6 +219,7 @@
     function clearAccess() {
       if (key || editorToken || githubToken || connected) accessVersion += 1;
       key = ""; editorToken = ""; connected = false;
+      presenceCapabilities = { pokes: false, activity: false };
       rememberTeamAccess("");
       resetGitHubAccess();
     }
@@ -447,7 +460,7 @@
       try { newKey = normalizedAccessKey(access && typeof access === "object" ? access.key : access); }
       catch (error) { clearAccess(); throw error; }
       const nextEditorToken = team ? "" : String(access?.editorToken || "").trim();
-      if (newKey !== key || nextEditorToken !== editorToken) { accessVersion += 1; connected = false; if (newKey !== key) rememberTeamAccess(""); resetGitHubAccess(); }
+      if (newKey !== key || nextEditorToken !== editorToken) { accessVersion += 1; connected = false; presenceCapabilities = { pokes: false, activity: false }; if (newKey !== key) rememberTeamAccess(""); resetGitHubAccess(); }
       key = newKey; editorToken = nextEditorToken;
       const operationVersion = accessVersion, operationGeneration = generation;
       try { return await refresh(); }
@@ -758,6 +771,7 @@
     function markImported(products, importedKey) {
       seed(products || adapter.getBaselineProducts?.() || adapter.getProducts()); connected = false;
       accessVersion += 1;
+      presenceCapabilities = { pokes: false, activity: false };
       let newKey = "";
       try { newKey = normalizedAccessKey(importedKey); } catch {}
       if (!newKey || newKey !== key) { editorToken = ""; resetGitHubAccess(); }
@@ -772,10 +786,16 @@
       connected = false;
     }
     return Object.freeze({ connect, refresh, save, saveScoped, applySnapshot, track, markImported, adoptLocalBaseline,
-      async presence({ sessionId, displayName, editing, productId, categoryId, leave = false } = {}) {
+      async presence({ sessionId, displayName, editing, productId, categoryId, activity, receivePokes, poke, ackPokeIds, leave = false } = {}) {
         if (mode === "github" || !configured || !key) return null;
         const operationVersion = accessVersion, operationGeneration = generation;
-        try { return await request({ endpoint, operation: "presence", key, team, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, ...(categoryId ? { categoryId } : {}), leave: Boolean(leave) }); }
+        try {
+          const result = await request({ endpoint, operation: "presence", key, team, fetchImpl, keepalive: Boolean(leave), sessionId, displayName, editing, productId, ...(categoryId ? { categoryId } : {}),
+            ...(activity !== undefined ? { activity } : {}), ...(receivePokes !== undefined ? { receivePokes } : {}), ...(poke !== undefined ? { poke } : {}),
+            ...(ackPokeIds !== undefined ? { ackPokeIds } : {}), leave: Boolean(leave) });
+          if (accessVersion === operationVersion && generation === operationGeneration) presenceCapabilities = { ...result.capabilities };
+          return result;
+        }
         catch (error) { if (error.code === "INVALID_KEY" && accessVersion === operationVersion && generation === operationGeneration) clearAccess(); throw error; }
       },
       setEditorProfile({ sessionId, displayName, editorName: suppliedName } = {}) {
@@ -815,7 +835,7 @@
         if (version !== accessVersion || operationGeneration !== generation) throw errorOf("These products could not be reviewed. Your draft is safe.", "INVALID_RESPONSE");
         return validateReviewResult(result, [productId, sourceProductId]);
       },
-      getState() { return { mode, team, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, editorProfile: { sessionId: editorSessionId, displayName: editorName }, busy, accessVersion, snapshot, pending: track() }; },
+      getState() { return { mode, team, configured, connected, hasKey: Boolean(key), hasGitHubToken: Boolean(githubToken), identity: identity ? clone(identity) : null, editorProfile: { sessionId: editorSessionId, displayName: editorName }, presenceCapabilities: { ...presenceCapabilities }, busy, accessVersion, snapshot, pending: track() }; },
     });
   }
   root.PortfolioMasterClient = Object.freeze({ conflictKey, normalizeEndpoint, normalizeSnapshot, request, createSession });
