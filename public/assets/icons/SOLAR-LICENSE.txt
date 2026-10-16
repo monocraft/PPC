@@ -1,0 +1,9 @@
+Catalog visibility icons: widget-2-linear, check-circle-linear,
+clock-circle-linear and archive-linear from Solar by 480 Design.
+Source: https://icon-sets.iconify.design/solar/
+Author: https://www.figma.com/community/file/1166831539721848736
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+Retrieved through the Iconify API. Original vector paths are unchanged.
+The application renders the icons as local CSS masks using its UI colors.

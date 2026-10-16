@@ -1112,6 +1112,7 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
   target.products = Array.isArray(target.products) ? target.products : [];
   target.settings = { showPrices: true, showSkus: true, hideDiscontinued: false, ...target.settings, freeMove: false };
   target.settings.hideDiscontinued = target.settings.hideDiscontinued === true;
+  if (!["all", "launched", "unreleased", "eol"].includes(target.settings.catalogGroup)) delete target.settings.catalogGroup;
   target.settings.roadmap = {
     startMonth: "2026-01",
     endMonth: "2030-12",
@@ -1656,20 +1657,78 @@ function portfolioForSearch() {
 }
 
 function clearHiddenCatalogSelection() {
-  if (activeView !== "products" || board.settings.hideDiscontinued !== true) return;
-  const hidden = id => id && board.products.some(product => product.id === id && PortfolioModel.isDiscontinued(product));
+  if (activeView !== "products") return;
+  const visible = new Set(PortfolioModel.catalogProducts(board.products, board.settings).map(product => product.id));
+  const hidden = id => id && board.products.some(product => product.id === id) && !visible.has(id);
   let changed = false;
-  if (hidden(selectedId)) { selectedId = null; changed = true; }
+  if (hidden(selectedId)) { selectedId = null; inspectorOpen = false; changed = true; }
   if (hidden(viewerInfoProductId)) { closeViewerInfo({ render: false }); changed = true; }
   if (changed) renderInspector();
 }
 
 function setCatalogHideDiscontinued(hidden) {
+  if (productLayoutEditing || packageOperationInProgress || pptxExportInProgress) return false;
   stopProductCardDrag();
   updateBoard(current => {
+    delete current.settings.catalogGroup;
     current.settings.hideDiscontinued = hidden === true;
     clearHiddenCatalogSelection();
   });
+}
+
+function setCatalogGroup(group) {
+  if (!["all", "launched", "unreleased", "eol"].includes(group) || productLayoutEditing || packageOperationInProgress || pptxExportInProgress) return false;
+  if (board.settings.catalogGroup === group && !board.settings.hideDiscontinued) return false;
+  stopProductCardDrag();
+  if (typeof productCardHover !== "undefined") productCardHover?.clear();
+  canvasScroll.scrollLeft = 0; canvasScroll.scrollTop = 0;
+  updateBoard(current => {
+    current.settings.catalogGroup = group;
+    current.settings.hideDiscontinued = false;
+    clearHiddenCatalogSelection();
+  });
+  return true;
+}
+
+function syncCatalogFilterControls() {
+  const controls = globalThis.document?.getElementById?.("catalogVisibility");
+  if (!controls || !board) return;
+  const now = new Date(), day = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const revision = typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision;
+  let cache = syncCatalogFilterControls.cache;
+  if (!cache || cache.board !== board || cache.products !== board.products || cache.revision !== revision || cache.day !== day) {
+    cache = { board, products: board.products, revision, day, counts: PortfolioModel.catalogLifecycleCounts(board.products, now) };
+    syncCatalogFilterControls.cache = cache;
+  }
+  const known = ["all", "launched", "unreleased", "eol"].includes(board.settings.catalogGroup);
+  const group = known ? board.settings.catalogGroup : "all", legacy = !known && board.settings.hideDiscontinued;
+  const labels = { all: "All products", launched: "Launched", unreleased: "Unreleased", eol: "EOL · End of manufacture" };
+  const locked = productLayoutEditing || packageOperationInProgress || pptxExportInProgress;
+  const legacyToggle = document.getElementById("hideDiscontinued");
+  if (legacyToggle) legacyToggle.disabled = locked;
+  for (const button of controls.querySelectorAll("[data-catalog-group]")) {
+    const value = button.dataset.catalogGroup, count = cache.counts[value];
+    const pressed = value === group ? legacy ? "mixed" : "true" : "false";
+    if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
+    button.disabled = locked;
+    const summary = legacy && value === "all" ? "All except discontinued · Click to show all" : labels[value];
+    const label = `${summary} · ${count} in this category${value === "all" && cache.counts.unknown ? ` · ${cache.counts.unknown} without a confirmed lifecycle appear in All` : ""}${locked ? " · Finish the current edit or export to change visibility" : ""}`;
+    if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+    const counter = button.querySelector(".catalog-group-count"), tooltip = button.querySelector(".catalog-group-tooltip");
+    if (counter.textContent !== String(count)) counter.textContent = String(count);
+    if (tooltip.textContent !== label) tooltip.textContent = label;
+  }
+  const empty = document.getElementById("catalogFilterEmpty");
+  const matchingCount = visibleProducts().length;
+  if (typeof productLayoutEditButton !== "undefined" && productLayoutEditButton) productLayoutEditButton.disabled = !matchingCount;
+  const noMatches = activeView === "products" && board.products.length > 0 && !productLayoutEditing && matchingCount === 0;
+  empty?.classList.toggle("hidden", !noMatches);
+  if (noMatches) {
+    document.getElementById("catalogFilterEmptyText").textContent = searchQuery.trim()
+      ? `No ${group === "all" ? "products" : labels[group].toLowerCase() + " products"} match your search. Clear the search or choose another visibility group.`
+      : `This category has no ${group === "all" ? "visible" : labels[group].toLowerCase()} products.${cache.counts.unknown ? " Products without a confirmed lifecycle appear in All." : ""}`;
+    document.getElementById("catalogClearSearch").classList.toggle("hidden", !searchQuery.trim());
+  }
 }
 
 function openPortfolioSearchResult(result) {
@@ -4344,6 +4403,7 @@ function updateProductLayoutEditControls() {
   productControls.closest(".workspace-controls").classList.toggle("is-reordering", productLayoutEditing);
   canvas.classList.toggle("is-layout-editing", productLayoutEditing);
   updateDataEditIndicator();
+  if (typeof syncCatalogFilterControls === "function") syncCatalogFilterControls();
 }
 
 function captureProductCardLayout(targetBoard, laneIds) {
@@ -4450,8 +4510,15 @@ function handleProductReorderKeydown(event) {
   const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
   const targetLane = vertical ? lanes[laneIndex + direction] : lanes[laneIndex];
   if (!targetLane) return true;
-  const products = board.products.filter((item) => item.laneId === targetLane.id).sort((a, b) => a.order - b.order);
-  const targetIndex = vertical ? Math.min(product.order, products.length) : products.findIndex((item) => item.id === product.id) + direction;
+  const visible = visibleProducts();
+  const source = visible.filter(item => item.laneId === product.laneId).sort((a, b) => a.order - b.order);
+  const rank = source.findIndex(item => item.id === product.id);
+  if (rank < 0 || (!vertical && (rank + direction < 0 || rank + direction >= source.length))) return true;
+  const products = board.products.filter(item => item.laneId === targetLane.id && item.id !== product.id).sort((a, b) => a.order - b.order);
+  const neighbours = visible.filter(item => item.laneId === targetLane.id && item.id !== product.id).sort((a, b) => a.order - b.order);
+  const targetRank = vertical ? Math.min(rank, neighbours.length) : rank + direction;
+  const next = neighbours[targetRank], previous = neighbours[targetRank - 1];
+  const targetIndex = next ? products.findIndex(item => item.id === next.id) : previous ? products.findIndex(item => item.id === previous.id) + 1 : products.length;
   reorderProduct(product.id, targetLane.id, targetIndex);
   return true;
 }
@@ -4619,6 +4686,7 @@ function renderBoard() {
   if (canvasScroll.scrollTop !== previousTop) canvasScroll.scrollTop = previousTop;
   syncViewZoomControls();
   renderStatus();
+  if (typeof syncCatalogFilterControls === "function") syncCatalogFilterControls();
   positionViewerInfo();
   if (typeof productCardActionLayer !== "undefined") syncProductCardActions();
   if (typeof productCardHover !== "undefined") productCardHover?.sync();
@@ -6034,7 +6102,7 @@ function syncControls() {
   updateProductLayoutEditControls();
   $("#showPrices").checked = board.settings.showPrices;
   $("#showSkus").checked = board.settings.showSkus;
-  $("#hideDiscontinued").checked = board.settings.hideDiscontinued;
+  $("#hideDiscontinued").checked = !["all", "launched", "unreleased", "eol"].includes(board.settings.catalogGroup) && board.settings.hideDiscontinued;
   $("#roadmapStart").value = board.settings.roadmap.startMonth;
   $("#roadmapEnd").value = board.settings.roadmap.endMonth;
   $("#roadmapSnap").value = board.settings.roadmap.snap;
@@ -6858,7 +6926,7 @@ function productPagesForPptx(category, targetBoard = null, canvasWidth = 0) {
   const categoryBoard = targetBoard || ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
   const layout = productCardLayout(categoryBoard, definition, { includeControls: false });
   const products = PortfolioModel.catalogProducts(categoryBoard.products, categoryBoard.settings);
-  if (categoryBoard.settings?.hideDiscontinued && !products.length) return [];
+  if (!products.length) return [];
   return PPTXPagination.paginateProductLanes(categoryBoard.lanes, products, {
     canvasWidth,
     cardWidth: CARD_WIDTH, cardGap: CARD_GAP, cardHeight: layout.cardHeight,
@@ -8362,6 +8430,21 @@ $("#searchInput").oninput = (event) => { searchQuery = event.target.value; rende
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
 $("#hideDiscontinued").onchange = (event) => setCatalogHideDiscontinued(event.target.checked);
+$("#catalogVisibility").onclick = event => {
+  const button = event.target.closest("[data-catalog-group]");
+  if (button && !button.disabled) setCatalogGroup(button.dataset.catalogGroup);
+};
+$("#catalogVisibility").onkeydown = event => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const buttons = [...event.currentTarget.querySelectorAll("button")].filter(button => !button.disabled);
+  const index = buttons.indexOf(event.target);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? buttons[0] : event.key === "End" ? buttons.at(-1) : buttons[(index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length];
+  next.focus(); setCatalogGroup(next.dataset.catalogGroup);
+};
+$("#catalogShowAll").onclick = () => setCatalogGroup("all");
+$("#catalogClearSearch").onclick = () => { searchQuery = ""; $("#searchInput").value = ""; renderBoard(); $("#searchInput").focus(); };
 $("#resetLayout").onclick = () => {
   stopProductCardDrag();
   zoom = 1;
@@ -8701,7 +8784,7 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
     return { view: activeView, basis: portfolio.settings.roadmapBasis || "lifecycle", activeCategoryId,
       categoryIds: hashoutCategoryScope() || portfolio.categories.map(category => category.id), dateRange: { start: board.settings.roadmap.startMonth, end: board.settings.roadmap.endMonth },
       search: hasDedicatedHashoutView() && activeView !== "products" ? document.querySelector(".hashout-search")?.value || "" : activeView === "products" ? searchQuery : roadmapSearchQuery,
-      display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus, hideDiscontinued: board.settings.hideDiscontinued } };
+      display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus, hideDiscontinued: board.settings.hideDiscontinued, catalogGroup: board.settings.catalogGroup } };
   },
   applyView(value) {
     if (workspaceOpening || packageOperationInProgress || pptxExportInProgress || productLayoutEditing) throw new Error("Finish the current edit or export before opening a saved view.");
@@ -8717,6 +8800,8 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
     if (typeof display.showPrices === "boolean") board.settings.showPrices = display.showPrices;
     if (typeof display.showSkus === "boolean") board.settings.showSkus = display.showSkus;
     if (typeof display.hideDiscontinued === "boolean") board.settings.hideDiscontinued = display.hideDiscontinued;
+    if (display.catalogGroup) { board.settings.catalogGroup = display.catalogGroup; board.settings.hideDiscontinued = false; }
+    else if (typeof display.hideDiscontinued === "boolean") delete board.settings.catalogGroup;
     if (typeof display.detailsOpen === "boolean") roadmapDetailsOpen = display.detailsOpen;
     resetHashoutView(); setView(safe.view || "products"); clearHiddenCatalogSelection();
     searchQuery = roadmapSearchQuery = safe.search || "";
