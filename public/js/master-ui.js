@@ -350,12 +350,12 @@
     async function saveFlow() {
       if (running || discarding || refreshRunning || session.getState().busy || adapter.hasPendingPackageOperation?.()) return;
       const operationGeneration = localBaselineGeneration;
-      adapter.beforeSave?.();
-      const reviewed = await review();
-      if (!reviewed || operationGeneration !== localBaselineGeneration) { updateStatus(); return; }
-      lastError = "";
-      running = true; updateStatus();
       try {
+        adapter.beforeSave?.();
+        const reviewed = await review();
+        if (!reviewed || operationGeneration !== localBaselineGeneration) return;
+        lastError = "";
+        running = true; updateStatus();
         while (!session.getState().hasKey) {
           const key = await getAccess();
           if (!key || operationGeneration !== localBaselineGeneration) return;

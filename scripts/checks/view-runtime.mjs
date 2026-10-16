@@ -211,7 +211,8 @@ assert.equal(JSON.stringify(mixedBoard.products), mixedProductsBefore);
   vm.runInContext(await fs.readFile(new URL("../../public/js/reference-theme.js", import.meta.url), "utf8"), variantContext);
   vm.runInContext(await fs.readFile(new URL("../../public/js/portfolio-model.js", import.meta.url), "utf8"), variantContext);
   variantContext.UI_PALETTE = variantContext.PortfolioTheme.uiPalette;
-  vm.runInContext(["productPresentation", "variantPopoverItemHtml", "positionVariantPopover", "openVariantPopover"].map(extract).join("\n"), variantContext);
+  vm.runInContext(appSource.slice(appSource.indexOf("const STANDARD_PRODUCT_COLORS"), appSource.indexOf("const COMMON_KEYBOARD_LAYOUTS")) +
+    ["displayColorVariant", "standardColorByKey", "inferStandardColor", "parseHexColor", "normalizeHexColor", "productPresentation", "variantPopoverItemHtml", "positionVariantPopover", "openVariantPopover"].map(extract).join("\n"), variantContext);
   for (const id of ["planned", "neutral", "development", "embargo", "new", "roadmap-embargo", "planned", "discontinued", "conflicting-embargo", "development", "sunsetting", "embargo", "neutral"]) {
     const product = products.find(item => item.id === id), presentation = variantContext.productPresentation(product);
     variantContext.openVariantPopover({ key: `variants-${id}`, productId: id, groups: variants }, 113, 81, { pinned: true });

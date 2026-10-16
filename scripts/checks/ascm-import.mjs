@@ -404,7 +404,7 @@ vm.createContext(sandbox);
 new vm.Script(await readFile(new URL("../../public/js/catalog-data.js", import.meta.url), "utf8")).runInContext(sandbox);
 const testedFunctions = [
   "id", "ensureImageAssetRegistry", "migrateLegacyProductImages", "standardColorByKey", "inferStandardColor",
-  "variantGroup", "normalizeColorVariant", "normalizeLayoutVariant", "normalizeVariantGroup", "productVariantGroups",
+  "variantGroup", "displayColorVariant", "normalizeColorVariant", "normalizeLayoutVariant", "normalizeVariantGroup", "productVariantGroups",
   "productColorVariants", "colorVariantById", "colorVariantWithImage", "makeRoadmap", "monthStringFromDate",
   "monthIndex", "monthString", "addMonths", "normalizeMonth", "categoryDefinition", "normalizeRoadmapStatus",
   "inferFamily", "defaultRoadmapForProduct", "normalizeProductInfoDate", "normalizeAscmRecord",
