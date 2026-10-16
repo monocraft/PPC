@@ -15,6 +15,7 @@
   }
 
   function productTone(product) {
+    if (isDiscontinued(product)) return lifecycleTone("end-of-life");
     if (product.statusType === "embargo" || product.roadmap?.status === "embargo") return THEME_ACCENTS.embargo;
     if (product.statusType === "new") return THEME_ACCENTS.newProduct;
     if (product.statusType === "in-development") return THEME_ACCENTS.inDevelopment;
@@ -23,6 +24,7 @@
   }
 
   function productLabelColor(product, fallback) {
+    if (isDiscontinued(product)) return "#FFFFFF";
     return product?.statusType === "embargo" || product?.roadmap?.status === "embargo" ? (root.PortfolioTheme?.colors.page || "#1A1B1C") : fallback;
   }
 
@@ -68,7 +70,7 @@
     return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : "";
   }
 
-  // Discontinued is a presentation derived from the saved product-level EOM.
+  // Discontinued follows an explicit saved product/EOL status or product EOM.
   // Quarter anchors are placement days, so an active quarter ends on its last
   // calendar day. Invalid active precision stays unknown rather than exact.
   function endManufacturingDay(product) {
@@ -87,6 +89,7 @@
   }
 
   function isDiscontinued(product, now = new Date()) {
+    if (product?.statusType === "discontinued" || product?.roadmap?.status === "end-of-life") return true;
     const end = endManufacturingDay(product), today = localCalendarDay(now);
     return Boolean(end && today && end <= today);
   }
@@ -113,8 +116,8 @@
     const group = settings?.catalogGroup;
     if (group === "unreleased") return ["in-development", "in-planning", "embargo", "unreleased"];
     if (CATALOG_GROUPS.includes(group)) return [group];
-    // The old checkbox hides only date-confirmed discontinuations, including
-    // neither unknown records nor stage-only EOL. No detail union is identical.
+    // The old checkbox follows the same explicit status and EOM evidence as
+    // the card. Unknown records still remain visible.
     return settings?.hideDiscontinued === true ? null : ["all"];
   }
 
@@ -126,7 +129,7 @@
   // the roadmap editor's default planning stage or turn a New label into a date.
   function catalogLifecycle(product, now = new Date()) {
     const stage = product?.roadmap?.status, flag = product?.statusType;
-    if (isDiscontinued(product, now) || stage === "end-of-life") return "eol";
+    if (isDiscontinued(product, now)) return "eol";
     if (flag === "embargo" || flag === "in-development" || stage === "embargo"
       || stage === "in-planning" || stage === "in-development") return "unreleased";
     if (stage === "launched") return "launched";

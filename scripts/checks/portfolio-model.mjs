@@ -325,6 +325,7 @@ const standardStatusCases = [
   ["embargo", "UPCOMING UNDER EMBARGO", "#FF2525"],
   ["in-development", "IN-DEVELOPMENT", "#56595E"],
   ["sunsetting", "SUNSETTING", "#4D5054"],
+  ["discontinued", "DISCONTINUED", "#242527"],
 ];
 const standardStatusSource =
   appSource.slice(appSource.indexOf("const STANDARD_CARD_STATUSES"), appSource.indexOf("const PRODUCT_TIER_OPTIONS")) +
@@ -414,8 +415,8 @@ for (const [statusType, label, expected] of standardStatusCases) {
   assert.equal(presentationSandbox.normalizeCardStatusType(` ${statusType.toUpperCase()} `), statusType, "imported preset names normalize without losing their status");
   assert.equal(presentationSandbox.standardizedStatus(statusType).label, label, "preset labels use the same wording in every category");
   assert.equal(presentationSandbox.standardizedStatus(statusType).color, expected, "preset colors are fixed rather than inherited from a roadmap stage");
-  assert.equal(presentationSandbox.productPresentation(item).primaryColor, statusType === "embargo" ? "#A52F3F" : "#4DA1F7", "native Embargo and development palettes retain the selected preset wording");
-  assert.equal(presentationSandbox.productPresentation(item).status.label, label);
+  assert.equal(presentationSandbox.productPresentation(item).primaryColor, statusType === "discontinued" ? "#242527" : statusType === "embargo" ? "#A52F3F" : "#4DA1F7", "discontinued is neutral while active Embargo and development retain their native palettes");
+  assert.equal(presentationSandbox.productPresentation(item).status.label, statusType === "discontinued" ? "Discontinued" : label);
   assert.equal(presentationSandbox.roadmapStatusColor(item), expected, "native card palettes preserve the independent fixed roadmap accents");
 }
 for (const [item, stage, label] of [
@@ -433,6 +434,8 @@ for (const [item, stage, label] of [
   [{ statusType: "sunsetting", roadmap: { status: "embargo" } }, "embargo", "UPCOMING UNDER EMBARGO"],
   [{ statusType: "in-development", roadmap: { status: "in-planning" }, endManufacturingDate: "2000-01-01" }, "", "Discontinued"],
   [{ statusType: "embargo", roadmap: { status: "embargo" }, endManufacturingDate: "2000-01-01" }, "", "Discontinued"],
+  [{ statusType: "discontinued", roadmap: { status: "embargo" } }, "", "Discontinued"],
+  [{ statusType: "embargo", roadmap: { status: "end-of-life" } }, "", "Discontinued"],
 ]) {
   const before = JSON.stringify(item), result = presentationSandbox.productPresentation(item);
   assert.equal(result.cardStage, stage);
@@ -444,7 +447,7 @@ for (const invalidStatus of [undefined, null, "", "unknown", "constructor", "toS
   assert.equal(presentationSandbox.normalizeCardStatusType(invalidStatus), "none", "unknown and inherited object keys never become built-in statuses");
   assert.equal(presentationSandbox.standardizedStatus(invalidStatus).label, "");
 }
-for (const statusType of ["none", ...standardStatusCases.map(([status]) => status)]) {
+for (const statusType of ["none", ...standardStatusCases.filter(([status]) => status !== "discontinued").map(([status]) => status)]) {
   const product = { statusType, roadmap: { status: "embargo" } };
   assert.equal(model.productTone(product), "#FF2525", "embargo remains visible even when another preset is selected");
   assert.equal(presentationSandbox.productPresentation(product).primaryColor, "#A52F3F", "embargo precedence applies to the full native card palette");
@@ -453,8 +456,20 @@ for (const statusType of ["none", ...standardStatusCases.map(([status]) => statu
   assert.equal(model.productLabelColor(product, "#111111"), "#1A1B1C", "Bright red roadmap surfaces retain their independent dark labels for readable contrast.");
 }
 assert.equal(model.productLabelColor({ statusType: "embargo" }, "#111111"), "#1A1B1C");
-for (const product of [null, {}, ...standardStatusCases.filter(([type]) => type !== "embargo").map(([statusType]) => ({ statusType })), { statusType: "none", roadmap: { status: "in-development" } }]) {
+for (const product of [null, {}, ...standardStatusCases.filter(([type]) => !["embargo", "discontinued"].includes(type)).map(([statusType]) => ({ statusType })), { statusType: "none", roadmap: { status: "in-development" } }]) {
   assert.equal(model.productLabelColor(product, "#111111"), "#111111", "The embargo preference leaves normal contrast choices intact.");
+}
+for (const product of [
+  { statusType: "discontinued", roadmap: { status: "embargo" } },
+  { statusType: "embargo", roadmap: { status: "end-of-life" } },
+  { statusType: "in-development", endManufacturingDate: "2000-01-01" },
+]) {
+  const before = JSON.stringify(product);
+  assert.equal(model.productTone(product), "#242527", "explicit status, roadmap EOL and elapsed EOM share the neutral discontinued tone");
+  assert.equal(model.productLabelColor(product, "#111111"), "#FFFFFF", "discontinued headers remain white even with stale active flags");
+  assert.equal(presentationSandbox.productPresentation(product).cardStage, "");
+  assert.equal(presentationSandbox.productPresentation(product).controlStyle, globalThis.PortfolioTheme.productActionStyles.discontinued);
+  assert.equal(JSON.stringify(product), before, "linked discontinuation is a pure reading rule and does not fabricate dates or change saved flags");
 }
 
 // Console platform labels are secondary to the same lifecycle banner used by
@@ -482,26 +497,28 @@ vm.runInContext(
   appSource.slice(appSource.indexOf("function renderSplitProduct("), appSource.indexOf("function updateLinkedViewButton(")),
   presentationSandbox,
 );
-const consoleContext = { save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
+const consoleContext = { globalAlpha: 1, save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fillRect() {},
   measureText: (text) => ({ width: text.length * 5 }), fillText: (text) => { consoleText.push(text); consoleTextColors.push(consoleContext.fillStyle); } };
 const consoleLayout = { cardHeight: 300, imageSlotTop: 34, imageSlotHeight: 110, titleBlockTop: 150, detailsTopOffset: 65 };
 for (const [statusType, label, color] of standardStatusCases) {
-  const cardColor = statusType === "embargo" ? "#A52F3F" : "#4DA1F7";
+  const displayLabel = statusType === "discontinued" ? "Discontinued" : label;
+  const cardColor = statusType === "discontinued" ? "#242527" : statusType === "embargo" ? "#A52F3F" : "#4DA1F7";
+  const headerInk = ["embargo", "discontinued"].includes(statusType) ? "#FFFFFF" : "#111111";
   for (const variantLabel of ["", "PLAYSTATION", "XBOX", label, label.toLowerCase()]) {
     consoleProduct = { name: "Console headset", statusType, variantLabel, specs: [], roadmap: { status: "in-development" } };
     const before = JSON.stringify(consoleProduct);
     const presentation = presentationSandbox.productPresentation(consoleProduct);
-    assert.equal(presentation.primaryLabel, label, "platforms cannot replace the shared status banner");
+    assert.equal(presentation.primaryLabel, displayLabel, "platforms cannot replace the shared status banner");
     assert.equal(presentation.primaryColor, cardColor);
-    assert.equal(presentation.secondaryLabel, variantLabel && variantLabel.toUpperCase() !== label ? variantLabel : "", "identical status/variant labels are never duplicated, regardless of case");
+    assert.equal(presentation.secondaryLabel, variantLabel && variantLabel.toUpperCase() !== displayLabel.toUpperCase() ? variantLabel : "", "identical status/variant labels are never duplicated, regardless of case");
     for (const detailed of [false, true]) {
       consoleText.length = 0;
       consoleTextColors.length = 0;
       consoleShapes.length = 0;
       presentationSandbox.drawCard(consoleContext, consoleProduct, 0, 0, false, { ...consoleLayout, detailed }, false);
-      assert.equal(consoleText[0], label, "both compact and detailed cards start with the shared status label");
+      assert.equal(consoleText[0], displayLabel.toUpperCase(), "both compact and detailed cards start with the shared status label");
       assert.equal(consoleShapes[1][6], cardColor, "the main banner uses the card stage accent");
-      assert.equal(consoleTextColors[0], statusType === "embargo" ? "#FFFFFF" : "#111111", "Compact, detailed, and exported cards share the white native Embargo label color.");
+      assert.equal(consoleTextColors[0], headerInk, "Compact, detailed, and exported cards share the readable native status label color.");
       if (presentation.secondaryLabel) {
         assert.equal(consoleText[1], variantLabel);
         assert.equal(consoleShapes[2][6], cardColor, "the variant badge matches the status banner color");
@@ -511,10 +528,10 @@ for (const [statusType, label, color] of standardStatusCases) {
       }
     }
     presentationSandbox.renderSplitProduct();
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`>${label}</div>`), "roadmap details retain the same primary status");
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${statusType === "embargo" ? "#FFFFFF" : "#111111"}`), "The roadmap detail header shares the banner text preference.");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`>${displayLabel}</div>`), "roadmap details retain the same primary status");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`color:${headerInk}`), "The roadmap detail header shares the banner text preference.");
     assert.equal(presentationSandbox.splitProduct.innerHTML.includes('class="split-platform-label"'), Boolean(presentation.secondaryLabel));
-    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${cardColor};--product-label-color:${statusType === "embargo" ? "#FFFFFF" : "#111111"}`), "roadmap details provide the same status fill and text color to the variant badge");
+    assert.ok(presentationSandbox.splitProduct.innerHTML.includes(`--product-highlight:${cardColor};--product-label-color:${headerInk}`), "roadmap details provide the same status fill and text color to the variant badge");
     assert.equal(JSON.stringify(consoleProduct), before, "presentation never changes the saved manual status or platform label");
   }
 }

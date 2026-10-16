@@ -3,6 +3,7 @@ import '../../public/js/date-precision.js';
 import '../../public/js/ffs-roadmap.js';
 
 const map = globalThis.PortfolioFfsRoadmap;
+assert.equal(map.status({ statusType: 'discontinued', roadmap: { status: 'launched' } }), 'end-of-life', 'A manual discontinued flag projects End of life even for standalone FFS consumers.');
 const quarter = globalThis.PortfolioDatePrecision.parseQuarter('Q2 2028');
 const product = (ffsDate, period, extra = {}) => ({ ffsDate, ...(period ? { plc: { fields: { ffsDate: { value: ffsDate, period } } } } : {}), ...extra });
 const options = { leftWidth: 200, monthWidth: 60, rowHeight: 34 };
@@ -94,5 +95,13 @@ const saved = JSON.stringify(q2Product);
 Object.freeze(q2Product.plc.fields.ffsDate.period); Object.freeze(q2Product.plc.fields.ffsDate); Object.freeze(q2Product.roadmap); Object.freeze(q2Product);
 map.period(q2Product); map.geometry(q2Product, tenYears, 0, options);
 assert.equal(JSON.stringify(q2Product), saved, 'Rendering the FFS map preserves saved product dates, stage, and precision evidence.');
+
+await import('../../public/js/portfolio-model.js');
+const retired = { endManufacturingDate: '2000-01-01', roadmap: { status: 'embargo' }, ffsDate: '1999-01-01' };
+const retiredBefore = JSON.stringify(retired);
+assert.equal(map.status(retired), 'end-of-life', 'The app shares completed manufacturing evidence with Hashout and its exports.');
+assert.equal(map.status({ roadmap: { status: 'end-of-life' }, endManufacturingDate: '' }), 'end-of-life', 'An explicit lifecycle EOL does not require inventing an exact date.');
+assert.equal(map.status({ roadmap: { status: 'launched' }, endManufacturingDate: '9999-12-31' }), 'launched', 'A future manufacturing date alone leaves the saved stage active.');
+assert.equal(JSON.stringify(retired), retiredBefore, 'Projecting End of life never rewrites stored dates or the source stage.');
 
 console.log('FFS map checks passed: independent milestone, strict days, leap placement, faithful estimate windows, horizon clipping, current evidence guards, and explicit lifecycle stage.');

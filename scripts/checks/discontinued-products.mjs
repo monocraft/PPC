@@ -16,6 +16,12 @@ const quarter = (year, q, patch = {}) => {
   return { endManufacturingDate: period.start, plc: { fields: { endManufacturingDate: { value: period.start, period, ...patch } } } };
 };
 const cases = [
+  [{ statusType: "discontinued" }, today, true, "explicit product status needs no manufactured EOM"],
+  [{ statusType: "discontinued", endManufacturingDate: "9999-12-31", roadmap: { status: "embargo" } }, today, true, "explicit Discontinued overrides stale Embargo and future EOM"],
+  [{ roadmap: { status: "end-of-life" } }, today, true, "explicit roadmap EOL is linked to Discontinued"],
+  [{ statusType: "in-development", roadmap: { status: "end-of-life" }, endManufacturingDate: "9999-12-31" }, today, true, "explicit EOL overrides stale development and future EOM"],
+  [{ statusType: "discontinued" }, new Date(NaN), true, "explicit status needs no clock"],
+  [{ roadmap: { status: "end-of-life" } }, new Date(NaN), true, "explicit roadmap EOL needs no clock"],
   [eom("2026-10-14"), today, true, "past"],
   [eom("2026-10-15"), today, true, "today is inclusive"],
   [eom("2026-10-16"), today, false, "future"],
@@ -54,6 +60,8 @@ const products = [
   { id: "ended", name: "Cloud old", statusType: "new", statusLabel: "User label", endManufacturingDate: "2000-01-01", imageAssetId: "saved-main", featuredVariantId: "black", roadmap: { family: "Cloud", endMonth: "2000-01", status: "launched" } },
   { id: "live", name: "Cloud future", endManufacturingDate: "9999-12-31", roadmap: { family: "Cloud", status: "launched" } },
   { id: "unknown", name: "Cloud unknown", endManufacturingDate: "", roadmap: { family: "Cloud", status: "launched" } },
+  { id: "manual-ended", name: "Cloud manual", statusType: "discontinued", endManufacturingDate: "", roadmap: { family: "Cloud", status: "embargo" } },
+  { id: "roadmap-ended", name: "Cloud EOL", statusType: "in-development", endManufacturingDate: "9999-12-31", roadmap: { family: "Cloud", status: "end-of-life" } },
 ];
 products.forEach(product => { product.laneId = "main"; });
 products.forEach(Object.freeze); Object.freeze(products);
@@ -96,6 +104,8 @@ assert.notEqual(sandbox.portfolioForSearch(), sandbox.portfolio, "Roadmap search
 assert.equal(globalThis.PortfolioSearch.search(sandbox.portfolioForSearch(), "old").total, 0);
 sandbox.activeView = "products";
 assert.equal(sandbox.productPresentation(products[0]).primaryLabel, "Discontinued", "derived top banner overrides New without replacing it in data");
+assert.equal(sandbox.productPresentation(products[3]).primaryLabel, "Discontinued", "manual status uses the same banner even with stale Embargo");
+assert.equal(sandbox.productPresentation(products[4]).primaryLabel, "Discontinued", "roadmap EOL uses the same banner without changing a future saved EOM");
 assert.equal(products[0].statusType, "new"); assert.equal(products[0].statusLabel, "User label");
 const category = { id: "audio", board };
 const productPlan = sandbox.buildPptxExportPlan("products", [category]);
@@ -107,6 +117,37 @@ assert.equal(sandbox.buildPptxExportPlan("products", [allHidden]).length, 0, "al
 assert.equal(sandbox.buildPptxExportPlan("both", [allHidden]).length, 0, "all-hidden category contributes no phantom product or Roadmap slides");
 assert.equal(sandbox.buildPptxExportPlan("roadmap", [allHidden]).length, 0);
 assert.equal(JSON.stringify(board), dataBefore, "rendering, searching, planning and banner derivation change no business facts, image IDs, defaults, clocks or settings");
+
+// Capture the actual application's shared planner input. Accepted raw flags
+// may disagree with effective discontinuation, so the exported legend must
+// follow the same read-only evidence as the card and editor controls.
+const exportCategory = { id: "status-export", board: { ...plain(board), settings: { hideDiscontinued: false }, products: [
+  plain(products[0]),
+  plain(products[3]),
+  { ...plain(products[4]), statusType: "new", statusLabel: "NEW PRODUCT" },
+] } };
+const exportBefore = JSON.stringify(exportCategory);
+let plannedSections, plannerCalls = 0;
+Object.assign(sandbox, {
+  effectiveRoadmap: product => product.roadmap,
+  roadmapStatusColor: product => model.productTone(product),
+  contrastTextColor: () => "#111111",
+  splitRoadmapStatusLabel: stage => stage,
+  PPTXExportPlanner: { planRoadmap(sections) { plannerCalls++; plannedSections = plain(sections); return { slides: [] }; } },
+});
+sandbox.buildPptxExportPlan("roadmap", [exportCategory], { mode: "categories", startMonth: "1999-01", endMonth: "2030-12", overflow: "fit" });
+assert.equal(plannerCalls, 1, "The real buildPptxExportPlan hands its projected data to the planner.");
+assert.deepEqual(plannedSections[0].products.map(product => product.id), exportCategory.board.products.map(product => product.id));
+for (const product of plannedSections[0].products) {
+  assert.equal(product.status, "end-of-life", "Elapsed EOM, manual Discontinued and saved EOL export the effective lifecycle stage.");
+  assert.equal(product.statusLabel, "End of life", "An active raw Product flag cannot mislabel the exported legend.");
+  assert.equal(product.fill, "#242527", "Exported discontinued entries share the neutral card/roadmap tone.");
+  assert.equal(product.textColor, "#FFFFFF", "Exported discontinued entries retain readable white text.");
+}
+assert.equal(JSON.stringify(exportCategory), exportBefore, "Projecting effective export status preserves every saved raw flag, date, image reference and metadata value.");
+assert.equal(JSON.stringify(board), dataBefore);
+delete sandbox.PPTXExportPlanner;
+
 let emptyDecks = 0;
 Object.assign(sandbox, {
   PortfolioTheme: { fontsReady: async () => true },

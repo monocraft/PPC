@@ -28,7 +28,7 @@ const manual = { id: 'synthetic', ffsDate: q2.start, generalAvailabilityDate: '2
 const manifest = { categories: [{ board: { products: [manual] } }] };
 let clock = '2026-10-09T20:00:00.000Z', saves = 0;
 class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } }
-const sandbox = { PortfolioDatePrecision: dates, PortfolioMasterModel: globalThis.PortfolioMasterModel, portfolio: manifest, Date: TestDate, selectedProduct: () => manual, escapeHtml: (value) => String(value ?? ''), updateProduct(id, patch) { assert.equal(id, manual.id); Object.assign(manual, globalThis.PortfolioModel.mergeProductUpdate(manual, structuredClone(patch))); saves++; } };
+const sandbox = { PortfolioModel: globalThis.PortfolioModel, PortfolioDatePrecision: dates, PortfolioMasterModel: globalThis.PortfolioMasterModel, portfolio: manifest, Date: TestDate, selectedProduct: () => manual, escapeHtml: (value) => String(value ?? ''), updateProduct(id, patch) { assert.equal(id, manual.id); Object.assign(manual, globalThis.PortfolioModel.mergeProductUpdate(manual, structuredClone(patch))); saves++; } };
 vm.createContext(sandbox);
 for (const name of ['updateProductMilestone', 'productDatePrecisionControls']) {
   const definition = source.match(new RegExp(`^function ${name}\\([^]*?^\\}`, 'm'));

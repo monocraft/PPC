@@ -46,7 +46,12 @@
     "in-development": Object.freeze({ accent: chartSeries[2], surface: "#293440", footer: "#2C3F54", outline: "#3E6A98", muted: chartPalette.blue[40] }),
     embargo: Object.freeze({ accent: "#A52F3F", surface: "#3D282D", footer: "#4C2C33", outline: "#9E4B5A", muted: "#FFB8C2", label: "#FFFFFF", selection: "#FFB8C2" }),
   });
+  function productIsDiscontinued(product) {
+    return product?.statusType === "discontinued" || product?.roadmap?.status === "end-of-life"
+      || root.PortfolioModel?.isDiscontinued?.(product) === true;
+  }
   function productCardStage(product) {
+    if (productIsDiscontinued(product)) return "";
     if (product?.statusType === "embargo" || product?.roadmap?.status === "embargo") return "embargo";
     if (product?.statusType === "in-development") return "in-development";
     const stage = product?.roadmap?.status;
@@ -62,7 +67,7 @@
     discontinued: Object.freeze({ ...neutralActions, name: "discontinued", ink: "#FFFFFF", hoverInk: "#FFFFFF", focus: "#FFFFFF" }),
   });
   function productActionStyle(product, discontinued = false) {
-    if (discontinued) return productActionStyles.discontinued;
+    if (discontinued || productIsDiscontinued(product)) return productActionStyles.discontinued;
     if (product?.statusType === "embargo" || product?.roadmap?.status === "embargo") return productActionStyles.embargo;
     return productActionStyles[productCardStage(product)] || productActionStyles.neutral;
   }

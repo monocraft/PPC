@@ -83,6 +83,7 @@
 
   function status(product) {
     const stage = clean(product?.roadmap?.status);
+    if (product?.statusType === "discontinued" || root.PortfolioModel?.isDiscontinued?.(product)) return "end-of-life";
     return STAGES.has(stage) ? stage : "unknown";
   }
 

@@ -610,9 +610,9 @@ const savedPlanModel = appModelSandbox.productDetailsModel(savedPlanProduct);
 assert.deepEqual(JSON.parse(JSON.stringify(savedPlanModel.lifecycle)), [
   { key: "launch", label: "Planned launch", value: "Feb 2026" },
   { key: "lifecycle-end", label: "Planned end", value: "Mar 2026" },
-  { key: "stage", label: "Stage", value: "In development" },
+  { key: "stage", label: "Stage", value: "End of life" },
   { key: "confidence", label: "Confidence", value: "high" },
-], "independently saved month plans must remain visible under clear planned-date labels");
+], "independently saved month plans remain visible while completed manufacturing dates project End of life");
 assert.deepEqual(savedPlanProduct, originalSavedPlan, "deduplicating Overview must not rewrite exact dates or legacy roadmap plans");
 const savedPlanHtml = details.render(savedPlanModel, { surface: "viewer" });
 assert.deepEqual([...savedPlanHtml.matchAll(/data-lifecycle-kind="([^"]+)"/g)].map((match) => match[1]), lifecycleKeys, "planned fallback dates must retain their teal/red semantic hooks through rendering");
