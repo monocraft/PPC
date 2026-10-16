@@ -176,7 +176,7 @@ assert.equal(viewSandbox.portfolio.categories[1].board.settings.hideDiscontinued
 assert.equal(JSON.stringify(products), JSON.stringify(JSON.parse(dataBefore).products));
 const controls = new Map([["#hideDiscontinued", {}]]);
 const updateBoard = update => update(board);
-const selectionSandbox = { $: id => controls.get(id), updateBoard, board, PortfolioModel: model, activeView: "products", selectedId: "ended", viewerInfoProductId: "ended",
+const selectionSandbox = { $: id => controls.get(id), updateBoard, board, PortfolioModel: model, activeView: "products", selectedId: "ended", viewerInfoProductId: "ended", productLayoutEditing: false, packageOperationInProgress: false, pptxExportInProgress: false,
   stopProductCardDrag() {}, renderInspector() {}, closeViewerInfo() { selectionSandbox.viewerInfoProductId = null; } };
 vm.createContext(selectionSandbox);
 vm.runInContext(fn("clearHiddenCatalogSelection") + fn("setCatalogHideDiscontinued") + source.match(/^\$\("#hideDiscontinued"\)\.onchange = [^\n]+/m)[0], selectionSandbox);

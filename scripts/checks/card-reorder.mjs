@@ -34,7 +34,7 @@ function harness() {
     board, portfolio, activeCategoryId: "audio", activeView: "products", selectedId: "a", productLayoutEditing: false, productReorderSession: null, dragState: null, panState: null, productCardMotion: null, productCardMotionFrame: null, zoom: 1, searchQuery: "",
     productLayoutEditButton: get("productLayoutEditToggle"), productControls: get("productControls"), roadmapControls: get("roadmapControls"), canvas,
     $: (selector) => get(selector.slice(1)), scheduleSave: () => counts.saves++, syncControls() {}, renderInspector() {}, renderActiveView() { counts.paints++; }, renderBoard() { counts.paints++; }, updateDataEditIndicator() {},
-    closePopupMenus() {}, showWorkspaceNotice: (message, options) => notices.push({ message, options }), selectedProduct: () => context.board.products.find((product) => product.id === context.selectedId), sortedLanes: () => context.board.lanes,
+    closePopupMenus() {}, showWorkspaceNotice: (message, options) => notices.push({ message, options }), selectedProduct: () => context.board.products.find((product) => product.id === context.selectedId), sortedLanes: () => context.board.lanes, visibleProducts: () => context.board.products.filter(product => !context.visibleIds || context.visibleIds.has(product.id)),
     updateBoard(mutator) { counts.writes++; mutator(context.board); context.scheduleSave(); context.updateProductLayoutEditControls(); },
     closeViewerInfo() {}, viewerInfoOutline: get("outline"), viewerInfoProgress: 0, viewerInfoProductId: null, viewerInfoOpen: false,
     ensureBoardSchema: (value) => value, categoryDefinition: () => ({}), PortfolioModel: { syncTimelineSettings() {} }, closeInspector() {}, closeVariantPopover() {}, hoveredHeroVariant: null, stopRoadmapSlotEditing() {}, initialVerticalFitPending: false, fitProductLanesVertically() {}, ROADMAP_DEFAULT_MONTH_WIDTH: roadmapDefaultMonthWidth,
@@ -145,6 +145,17 @@ function harness() {
   assert.deepEqual(h.order("first"), ["b", "a", "c"]);
   h.context.handleProductReorderKeydown(h.event("ArrowDown", { altKey: true })); assert.deepEqual(h.order("second"), ["d", "a", "e"]);
   assert.equal(h.context.handleProductReorderKeydown(h.event("ArrowRight", { altKey: true, target: h.get("some-input") })), false, "Typing in another control never rearranges a product");
+}
+{
+  const h = harness(), before = h.layouts(); h.context.visibleIds = new Set(["a", "c", "e"]); h.context.startProductReorder();
+  h.context.handleProductReorderKeydown(h.event("ArrowLeft", { altKey: true }));
+  assert.deepEqual(h.layouts(), before, "a visible boundary does not step through hidden products");
+  h.context.handleProductReorderKeydown(h.event("ArrowRight", { altKey: true }));
+  assert.deepEqual(h.order("first"), ["b", "c", "a"], "one keyboard move crosses the next visible neighbour in the complete lane");
+  h.context.handleProductReorderKeydown(h.event("ArrowDown", { altKey: true }));
+  assert.deepEqual(h.order("second"), ["d", "e", "a"], "vertical placement follows visible rank without losing hidden lane members");
+  assert.equal(h.board.products.length, 5);
+  h.context.finishProductReorder({ cancel: true }); assert.deepEqual(h.layouts(), before, "Cancel restores filtered keyboard moves atomically");
 }
 {
   const h = harness(); h.context.startProductReorder(); h.context.reorderProduct("a", "first", 2); const latest = h.layouts();

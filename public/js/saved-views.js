@@ -26,6 +26,7 @@
         showPrices: typeof value.display.showPrices === 'boolean' ? value.display.showPrices : undefined,
         showSkus: typeof value.display.showSkus === 'boolean' ? value.display.showSkus : undefined,
         hideDiscontinued: typeof value.display.hideDiscontinued === 'boolean' ? value.display.hideDiscontinued : undefined,
+        catalogGroup: choice(value.display.catalogGroup, ['all','launched','unreleased','eol']),
       }) : undefined;
       return clean({ view: choice(value.view, ['products','roadmap','split']), basis: choice(value.basis, ['lifecycle','ffs']),
         categoryIds: ids(value.categoryIds, 200), activeCategoryId: text(value.activeCategoryId),

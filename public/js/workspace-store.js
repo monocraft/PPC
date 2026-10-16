@@ -48,13 +48,16 @@
     const maps = [base, ours, theirs].map(categoryMap); if (maps.some(map => map === null)) return null;
     const viewportPath = ["settings", "hashoutViewport"], viewportKeys = ["start", "end", "zoom"];
     const discontinuedPath = ["board", "settings", "hideDiscontinued"];
-    // This new preference is a boolean leaf only. An unknown shape is not a
+    const catalogGroupPath = ["board", "settings", "catalogGroup"];
+    const catalogGroups = ["all", "launched", "unreleased", "eol"];
+    // These preferences are strict view leaves only. An unknown shape is not a
     // presentation-only change and cannot bypass the full-fact conflict guard.
     if (maps.some(map => [...map.values()].some(category => {
       const leaf = leafAt(category, discontinuedPath);
-      return leaf.exists && typeof leaf.value !== "boolean";
+      const group = leafAt(category, catalogGroupPath);
+      return leaf.exists && typeof leaf.value !== "boolean" || group.exists && !catalogGroups.includes(group.value);
     }))) return null;
-    const categoryPaths = [...new Set(maps.flatMap(map => [...map.keys()]))].flatMap(id => [...["startMonth", "endMonth"].map(key => ({ id, path: ["board", "settings", "roadmap", key] })), ...["showPrices", "showSkus", "hideDiscontinued"].map(key => ({ id, path: ["board", "settings", key] }))]);
+    const categoryPaths = [...new Set(maps.flatMap(map => [...map.keys()]))].flatMap(id => [...["startMonth", "endMonth"].map(key => ({ id, path: ["board", "settings", "roadmap", key] })), ...["showPrices", "showSkus", "hideDiscontinued", "catalogGroup"].map(key => ({ id, path: ["board", "settings", key] }))]);
     const pruneEmptyContainer = (value, path) => { const leaf = leafAt(value, path); if (leaf.exists && object(leaf.value) && Object.keys(leaf.value).length === 0) putLeaf(value, path, { exists: false }); };
     const withoutViews = value => {
       const copy = JSON.parse(JSON.stringify(value));

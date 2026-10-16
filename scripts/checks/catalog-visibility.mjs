@@ -1,0 +1,365 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
+await import("../../public/js/date-precision.js");
+await import("../../public/js/portfolio-model.js");
+
+const model = globalThis.PortfolioModel;
+const today = new Date(2026, 9, 15, 0, 0, 0);
+const clone = value => JSON.parse(JSON.stringify(value));
+const freeze = value => {
+  if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
+  return value;
+};
+const quarter = (field, year, q, evidence = {}) => {
+  const period = globalThis.PortfolioDatePrecision.parseQuarter(`Q${q} ${year}`);
+  return { [field]: period.start, plc: { fields: { [field]: { value: period.start, period, ...evidence } } } };
+};
+const gaQuarter = (year, q, evidence) => quarter("generalAvailabilityDate", year, q, evidence);
+const eomQuarter = (year, q, evidence) => quarter("endManufacturingDate", year, q, evidence);
+const stage = value => ({ roadmap: { status: value } });
+let checks = 0;
+const cases = [
+  [null, today, "unknown", "no product"],
+  [{}, today, "unknown", "no stage or date"],
+  [stage("launched"), today, "launched", "explicit launched"],
+  [stage("in-planning"), today, "unreleased", "explicit planning"],
+  [stage("in-development"), today, "unreleased", "explicit development"],
+  [stage("embargo"), today, "unreleased", "roadmap embargo"],
+  [stage("end-of-life"), today, "eol", "explicit EOL without a date"],
+  [{ statusType: "in-development", ...stage("launched") }, today, "unreleased", "development flag takes precedence"],
+  [{ statusType: "embargo", ...stage("launched") }, today, "unreleased", "embargo flag takes precedence"],
+  [{ statusType: "new" }, today, "unknown", "New is not launch evidence"],
+  [{ statusType: "sunsetting" }, today, "unknown", "Sunsetting is not EOL evidence"],
+  [{ statusType: "new", ...stage("in-planning") }, today, "unreleased", "New does not replace planning"],
+  [{ statusType: "sunsetting", ...stage("launched") }, today, "launched", "Sunsetting does not replace launched"],
+  [{ statusType: "embargo", ...stage("end-of-life") }, today, "eol", "explicit EOL precedes embargo"],
+  [{ ...stage("in-development"), endManufacturingDate: "2026-10-14" }, today, "eol", "past EOM precedes development"],
+  [{ ...stage("in-planning"), endManufacturingDate: "2026-10-15" }, today, "eol", "EOM today is inclusive"],
+  [{ ...stage("launched"), endManufacturingDate: "2026-10-16" }, today, "launched", "future EOM remains launched"],
+  [{ ...stage("launched"), generalAvailabilityDate: "2099-01-01" }, today, "launched", "explicit stage precedes date fallback"],
+  [{ ...stage("in-planning"), generalAvailabilityDate: "2000-01-01" }, today, "unreleased", "planning precedes date fallback"],
+  [{ generalAvailabilityDate: "2026-10-14" }, today, "launched", "past exact GA"],
+  [{ generalAvailabilityDate: "2026-10-15" }, today, "launched", "GA today is inclusive"],
+  [{ generalAvailabilityDate: "2026-10-16" }, today, "unreleased", "future exact GA"],
+  [{ generalAvailabilityDate: "2024-02-29" }, today, "launched", "valid leap day"],
+  ...["", "TBD", "2026-02-30", "2025-02-29", "2026-10", "Q4 2026", "10/14/2026", "2026-10-14junk"].map(value => [{ generalAvailabilityDate: value }, today, "unknown", `invalid GA ${value}`]),
+  ...["", "unknown", "constructor", "toString", "__proto__", "LAUNCHED", "planned", "concept"].map(value => [stage(value), today, "unknown", `no implicit stage default ${value}`]),
+  [{ ...stage("unknown"), generalAvailabilityDate: "2026-10-15" }, today, "launched", "unknown stage permits factual date fallback"],
+  [gaQuarter(2026, 3), new Date(2026, 8, 30), "unknown", "GA quarter last day remains uncertain"],
+  [gaQuarter(2026, 3), new Date(2026, 9, 1), "launched", "GA quarter becomes launched after it ends"],
+  [gaQuarter(2026, 4), new Date(2026, 8, 30), "unreleased", "GA quarter wholly in future"],
+  [gaQuarter(2026, 4), new Date(2026, 9, 1), "unknown", "GA quarter first day is uncertain"],
+  [gaQuarter(2026, 4), today, "unknown", "GA quarter anchor is not exact GA"],
+  [gaQuarter(2026, 4), new Date(2026, 11, 31), "unknown", "Q4 last day is still inside GA window"],
+  [gaQuarter(2026, 4), new Date(2027, 0, 1), "launched", "Q4 next year boundary"],
+  ...[null, false, [], {}, { precision: "quarter", basis: "fiscal", year: 2026, quarter: 4 }, { precision: "quarter", basis: "calendar", year: 2026, quarter: 4, end: "2026-10-01" }].map(period => [gaQuarter(2026, 4, { period }), today, "unknown", "malformed active GA precision cannot become exact anchor"]),
+  [gaQuarter(2026, 4, { supersededAt: "2026-10-14T00:00:00Z" }), today, "launched", "superseded precision leaves saved exact day authoritative"],
+  [gaQuarter(2026, 4, { value: "2026-07-01" }), today, "launched", "stale precision cannot override current exact day"],
+  [eomQuarter(2026, 3), new Date(2026, 8, 29), "unknown", "EOM quarter not ended"],
+  [eomQuarter(2026, 3), new Date(2026, 8, 30), "eol", "EOM quarter final day is inclusive"],
+  [{ ...stage("launched"), ...eomQuarter(2026, 4) }, today, "launched", "future EOM quarter does not hide launched card"],
+  [{ ...stage("launched"), ...eomQuarter(2026, 4, { period: {} }) }, today, "launched", "invalid EOM precision does not prove EOL"],
+  [{ variantGroups: [{ items: [{ generalAvailabilityDate: "2000-01-01", endManufacturingDate: "2000-02-01" }] }] }, today, "unknown", "variant dates do not classify the whole product"],
+  [{ generalAvailabilityDate: "2000-01-01" }, new Date(NaN), "unknown", "invalid clock cannot establish date fallback"],
+  [stage("launched"), new Date(NaN), "launched", "explicit stage needs no working clock"],
+];
+for (const [product, now, expected, label] of cases) {
+  freeze(product);
+  const before = JSON.stringify(product);
+  assert.equal(model.catalogLifecycle(product, now), expected, label);
+  assert.equal(JSON.stringify(product), before, `${label}: immutable source`);
+  checks++;
+}
+class LocalBoundaryDate extends Date { getFullYear() { return 2026; } getMonth() { return 9; } getDate() { return 14; } }
+class AheadBoundaryDate extends Date { getFullYear() { return 2026; } getMonth() { return 9; } getDate() { return 16; } }
+assert.equal(model.catalogLifecycle({ generalAvailabilityDate: "2026-10-15" }, new LocalBoundaryDate("2026-10-15T06:59:59Z")), "unreleased");
+assert.equal(model.catalogLifecycle({ generalAvailabilityDate: "2026-10-16" }, new AheadBoundaryDate("2026-10-15T10:00:00Z")), "launched");
+checks += 2;
+
+const products = freeze([
+  { id: "launched", ...stage("launched"), imageAssetId: "main", featuredVariantId: "black", variantGroups: [{ id: "colors", items: [{ id: "black", imageAssetId: "variant" }] }], specs: [{ id: "spec", value: "Technical (condition)" }], revisions: { plc: 12 } },
+  { id: "unreleased", ...stage("in-planning"), generalAvailabilityDate: "2000-01-01" },
+  { id: "dated-eol", ...stage("launched"), endManufacturingDate: "2000-01-01" },
+  { id: "stage-eol", ...stage("end-of-life") },
+  { id: "unknown", statusType: "new", unknownEvidence: { retained: [null, false, ""] } },
+].map(product => ({ ...product, laneId: "main", name: product.id })));
+const productBytes = JSON.stringify(products);
+assert.deepEqual(model.CATALOG_GROUPS, ["all", "launched", "unreleased", "eol"]);
+assert.ok(Object.isFrozen(model.CATALOG_GROUPS));
+assert.equal(model.catalogProducts(products, {}, today), products);
+assert.equal(model.catalogProducts(products, { catalogGroup: "all", hideDiscontinued: true }, today), products, "explicit All overrides stale checkbox");
+for (const [group, expected] of [["launched", ["launched"]], ["unreleased", ["unreleased"]], ["eol", ["dated-eol", "stage-eol"]]]) {
+  for (const legacy of [false, true]) assert.deepEqual(model.catalogProducts(products, { catalogGroup: group, hideDiscontinued: legacy }, today).map(p => p.id), expected);
+}
+assert.deepEqual(model.catalogProducts(products, { hideDiscontinued: true }, today).map(p => p.id), ["launched", "unreleased", "stage-eol", "unknown"], "legacy checkbox keeps its original date-only meaning");
+assert.equal(model.catalogProducts(products, { hideDiscontinued: "true" }, today), products);
+for (const value of [null, false, "unknown", "ALL", "constructor", {}, []]) {
+  assert.equal(model.catalogProducts(products, { catalogGroup: value }, today), products, "invalid model preference fails safely without dropping cards");
+  assert.equal(model.catalogProducts(products, { catalogGroup: value, hideDiscontinued: true }, today).length, 4, "invalid mode cannot bypass an old explicit hide");
+}
+assert.deepEqual(model.catalogLifecycleCounts(products, today), { all: 5, launched: 1, unreleased: 1, eol: 2, unknown: 1 });
+assert.deepEqual(model.catalogLifecycleCounts(null, today), { all: 0, launched: 0, unreleased: 0, eol: 0, unknown: 0 });
+assert.deepEqual(model.catalogProducts(null, { catalogGroup: "eol" }, today), []);
+assert.equal(model.catalogProducts(products, { catalogGroup: "eol" }, today)[0], products[2], "filtered cards retain original object identities");
+assert.equal(JSON.stringify(products), productBytes, "filter/count operations preserve every field, array, source value, clock, default and image");
+checks += 25;
+
+// Exercise the actual pure reconciliation implementation without exposing a new
+// production API or touching a browser database. Existing workspace-store tests
+// separately cover its transaction-completion and stale-save integration.
+const source = await readFile(new URL("../../public/js/workspace-store.js", import.meta.url), "utf8");
+const start = source.indexOf("  const own = "), end = source.indexOf("  function create(");
+assert.ok(start >= 0 && end > start);
+const sandbox = {};
+vm.createContext(sandbox);
+vm.runInContext(source.slice(start, end) + "\nthis.reconcile = reconcileViewSnapshots;", sandbox);
+const fixture = () => ({
+  version: 4, categories: ["one", "two"].map(id => ({ id, board: {
+    settings: { showPrices: true, unknownSettings: { exact: true } }, lanes: [{ id: "lane", order: 0 }],
+    products: [{ id: `${id}-product`, name: `${id} product`, laneId: "lane", order: 0, imageAssetId: "image", featuredVariantId: "black", specs: [{ id: "spec", value: "Exact technical condition" }], plc: { version: 1, fields: { ffsDate: { value: "2028-04-01" } }, history: [{ raw: "Retained" }] }, revisions: { plc: 5 } }],
+  } })), imageAssets: [{ id: "image", packagePath: "images/exact.png" }],
+  masterLocalMerges: [{ sourceProduct: { id: "old", original: "Exact archived data" } }],
+  masterLocalTombstones: [{ productId: "old", revisions: { "@product": 9 } }],
+  dateLocalEdits: { "one-product": { ffsDate: { value: "2028-04-01" } } },
+  receipts: [{ exact: "Retained" }], unknownOperational: { retained: [false, null, 0, ""] },
+});
+const reconcile = (base, mine, latest) => {
+  const bytes = [base, mine, latest].map(JSON.stringify);
+  const result = sandbox.reconcile(...bytes);
+  assert.deepEqual([base, mine, latest].map(JSON.stringify), bytes, "reconciliation never mutates any snapshot input");
+  return result === null ? null : JSON.parse(result);
+};
+for (const group of model.CATALOG_GROUPS) {
+  const base = fixture(), mine = clone(base), latest = clone(base);
+  base.categories[0].board.settings.hideDiscontinued = mine.categories[0].board.settings.hideDiscontinued = latest.categories[0].board.settings.hideDiscontinued = true;
+  mine.categories[0].board.settings.catalogGroup = group;
+  latest.categories[0].board.products[0].name = "Concurrent accepted product";
+  latest.receipts.push({ exact: "Concurrent receipt" });
+  const expected = clone(latest); expected.categories[0].board.settings.catalogGroup = group;
+  assert.deepEqual(reconcile(base, mine, latest), expected, `${group} reconciles with accepted facts`);
+
+  const localFacts = clone(base), otherView = clone(base);
+  localFacts.categories[0].board.products[0].plc.history.push({ raw: "Accepted local history" });
+  otherView.categories[0].board.settings.catalogGroup = group;
+  const inverse = clone(localFacts); inverse.categories[0].board.settings.catalogGroup = group;
+  assert.deepEqual(reconcile(base, localFacts, otherView), inverse, `${group} reconciles in the opposite direction`);
+  checks += 2;
+}
+{
+  const base = fixture(), mine = clone(base), latest = clone(base);
+  base.categories[0].board.settings.catalogGroup = mine.categories[0].board.settings.catalogGroup = latest.categories[0].board.settings.catalogGroup = "all";
+  mine.categories[0].board.settings.catalogGroup = "eol";
+  latest.categories[1].board.settings.catalogGroup = "unreleased";
+  const expected = clone(latest); expected.categories[0].board.settings.catalogGroup = "eol";
+  assert.deepEqual(reconcile(base, mine, latest), expected, "category-local choices merge independently");
+  delete mine.categories[0].board.settings.catalogGroup;
+  latest.categories[0].board.settings.catalogGroup = "launched";
+  const absent = clone(latest); delete absent.categories[0].board.settings.catalogGroup;
+  assert.deepEqual(reconcile(base, mine, latest), absent, "intentional preference removal is a valid view leaf");
+  checks += 2;
+}
+for (const invalid of [null, false, true, 0, "", "ALL", "unknown", "constructor", "__proto__", [], {}, ["all"]]) {
+  for (const position of [0, 1, 2]) {
+    const snapshots = [fixture(), fixture(), fixture()];
+    snapshots[position].categories[0].board.settings.catalogGroup = invalid;
+    assert.equal(reconcile(...snapshots), null, "invalid enum in any snapshot cannot bypass full-fact guards");
+    checks++;
+  }
+}
+{
+  const base = fixture(), mine = clone(base), latest = clone(base);
+  latest.categories[0].board.products[0].name = "Concurrent fact";
+  mine.categories[0].board.settings.unknownCatalogRule = "not a view leaf";
+  assert.equal(reconcile(base, mine, latest), null, "unknown settings remain protected facts");
+  delete mine.categories[0].board.settings.unknownCatalogRule;
+  mine.categories[0].board.settings.catalogGroup = "eol";
+  mine.categories[0].board.products[0].specs[0].value = "Different local fact";
+  assert.equal(reconcile(base, mine, latest), null, "valid group does not bypass conflicting product facts");
+  const removed = clone(base), secondCategoryChoice = clone(base);
+  removed.categories.splice(1, 1); secondCategoryChoice.categories[1].board.settings.catalogGroup = "eol";
+  assert.deepEqual(reconcile(base, secondCategoryChoice, removed), removed, "view changes never resurrect removed categories");
+  checks += 3;
+}
+await import("../../public/js/portfolio-search.js");
+await import("../../public/js/pptx-pagination.js");
+await import("../../public/js/saved-views.js");
+const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
+const appFunction = name => {
+  const match = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, "m"));
+  assert.ok(match, `execute actual application function ${name}`);
+  return match[0];
+};
+const appBoard = { lanes: [{ id: "main", label: "Main", order: 0 }], settings: { hideDiscontinued: true, roadmap: { startMonth: "2026-01", endMonth: "2030-12" } }, products };
+const otherBoard = { ...appBoard, settings: { catalogGroup: "all", hideDiscontinued: false, roadmap: { startMonth: "2026-01", endMonth: "2030-12" } } };
+const otherSettings = JSON.stringify(otherBoard.settings);
+const calls = { drag: 0, hover: 0, save: 0, controls: 0, render: 0, viewerClose: 0 };
+const inspector = { className: "inspector is-open", childElementCount: 1, innerHTML: "Existing editor", attributes: {},
+  setAttribute(name, value) { this.attributes[name] = value; },
+  replaceChildren() { this.childElementCount = 0; this.innerHTML = ""; } };
+const app = {
+  PortfolioModel: model, PortfolioSearch: globalThis.PortfolioSearch, PPCSavedViews: globalThis.PPCSavedViews,
+  board: appBoard, portfolio: { settings: {}, categories: [{ id: "one", board: appBoard }, { id: "two", board: otherBoard }] },
+  activeView: "products", activeCategoryId: "one", selectedId: "dated-eol", viewerInfoProductId: "dated-eol", inspectorOpen: true,
+  inspector, editSelectedButton: {}, searchQuery: "Exact technical condition", roadmapSearchQuery: "", roadmapDetailsOpen: false,
+  productLayoutEditing: false, packageOperationInProgress: false, pptxExportInProgress: false, workspaceOpening: false,
+  canvasScroll: { scrollLeft: 123, scrollTop: 45 }, productCardHover: { clear() { calls.hover++; } },
+  stopProductCardDrag() { calls.drag++; }, scheduleSave() { calls.save++; }, syncControls() { calls.controls++; }, renderActiveView() { calls.render++; },
+  closeViewerInfo(options) { assert.equal(options.render, false); calls.viewerClose++; app.viewerInfoProductId = null; },
+};
+vm.createContext(app);
+vm.runInContext(["selectedProduct", "applyInspectorState", "renderInspector", "clearHiddenCatalogSelection", "setCatalogGroup", "setCatalogHideDiscontinued", "updateBoard", "visibleProducts", "visibleRoadmapProducts", "portfolioForSearch", "openPortfolioSearchResult"].map(appFunction).join("\n"), app);
+assert.equal(app.setCatalogGroup("launched"), true);
+assert.equal(appBoard.settings.catalogGroup, "launched"); assert.equal(appBoard.settings.hideDiscontinued, false);
+assert.equal(app.selectedId, null, "hidden selection clears the toolbar");
+assert.equal(app.viewerInfoProductId, null, "hidden expanded detail is closed");
+assert.equal(app.inspectorOpen, false, "hidden selected product closes its real inspector state");
+assert.equal(inspector.attributes["aria-hidden"], "true"); assert.equal(inspector.childElementCount, 0, "real inspector render removes the old editor");
+assert.equal(app.searchQuery, "Exact technical condition", "group changes preserve the search query");
+assert.deepEqual(app.canvasScroll, { scrollLeft: 0, scrollTop: 0 });
+assert.deepEqual(calls, { drag: 1, hover: 1, save: 1, controls: 1, render: 1, viewerClose: 1 });
+assert.equal(JSON.stringify(otherBoard.settings), otherSettings, "group selection changes only the current category");
+assert.equal(JSON.stringify(products), productBytes);
+checks++;
+
+const actionBefore = JSON.stringify({ portfolio: app.portfolio, calls, scroll: app.canvasScroll, query: app.searchQuery });
+assert.equal(app.setCatalogGroup("launched"), false, "same effective group is a no-op");
+for (const invalid of ["", "ALL", "unknown", null, false, {}, ["all"]]) assert.equal(app.setCatalogGroup(invalid), false, "invalid mode rejected by actual handler");
+assert.equal(JSON.stringify({ portfolio: app.portfolio, calls, scroll: app.canvasScroll, query: app.searchQuery }), actionBefore);
+for (const guard of ["productLayoutEditing", "packageOperationInProgress", "pptxExportInProgress"]) {
+  app[guard] = true;
+  assert.equal(app.setCatalogGroup("eol"), false, `${guard} locks the actual handler`);
+  app[guard] = false;
+  assert.equal(JSON.stringify({ portfolio: app.portfolio, calls, scroll: app.canvasScroll, query: app.searchQuery }), actionBefore);
+  checks++;
+}
+appBoard.settings.hideDiscontinued = true;
+assert.equal(app.setCatalogGroup("launched"), true, "same mode with stale legacy true is not a no-op");
+assert.equal(appBoard.settings.hideDiscontinued, false);
+app.selectedId = "launched"; app.viewerInfoProductId = "dated-eol";
+appBoard.settings.catalogGroup = "all";
+assert.equal(app.setCatalogGroup("launched"), true);
+assert.equal(app.selectedId, "launched", "still-visible selection remains");
+assert.equal(app.viewerInfoProductId, null, "hidden viewer closes independently of a visible selection");
+app.activeView = "roadmap"; app.selectedId = app.viewerInfoProductId = "dated-eol";
+app.clearHiddenCatalogSelection();
+assert.equal(app.selectedId, "dated-eol"); assert.equal(app.viewerInfoProductId, "dated-eol", "Roadmap retains hidden catalogue history");
+app.activeView = "products"; app.selectedId = app.viewerInfoProductId = null;
+checks += 3;
+
+const idsOf = rows => Array.from(rows, row => row.id);
+appBoard.settings.catalogGroup = "unreleased"; app.searchQuery = "";
+assert.deepEqual(idsOf(app.visibleProducts()), ["unreleased"]);
+app.searchQuery = "Technical";
+assert.equal(app.visibleProducts().length, 0, "search cannot reintroduce a product excluded by lifecycle");
+appBoard.settings.catalogGroup = "launched";
+assert.deepEqual(idsOf(app.visibleProducts()), ["launched"], "visible lifecycle and source-spec query compose");
+otherBoard.settings.catalogGroup = "unreleased";
+assert.deepEqual(idsOf(app.portfolioForSearch().categories[0].board.products), ["launched"]);
+assert.deepEqual(idsOf(app.portfolioForSearch().categories[1].board.products), ["unreleased"], "all-category lookup respects each category's group");
+assert.equal(app.openPortfolioSearchResult({ categoryId: "one", productId: "dated-eol" }), false, "stale search result cannot reopen a filtered product");
+app.activeView = "roadmap";
+assert.equal(app.portfolioForSearch(), app.portfolio);
+app.roadmapSearchQuery = ""; assert.equal(app.visibleRoadmapProducts().length, products.length);
+app.activeView = "products"; app.searchQuery = "";
+checks += 7;
+
+Object.assign(app, {
+  PPTXPagination: globalThis.PPTXPagination,
+  PPTXEditable: { FONT_FACE: "Existing font", fontsReady: async () => true }, UI_FONT_FACE: "Existing font",
+  PortfolioTheme: { fontsReady: async () => true }, isFfsRoadmap: () => false,
+  categoryDefinition: id => ({ id }), ensureBoardSchema: target => target,
+  productCardLayout: () => ({ cardHeight: 552, laneHeight: 622 }),
+  CARD_WIDTH: 246, CARD_GAP: 10, GUTTER: 18, SIDE_PADDING: 40, LANE_TOP: 34,
+  inferFamily: () => "Synthetic family",
+  roadmapGroupsForProducts: rows => [{ family: "Synthetic family", products: rows }],
+  paginateRoadmapGroupsForPptx: globalThis.PPTXPagination.paginateRoadmapGroups,
+  closePopupMenus() {},
+});
+vm.runInContext(["productPagesForPptx", "buildPptxExportPlan", "exportPptx"].map(appFunction).join("\n"), app);
+const category = app.portfolio.categories[0];
+for (const [group, expected] of [["all", products.map(p => p.id)], ["launched", ["launched"]], ["unreleased", ["unreleased"]], ["eol", ["dated-eol", "stage-eol"]]]) {
+  appBoard.settings.catalogGroup = group;
+  const plan = app.buildPptxExportPlan("products", [category]);
+  assert.deepEqual(Array.from(plan).flatMap(page => Array.from(page.page.rows).flatMap(row => idsOf(row.products))), expected, "actual Products export planner uses lifecycle group");
+  checks++;
+}
+const allHidden = { id: "hidden", board: { ...appBoard, products: [products[0]], settings: { catalogGroup: "eol" } } };
+assert.equal(app.buildPptxExportPlan("products", [allHidden]).length, 0, "all-hidden lifecycle category creates no phantom slide");
+assert.deepEqual(Array.from(app.buildPptxExportPlan("both", [allHidden])).flatMap(page => page.kind === "roadmap" ? Array.from(page.groups).flatMap(group => idsOf(group.products)) : []), ["launched"], "combined export retains Roadmap history when every product card is hidden");
+let emptyDecks = 0;
+app.PptxGenJS = class { constructor() { emptyDecks++; } };
+const exportPortfolio = app.portfolio; app.portfolio = { categories: [allHidden] };
+await assert.rejects(app.exportPptx("products", [allHidden.id]), /No visible products to export/);
+assert.equal(emptyDecks, 0, "actual export aborts before creating an empty deck");
+app.portfolio = exportPortfolio;
+checks += 3;
+
+const painted = [];
+Object.assign(app, {
+  UI_PALETTE: { charcoal800: "#1A1B1C" },
+  sortedLanes: () => app.board.lanes, roundRect() {}, drawProductBoardExportBackground() {},
+  drawCard: (_context, product) => painted.push(product.id), cardXForDisplayIndex: (_rows, index) => index * 256,
+  renderedCards: [], renderedVariantOverflow: [], renderedHeroVariantRegions: [], renderedInfoButtons: [],
+});
+vm.runInContext(appFunction("drawBoardTo"), app);
+const dimensions = { width: 1000, height: 650, includeViewer: false, layout: { cardHeight: 552, laneHeight: 622 }, laneRows: [{ lane: appBoard.lanes[0], top: 34, contentHeight: 552 }] };
+for (const [group, expected] of [["launched", ["launched"]], ["unreleased", ["unreleased"]], ["eol", ["dated-eol", "stage-eol"]]]) {
+  appBoard.settings.catalogGroup = group; painted.length = 0;
+  app.drawBoardTo({ clearRect() {} }, dimensions, false, true);
+  assert.deepEqual(painted, expected, "actual PNG board rendering uses the lifecycle group");
+  checks++;
+}
+app.board = allHidden.board; painted.length = 0;
+app.drawBoardTo({ clearRect() {} }, dimensions, false, true);
+assert.equal(painted.length, 0, "all-hidden PNG paints no product cards");
+app.board = appBoard;
+assert.match(appFunction("exportPng"), /if \(isProducts\) drawBoardTo\(/);
+checks++;
+
+const savedViews = globalThis.PPCSavedViews;
+for (const group of model.CATALOG_GROUPS) {
+  assert.equal(savedViews.sanitizePreferences("portfolio", { display: { catalogGroup: group, privateKey: "never" } }).display.catalogGroup, group);
+  assert.equal(savedViews.sanitizePreferences("portfolio", { display: { catalogGroup: group, privateKey: "never" } }).display.privateKey, undefined);
+  checks++;
+}
+for (const invalid of [null, false, "ALL", "unknown", {}, ["all"]]) assert.equal(savedViews.sanitizePreferences("portfolio", { display: { catalogGroup: invalid } }).display.catalogGroup, undefined);
+const capture = appSource.match(/^  captureView\(\) \{[^]*?^  \},/m)?.[0];
+const apply = appSource.match(/^  applyView\(value\) \{[^]*?^  \},/m)?.[0];
+assert.ok(capture && apply);
+Object.assign(app, {
+  zoom: 1, roadmapMonthWidth: 20, ROADMAP_DEFAULT_MONTH_WIDTH: 20,
+  hashoutCategoryScope: () => null, hasDedicatedHashoutView: () => false,
+  activateCategory(id) { app.activeCategoryId = id; app.board = app.portfolio.categories.find(category => category.id === id).board; app.selectedId = app.viewerInfoProductId = null; app.inspectorOpen = false; },
+  resetHashoutView() {}, setView(view) { app.activeView = view; }, setProductZoom() {}, setRoadmapZoom() {},
+  document: { querySelector: () => null }, $: () => null,
+});
+vm.runInContext(`var adapter = { ${capture} ${apply} };`, app);
+appBoard.settings.catalogGroup = "unreleased"; appBoard.settings.hideDiscontinued = false; app.searchQuery = "Saved query";
+const captured = clone(app.adapter.captureView());
+assert.equal(captured.display.catalogGroup, "unreleased"); assert.equal(captured.search, "Saved query");
+const unchangedOther = JSON.stringify(otherBoard.settings);
+for (const group of model.CATALOG_GROUPS) {
+  app.adapter.applyView({ view: "products", activeCategoryId: "one", search: "Restored query", display: { catalogGroup: group, hideDiscontinued: true } });
+  assert.equal(appBoard.settings.catalogGroup, group); assert.equal(appBoard.settings.hideDiscontinued, false, "new saved group is authoritative over stale legacy true");
+  assert.equal(app.searchQuery, "Restored query"); assert.equal(JSON.stringify(otherBoard.settings), unchangedOther, "saved view group is category-scoped");
+  checks++;
+}
+app.adapter.applyView({ view: "products", activeCategoryId: "one", display: {} });
+assert.equal(appBoard.settings.catalogGroup, "eol", "older view without visibility fields preserves current choice");
+app.adapter.applyView({ view: "products", activeCategoryId: "one", display: { catalogGroup: "bad" } });
+assert.equal(appBoard.settings.catalogGroup, "eol", "invalid saved group cannot replace current preference");
+app.adapter.applyView({ view: "products", activeCategoryId: "one", display: { hideDiscontinued: true } });
+assert.equal(appBoard.settings.catalogGroup, undefined); assert.equal(appBoard.settings.hideDiscontinued, true, "legacy saved checkbox restores its old semantics");
+app.adapter.applyView({ view: "products", activeCategoryId: "two", display: { catalogGroup: "launched" } });
+assert.equal(otherBoard.settings.catalogGroup, "launched"); assert.equal(appBoard.settings.catalogGroup, undefined);
+for (const guard of ["workspaceOpening", "packageOperationInProgress", "pptxExportInProgress", "productLayoutEditing"]) {
+  app[guard] = true; const before = JSON.stringify(app.portfolio);
+  assert.throws(() => app.adapter.applyView({ display: { catalogGroup: "eol" } }), /Finish the current edit or export/);
+  assert.equal(JSON.stringify(app.portfolio), before);
+  app[guard] = false;
+  checks++;
+}
+assert.equal(JSON.stringify(products), productBytes, "all real application filter, saved-view, search and export paths preserve product facts, arrays, images, defaults and clocks");
+checks += 5;
+console.log(`Catalog visibility checks passed: ${checks} model/concurrent-view and actual application cases, local exact/quarter boundaries, legacy and saved-view compatibility, action guards, hidden selection/editor cleanup, search and PNG/PPTX filtering with Roadmap preservation.`);

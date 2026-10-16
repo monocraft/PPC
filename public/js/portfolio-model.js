@@ -80,17 +80,59 @@
     return exactProductDate(value);
   }
 
-  function isDiscontinued(product, now = new Date()) {
-    const end = endManufacturingDay(product);
-    if (!end || !(now instanceof Date) || !Number.isFinite(now.getTime())) return false;
+  function localCalendarDay(now) {
+    if (!(now instanceof Date) || !Number.isFinite(now.getTime())) return "";
     // Use the user's local calendar, including around UTC midnight.
-    const today = `${String(now.getFullYear()).padStart(4, "0")}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    return end <= today;
+    return `${String(now.getFullYear()).padStart(4, "0")}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  }
+
+  function isDiscontinued(product, now = new Date()) {
+    const end = endManufacturingDay(product), today = localCalendarDay(now);
+    return Boolean(end && today && end <= today);
+  }
+
+  const CATALOG_GROUPS = Object.freeze(["all", "launched", "unreleased", "eol"]);
+
+  // Catalogue groups describe saved evidence; absent stages must never inherit
+  // the roadmap editor's default planning stage or turn a New label into a date.
+  function catalogLifecycle(product, now = new Date()) {
+    const stage = product?.roadmap?.status, flag = product?.statusType;
+    if (isDiscontinued(product, now) || stage === "end-of-life") return "eol";
+    if (flag === "embargo" || flag === "in-development" || stage === "embargo"
+      || stage === "in-planning" || stage === "in-development") return "unreleased";
+    if (stage === "launched") return "launched";
+
+    const today = localCalendarDay(now);
+    if (!today) return "unknown";
+    const value = String(product?.generalAvailabilityDate ?? "").trim();
+    const evidence = product?.plc?.fields?.generalAvailabilityDate;
+    const activePeriod = evidence && Object.hasOwn(evidence, "period") && !evidence.supersededAt
+      && String(evidence.value ?? "").trim() === value;
+    if (activePeriod) {
+      const period = root.PortfolioDatePrecision?.currentPeriod(product, "generalAvailabilityDate");
+      if (!period) return "unknown";
+      // A quarter is not a launch day. Its last day is still inside the window.
+      return period.end < today ? "launched" : period.start > today ? "unreleased" : "unknown";
+    }
+    const day = exactProductDate(value);
+    return day ? day <= today ? "launched" : "unreleased" : "unknown";
   }
 
   function catalogProducts(products, settings = {}, now = new Date()) {
     const rows = Array.isArray(products) ? products : [];
+    const group = settings?.catalogGroup;
+    if (CATALOG_GROUPS.includes(group)) return group === "all" ? rows : rows.filter(product => catalogLifecycle(product, now) === group);
+    // Older workspaces retain their checkbox until an explicit group is saved.
     return settings?.hideDiscontinued === true ? rows.filter(product => !isDiscontinued(product, now)) : rows;
+  }
+
+  function catalogLifecycleCounts(products, now = new Date()) {
+    const counts = { all: 0, launched: 0, unreleased: 0, eol: 0, unknown: 0 };
+    for (const product of Array.isArray(products) ? products : []) {
+      counts.all++;
+      counts[catalogLifecycle(product, now)]++;
+    }
+    return counts;
   }
 
   function dateInMonth(value, month) {
@@ -244,5 +286,5 @@
     });
   }
 
-  root.PortfolioModel = Object.freeze({ endManufacturingDay, isDiscontinued, catalogProducts, DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, productLabelColor, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
+  root.PortfolioModel = Object.freeze({ endManufacturingDay, isDiscontinued, CATALOG_GROUPS, catalogLifecycle, catalogProducts, catalogLifecycleCounts, DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, productLabelColor, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
 })(globalThis);
