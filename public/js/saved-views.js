@@ -25,6 +25,7 @@
         productZoom: number(value.display.productZoom, 0.2, 2), roadmapZoom: number(value.display.roadmapZoom, 0.1, 2),
         showPrices: typeof value.display.showPrices === 'boolean' ? value.display.showPrices : undefined,
         showSkus: typeof value.display.showSkus === 'boolean' ? value.display.showSkus : undefined,
+        hideDiscontinued: typeof value.display.hideDiscontinued === 'boolean' ? value.display.hideDiscontinued : undefined,
       }) : undefined;
       return clean({ view: choice(value.view, ['products','roadmap','split']), basis: choice(value.basis, ['lifecycle','ffs']),
         categoryIds: ids(value.categoryIds, 200), activeCategoryId: text(value.activeCategoryId),

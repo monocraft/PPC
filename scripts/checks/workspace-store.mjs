@@ -259,6 +259,46 @@ for (const kind of ['blocked', 'error', 'throw']) {
 const clone = value => JSON.parse(JSON.stringify(value));
 const viewFixture = () => ({ version: 4, activeCategoryId: 'first', settings: { roadmapBasis: 'ffs', hashoutCategoryIds: null, hashoutViewport: { start: 24312, end: 24432, zoom: 1 }, hashoutLabelMode: 'default', timeline: { startMonth: '2026-01', endMonth: '2035-12', snap: 'month', statusColors: { 'in-planning': '#343434' }, unknownTimeline: { retain: true } }, unknownSettings: { retain: [null, false, 0, ''] } }, categories: ['first', 'second'].map((id, index) => ({ id, name: id, board: { title: `${id} exact title`, lanes: [{ id: 'lane', order: 0 }], settings: { roadmap: { startMonth: '2026-01', endMonth: '2035-12', familyOrder: ['Keep family'], sourceLabel: { exact: true } }, unknownBoardSettings: { retain: true } }, products: [{ id: `${id}-product`, name: `${id} product`, laneId: 'lane', order: 0, imageAssetId: 'existing-image', ffsDate: '2028-04-01', plc: { version: 1, sourceFile: 'Original.xlsx', fields: { ffsDate: { value: '2028-04-01', period: { precision: 'quarter', basis: 'calendar', year: 2028, quarter: 2, start: '2028-04-01', end: '2028-06-30', label: 'Q2 2028' }, reviewed: true } }, history: [{ exact: 'Evidence' }] }, privateProduct: { retain: ['all', 'facts'] } }] } })), masterLocalBaseline: [{ productId: 'first-product', values: { accepted: true } }], masterLocalMerges: [{ sourceProduct: { exact: 'Undo metadata' }, base: { revisions: { plc: 5 } } }], masterLocalRemovedProducts: { deleted: { id: 'deleted', imageAssetId: 'old-image' } }, masterLocalTombstones: [{ productId: 'deleted', revisions: { '@product': 4 } }], plcReview: { entries: [{ key: 'retain', raw: 'All unresolved source text' }] }, plcSharePending: { patches: [{ productId: 'first-product', patch: { plc: { exact: 'Queued accepted provenance' } } }] }, dateLocalEdits: { 'first-product': { ffsDate: { value: '2028-04-01', source: 'planning' } } }, imageAssets: [{ id: 'existing-image', sourceType: 'local' }, { id: 'old-image', sourceType: 'local' }], loadedPackageInfo: { gitBlobSha: 'a'.repeat(40) }, receipts: [{ signed: 'retain' }], unknownOperational: { exact: { nested: [null, 0, false] } } });
 async function diverged(base, current) { const d = driver(), first = create(d), second = create(d); await first.save(JSON.stringify(base)); await second.read(); await first.save(JSON.stringify(current)); return { d, first, second }; }
+for (const hidden of [true, false]) {
+  const base = viewFixture(); base.categories[0].board.settings.hideDiscontinued = !hidden;
+  const latest = clone(base), mine = clone(base);
+  latest.categories[0].board.products[0].name = 'Concurrent accepted product'; latest.receipts.push({ exact: 'Latest accepted receipt' });
+  mine.categories[0].board.settings.hideDiscontinued = hidden;
+  const h = await diverged(base, latest), receipt = await h.second.save(JSON.stringify(mine), { reconcileViews: true });
+  const expected = clone(latest); expected.categories[0].board.settings.hideDiscontinued = hidden;
+  assert.equal(receipt.reconciled, true); assert.deepEqual(JSON.parse(receipt.serialized), expected);
+  assert.equal(await h.second.read(), receipt.serialized);
+  const other = clone(base), localFacts = clone(base); other.categories[0].board.settings.hideDiscontinued = hidden;
+  localFacts.categories[0].board.products[0].plc.history.push({ exact: 'Local accepted evidence' });
+  const inverse = await diverged(base, other), merged = await inverse.second.save(JSON.stringify(localFacts), { reconcileViews: true });
+  const inverseExpected = clone(localFacts); inverseExpected.categories[0].board.settings.hideDiscontinued = hidden;
+  assert.deepEqual(JSON.parse(merged.serialized), inverseExpected);
+}
+mark('hideDiscontinued true and false reconcile in both directions while preserving full facts, receipts, images, dates and other-category preferences');
+{
+  const base = viewFixture(), latest = clone(base), mine = clone(base);
+  latest.categories[0].board.products[0].name = 'Accepted fact after legacy workspace';
+  mine.categories[0].board.settings.hideDiscontinued = false;
+  const h = await diverged(base, latest), merged = await h.second.save(JSON.stringify(mine), { reconcileViews: true });
+  const expected = clone(latest); expected.categories[0].board.settings.hideDiscontinued = false;
+  assert.deepEqual(JSON.parse(merged.serialized), expected);
+  mark('legacy absent discontinued preference safely reconciles the default-show schema leaf');
+}
+for (const value of ['true', 1, null, [], { hidden: true }]) {
+  const base = viewFixture(), latest = clone(base), mine = clone(base);
+  latest.categories[0].board.products[0].name = 'Protected latest fact'; mine.categories[0].board.settings.hideDiscontinued = value;
+  const h = await diverged(base, latest);
+  await assert.rejects(h.second.save(JSON.stringify(mine), { reconcileViews: true }), { code: 'WORKSPACE_CONFLICT' });
+  assert.equal(await h.first.read(), JSON.stringify(latest));
+}
+{
+  const base = viewFixture(), latest = clone(base), mine = clone(base);
+  latest.categories[0].board.products[0].name = 'Protected latest fact'; mine.categories[0].board.settings.hideUnapproved = true;
+  const h = await diverged(base, latest);
+  await assert.rejects(h.second.save(JSON.stringify(mine), { reconcileViews: true }), { code: 'WORKSPACE_CONFLICT' });
+  assert.equal(await h.first.read(), JSON.stringify(latest));
+  mark('nonboolean discontinued shapes and unknown hide settings cannot bypass full-fact CAS');
+}
 {
   const base = viewFixture(), latest = clone(base), mine = clone(base);
   latest.settings.hashoutLabelMode = 'off'; latest.settings.hashoutWindowsVisible = false; mine.settings.hashoutViewport = { start: 24324, end: 24372, zoom: 2.5 }; mine.settings.hashoutSelectedKey = '["first","first-product"]';
