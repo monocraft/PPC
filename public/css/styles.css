@@ -340,19 +340,29 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 @keyframes discontinued-pixel-fall { 0% { opacity: 0; transform: translate3d(0, -8px, 0); } 15% { opacity: .85; } 100% { opacity: 0; transform: translate3d(var(--pixel-x), var(--pixel-y), 0); } }
 @keyframes discontinued-edge-dissolve { 0%, 100% { opacity: 0; } 25%, 55% { opacity: .8; } }
 .product-card-actions { position: absolute; z-index: 7; inset: 0; pointer-events: none; }
-.product-card-action-row { position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-height: 28px; pointer-events: none; }
+.product-card-action-row { position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: flex-end; min-height: 34px; pointer-events: none; }
+.product-card-action-group { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 2px; border-radius: 7px; background: #2B2D30; pointer-events: none; }
 .product-card-action-row.is-discontinued { opacity: .4; }
 .product-card-actions[hidden], .product-card-action-row[hidden] { display: none; }
-.product-card-action-row button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 5px; border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); pointer-events: auto; transition: background-color 150ms ease, color 150ms ease; }
+.product-card-action-row button { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; min-width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #8B8E94; pointer-events: auto; transition: background-color 130ms ease, color 130ms ease; }
+.product-card-action-row button + button::before { content: ""; position: absolute; left: -2px; top: 10px; width: 1px; height: 10px; background: #44464A; pointer-events: none; }
 .product-card-action-row button:hover, .product-card-action-row button.is-active, .product-card-action-row button[aria-pressed="true"] { background: var(--color-header); color: var(--color-text); }
-.product-card-action-row.is-stage-colored button { color: var(--product-card-accent); }
-.product-card-action-row.is-stage-colored button:hover, .product-card-action-row.is-stage-colored button.is-active { background: var(--product-card-footer); color: var(--color-text); }
+.product-card-action-row button:active { background: #404246; color: var(--color-text); }
 .product-card-action-row button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .product-card-action-label { display: none; }
-.product-card-action-icon { display: block; flex: 0 0 18px; width: 18px; height: 18px; }
+.product-card-action-icon { display: block; flex: 0 0 15px; width: 15px; height: 15px; }
 .product-card-action-icon > svg { display: block; width: 100%; height: 100%; }
-.product-card-action-row.is-condensed { gap: 0; }
-.product-card-action-row.is-condensed button { flex-basis: 24px; width: 24px; min-width: 24px; padding: 3px; }
+.product-card-action-row.is-condensed .product-card-action-group { gap: 0; padding-inline: 0; }
+.product-card-action-row.is-condensed button { flex-basis: 24px; width: 24px; min-width: 24px; }
+.product-card-action-row.is-condensed button + button::before { display: none; }
+@media (pointer: coarse) {
+  .product-card-action-row { min-height: 48px; }
+  .product-card-action-row button { flex-basis: 44px; width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+  .product-card-action-row button + button::before { top: 17px; }
+  .product-card-action-row.is-condensed .product-card-action-group { flex-direction: column; gap: 0; padding: 2px; }
+  .product-card-action-row.is-condensed button { flex-basis: 44px; width: 44px; min-width: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .product-card-action-row button { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .product-card-hover-frame { transition: none; } .product-card-hover-frame .product-card-dissolve-pixel, .product-card-hover-frame.is-disintegrating .product-card-dissolve-pixel, .product-card-hover-frame.is-disintegrating::after { display: none; animation: none; } }
 .roadmap-edit-controls { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; font-size: 10px; }
 .roadmap-edit-controls > button { min-height: 32px; padding: 6px 8px; font-size: 10px; white-space: nowrap; }

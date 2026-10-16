@@ -182,6 +182,29 @@ for (const detailed of [false, true]) {
   }
 }
 assert.equal(JSON.stringify(mixedBoard.products), mixedProductsBefore);
+// The recess stays within its physical card and reserved action band. On touch,
+// narrow zoomed cards stack the independent 44px targets above the SKU footer.
+placementContext.CARD_WIDTH = 246;
+for (const coarse of [false, true]) {
+  placementContext.matchMedia = () => ({ matches: coarse });
+  for (const scale of [.2, .3, .34, .44, .45, .7, 1, 2]) {
+    placementContext.zoom = scale;
+    const layout = placementContext.productCardLayout();
+    const card = { x: 18, y: 50, width: 246, height: layout.cardHeight };
+    const placement = placementContext.productCardActionPlacement(card, layout);
+    const condensed = card.width * scale < (coarse ? 110 : 82);
+    const groupWidth = coarse ? (condensed ? 48 : 94) : (condensed ? 48 : 66);
+    const groupHeight = coarse ? (condensed ? 92 : 48) : 34;
+    const right = placement.x + placement.width;
+    assert.ok(right - groupWidth >= card.x * scale - 1e-8, "the complete recess fits the physical card at every zoom");
+    assert.ok(right <= (card.x + card.width) * scale + 1e-8, "the recess cannot reach the neighboring card");
+    assert.ok(placement.y + groupHeight <= (card.y + layout.actionTop + layout.actionHeight) * scale + 1e-8,
+      "the complete hit area remains above the reserved SKU footer");
+    assert.equal(placementContext.productCardLayout(mixedBoard, placementContext.categoryDefinition(), { includeControls: false }).actionHeight, 0,
+      "desktop and touch exports both omit the interactive recess");
+  }
+}
+delete placementContext.matchMedia;
 const iconActions = extract("syncProductCardActions");
 assert.equal((iconActions.match(/<svg viewBox=/g) || []).length, 2);
 assert.ok(!iconActions.includes("product-card-action-label"), "both native controls stay icon-only at every zoom");

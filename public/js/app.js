@@ -1902,7 +1902,9 @@ function detailedSpecsHeight(product, categoryId = activeCategoryId) {
 
 function productCardLayout(targetBoard = board, definition = categoryDefinition(), { includeControls = true } = {}) {
   const cache = globalThis.PortfolioViewRuntime?.layoutCache;
-  const actionHeight = globalThis.PortfolioViewRuntime && includeControls && targetBoard === board && activeView === "products" && !pptxExportInProgress ? 36 / zoom : 0;
+  const coarsePointer = globalThis.matchMedia?.("(pointer: coarse)")?.matches === true;
+  const actionPixels = coarsePointer ? (CARD_WIDTH * zoom < 110 ? 96 : 52) : 36;
+  const actionHeight = globalThis.PortfolioViewRuntime && includeControls && targetBoard === board && activeView === "products" && !pptxExportInProgress ? actionPixels / zoom : 0;
   const cacheKey = `${typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision}:${definition.id || ""}:${definition.fullSpecCards === true}:${targetBoard.settings.showSkus}:${targetBoard.products.length}:${targetBoard.lanes?.length || 0}:${actionHeight}`;
   const cached = cache?.get(targetBoard, cacheKey);
   if (cached) return cached;
@@ -6268,8 +6270,9 @@ function hitInfoButton(point) {
 }
 
 function productCardActionPlacement(card, layout = productCardLayout()) {
-  const width = Math.max(0, card.width * zoom - (card.width * zoom < 68 ? 0 : 16));
-  return { x: card.x * zoom + (card.width * zoom - width) / 2, y: (card.y + layout.actionTop) * zoom + 4, width };
+  const condensedBelow = globalThis.matchMedia?.("(pointer: coarse)")?.matches ? 110 : 82;
+  const width = Math.max(0, card.width * zoom - (card.width * zoom < condensedBelow ? 0 : 16));
+  return { x: card.x * zoom + (card.width * zoom - width) / 2, y: (card.y + layout.actionTop) * zoom + 2, width };
 }
 
 function productCardActionAvailable(productId) {
@@ -6302,7 +6305,7 @@ function syncProductCardActions() {
     let row = productCardActionRows.get(product.id);
     if (!row) {
       row = document.createElement("div"); row.className = "product-card-action-row";
-      row.innerHTML = '<button type="button" data-card-detail-tab="overview"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3 3v12H5zM12 2.5v3h3M8 9h4M8 12h4M8 15h3"/></svg></span></button><button type="button" data-card-detail-tab="dates"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.5"/><path d="M6.5 2.5v4M13.5 2.5v4M3 8.5h14M6.5 11.5h.1M10 11.5h.1M13.5 11.5h.1M6.5 14.5h.1M10 14.5h.1"/></svg></span></button>';
+      row.innerHTML = '<div class="product-card-action-group"><button type="button" data-card-detail-tab="overview"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3 3v12H5zM12 2.5v3h3M8 9h4M8 12h4M8 15h3"/></svg></span></button><button type="button" data-card-detail-tab="dates"><span class="product-card-action-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.5"/><path d="M6.5 2.5v4M13.5 2.5v4M3 8.5h14M6.5 11.5h.1M10 11.5h.1M13.5 11.5h.1M6.5 14.5h.1M10 14.5h.1"/></svg></span></button></div>';
       row.dataset.cardProductId = product.id;
       productCardActionLayer.append(row); productCardActionRows.set(product.id, row);
     }
@@ -6316,7 +6319,7 @@ function syncProductCardActions() {
     row.classList.toggle("is-stage-colored", Boolean(cardStyle));
     row.style.setProperty("--product-card-accent", cardStyle?.muted || UI_PALETTE.silver);
     row.style.setProperty("--product-card-footer", cardStyle?.footer || UI_PALETTE.charcoal700);
-    row.classList.toggle("is-condensed", card.width * zoom < 68); if (row.hidden) row.hidden = false;
+    row.classList.toggle("is-condensed", card.width * zoom < (globalThis.matchMedia?.("(pointer: coarse)")?.matches ? 110 : 82)); if (row.hidden) row.hidden = false;
     for (const button of row.querySelectorAll("button")) {
       const actionLabel = button.dataset.cardDetailTab === "dates" ? "Dates" : "Specifications";
       const label = `${actionLabel} for ${product.name}`;
@@ -8720,6 +8723,7 @@ window.addEventListener("keydown", (event) => {
   if (selectedId) clearSelection();
 });
 window.addEventListener("resize", () => { if (workspaceOpening) return; closeVariantPopover({ force: true }); renderActiveView(); });
+globalThis.matchMedia?.("(pointer: coarse)")?.addEventListener?.("change", () => { if (!workspaceOpening) renderActiveView(); });
 window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
 
 // Draft actions keep complete records and images until the user saves or discards.
