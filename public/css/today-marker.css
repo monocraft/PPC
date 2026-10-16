@@ -1,0 +1,23 @@
+/* A single alert-colored rail; the pointer response stays on its fixed x axis. */
+.portfolio-today-marker { position: absolute; z-index: 6; overflow: hidden; pointer-events: none; user-select: none; contain: layout paint; font-family: var(--font-ui, "Jost", Arial, sans-serif); }
+.portfolio-today-marker[hidden] { display: none !important; }
+.hashout-stage > .portfolio-today-marker { z-index: 3; }
+.portfolio-today-marker * { box-sizing: border-box; pointer-events: none; }
+.portfolio-today-line { position: absolute; width: 1px; background: repeating-linear-gradient(to bottom, var(--color-danger, #FF2525) 0, var(--color-danger, #FF2525) 3px, transparent 3px, transparent 8px); opacity: .65; }
+.portfolio-today-donut { position: absolute; width: 8px; height: 8px; border: 1px solid var(--color-danger, #FF2525); border-radius: 50%; background: var(--color-page, #1A1B1C); }
+.portfolio-today-follower { position: absolute; top: 0; width: 1px; height: 48px; opacity: 0; background: linear-gradient(to bottom, transparent, var(--color-danger, #FF2525) 24%, var(--color-danger, #FF2525) 76%, transparent); transition: opacity .25s ease; }
+.portfolio-today-readout { position: absolute; display: flex; align-items: center; gap: 10px; width: max-content; height: 30px; overflow: hidden; padding: 0 10px; border: 1px solid var(--color-border, #333538); border-radius: 3px; background: var(--color-surface, #242527); color: var(--color-text, #D5D7DC); font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.portfolio-today-readout > * { flex: 0 0 auto; }
+.portfolio-today-word { color: var(--color-danger-text, #FF8A8A); font-weight: 500; }
+.portfolio-today-date { font-weight: 500; }
+.portfolio-today-day { color: var(--color-text-secondary, #BBBCC0); font-size: 11px; letter-spacing: .035em; }
+.portfolio-today-divider { width: 1px; height: 12px; background: var(--color-border-strong, #4D5054); }
+.portfolio-today-clock { display: inline-flex; font-size: 13px; font-weight: 500; letter-spacing: .035em; }
+.portfolio-today-seconds, .portfolio-today-zone { color: var(--color-text-secondary, #BBBCC0); }
+.portfolio-today-zone { font-size: 10px; }
+.portfolio-today-marker.is-compact .portfolio-today-readout { gap: 8px; padding-inline: 8px; }
+.portfolio-today-marker.is-compact .portfolio-today-word, .portfolio-today-marker.is-compact .portfolio-today-zone { display: none; }
+.portfolio-today-marker.is-narrow .portfolio-today-readout { gap: 5px; padding-inline: 7px; font-size: 11px; }
+.portfolio-today-marker.is-narrow .portfolio-today-clock { font-size: 12px; letter-spacing: 0; }
+.portfolio-today-marker.is-narrow .portfolio-today-day { letter-spacing: 0; }
+@media (pointer: coarse), (prefers-reduced-motion: reduce) { .portfolio-today-follower { display: none; transition: none; } }

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+await import('../../public/js/date-precision.js');
+await import('../../public/js/portfolio-model.js');
 
 const source = await readFile(new URL('../../public/js/saved-views.js', import.meta.url), 'utf8');
 const retailSource = await readFile(new URL('../../public/js/sellout-dashboard.js', import.meta.url), 'utf8');
@@ -23,6 +25,87 @@ vm.runInNewContext(source, { globalThis: window, console, Date, Math });
 const api = window.PPCSavedViews;
 const device = storage(), store = api.createStore(device);
 const secret = 'SOURCE AND CREDENTIAL FIXTURE MUST NEVER BE SAVED';
+// Multicategory visibility is a narrow portfolio preference, never a product or
+// category data envelope. Sanitation is deterministic and makes fresh objects.
+const visibilityInput = [
+  { categoryId:'audio',catalogGroup:'all',hideDiscontinued:true,products:[secret],privateKey:secret },
+  { categoryId:'pc',catalogGroup:'unreleased' },
+  { categoryId:'mics',hideDiscontinued:true },
+  { categoryId:'controllers',hideDiscontinued:false },
+  { categoryId:'undefined-option',catalogGroup:undefined,hideDiscontinued:true },
+];
+const visibilityBefore = JSON.stringify(visibilityInput);
+const visibilityExpected = [
+  {categoryId:'audio',catalogGroup:'all'}, {categoryId:'pc',catalogGroup:'unreleased'},
+  {categoryId:'mics',hideDiscontinued:true}, {categoryId:'controllers',hideDiscontinued:false},
+  {categoryId:'undefined-option',hideDiscontinued:true},
+];
+const visibility = api.sanitizePreferences('portfolio',{view:'roadmap',basis:'ffs',categoryVisibility:visibilityInput,display:{catalogGroup:'eol'}});
+assert.deepEqual(json(visibility.categoryVisibility),visibilityExpected,'Explicit group wins over legacy flag, and boolean-only entries survive.');
+assert.equal(visibility.display.catalogGroup,'eol','Existing active-category display preference remains backward compatible.');
+assert.equal(JSON.stringify(visibilityInput),visibilityBefore,'Sanitizing category visibility never changes source input.');
+assert.notEqual(visibility.categoryVisibility,visibilityInput); assert.notEqual(visibility.categoryVisibility[0],visibilityInput[0]);
+assert.deepEqual(json(api.sanitizePreferences('portfolio',visibility)),json(visibility),'The normalized schema is idempotent.');
+for(const catalogGroup of ['all','launched','unreleased','eol'])assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'exact',catalogGroup}]}).categoryVisibility),[{categoryId:'exact',catalogGroup}]);
+for(const categoryId of ['', '   ',null,false,123,'x'.repeat(241),'Audio\nInjection','Audio\u0000Injection','Audio\u007fInjection'])assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId,catalogGroup:'all'}]}).categoryVisibility),[]);
+assert.equal(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'x'.repeat(240),catalogGroup:'launched'}]}).categoryVisibility[0].categoryId.length,240);
+for(const malformed of [null,false,1,'audio',[],{}, {categoryId:'empty'}, {categoryId:'bad',catalogGroup:'ALL'}, {categoryId:'bad',catalogGroup:'unknown'}, {categoryId:'bad',catalogGroup:'constructor'}, {categoryId:'bad',catalogGroup:null}, {categoryId:'bad',hideDiscontinued:'true'}, {categoryId:'bad',hideDiscontinued:null}, {categoryId:'bad',catalogGroup:'all',hideDiscontinued:'false'}, Object.create({categoryId:'inherited',catalogGroup:'all'})])assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[malformed]}).categoryVisibility),[],'Malformed entries are rejected rather than retaining arbitrary blobs.');
+for(const malformed of [null,false,'[]',{},1])assert.equal(api.sanitizePreferences('portfolio',{categoryVisibility:malformed}).categoryVisibility,undefined,'Nonarray visibility is omitted.');
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[]}).categoryVisibility),[],'An explicit empty array remains distinct from an older absent preference.');
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[
+  {categoryId:'same',catalogGroup:'bad'}, {categoryId:'same',catalogGroup:'launched'}, {categoryId:'same',catalogGroup:'eol'},
+  {categoryId:'legacy',hideDiscontinued:true}, {categoryId:'legacy',catalogGroup:'all'},
+]}).categoryVisibility),[{categoryId:'same',catalogGroup:'launched'},{categoryId:'legacy',hideDiscontinued:true}],'First valid exact category identity wins; invalid earlier duplicates do not reserve it.');
+const manyVisibility = Array.from({length:205},(_,index)=>({categoryId:`category-${index}`,catalogGroup:'all'}));
+assert.equal(api.sanitizePreferences('portfolio',{categoryVisibility:manyVisibility}).categoryVisibility.length,200);
+assert.equal(api.sanitizePreferences('portfolio',{categoryVisibility:manyVisibility}).categoryVisibility.at(-1).categoryId,'category-199','Only the first bounded input window is inspected.');
+const dangerous = JSON.parse('{"categoryId":"safe","catalogGroup":"eol","__proto__":{"polluted":true},"constructor":{"privateKey":"'+secret+'"},"prototype":{"products":["'+secret+'"]}}');
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[dangerous]}).categoryVisibility),[{categoryId:'safe',catalogGroup:'eol'}]);
+assert.equal(Object.prototype.polluted,undefined); assert.equal(api.sanitizePreferences('retail',{categoryVisibility:visibilityInput}).categoryVisibility,undefined); assert.equal(api.sanitizePreferences('blueprint',{categoryVisibility:visibilityInput}).categoryVisibility,undefined);
+const visibilityDevice = storage(), visibilityStore = api.createStore(visibilityDevice);
+const visibilityRecord = visibilityStore.save('Cross-category FFS','portfolio',{view:'roadmap',basis:'ffs',categoryIds:['audio','pc'],categoryVisibility:visibilityInput,display:{catalogGroup:'all'}});
+assert.deepEqual(json(api.createStore(visibilityDevice).list()[0].preferences.categoryVisibility),visibilityExpected,'New per-category preferences survive real local-store save and reload.');
+assert.ok(!visibilityDevice.getItem(api.STORAGE_KEY).includes(secret),'No source facts or credentials leak through per-category entries.');
+visibilityInput[0].catalogGroup='unreleased'; visibilityInput.push({categoryId:'later',catalogGroup:'all'});
+assert.deepEqual(json(visibilityStore.list()[0].preferences.categoryVisibility),visibilityExpected,'Saved arrays do not alias later capture edits.');
+visibilityStore.rename(visibilityRecord.id,'Retained cross-category FFS');
+assert.deepEqual(json(visibilityStore.list()[0].preferences.categoryVisibility),visibilityExpected,'Renaming does not discard category visibility.');
+const oldVisibilityDevice=storage();
+oldVisibilityDevice.setItem(api.STORAGE_KEY,JSON.stringify({version:1,views:[{id:'legacy',name:'Legacy view',kind:'portfolio',preferences:{view:'products',display:{catalogGroup:'unreleased',hideDiscontinued:true}}}]}));
+const oldVisibility=api.createStore(oldVisibilityDevice).list()[0].preferences;
+assert.equal(oldVisibility.categoryVisibility,undefined); assert.equal(oldVisibility.display.catalogGroup,'unreleased'); assert.equal(oldVisibility.display.hideDiscontinued,true,'Older saved preferences remain exactly compatible.');
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{view:'roadmap',basis:'ffs'})),{view:'roadmap',basis:'ffs'},'Opening an old view does not manufacture a category-visibility override.');
+// Multi-selection is a bounded preference array, not a product-data envelope.
+const selectionInput = ['embargo','launched','in-development','launched'];
+const multiInput = { view:'roadmap', categoryVisibility:[
+  {categoryId:'audio',catalogGroups:selectionInput,catalogGroup:'eol',hideDiscontinued:true,products:[secret]},
+  {categoryId:'none',catalogGroups:[]}, {categoryId:'reset',catalogGroups:['all']},
+], display:{catalogGroups:selectionInput,catalogGroup:'unreleased',hideDiscontinued:true} };
+const multiBefore = JSON.stringify(multiInput), multi = api.sanitizePreferences('portfolio',multiInput);
+assert.deepEqual(json(multi.categoryVisibility), [
+  {categoryId:'audio',catalogGroups:['launched','in-development','embargo']},
+  {categoryId:'none',catalogGroups:[]}, {categoryId:'reset',catalogGroups:['all']},
+], 'new arrays take precedence and canonicalize without retaining contradictory category flags');
+assert.deepEqual(json(multi.display.catalogGroups),['launched','in-development','embargo']);
+assert.equal(multi.display.catalogGroup,'unreleased','old display properties remain backward compatible alongside the authoritative new array');
+assert.equal(multi.display.hideDiscontinued,true);
+assert.equal(JSON.stringify(multiInput),multiBefore); assert.notEqual(multi.categoryVisibility[0].catalogGroups,selectionInput);
+assert.deepEqual(json(api.sanitizePreferences('portfolio',multi)),json(multi),'multi-selection normalization is idempotent');
+for(const group of globalThis.PortfolioModel.CATALOG_VISIBILITY_GROUPS) {
+  assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'one',catalogGroups:[group]}]}).categoryVisibility),[{categoryId:'one',catalogGroups:[group]}]);
+}
+for(const malformed of [null,false,{},'launched',['unknown'],['all','launched'],[undefined],Array(1),Array(33).fill('all')]) {
+  assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'one',catalogGroups:malformed,catalogGroup:'all'}]}).categoryVisibility),[], 'invalid supplied arrays reject the category entry rather than silently changing its meaning');
+  assert.equal(api.sanitizePreferences('portfolio',{display:{catalogGroups:malformed}}).display.catalogGroups,undefined);
+}
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[
+  {categoryId:'same',catalogGroups:['bad']},{categoryId:'same',catalogGroups:[]},{categoryId:'same',catalogGroups:['all']},
+]}).categoryVisibility),[{categoryId:'same',catalogGroups:[]}], 'the first valid none selection reserves its exact category identity');
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'stale',catalogGroups:['launched'],catalogGroup:'bad',hideDiscontinued:'bad'}]}).categoryVisibility),[{categoryId:'stale',catalogGroups:['launched']}], 'valid new selection is independent of stale older fields');
+const multiDevice=storage(),multiStore=api.createStore(multiDevice),multiRecord=multiStore.save('Released and development','portfolio',multiInput);
+const multiSaved=json(multiRecord.preferences); selectionInput.push('eol'); multiInput.categoryVisibility[1].catalogGroups.push('eol');
+assert.deepEqual(json(api.createStore(multiDevice).list()[0].preferences),multiSaved,'real local persistence preserves independent canonical multi-selection arrays');
+assert.ok(!multiDevice.getItem(api.STORAGE_KEY).includes(secret));
 const preferences = { view: 'roadmap', basis: 'ffs', categoryIds: ['audio','audio','removed'], activeCategoryId: 'audio', dateRange: { start: '2026-01', end: '2028-12' }, search: 'launch',
   display: { labelMode: 'off', showSeasonalWindows: true, detailsOpen: true, showPrices: false, showSkus: true, productZoom: 0.7, roadmapZoom: 1.1, privateKey: secret },
   products: [{ id: secret }], workbook: secret, sourceUrl: secret, accessToken: secret, privateKey: secret };
@@ -163,6 +246,7 @@ const exportForm = {
 };
 let hidden = true, failExport = false, completedExports = 0, saveCalls = 0, hashoutScope = ['audio'], dedicated = false;
 const isolatedExport = {
+  PortfolioModel:globalThis.PortfolioModel,
   console:{error(){}}, document:{activeElement:null,querySelector:()=>({inert:false}),createElement:()=>control()},
   pptxExportForm:exportForm,pptxExportDialog:{classList:{add(){hidden=true;},remove(){hidden=false;},contains(){return hidden;}}},
   confirmPptxExportButton:control(),pptxExportInProgress:false,pptxSelectedCategoryIds:null,pptxReturnFocus:null,
@@ -209,4 +293,4 @@ assert.equal(api.readExportPreferences(exportStorage).scope,'roadmap'); assert.e
 assert.ok(!exportStorage.getItem(api.EXPORT_KEY).includes('limitToFit'),'Successful partial export still does not remember cutoff consent.');
 isolatedExport.openPptxExportDialog(); assert.equal(exportControls.get('#pptxRoadmapLimit').checked,false);
 failExport=true; await exportEvents.get('submit')({preventDefault(){}}); assert.equal(saveCalls,1,'Failed export never overwrites reusable preferences.');
-console.log('Saved view checks passed: bounded local schemas, save/rename/delete/recovery, privacy, Retail stale identities, retained Analytics source and successful-export-only reusable PPTX preferences with fresh cutoff decisions.');
+console.log('Saved view checks passed: bounded multicategory visibility/first-valid identities/group precedence/legacy round trips, local schemas, save/rename/delete/recovery, privacy, Retail stale identities, retained Analytics source and successful-export-only reusable PPTX preferences with fresh cutoff decisions.');

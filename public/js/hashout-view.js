@@ -5,6 +5,7 @@
   const STAGES = Object.freeze({ launched: "Released", "in-development": "In development", "in-planning": "In planning", embargo: "Embargo", "end-of-life": "End of life", unknown: "Stage unverified" });
   const RING_STAGGER_MS = 32, RING_MOTION_MS = 240;
   const HASHOUT_SELECTION = "#2DD4BF";
+  const TODAY_HEADER_INSET = 40;
   const LABEL_MODES = Object.freeze(["default", "on", "off"]);
   const normalizeLabelMode = (value) => LABEL_MODES.includes(value) ? value : "default";
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -112,7 +113,7 @@
     let scope = options.getScope?.() ?? null;
     let labelMode = normalizeLabelMode(options.getLabelMode?.()), labelLayout = { mode: labelMode, labels: [], lanes: [] };
     let windowsVisible = options.getWindows?.() !== false, seasonalWindows = [], seasonalBands = [], seasonalSignature = "";
-    const headerHeight = () => windowsVisible ? 78 : 46;
+    const headerHeight = () => TODAY_HEADER_INSET + (windowsVisible ? 78 : 46);
     let entries = [], allCategories = [], layout = null, horizon = null, viewport = null;
     let width = 0, height = 0, leftWidth = 166, renderFrame = 0, animationFrame = 0, destroyed = false;
     let selectedKey = options.getSelectedKey?.() || null, hovered = null, hoverMemberKey = null, pinned = false, cardAnchor = null, cardEntries = [], hideTimer = 0, keyboardIndex = -1, drag = null, suppressClick = false;
@@ -181,6 +182,16 @@
       viewportSignature = signature;
       options.onViewportChange?.({ ...viewport, zoom: horizon.count / (viewport.end - viewport.start) });
     };
+    const todayGeometry = (now = new Date()) => {
+      const today = root.PortfolioTodayMarker?.currentMonthPosition(now) ?? now.getFullYear() * 12 + now.getMonth() + (now.getDate() - 1) / new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const span = viewport ? viewport.end - viewport.start : 0;
+      return { x: span > 0 ? leftWidth + (today - viewport.start) / span * (width - leftWidth) : leftWidth,
+        left: leftWidth, right: width, yearTop: TODAY_HEADER_INSET, bodyTop: headerHeight(), width, height,
+        colors: theme(), fontFamily: root.PortfolioTheme?.cssFontFamily || font(),
+        visible: span > 0 && width > leftWidth && height > headerHeight() && today >= viewport.start && today < viewport.end };
+    };
+    const todayMarker = root.PortfolioTodayMarker?.create({ host: stage, eventTarget: stage, getGeometry: todayGeometry,
+      isActive: () => !destroyed && host.isConnected && !host.closest(".hidden, [hidden]") });
 
     function normalizedRange() {
       const value = options.getRange?.() || {};
@@ -293,7 +304,7 @@
         horizon = nextHorizon;
         viewport = wasFit ? { start: horizon.start, end: horizon.end + 1 } : boundViewport(viewport);
       }
-      if (options.getSelectedKey) selectedKey = options.getSelectedKey() || selectedKey;
+      if (options.getSelectedKey) selectedKey = options.getSelectedKey() || null;
       const nextSeasonalSignature = `${horizon.start}:${horizon.end}`;
       if (nextSeasonalSignature !== seasonalSignature) {
         seasonalSignature = nextSeasonalSignature;
@@ -317,12 +328,14 @@
       pickerPanel.replaceChildren();
       const allRow = node("label", "hashout-category-option hashout-category-all");
       const allInput = node("input"); allInput.type = "checkbox"; allInput.checked = ids.size === allCategories.length; allInput.indeterminate = ids.size > 0 && ids.size < allCategories.length;
+      allInput.setAttribute("aria-label", "All Hashout categories");
       allRow.append(allInput, node("span", "", "All categories"));
       listen(allInput, "change", () => chooseScope(allInput.checked ? null : []));
       pickerPanel.append(allRow);
       for (const category of allCategories) {
         const label = node("label", "hashout-category-option");
         const input = node("input"); input.type = "checkbox"; input.checked = ids.has(category.id); input.value = category.id;
+        input.setAttribute("aria-label", `${category.name}, ${category.count} visible ${category.count === 1 ? "product" : "products"}`);
         label.append(input, node("span", "hashout-category-name", category.name), node("small", "", String(category.count)));
         listen(input, "change", () => { const current = new Set(scopeIds()); if (input.checked) current.add(category.id); else current.delete(category.id); chooseScope(current.size === allCategories.length ? null : [...current]); });
         pickerPanel.append(label);
@@ -421,11 +434,11 @@
       for (let year = startYear; year <= endYear; year++) {
         const x = xAt(year * 12), nextX = xAt((year + 1) * 12);
         if (year % 2) { context.fillStyle = alpha(colors.label, .024); context.fillRect(Math.max(leftWidth, x), header, Math.min(width, nextX) - Math.max(leftWidth, x), height - header); }
-        context.strokeStyle = alpha(colors.label, .11); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, 0); context.lineTo(x + .5, height); context.stroke();
+        context.strokeStyle = alpha(colors.label, .11); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, TODAY_HEADER_INSET); context.lineTo(x + .5, height); context.stroke();
         if ((year - startYear) % yearStride === 0) {
           context.font = `600 ${width < 520 ? 10 : 12}px ${font()}`; context.fillStyle = colors.text; context.textAlign = "left"; context.textBaseline = "middle";
           const label = String(year), labelWidth = context.measureText(label).width;
-          context.fillText(label, clamp(x + 8, leftWidth + 6, Math.max(leftWidth + 6, width - labelWidth - 6)), 17);
+          context.fillText(label, clamp(x + 8, leftWidth + 6, Math.max(leftWidth + 6, width - labelWidth - 6)), TODAY_HEADER_INSET + 17);
         }
       }
       const monthPixels = plotWidth / span;
@@ -433,12 +446,12 @@
         for (let month = Math.floor(viewport.start); month < viewport.end; month++) {
           const x = xAt(month), yearMonth = month % 12;
           context.fillStyle = colors.label; context.font = `10px ${font()}`; context.textAlign = "center";
-          context.fillText(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][yearMonth], xAt(month + .5), 35);
+          context.fillText(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][yearMonth], xAt(month + .5), TODAY_HEADER_INSET + 35);
           context.strokeStyle = alpha(colors.label, .045); context.beginPath(); context.moveTo(x + .5, header); context.lineTo(x + .5, height); context.stroke();
         }
       } else if (monthPixels * 3 >= 35) {
         for (let month = Math.floor(viewport.start / 3) * 3; month < viewport.end; month += 3) {
-          context.fillStyle = colors.label; context.font = `10px ${font()}`; context.textAlign = "center"; context.fillText(`Q${Math.floor(month % 12 / 3) + 1}`, xAt(month + 1.5), 35);
+          context.fillStyle = colors.label; context.font = `10px ${font()}`; context.textAlign = "center"; context.fillText(`Q${Math.floor(month % 12 / 3) + 1}`, xAt(month + 1.5), TODAY_HEADER_INSET + 35);
         }
       }
       if (windowsVisible) {
@@ -447,39 +460,35 @@
           const visibleX = Math.max(leftWidth, x), visibleRight = Math.min(width, right), visibleWidth = visibleRight - visibleX;
           if (visibleWidth <= 0) continue;
           context.fillStyle = alpha(color, .045); context.fillRect(visibleX, header, visibleWidth, Math.max(0, height - header));
-          context.fillStyle = alpha(color, .12); context.fillRect(visibleX, 46, visibleWidth, header - 46);
-          context.strokeStyle = alpha(color, .2); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, 46); context.lineTo(x + .5, height); context.moveTo(right + .5, 46); context.lineTo(right + .5, height); context.stroke();
+          context.fillStyle = alpha(color, .12); context.fillRect(visibleX, TODAY_HEADER_INSET + 46, visibleWidth, header - TODAY_HEADER_INSET - 46);
+          context.strokeStyle = alpha(color, .2); context.lineWidth = 1; context.beginPath(); context.moveTo(x + .5, TODAY_HEADER_INSET + 46); context.lineTo(x + .5, height); context.moveTo(right + .5, TODAY_HEADER_INSET + 46); context.lineTo(right + .5, height); context.stroke();
           // The full names remain readable in the fixed corner key. Repeated
           // annual titles are shown only when they fit their own visible span.
-          context.save(); context.beginPath(); context.rect(visibleX, 46, visibleWidth, header - 46); context.clip();
+          context.save(); context.beginPath(); context.rect(visibleX, TODAY_HEADER_INSET + 46, visibleWidth, header - TODAY_HEADER_INSET - 46); context.clip();
           context.font = `500 10px ${font()}`; context.fillStyle = color; context.textAlign = "center"; context.textBaseline = "middle";
           const center = (visibleX + visibleRight) / 2;
           if (context.measureText(window.label).width + 12 <= visibleWidth) {
-            context.fillText(window.label, center, 56);
+            context.fillText(window.label, center, TODAY_HEADER_INSET + 56);
             context.font = `9px ${font()}`; context.fillStyle = alpha(colors.text, .7);
-            context.fillText(window.season === "spring" ? "Feb–May" : "Jul–Oct", center, 69);
+            context.fillText(window.season === "spring" ? "Feb–May" : "Jul–Oct", center, TODAY_HEADER_INSET + 69);
           } else {
             context.font = `500 9px ${font()}`;
             if (Math.max(context.measureText("Spring").width, context.measureText("on-shelf").width) + 6 <= visibleWidth) {
-              context.fillText(window.season === "spring" ? "Spring" : "Fall", center, 56);
-              context.fillText("on-shelf", center, 69);
+              context.fillText(window.season === "spring" ? "Spring" : "Fall", center, TODAY_HEADER_INSET + 56);
+              context.fillText("on-shelf", center, TODAY_HEADER_INSET + 69);
             }
           }
           context.restore();
         }
       }
-      const now = new Date(), today = now.getFullYear() * 12 + now.getMonth() + (now.getDate() - 1) / new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-      if (today >= viewport.start && today < viewport.end) {
-        const x = xAt(today); context.strokeStyle = colors.alert; context.lineWidth = 1; context.setLineDash([4, 4]); context.beginPath(); context.moveTo(x, header); context.lineTo(x, height); context.stroke(); context.setLineDash([]);
-      }
       context.restore();
       context.fillStyle = colors.surface; context.fillRect(0, 0, leftWidth, header);
-      context.font = `500 11px ${font()}`; context.fillStyle = colors.label; context.textAlign = "left"; context.textBaseline = "middle"; context.fillText("Category", 14, 24);
+      context.font = `500 11px ${font()}`; context.fillStyle = colors.label; context.textAlign = "left"; context.textBaseline = "middle"; context.fillText("Category", 14, TODAY_HEADER_INSET + 24);
       if (windowsVisible) {
         context.font = `500 10px ${font()}`;
         for (const [season, label, y] of [["spring", "Spring on-shelf", 55], ["fall", "Fall on-shelf", 69]]) {
-          context.fillStyle = seasonColor(season); context.beginPath(); context.roundRect(14, y - 3, 5, 6, 2); context.fill();
-          context.fillStyle = colors.text; context.fillText(label, 25, y);
+          context.fillStyle = seasonColor(season); context.beginPath(); context.roundRect(14, TODAY_HEADER_INSET + y - 3, 5, 6, 2); context.fill();
+          context.fillStyle = colors.text; context.fillText(label, 25, TODAY_HEADER_INSET + y);
         }
       }
       context.strokeStyle = alpha(colors.label, .14); context.beginPath(); context.moveTo(0, header - .5); context.lineTo(width, header - .5); context.stroke();
@@ -621,7 +630,9 @@
       if (guideMonth.textContent !== label) guideMonth.textContent = label;
       selectionGuide.dataset.productKey = entry.key;
       const x = source.centerX - leftWidth, labelWidth = guideMonth.offsetWidth;
-      guideStroke.style.left = `${x}px`; guideStroke.style.height = `${Math.max(0, source.centerY - 52)}px`;
+      guideStroke.style.left = `${x}px`; guideStroke.style.top = `${TODAY_HEADER_INSET + 44}px`;
+      guideStroke.style.height = `${Math.max(0, source.centerY - TODAY_HEADER_INSET - 52)}px`;
+      guideMonth.style.top = `${TODAY_HEADER_INSET + 26}px`;
       guideMonth.style.left = `${clamp(x - labelWidth / 2, 3, Math.max(3, width - leftWidth - labelWidth - 3))}px`;
       if (changed) { selectionGuide.classList.remove("is-active"); void guideStroke.offsetHeight; }
       selectionGuide.classList.add("is-active");
@@ -648,7 +659,7 @@
     function draw(neutral = false) {
       if (destroyed || !horizon) return;
       const ratio = dimensions();
-      if (width <= 1 || height <= 1) return;
+      if (width <= 1 || height <= 1) { todayMarker?.clear(); return; }
       layout = root.PortfolioHashoutLayout.layout(entries, horizon, { width, height, leftWidth, headerHeight: headerHeight(), maxLaneHeight: height, viewportStart: viewport.start, viewportEnd: viewport.end });
       const context = canvas.getContext("2d"); context.setTransform(ratio, 0, 0, ratio, 0, 0);
       const colors = theme(); context.fillStyle = colors.page; context.fillRect(0, 0, width, height);
@@ -676,6 +687,8 @@
         if (hoverOverlay) drawGlyph(context, hoverOverlay, false, true);
       }
       context.restore();
+      if (neutral) root.PortfolioTodayMarker?.drawStatic?.(context, todayGeometry(), new Date());
+      else todayMarker?.sync();
       updateRail();
       const focusedCategories = focused ? new Set(entries.filter((entry) => focused.has(entry.key)).map((entry) => entry.categoryId)) : null;
       if (!neutral) for (const label of rail.children) label.classList.toggle("is-dimmed", Boolean(focusedCategories && !focusedCategories.has(label.dataset.categoryId)));
@@ -1249,7 +1262,7 @@
           counts: layout?.counts || {}, entries, layout, labelMode, labelLayout, windowsVisible, seasonalWindows, seasonalBands, windowMatches: Object.fromEntries(entries.map((entry) => [entry.key, targetMatches(entry.period)])), hoveredCategoryId, sourcePulseKey: selectionWave.hidden ? null : selectionWave.dataset.productKey, sourceGuideKey: selectionGuide.hidden ? null : selectionGuide.dataset.productKey, focusKeys: focused ? [...focused] : null, previousViewport: previousViewport ? { ...previousViewport } : null,
           ring: ringState ? { ...ringState.geometry, open: true, page: ringState.page, pageSize: ringState.pageSize, radius: ringState.radius, activeKey: ringState.activeKey, selectedKey: ringState.selectedKey, animationDuration: ringState.animationDuration, staggerMs: RING_STAGGER_MS, motionMs: RING_MOTION_MS, memberKeys: ringState.entries.map((entry) => entry.key) } : { open: false } };
       },
-      destroy() { destroyed = true; clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); overview?.destroy(); abort.abort(); shell.remove(); },
+      destroy() { destroyed = true; todayMarker?.destroy(); clearTimeout(hideTimer); clearTimeout(ringCloseTimer); cancelRingReveal(); cancelAnimationFrame(renderFrame); cancelAnimationFrame(animationFrame); cancelAnimationFrame(laneHoverFrame); resize.disconnect(); overview?.destroy(); abort.abort(); shell.remove(); },
     });
   }
 
