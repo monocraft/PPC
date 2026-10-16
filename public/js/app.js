@@ -6416,6 +6416,8 @@ async function buildProjectPackageBytes(packageInfo) {
   const codec = packageCodec();
   const expectedCurrent = JSON.stringify(portfolio);
   const manifest = JSON.parse(expectedCurrent);
+  // Packages open at the first dropdown category, independent of navigation.
+  manifest.activeCategoryId = manifest.categories[0].id;
   delete manifest.masterLocalBaseline;
   delete manifest.masterLocalTombstones;
   delete manifest.masterLocalRemovedProducts;
@@ -6494,6 +6496,8 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false, 
     catch (_) { throw new Error("The package portfolio data is damaged."); }
     validatePackageManifest(parsed);
     const draft = normalizeImportedPortfolio(JSON.parse(JSON.stringify(parsed)));
+    // Match a fresh app opening, including packages saved on another category.
+    draft.activeCategoryId = draft.categories[0].id;
     if (globalThis.PortfolioMasterModel) draft.masterLocalBaseline = globalThis.PortfolioMasterModel.snapshot(draft).products;
     const legacyImages = new Map(pendingLegacyImageBlobs.splice(pendingStart).map((entry) => [entry.id, entry.blob]));
     validatePackageImageReferences(draft);
