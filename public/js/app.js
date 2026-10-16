@@ -2167,12 +2167,12 @@ function registerHeroVariantRegion(region) {
   });
 }
 
-function drawVariantFooter(context, product, x, y, layout) {
-  roundRect(context, x, y, CARD_WIDTH, layout.height, [0, 0, 4, 4], UI_PALETTE.charcoal700);
+function drawVariantFooter(context, product, x, y, layout, cardStyle = null) {
+  roundRect(context, x, y, CARD_WIDTH, layout.height, [0, 0, 4, 4], cardStyle?.footer || UI_PALETTE.charcoal700);
   const activeHeroVariantId = activeHeroVariant(product)?.id || "";
   let cursorY = y + 9;
   layout.groups.forEach((group, groupIndex) => {
-    context.fillStyle = UI_PALETTE.steelTealLight;
+    context.fillStyle = cardStyle?.muted || UI_PALETTE.steelTealLight;
     context.font = `700 9px ${UI_FONT_FACE}`;
     context.textAlign = "left";
     context.fillText(group.label.toUpperCase(), x + 12, cursorY + 8);
@@ -2429,8 +2429,8 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
           context.rect(position.x, position.y, sourceOffset, layout.cardHeight);
           context.rect(sourceX + CARD_WIDTH, position.y, sourceOffset, layout.cardHeight);
           context.clip();
-          roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, layout.cardHeight, [4, 4, 0, 0], UI_PALETTE.carbon);
           const presentation = productPresentation(product);
+          roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, layout.cardHeight, [4, 4, 0, 0], presentation.cardStyle?.surface || UI_PALETTE.carbon);
           if (presentation.primaryLabel) roundRect(context, position.x, position.y, CARD_WIDTH + sourceOffset * 2, STATUS_BANNER_HEIGHT, [4, 4, 0, 0], presentation.primaryColor);
           if (presentation.discontinued) {
             context.save(); context.globalAlpha *= .6; context.fillStyle = UI_PALETTE.charcoal800;
@@ -2438,7 +2438,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
           }
           context.restore();
         }
-        renderedCards.push({ productId: product.id, name: product.name, discontinued: globalThis.PortfolioModel?.isDiscontinued?.(product) === true, laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
+        renderedCards.push({ productId: product.id, name: product.name, discontinued: globalThis.PortfolioModel?.isDiscontinued?.(product) === true, cardStage: globalThis.PortfolioTheme?.productCardStage?.(product) || "", laneId: lane.id, x: sourceX, y: position.y, width: CARD_WIDTH, height: cardLayout.cardHeight,
           ...(integrated ? { viewerIntegrated: true, viewerStacked: stacked, integrationX: position.x, integrationWidth: CARD_WIDTH + viewerInfoReserveLogical(), integrationHeight: contentHeight } : {}) });
         const outsideViewport = includeSelection && !dimensions.pptxPage && !motion && canvasScroll?.clientHeight > 0 &&
           ((sourceX + CARD_WIDTH) * zoom < canvasScroll.scrollLeft - 16 || sourceX * zoom > canvasScroll.scrollLeft + canvasScroll.clientWidth + 16 ||
@@ -2472,7 +2472,7 @@ function drawBoardTo(context, dimensions, includeSelection = true, includeBackgr
       if (discontinued) context.globalAlpha *= .4;
       roundRect(context, position.x + .5, position.y + .5, CARD_WIDTH - 1, layout.cardHeight - 1, 4, null, UI_PALETTE.steelTealLight, 1.5);
       context.restore();
-      renderedCards.push({ productId: product.id, name: product.name, discontinued, laneId: drag?.dropTarget?.laneId || position.laneId || product.laneId, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
+      renderedCards.push({ productId: product.id, name: product.name, discontinued, cardStage: globalThis.PortfolioTheme?.productCardStage?.(product) || "", laneId: drag?.dropTarget?.laneId || position.laneId || product.laneId, x: position.x, y: position.y, width: CARD_WIDTH, height: layout.cardHeight });
     }
   }
   if (viewportPaint) context.restore();
@@ -2561,24 +2561,30 @@ function drawSpecIcon(context, label, centerX, centerY) {
 
 function productPresentation(product) {
   const tone = PortfolioModel.productTone(product);
-  const status = { ...standardizedStatus(product.statusType), color: tone };
   const discontinued = PortfolioModel.isDiscontinued(product);
+  const cardStage = discontinued ? "" : globalThis.PortfolioTheme?.productCardStage?.(product) || "";
+  const cardStyle = globalThis.PortfolioTheme?.productCardStyles?.[cardStage] || null;
+  const primaryColor = cardStyle?.accent || tone;
+  const status = { ...standardizedStatus(product.statusType), color: primaryColor };
   if (discontinued) status.label = "Discontinued";
+  else if (!status.label && cardStage) status.label = cardStage === "in-planning" ? "IN-PLANNING" : "IN-DEVELOPMENT";
   const variantLabel = String(product.variantLabel || "").trim();
   const hasVariant = Boolean(variantLabel);
   const secondaryLabel = status.label && variantLabel && variantLabel.toUpperCase() !== status.label.toUpperCase()
     ? variantLabel : "";
   return {
     discontinued,
+    cardStage,
+    cardStyle,
     status,
     hasVariant,
     hasStatus: Boolean(status.label),
     variantLabel,
     secondaryLabel,
-    variantColor: tone,
+    variantColor: primaryColor,
     primaryLabel: status.label || variantLabel,
-    primaryColor: tone,
-    outlineColor: hasVariant || status.label ? tone : UI_PALETTE.charcoal600,
+    primaryColor,
+    outlineColor: hasVariant || status.label ? primaryColor : UI_PALETTE.charcoal600,
   };
 }
 
@@ -2718,7 +2724,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   context.shadowColor = "transparent";
   context.shadowBlur = 0;
   context.shadowOffsetY = 0;
-  roundRect(context, x, y, CARD_WIDTH, cardHeight, layout.viewerExtended ? 0 : 4, UI_PALETTE.carbon);
+  roundRect(context, x, y, CARD_WIDTH, cardHeight, layout.viewerExtended ? 0 : 4, presentation.cardStyle?.surface || UI_PALETTE.carbon, presentation.cardStyle?.outline, .75);
   context.restore();
 
   if (presentation.primaryLabel) {
@@ -2792,16 +2798,16 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
 
   if (footerHeight) {
     const footerY = y + cardHeight - footerHeight;
-    drawVariantFooter(context, product, x, footerY, footerLayout);
+    drawVariantFooter(context, product, x, footerY, footerLayout, presentation.cardStyle);
   }
 
   // Filled surfaces and gutters separate cards; outlines identify selection.
   if (selected) {
     context.save();
-    if (!layout.viewerExtended) roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, UI_PALETTE.selection, 1.25);
+    if (!layout.viewerExtended) roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, presentation.cardStyle?.accent || UI_PALETTE.selection, 1.25);
     const markerY = y + STATUS_BANNER_HEIGHT + (presentation.secondaryLabel ? 28 : 9);
-    roundRect(context, x + 8, markerY, 64, 18, 4, UI_PALETTE.charcoal700);
-    context.fillStyle = UI_PALETTE.steelTealLight;
+    roundRect(context, x + 8, markerY, 64, 18, 4, presentation.cardStyle?.footer || UI_PALETTE.charcoal700);
+    context.fillStyle = presentation.cardStyle?.muted || UI_PALETTE.steelTealLight;
     context.fillRect(x + 14, markerY + 7, 3, 3);
     context.font = `600 9px ${UI_FONT_FACE}`;
     context.textAlign = "left";
@@ -4304,7 +4310,7 @@ function renderSplitProduct() {
   if (globalThis.PortfolioViewRuntime?.panelCache.unchanged(splitProduct, signature)) return;
   const labelColor = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
   splitProduct.innerHTML = `
-    <article class="split-product-card split-product-card--detail${presentation.discontinued ? ' is-discontinued' : ''}" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)}">
+    <article class="split-product-card split-product-card--detail${presentation.discontinued ? ' is-discontinued' : ''}" data-card-stage="${escapeHtml(presentation.cardStage)}" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)};--product-card-surface:${escapeHtml(presentation.cardStyle?.surface || UI_PALETTE.carbon)};--product-card-accent:${escapeHtml(presentation.cardStyle?.muted || UI_PALETTE.silver)};--product-card-footer:${escapeHtml(presentation.cardStyle?.footer || UI_PALETTE.charcoal700)}">
       ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(labelColor)}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
       <div class="split-product-hero">
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
@@ -4742,6 +4748,10 @@ function positionViewerInfo() {
   viewerInfo.dataset.stacked = String(stacked);
   viewerInfo.style.setProperty("--viewer-info-band-height", `${stacked ? 0 : STATUS_BANNER_HEIGHT * zoom}px`);
   viewerInfo.style.setProperty("--viewer-info-band-color", presentation.primaryLabel ? presentation.primaryColor : UI_PALETTE.carbon);
+  viewerInfo.style.setProperty("--product-card-surface", presentation.cardStyle?.surface || UI_PALETTE.carbon);
+  viewerInfo.style.setProperty("--product-card-accent", presentation.cardStyle?.muted || UI_PALETTE.silver);
+  viewerInfo.style.setProperty("--product-card-footer", presentation.cardStyle?.footer || UI_PALETTE.charcoal700);
+  viewerInfo.dataset.cardStage = presentation.cardStage;
   viewerInfo.style.left = `${left}px`;
   viewerInfo.style.top = `${top}px`;
   viewerInfo.style.transform = "none";
@@ -4753,6 +4763,7 @@ function positionViewerInfo() {
     const outlineWidth = stacked ? visibleWidth : (CARD_WIDTH * zoom) + visibleWidth;
     viewerInfoOutline.classList.toggle("is-open", viewerInfoProgress > .001);
     viewerInfoOutline.style.opacity = presentation.discontinued ? ".4" : "1";
+    viewerInfoOutline.style.borderColor = presentation.cardStyle?.accent || UI_PALETTE.selection;
     viewerInfoOutline.style.left = `${(card.integrationX ?? card.x) * zoom}px`;
     viewerInfoOutline.style.top = `${card.y * zoom}px`;
     viewerInfoOutline.style.width = `${outlineWidth}px`;
@@ -6105,6 +6116,10 @@ function syncProductCardActions() {
     if (row.style.transform !== transform) row.style.transform = transform;
     if (row.style.width !== width) row.style.width = width;
     row.classList.toggle("is-discontinued", card.discontinued === true);
+    const cardStyle = productPresentation(product).cardStyle;
+    row.classList.toggle("is-stage-colored", Boolean(cardStyle));
+    row.style.setProperty("--product-card-accent", cardStyle?.muted || UI_PALETTE.silver);
+    row.style.setProperty("--product-card-footer", cardStyle?.footer || UI_PALETTE.charcoal700);
     row.classList.toggle("is-condensed", card.width * zoom < 68); if (row.hidden) row.hidden = false;
     for (const button of row.querySelectorAll("button")) {
       const actionLabel = button.dataset.cardDetailTab === "dates" ? "Dates" : "Specifications";
