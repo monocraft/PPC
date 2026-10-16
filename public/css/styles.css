@@ -285,7 +285,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .catalog-group-tooltip { position: absolute; top: calc(100% + 9px); left: 50%; z-index: 30; width: max-content; max-width: min(320px, 75vw); padding: 8px 10px; border-radius: var(--corner-control); background: var(--color-header); color: var(--color-text); box-shadow: var(--shadow-overlay); font-size: 11px; line-height: 1.5; text-align: left; white-space: normal; pointer-events: none; opacity: 0; visibility: hidden; transform: translateX(-50%); }
 .catalog-visibility button:hover .catalog-group-tooltip, .catalog-visibility button:focus-visible .catalog-group-tooltip { opacity: 1; visibility: visible; }
 .product-view { position: relative; }
-.catalog-filter-empty { position: absolute; z-index: 8; inset: 0 0 35px 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; background: var(--color-page); text-align: center; }
+.catalog-filter-empty { position: absolute; z-index: 8; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; background: var(--color-page); text-align: center; }
 .catalog-filter-empty h2, .catalog-filter-empty p { margin: 0; }
 .catalog-filter-empty p { max-width: 440px; color: var(--color-text-secondary); line-height: 1.6; }
 .catalog-filter-empty > div { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }

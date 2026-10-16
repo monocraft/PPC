@@ -340,6 +340,7 @@ let scopedHashoutEntries = [];
 Object.assign(statusContext, {
   hasDedicatedHashoutView: () => true, activeView: "roadmap",
   PortfolioHashoutLayout: { project: () => scopedHashoutEntries },
+  portfolioForSearch: () => statusContext.portfolio,
   hashoutCategoryScope: () => [], hashoutSelectionEntry: () => null,
 });
 statusContext.publishWorkspaceState();

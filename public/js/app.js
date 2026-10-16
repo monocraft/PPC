@@ -1648,26 +1648,31 @@ function visibleProducts() {
 }
 
 function portfolioForSearch() {
-  if (activeView !== "products") return portfolio;
-  // Catalog search follows each category's preference without replacing any
-  // saved arrays. Roadmap lookup continues to include historical products.
+  // Both views and the multi-category FFS map use the same immutable projection.
   return { ...portfolio, categories: portfolio.categories.map(category => ({ ...category,
     board: category.board ? { ...category.board, products: PortfolioModel.catalogProducts(category.board.products, category.board.settings) } : category.board,
   })) };
 }
 
 function clearHiddenCatalogSelection() {
-  if (activeView !== "products") return;
   const visible = new Set(PortfolioModel.catalogProducts(board.products, board.settings).map(product => product.id));
   const hidden = id => id && board.products.some(product => product.id === id) && !visible.has(id);
   let changed = false;
   if (hidden(selectedId)) { selectedId = null; inspectorOpen = false; changed = true; }
   if (hidden(viewerInfoProductId)) { closeViewerInfo({ render: false }); changed = true; }
+  if (typeof hashoutSelectedKey !== "undefined" && globalThis.PortfolioHashoutLayout) {
+    const key = hashoutSelectedKey || portfolio.settings?.hashoutSelectedKey;
+    if (key && !globalThis.PortfolioHashoutLayout.project(portfolioForSearch(), hashoutCategoryScope()).some(entry => entry.key === key)) {
+      hashoutSelectedKey = null;
+      portfolio.settings.hashoutSelectedKey = null;
+      if (typeof hashoutViewController !== "undefined") hashoutViewController?.closeOverlay?.();
+    }
+  }
   if (changed) renderInspector();
 }
 
 function setCatalogHideDiscontinued(hidden) {
-  if (productLayoutEditing || packageOperationInProgress || pptxExportInProgress) return false;
+  if (productLayoutEditing || packageOperationInProgress || pptxExportInProgress || (typeof roadmapDraft !== "undefined" && roadmapDraft)) return false;
   stopProductCardDrag();
   updateBoard(current => {
     delete current.settings.catalogGroup;
@@ -1676,15 +1681,30 @@ function setCatalogHideDiscontinued(hidden) {
   });
 }
 
+function catalogFilterCategories() {
+  if (activeView !== "products" && typeof isFfsRoadmap === "function" && isFfsRoadmap()) {
+    const scope = hashoutCategoryScope();
+    return portfolio.categories.filter(category => category.board && (scope === null || scope.includes(category.id)));
+  }
+  return portfolio.categories.filter(category => category.id === activeCategoryId && category.board);
+}
+
 function setCatalogGroup(group) {
-  if (!["all", "launched", "unreleased", "eol"].includes(group) || productLayoutEditing || packageOperationInProgress || pptxExportInProgress) return false;
-  if (board.settings.catalogGroup === group && !board.settings.hideDiscontinued) return false;
+  if (!["all", "launched", "unreleased", "eol"].includes(group) || productLayoutEditing || packageOperationInProgress || pptxExportInProgress || (typeof roadmapDraft !== "undefined" && roadmapDraft)) return false;
+  const categories = catalogFilterCategories();
+  if (!categories.length || categories.every(category => category.board.settings.catalogGroup === group && !category.board.settings.hideDiscontinued)) return false;
   stopProductCardDrag();
   if (typeof productCardHover !== "undefined") productCardHover?.clear();
+  if (typeof roadmapLaneHovers !== "undefined") roadmapLaneHovers.forEach(hover => hover.clear({ immediate: true }));
+  if (typeof roadmapPanState !== "undefined") roadmapPanState?.cancel?.();
+  if (typeof hashoutViewController !== "undefined") hashoutViewController?.closeOverlay?.();
   canvasScroll.scrollLeft = 0; canvasScroll.scrollTop = 0;
-  updateBoard(current => {
-    current.settings.catalogGroup = group;
-    current.settings.hideDiscontinued = false;
+  if (typeof roadmapFilterScrollResetPending !== "undefined") roadmapFilterScrollResetPending = true;
+  updateBoard(() => {
+    for (const category of categories) {
+      category.board.settings.catalogGroup = group;
+      category.board.settings.hideDiscontinued = false;
+    }
     clearHiddenCatalogSelection();
   });
   return true;
@@ -1693,42 +1713,63 @@ function setCatalogGroup(group) {
 function syncCatalogFilterControls() {
   const controls = globalThis.document?.getElementById?.("catalogVisibility");
   if (!controls || !board) return;
+  const categories = catalogFilterCategories(), scoped = activeView !== "products" && isFfsRoadmap();
+  const host = document.getElementById(activeView === "products" ? "productControls" : "roadmapContextTools");
+  if (host && controls.parentElement !== host) {
+    const focused = controls.contains(document.activeElement) ? document.activeElement : null;
+    host.insertBefore(controls, activeView === "products" ? document.getElementById("productReorderActions") : host.querySelector(".roadmap-basis-control"));
+    focused?.focus({ preventScroll: true });
+  }
   const now = new Date(), day = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
   const revision = typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision;
   let cache = syncCatalogFilterControls.cache;
-  if (!cache || cache.board !== board || cache.products !== board.products || cache.revision !== revision || cache.day !== day) {
-    cache = { board, products: board.products, revision, day, counts: PortfolioModel.catalogLifecycleCounts(board.products, now) };
+  const categoryKey = JSON.stringify(categories.map(category => category.id));
+  if (!cache || cache.portfolio !== portfolio || cache.categoryKey !== categoryKey || categories.some((category, index) => cache.products[index] !== category.board.products) || cache.revision !== revision || cache.day !== day) {
+    const counts = { all: 0, launched: 0, unreleased: 0, eol: 0, unknown: 0 };
+    for (const category of categories) {
+      const current = PortfolioModel.catalogLifecycleCounts(category.board.products, now);
+      for (const key of Object.keys(counts)) counts[key] += current[key];
+    }
+    cache = { portfolio, categoryKey, products: categories.map(category => category.board.products), revision, day, counts };
     syncCatalogFilterControls.cache = cache;
   }
-  const known = ["all", "launched", "unreleased", "eol"].includes(board.settings.catalogGroup);
-  const group = known ? board.settings.catalogGroup : "all", legacy = !known && board.settings.hideDiscontinued;
+  const choices = categories.map(category => ["all", "launched", "unreleased", "eol"].includes(category.board.settings.catalogGroup) ? category.board.settings.catalogGroup : category.board.settings.hideDiscontinued ? "legacy" : "all");
+  const mixed = new Set(choices).size > 1, group = mixed ? "mixed" : choices[0] || "all", legacy = group === "legacy";
   const labels = { all: "All products", launched: "Launched", unreleased: "Unreleased", eol: "EOL · End of manufacture" };
-  const locked = productLayoutEditing || packageOperationInProgress || pptxExportInProgress;
+  const locked = productLayoutEditing || packageOperationInProgress || pptxExportInProgress || Boolean(typeof roadmapDraft !== "undefined" && roadmapDraft);
+  const scopeLabel = scoped ? `across ${categories.length} selected ${categories.length === 1 ? "category" : "categories"}` : "in this category";
+  controls.setAttribute("aria-label", `${mixed ? "Mixed lifecycle visibility" : "Lifecycle visibility"} · ${scopeLabel}`);
   const legacyToggle = document.getElementById("hideDiscontinued");
   if (legacyToggle) legacyToggle.disabled = locked;
   for (const button of controls.querySelectorAll("[data-catalog-group]")) {
     const value = button.dataset.catalogGroup, count = cache.counts[value];
-    const pressed = value === group ? legacy ? "mixed" : "true" : "false";
+    const pressed = !categories.length ? "false" : mixed ? choices.includes(value) || value === "all" && choices.includes("legacy") ? "mixed" : "false" : value === group ? "true" : legacy && value === "all" ? "mixed" : "false";
     if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
-    button.disabled = locked;
+    button.disabled = locked || !categories.length;
     const summary = legacy && value === "all" ? "All except discontinued · Click to show all" : labels[value];
-    const label = `${summary} · ${count} in this category${value === "all" && cache.counts.unknown ? ` · ${cache.counts.unknown} without a confirmed lifecycle appear in All` : ""}${locked ? " · Finish the current edit or export to change visibility" : ""}`;
+    const scopeAction = !categories.length ? "Choose categories to enable visibility filters" : `Apply to ${categories.length === 1 ? "the selected category" : `all ${categories.length} selected categories`}`;
+    const label = `${summary} · ${count} ${scopeLabel}${mixed ? " · Mixed category filters" : ""}${scoped ? ` · ${scopeAction}` : ""}${value === "all" && cache.counts.unknown ? ` · ${cache.counts.unknown} without a confirmed lifecycle appear in All` : ""}${locked ? " · Finish the current edit or export to change visibility" : ""}`;
     if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
     const counter = button.querySelector(".catalog-group-count"), tooltip = button.querySelector(".catalog-group-tooltip");
     if (counter.textContent !== String(count)) counter.textContent = String(count);
     if (tooltip.textContent !== label) tooltip.textContent = label;
   }
   const empty = document.getElementById("catalogFilterEmpty");
-  const matchingCount = visibleProducts().length;
-  if (typeof productLayoutEditButton !== "undefined" && productLayoutEditButton) productLayoutEditButton.disabled = !matchingCount;
-  const noMatches = activeView === "products" && board.products.length > 0 && !productLayoutEditing && matchingCount === 0;
+  const emptyHost = document.querySelector(scoped ? "#hashoutView .hashout-stage" : ".workspace");
+  if (empty && emptyHost && empty.parentElement !== emptyHost) emptyHost.append(empty);
+  const matchingCount = scoped ? categories.reduce((count, category) => count + PortfolioModel.catalogProducts(category.board.products, category.board.settings).length, 0) : activeView === "products" ? visibleProducts().length : visibleRoadmapProducts().length;
+  if (typeof productLayoutEditButton !== "undefined" && productLayoutEditButton) productLayoutEditButton.disabled = !visibleProducts().length;
+  const noMatches = cache.counts.all > 0 && !productLayoutEditing && matchingCount === 0;
   empty?.classList.toggle("hidden", !noMatches);
   if (noMatches) {
-    document.getElementById("catalogFilterEmptyText").textContent = searchQuery.trim()
-      ? `No ${group === "all" ? "products" : labels[group].toLowerCase() + " products"} match your search. Clear the search or choose another visibility group.`
-      : `This category has no ${group === "all" ? "visible" : labels[group].toLowerCase()} products.${cache.counts.unknown ? " Products without a confirmed lifecycle appear in All." : ""}`;
-    document.getElementById("catalogClearSearch").classList.toggle("hidden", !searchQuery.trim());
+    const query = scoped ? "" : activeView === "products" ? searchQuery.trim() : roadmapSearchQuery.trim();
+    const description = { launched: "launched", unreleased: "unreleased", eol: "discontinued" }[group] || "visible";
+    document.getElementById("catalogFilterEmptyText").textContent = query
+      ? `No ${group === "all" ? "products" : description + " products"} match your search. Clear the search or choose another visibility group.`
+      : `No ${group === "all" ? "visible" : description} products ${scopeLabel}.${cache.counts.unknown ? " Products without a confirmed lifecycle appear in All." : ""}`;
+    document.getElementById("catalogClearSearch").classList.toggle("hidden", !query);
   }
+  for (const button of empty?.querySelectorAll("button") || []) button.disabled = locked;
 }
 
 function openPortfolioSearchResult(result) {
@@ -1736,7 +1777,7 @@ function openPortfolioSearchResult(result) {
   const locations = portfolio.categories.flatMap((category) => (category.board?.products || []).filter((product) => product.id === result.productId).map((product) => ({ category, product })));
   if (locations.length !== 1 || locations[0].category.id !== result.categoryId) return false;
   const { category, product } = locations[0];
-  if (activeView === "products" && !PortfolioModel.catalogProducts(category.board.products, category.board.settings).includes(product)) return false;
+  if (!PortfolioModel.catalogProducts(category.board.products, category.board.settings).includes(product)) return false;
   const nextView = activeView === "products" ? "products" : "split";
   activateCategory(category.id, { render: false, fitVertical: true });
   selectedId = product.id;
@@ -2896,9 +2937,10 @@ function roadmapRange() {
 }
 
 function visibleRoadmapProducts() {
+  const products = PortfolioModel.catalogProducts(board.products, board.settings);
   const query = roadmapSearchQuery.trim();
-  if (!query) return board.products;
-  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
+  if (!query) return products;
+  return products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
 }
 
 function roadmapFamilyOrder(family, targetBoard = board, definition = categoryDefinition()) {
@@ -2960,10 +3002,13 @@ function hashoutCategoryScope() {
 function hashoutSelectionEntry() {
   if (!globalThis.PortfolioHashoutLayout || !portfolio) return null;
   const key = hashoutSelectedKey || portfolio.settings?.hashoutSelectedKey || JSON.stringify([activeCategoryId, selectedId]);
-  return globalThis.PortfolioHashoutLayout.project(portfolio).find(entry => entry.key === key) || null;
+  return globalThis.PortfolioHashoutLayout.project(portfolioForSearch(), hashoutCategoryScope()).find(entry => entry.key === key) || null;
 }
 
 function resetHashoutView() {
+  // Keep the shared recovery control when the temporary FFS shell is removed.
+  const empty = globalThis.document?.getElementById?.("catalogFilterEmpty");
+  if (empty) document.querySelector(".workspace")?.append(empty);
   hashoutViewController?.destroy();
   hashoutViewController = null;
   hashoutSelectedKey = null;
@@ -2974,7 +3019,7 @@ function ensureHashoutView() {
   if (!hasDedicatedHashoutView()) return null;
   if (!hashoutViewController) {
     hashoutViewController = globalThis.PortfolioHashoutView.create(hashoutView, {
-      getPortfolio: () => portfolio,
+      getPortfolio: portfolioForSearch,
       getRange: () => roadmapRange(),
       getScope: hashoutCategoryScope,
       getViewport: () => portfolio.settings?.hashoutViewport || null,
@@ -2991,7 +3036,9 @@ function ensureHashoutView() {
       },
       onScopeChange: ids => {
         portfolio.settings.hashoutCategoryIds = ids;
+        clearHiddenCatalogSelection();
         scheduleSave();
+        syncCatalogFilterControls();
         renderStatus();
       },
       onSelect: (entry, { openDetails = false } = {}) => {
@@ -3696,8 +3743,10 @@ function renderRoadmaps() {
   syncViewZoomControls();
   updateRoadmapEditControls();
   syncFfsRoadmapControls();
+  if (typeof syncCatalogFilterControls === "function") syncCatalogFilterControls();
   if (hasDedicatedHashoutView() && activeView !== "products") {
     ensureHashoutView()?.render();
+    if (typeof syncCatalogFilterControls === "function") syncCatalogFilterControls();
     roadmapFilterScrollResetPending = false;
     if (activeView !== previousView) renderStatus();
     return;
@@ -4575,6 +4624,7 @@ function setView(view, { focusSelected = false } = {}) {
   roadmapInteractionMode = "pan";
   if (view === "split") roadmapDetailsOpen = true;
   activeView = view === "products" ? "products" : ["roadmap", "split"].includes(view) ? (roadmapDetailsOpen ? "split" : "roadmap") : "products";
+  if (typeof syncCatalogFilterControls === "function") syncCatalogFilterControls();
   if (typeof workspaceNavigation !== "undefined") workspaceNavigation?.set({ view: activeView === "products" ? "products" : "roadmap", basis: portfolio.settings?.roadmapBasis === "ffs" ? "ffs" : "lifecycle", detailsOpen: roadmapDetailsOpen });
   if (activeView === "products") stopRoadmapSlotEditing();
   else finishProductReorder({ render: false });
@@ -4607,6 +4657,7 @@ function setView(view, { focusSelected = false } = {}) {
 }
 
 function renderActiveView() {
+  if (typeof clearHiddenCatalogSelection === "function") clearHiddenCatalogSelection();
   renderViewerInfo();
   updateLinkedViewButton();
   updateRoadmapEditControls();
@@ -4701,7 +4752,7 @@ function renderStatus() {
 function publishWorkspaceState() {
   if (!portfolio || !board) return;
   const hashout = hasDedicatedHashoutView() && activeView !== "products";
-  const hashoutEntries = hashout ? globalThis.PortfolioHashoutLayout.project(portfolio, hashoutCategoryScope()) : [];
+  const hashoutEntries = hashout ? globalThis.PortfolioHashoutLayout.project(portfolioForSearch(), hashoutCategoryScope()) : [];
   const detail = {
     categories: portfolio.categories.map((category) => ({ id: category.id, name: category.name, count: category.board.products.length })),
     activeCategoryId, title: hashout ? "Hashout roadmap" : board.title, selectedName: hashout ? hashoutSelectionEntry()?.product.name || "" : selectedProduct()?.name || "", productCount: hashout ? portfolio.categories.reduce((total, category) => total + category.board.products.length, 0) : board.products.length,
@@ -7231,7 +7282,9 @@ function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
       }
 
       if (includeRoadmap && !globalThis.PPTXExportPlanner) {
-        const groups = roadmapGroupsForProducts(targetBoard.products, targetBoard, definition);
+        const products = PortfolioModel.catalogProducts(targetBoard.products, targetBoard.settings);
+        if (targetBoard.products.length && !products.length) return;
+        const groups = roadmapGroupsForProducts(products, targetBoard, definition);
         const pages = paginateRoadmapGroupsForPptx(groups);
         pages.forEach((pageGroups, pageIndex) => {
           slides.push({ category, categoryIndex, kind: "roadmap", groups: pageGroups, pageIndex, pageCount: pages.length });
@@ -7240,9 +7293,9 @@ function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
     });
 
     if (includeRoadmap && globalThis.PPTXExportPlanner) {
-      const sections = preparedCategories.map(({ category, definition, targetBoard }) => ({
+      const sections = preparedCategories.filter(({ targetBoard }) => !targetBoard.products.length || PortfolioModel.catalogProducts(targetBoard.products, targetBoard.settings).length).map(({ category, definition, targetBoard }) => ({
         id: category.id, name: category.name || category.id,
-        products: roadmapGroupsForProducts(targetBoard.products, targetBoard, definition).flatMap(group => group.products.map(product => {
+        products: roadmapGroupsForProducts(PortfolioModel.catalogProducts(targetBoard.products, targetBoard.settings), targetBoard, definition).flatMap(group => group.products.map(product => {
           const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
           const status = standardizedStatus(product.statusType);
           return { id: product.id, name: product.name, family: group.family, startMonth: roadmap?.startMonth || roadmap?.launchMonth || "", endMonth: roadmap?.endMonth || "",
@@ -7295,8 +7348,8 @@ function renderPptxExportCategories() {
   const selected = new Set(PPTXPagination.selectExportCategories(categories, pptxSelectedCategoryIds)
     .map((category) => category.id));
   $("#pptxExportCategories").innerHTML = categories.map((category) => {
-    const count = Array.isArray(category.board.products) ? category.board.products.length : 0;
-    return `<label class="pptx-category-choice"><input type="checkbox" name="pptxExportCategory" value="${escapeHtml(category.id)}"${selected.has(category.id) ? " checked" : ""}><span class="pptx-category-label"><strong>${escapeHtml(category.name || category.id)}</strong><small>${count} product${count === 1 ? "" : "s"}</small></span></label>`;
+    const total = category.board.products.length, count = PortfolioModel.catalogProducts(category.board.products, category.board.settings).length;
+    return `<label class="pptx-category-choice"><input type="checkbox" name="pptxExportCategory" value="${escapeHtml(category.id)}"${selected.has(category.id) ? " checked" : ""}><span class="pptx-category-label"><strong>${escapeHtml(category.name || category.id)}</strong><small>${count} of ${total} product${total === 1 ? "" : "s"} visible</small></span></label>`;
   }).join("");
 }
 
@@ -7433,7 +7486,7 @@ async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOpt
   try {
     const exportPlan = buildPptxExportPlan(scope, categories, roadmapOptions);
     if (exportPlan.roadmapPlan?.requiresDecision) throw new Error(exportPlan.roadmapPlan.reason || "Choose a valid roadmap period before exporting.");
-    if (!exportPlan.length) throw new Error("No visible products to export. Show discontinued products in Display settings or include a roadmap.");
+    if (!exportPlan.length) throw new Error("No visible products to export. Choose All in the lifecycle visibility icons or select categories with matching products.");
 
     const pptx = new PptxGenJS();
     pptx.layout = "LAYOUT_WIDE";
@@ -8444,7 +8497,11 @@ $("#catalogVisibility").onkeydown = event => {
   next.focus(); setCatalogGroup(next.dataset.catalogGroup);
 };
 $("#catalogShowAll").onclick = () => setCatalogGroup("all");
-$("#catalogClearSearch").onclick = () => { searchQuery = ""; $("#searchInput").value = ""; renderBoard(); $("#searchInput").focus(); };
+$("#catalogClearSearch").onclick = () => {
+  const input = $(activeView === "products" ? "#searchInput" : "#roadmapSearch");
+  if (activeView === "products") searchQuery = ""; else roadmapSearchQuery = "";
+  input.value = ""; renderActiveView(); input.focus();
+};
 $("#resetLayout").onclick = () => {
   stopProductCardDrag();
   zoom = 1;
@@ -8782,12 +8839,13 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
   },
   captureView() {
     return { view: activeView, basis: portfolio.settings.roadmapBasis || "lifecycle", activeCategoryId,
+      categoryVisibility: catalogFilterCategories().map(category => ({ categoryId: category.id, catalogGroup: category.board.settings.catalogGroup, hideDiscontinued: category.board.settings.hideDiscontinued === true })),
       categoryIds: hashoutCategoryScope() || portfolio.categories.map(category => category.id), dateRange: { start: board.settings.roadmap.startMonth, end: board.settings.roadmap.endMonth },
       search: hasDedicatedHashoutView() && activeView !== "products" ? document.querySelector(".hashout-search")?.value || "" : activeView === "products" ? searchQuery : roadmapSearchQuery,
       display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus, hideDiscontinued: board.settings.hideDiscontinued, catalogGroup: board.settings.catalogGroup } };
   },
   applyView(value) {
-    if (workspaceOpening || packageOperationInProgress || pptxExportInProgress || productLayoutEditing) throw new Error("Finish the current edit or export before opening a saved view.");
+    if (workspaceOpening || packageOperationInProgress || pptxExportInProgress || productLayoutEditing || (typeof roadmapDraft !== "undefined" && roadmapDraft)) throw new Error("Finish the current edit or export before opening a saved view.");
     const safe = globalThis.PPCSavedViews?.sanitizePreferences("portfolio", value); if (!safe) throw new Error("This saved view is invalid.");
     const categoryId = portfolio.categories.some(category => category.id === safe.activeCategoryId) ? safe.activeCategoryId : activeCategoryId;
     activateCategory(categoryId, { render: false, fitVertical: false });
@@ -8799,9 +8857,18 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
     if (typeof display.showSeasonalWindows === "boolean") portfolio.settings.hashoutWindowsVisible = display.showSeasonalWindows;
     if (typeof display.showPrices === "boolean") board.settings.showPrices = display.showPrices;
     if (typeof display.showSkus === "boolean") board.settings.showSkus = display.showSkus;
-    if (typeof display.hideDiscontinued === "boolean") board.settings.hideDiscontinued = display.hideDiscontinued;
-    if (display.catalogGroup) { board.settings.catalogGroup = display.catalogGroup; board.settings.hideDiscontinued = false; }
-    else if (typeof display.hideDiscontinued === "boolean") delete board.settings.catalogGroup;
+    if (safe.categoryVisibility) {
+      for (const preference of safe.categoryVisibility) {
+        const target = portfolio.categories.find(category => category.id === preference.categoryId)?.board;
+        if (!target) continue;
+        if (preference.catalogGroup) { target.settings.catalogGroup = preference.catalogGroup; target.settings.hideDiscontinued = false; }
+        else if (typeof preference.hideDiscontinued === "boolean") { delete target.settings.catalogGroup; target.settings.hideDiscontinued = preference.hideDiscontinued; }
+      }
+    } else {
+      if (typeof display.hideDiscontinued === "boolean") board.settings.hideDiscontinued = display.hideDiscontinued;
+      if (display.catalogGroup) { board.settings.catalogGroup = display.catalogGroup; board.settings.hideDiscontinued = false; }
+      else if (typeof display.hideDiscontinued === "boolean") delete board.settings.catalogGroup;
+    }
     if (typeof display.detailsOpen === "boolean") roadmapDetailsOpen = display.detailsOpen;
     resetHashoutView(); setView(safe.view || "products"); clearHiddenCatalogSelection();
     searchQuery = roadmapSearchQuery = safe.search || "";
@@ -8817,7 +8884,7 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
     const today = monthStringFromDate();
     if (mode === "next") updateTimelineSettings({ startMonth: today, endMonth: addMonths(today, 23) });
     else {
-      const products = mode === "selected" ? [hasDedicatedHashoutView() && activeView !== "products" ? hashoutSelectionEntry()?.product : selectedProduct()].filter(Boolean) : portfolio.categories.filter(category => activeView === "products" || !isFfsRoadmap() || !hashoutCategoryScope() || hashoutCategoryScope().includes(category.id)).flatMap(category => category.board.products);
+      const products = mode === "selected" ? [hasDedicatedHashoutView() && activeView !== "products" ? hashoutSelectionEntry()?.product : PortfolioModel.catalogProducts(board.products, board.settings).find(product => product.id === selectedId)].filter(Boolean) : catalogFilterCategories().flatMap(category => activeView === "products" ? visibleProducts() : isFfsRoadmap() ? PortfolioModel.catalogProducts(category.board.products, category.board.settings) : visibleRoadmapProducts());
       const dates = products.flatMap(product => (isFfsRoadmap() ? [globalThis.PortfolioFfsRoadmap?.period(product)?.start, globalThis.PortfolioFfsRoadmap?.period(product)?.end, product.ffsDate] : [globalThis.PortfolioDatePrecision?.currentPeriod(product,"generalAvailabilityDate")?.start || product.generalAvailabilityDate, globalThis.PortfolioDatePrecision?.currentPeriod(product,"endManufacturingDate")?.end || product.endManufacturingDate])).filter(value => /^\d{4}-\d{2}/.test(value || "")).map(value => value.slice(0, 7)).sort();
       if (!dates.length) throw new Error("No dated products are available in this selection.");
       updateTimelineSettings({ startMonth: addMonths(dates[0], -1), endMonth: addMonths(dates[dates.length - 1], 1) });

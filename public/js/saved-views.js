@@ -15,6 +15,22 @@
   }
   const number = (value, min, max) => typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : undefined;
   const clean = value => Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+  function categoryVisibility(value) {
+    if (!Array.isArray(value)) return undefined;
+    const seen = new Set(), groups = ['all','launched','unreleased','eol'];
+    return value.slice(0, 200).flatMap(entry => {
+      if (!object(entry) || !Object.hasOwn(entry, 'categoryId')) return [];
+      const categoryId = text(entry.categoryId);
+      const hasGroup = Object.hasOwn(entry, 'catalogGroup') && entry.catalogGroup !== undefined;
+      const hasLegacy = Object.hasOwn(entry, 'hideDiscontinued') && entry.hideDiscontinued !== undefined;
+      if (!categoryId?.trim() || seen.has(categoryId) || !hasGroup && !hasLegacy
+        || hasGroup && !groups.includes(entry.catalogGroup) || hasLegacy && typeof entry.hideDiscontinued !== 'boolean') return [];
+      seen.add(categoryId);
+      // A group is authoritative. Do not retain a contradictory legacy flag;
+      // boolean-only entries preserve older per-category visibility exactly.
+      return [{ categoryId, ...(hasGroup ? { catalogGroup: entry.catalogGroup } : { hideDiscontinued: entry.hideDiscontinued }) }];
+    });
+  }
   function sanitizePreferences(kind, value) {
     if (!kinds.includes(kind) || !object(value)) return null;
     if (kind === 'portfolio') {
@@ -30,6 +46,7 @@
       }) : undefined;
       return clean({ view: choice(value.view, ['products','roadmap','split']), basis: choice(value.basis, ['lifecycle','ffs']),
         categoryIds: ids(value.categoryIds, 200), activeCategoryId: text(value.activeCategoryId),
+        categoryVisibility: categoryVisibility(value.categoryVisibility),
         dateRange: object(value.dateRange) ? clean({ start: date(value.dateRange.start, true), end: date(value.dateRange.end, true) }) : undefined,
         search: text(value.search, 200), display });
     }
