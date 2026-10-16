@@ -110,7 +110,7 @@
     let entries = [], allCategories = [], layout = null, horizon = null, viewport = null;
     let width = 0, height = 0, leftWidth = 166, renderFrame = 0, animationFrame = 0, destroyed = false;
     let selectedKey = options.getSelectedKey?.() || null, hovered = null, hoverMemberKey = null, pinned = false, cardAnchor = null, cardEntries = [], hideTimer = 0, keyboardIndex = -1, drag = null, suppressClick = false;
-    let railSignature = "", searchSignature = "", viewportSignature = "";
+    let railSignature = "", searchSignature = "", viewportSignature = "", suppressSearchFocus = false;
     let labelSignature = "", capsuleExpanded = false;
     let hoveredCategoryId = null, lanePointer = null, laneHoverFrame = 0;
     let ringState = null, ringCloseTimer = 0, previousViewport = null;
@@ -330,20 +330,46 @@
       return button;
     }
 
-    function updateSearch() {
+    function syncSearchEngagement(focusTarget = document.activeElement) {
+      searchShell.classList.toggle("is-engaged", Boolean(search.value.trim() || searchShell.contains(focusTarget)));
+    }
+
+    function closeSearch(returnFocus = false) {
+      results.hidden = true;
+      search.setAttribute("aria-expanded", "false");
+      if (returnFocus) {
+        suppressSearchFocus = true;
+        try { search.focus({ preventScroll: true }); } finally { suppressSearchFocus = false; }
+      }
+      syncSearchEngagement();
+    }
+
+    function dismissSearchOutside(event) {
+      if (searchShell.contains(event.target)) return;
+      closeSearch();
+      if (searchShell.contains(document.activeElement)) document.activeElement.blur?.();
+      syncSearchEngagement();
+    }
+
+    function updateSearch({ open = false } = {}) {
+      syncSearchEngagement();
       const query = search.value.trim().toLocaleLowerCase();
       const signature = JSON.stringify([query, entries.map((entry) => [entry.key, entry.product?.name, entry.period?.label])]);
-      if (signature === searchSignature) return;
+      if (signature === searchSignature) {
+        if (open && query) { results.hidden = false; search.setAttribute("aria-expanded", "true"); }
+        return;
+      }
+      const show = open || !results.hidden;
       searchSignature = signature;
       results.replaceChildren();
-      if (!query) { results.hidden = true; search.setAttribute("aria-expanded", "false"); return; }
+      if (!query) { closeSearch(); return; }
       const matches = entries.filter((entry) => searchText(entry).includes(query));
       const summary = node("p", "hashout-result-summary", matches.length ? `${matches.length} ${matches.length === 1 ? "match" : "matches"}` : "No products in the selected categories");
       results.append(summary);
-      for (const entry of matches.slice(0, 80)) results.append(productButton(entry, (item) => { focusProduct(item.key); results.hidden = true; search.setAttribute("aria-expanded", "false"); }));
+      for (const entry of matches.slice(0, 80)) results.append(productButton(entry, (item) => { focusProduct(item.key); closeSearch(true); }));
       if (matches.length > 80) results.append(node("p", "hashout-result-summary", "Type more to narrow these results."));
-      results.hidden = false;
-      search.setAttribute("aria-expanded", "true");
+      results.hidden = !show;
+      search.setAttribute("aria-expanded", String(show));
     }
 
     function updateRail() {
@@ -1101,29 +1127,38 @@
       return true;
     }
 
-    listen(search, "input", () => { searchSignature = ""; updateSearch(); });
-    listen(search, "focus", () => { if (search.value.trim()) { results.hidden = false; search.setAttribute("aria-expanded", "true"); } });
+    listen(search, "input", () => { searchSignature = ""; updateSearch({ open: true }); });
+    listen(search, "search", () => { searchSignature = ""; updateSearch({ open: document.activeElement === search }); });
+    listen(search, "focus", () => { syncSearchEngagement(); if (!suppressSearchFocus) updateSearch({ open: true }); });
+    listen(searchShell, "focusin", () => syncSearchEngagement());
+    listen(searchShell, "focusout", (event) => {
+      if (!searchShell.contains(event.relatedTarget)) closeSearch();
+      syncSearchEngagement(event.relatedTarget);
+    });
     listen(search, "keydown", (event) => {
-      if (event.key === "Escape") { results.hidden = true; search.setAttribute("aria-expanded", "false"); search.blur(); }
-      if (event.key === "ArrowDown") { results.querySelector("button")?.focus(); event.preventDefault(); }
-      if (event.key === "Enter") { results.querySelector("button")?.click(); event.preventDefault(); }
+      if (event.isComposing) return;
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(); }
+      if (event.key === "ArrowDown") { updateSearch({ open: true }); results.querySelector("button")?.focus(); event.preventDefault(); }
+      if (event.key === "Enter" && !results.hidden) { results.querySelector("button")?.click(); event.preventDefault(); }
     });
     listen(results, "keydown", (event) => {
+      if (event.isComposing) return;
       const buttons = [...results.querySelectorAll("button")], index = buttons.indexOf(document.activeElement);
       if (event.key === "ArrowDown" || event.key === "ArrowUp") { buttons[clamp(index + (event.key === "ArrowDown" ? 1 : -1), 0, buttons.length - 1)]?.focus(); event.preventDefault(); }
-      if (event.key === "Escape") { results.hidden = true; search.setAttribute("aria-expanded", "false"); search.focus(); }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(true); }
     });
     listen(document, "pointerdown", (event) => {
       if (event.pointerType === "touch") coarseInput = true;
       else if (event.pointerType === "mouse" && !root.matchMedia?.("(pointer: coarse)")?.matches) coarseInput = false;
       if (!windowsControl.contains(event.target)) windowsKey.open = false;
-      if (!searchShell.contains(event.target)) { results.hidden = true; search.setAttribute("aria-expanded", "false"); }
+      dismissSearchOutside(event);
       const insideCard = card.contains(event.target);
       if (ringState && !ring.contains(event.target) && !insideCard) { closeRing(); closeCard(); }
       // Dismiss the old disclosure without cancelling the click. A different
       // product, category, or toolbar control must still work on that click.
       if (pinned && !insideCard) closeCard();
     });
+    listen(document, "click", dismissSearchOutside);
     listen(card, "pointerenter", () => clearTimeout(hideTimer));
     listen(card, "pointerleave", () => { if (!pinned) hideTimer = setTimeout(() => closeCard(), 160); });
     listen(card, "click", (event) => { if (!pinned && !event.target.closest("button")) { if (cardEntries.length > 1) openRing({ entries: cardEntries, memberKeys: cardEntries.map((entry) => entry.key), countLabelX: cardAnchor.x, centerX: cardAnchor.x, centerY: cardAnchor.y }); else showEntries(cardEntries, cardAnchor, true); } });
