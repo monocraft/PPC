@@ -3,6 +3,8 @@
   "use strict";
   let active = null;
   const displayNameKey = "portfolio.sharedDisplayName";
+  const activityModes = new Set(["browsing", "editing", "roadmap", "focused", "idle"]);
+  const validSessionId = (value) => typeof value === "string" && /^[-_a-z0-9]{8,128}$/i.test(value);
   const anonymousName = (sessionId) => `Editor ${String(sessionId).replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase()}`;
   const avatarText = (name, sessionId) => {
     if (!name || name === anonymousName(sessionId)) return String(sessionId).replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase();
@@ -11,7 +13,7 @@
   };
   const avatarTone = (sessionId) => [...String(sessionId)].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) % 5, 0);
   const sessionSummary = (count) => `${count} connected ${count === 1 ? "session" : "sessions"}`;
-  const activityText = (user) => `${user.editing ? "Editing" : "Viewing"} ${user.productName || user.categoryName || "the portfolio"}${user.productName && user.categoryName ? ` · ${user.categoryName}` : ""}`;
+  const activityText = (user) => user.activity === "idle" && !user.editing ? `Taking a breather${user.categoryName ? ` · ${user.categoryName}` : ""}` : user.activity === "roadmap" && !user.editing ? `Exploring the roadmap${user.categoryName ? ` · ${user.categoryName}` : ""}` : `${user.editing ? "Editing" : user.activity === "focused" ? "Focused on" : "Viewing"} ${user.productName || user.categoryName || "the portfolio"}${user.productName && user.categoryName ? ` · ${user.categoryName}` : ""}`;
   const connectionSummary = (state) => !state.configured ? "Team sharing is not connected" : state.mode === "github" ? state.connected ? `${state.users.length} recent ${state.users.length === 1 ? "editor" : "editors"}` : "No recent editors" : state.unavailable ? "Shared connection unavailable" : state.connected ? sessionSummary(state.onlineCount) : state.hasKey ? "Connecting…" : "Not connected";
 
   function normalizeRecentEditors(snapshot, identity) {
@@ -36,6 +38,7 @@
       seen.add(sessionId);
       const displayName = typeof item.displayName === "string" ? item.displayName.trim().slice(0, 60) : "";
       users.push({ sessionId, displayName, label: displayName || anonymousName(sessionId), editing: item.editing === true,
+        activity: item.editing === true ? "editing" : activityModes.has(item.activity) && item.activity !== "editing" ? item.activity : "browsing", receivePokes: item.receivePokes !== false,
         productId: String(item.productId || ""), productName: String(item.productName || "").slice(0, 240),
         categoryId: String(item.categoryId || ""), categoryName: String(item.categoryName || "").slice(0, 180),
         isSelf: sessionId === ownSessionId, lastSeenAt: item.lastSeenAt || item.lastSeen || "",
@@ -45,11 +48,30 @@
     return users.sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || a.label.localeCompare(b.label));
   }
 
-  function createController({ sessionProvider, getSelectedProductId = () => "", getSelectedCategoryId = () => "", onChange = () => {}, sessionId = sessionProvider?.()?.getState?.()?.editorProfile?.sessionId || root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, displayName = "" } = {}) {
+  function createController({ sessionProvider, getSelectedProductId = () => "", getSelectedCategoryId = () => "", getActivity = () => "browsing", onChange = () => {}, onPokeReceived = () => {}, receivePokes = true, now = Date.now, sessionId = sessionProvider?.()?.getState?.()?.editorProfile?.sessionId || root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, displayName = "" } = {}) {
     let users = [], mode = "service", configured = false, connected = false, unavailable = false, hasKey = false, hasGitHubToken = false, inFlight = null;
     let generation = 0, observedSession = null, observedAccessVersion, observedHasKey = false;
+    let pokeSupported = false, allowPokes = receivePokes !== false, pokeSequence = 0;
+    const ackPokeIds = new Set(), seenPokes = new Map(), pokeCooldowns = new Map(), pokeAttempts = new Map();
     let name = String(displayName).trim().slice(0, 60);
-    function state() { return { users: users.map((user) => ({ ...user })), mode, onlineCount: mode === "github" ? 0 : users.length, configured, connected, unavailable, hasKey, hasGitHubToken, sessionId, displayName: name }; }
+    function state() { return { users: users.map((user) => ({ ...user })), mode, onlineCount: mode === "github" ? 0 : users.length, configured, connected, unavailable, hasKey, hasGitHubToken, sessionId, displayName: name, pokeSupported, receivePokes: allowPokes }; }
+    function pokeError(message, code) { const error = new Error(message); error.code = code; return error; }
+    function receiveInbox(response) {
+      const time = now();
+      for (const [id, at] of seenPokes) if (time - at > 90000) seenPokes.delete(id);
+      for (const event of Array.isArray(response.pokes) ? response.pokes.slice(0, 16) : []) {
+        if (!validSessionId(event?.id) || !validSessionId(event?.fromSessionId) || event.fromSessionId === sessionId || event.toSessionId !== sessionId) continue;
+        if (ackPokeIds.size < 64) ackPokeIds.add(event.id);
+        if (seenPokes.has(event.id)) continue;
+        if (seenPokes.size >= 256) seenPokes.delete(seenPokes.keys().next().value);
+        seenPokes.set(event.id, time);
+        const at = Date.parse(event.createdAt);
+        if (!allowPokes || !Number.isFinite(at) || time - at > 45000 || at - time > 5000) continue;
+        const safeEvent = { id: event.id, fromSessionId: event.fromSessionId, toSessionId: sessionId,
+          fromDisplayName: String(event.fromDisplayName || anonymousName(event.fromSessionId)).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 60), createdAt: new Date(at).toISOString() };
+        try { onPokeReceived(safeEvent); } catch { /* Social feedback must never interrupt editing or the heartbeat. */ }
+      }
+    }
     function observeAccess() {
       const session = sessionProvider?.();
       session?.setEditorProfile?.({ sessionId, displayName: name });
@@ -61,12 +83,12 @@
       if (session !== observedSession || available !== observedHasKey || sessionState?.accessVersion !== observedAccessVersion) {
         generation += 1;
         observedSession = session; observedHasKey = available; observedAccessVersion = sessionState?.accessVersion;
-        users = []; connected = false; unavailable = false;
+        users = []; connected = false; unavailable = false; pokeSupported = false; ackPokeIds.clear(); seenPokes.clear(); pokeCooldowns.clear(); pokeAttempts.clear();
       }
       hasKey = available;
       return { session, sessionState, generation };
     }
-    async function heartbeat({ leave = false } = {}) {
+    async function heartbeat({ leave = false, poke } = {}) {
       const { session, sessionState } = observeAccess();
       if (mode === "github") {
         generation += 1;
@@ -79,28 +101,68 @@
       }
       if (leave) { generation += 1; users = []; connected = false; unavailable = false; onChange(state()); }
       if (inFlight?.generation === generation && !leave) return state();
-      const operation = { generation, session }; inFlight = operation;
+      const operation = { generation, session }; operation.done = new Promise((resolve) => { operation.finish = resolve; }); inFlight = operation;
+      let pokeResult = null, pokeFailure = null;
+      const acknowledgments = pokeSupported ? [...ackPokeIds] : [];
       try {
         const selected = String(getSelectedProductId() || ""), pending = sessionState.pending || [];
         const draft = pending.find((product) => product.productId === selected);
-        const response = await session.presence({ sessionId, displayName: name, editing: Boolean(draft), productId: selected, categoryId: String(getSelectedCategoryId() || ""), leave });
+        const requestedActivity = getActivity();
+        const response = await session.presence({ sessionId, displayName: name, editing: Boolean(draft), productId: selected, categoryId: String(getSelectedCategoryId() || ""), leave,
+          ...(pokeSupported && !leave ? { activity: draft ? "editing" : activityModes.has(requestedActivity) && requestedActivity !== "editing" ? requestedActivity : "browsing", receivePokes: allowPokes, ackPokeIds: acknowledgments, ...(poke ? { poke } : {}) } : {}) });
         const current = observeAccess();
-        if (current.generation !== operation.generation || current.session !== operation.session || !hasKey) return state();
-        if (response && !leave) { users = normalizeRoster(response, sessionId); connected = true; unavailable = false; }
+        if (current.generation !== operation.generation || current.session !== operation.session || !hasKey) { if (poke) throw pokeError("The shared connection changed. Try again after reconnecting.", "POKE_CONNECTION_CHANGED"); return state(); }
+        if (response && !leave) {
+          const previous = new Map(users.map((user) => [user.sessionId, user]));
+          users = normalizeRoster(response, sessionId).map((user) => ({ ...user, editingSince: user.editing ? previous.get(user.sessionId)?.editing && previous.get(user.sessionId)?.productId === user.productId ? previous.get(user.sessionId).editingSince ?? now() : now() : null }));
+          connected = true; unavailable = false; pokeSupported = response.capabilities?.pokes === true;
+          for (const id of acknowledgments) ackPokeIds.delete(id);
+          if (pokeSupported) receiveInbox(response);
+          if (poke) {
+            if (response.poke?.id !== poke.id || !["queued", "duplicate", "throttled", "unavailable"].includes(response.poke?.status)) throw pokeError("This connection could not confirm your poke. Try again.", "POKE_UNCONFIRMED");
+            pokeResult = { ...response.poke };
+            // Record before releasing a waiting sender, so simultaneous clicks
+            // cannot slip through the target's cooldown between microtasks.
+            if (["queued", "duplicate"].includes(pokeResult.status)) pokeCooldowns.set(poke.targetSessionId, now());
+            pokeAttempts.delete(poke.targetSessionId);
+          }
+        }
         if (leave) { users = []; connected = false; }
-      } catch {
+      } catch (error) {
+        if (poke) pokeFailure = error;
         const current = observeAccess();
         if (current.generation === operation.generation && current.session === operation.session && hasKey) { connected = false; unavailable = true; }
-      } finally { if (inFlight === operation) inFlight = null; onChange(state()); }
+      } finally { if (inFlight === operation) inFlight = null; try { onChange(state()); } finally { operation.finish(); } }
+      if (pokeFailure) throw pokeFailure;
+      if (poke) return pokeResult;
       return state();
     }
     return Object.freeze({ heartbeat, getState: state,
+      async poke(targetSessionId) {
+        observeAccess();
+        const expectedGeneration = generation, expectedSession = observedSession;
+        while (inFlight) await inFlight.done;
+        observeAccess();
+        if (expectedGeneration !== generation || expectedSession !== observedSession || !pokeSupported || !connected || unavailable || mode === "github" || !hasKey) throw pokeError("Pokes are not available on this connection yet.", "POKE_UNAVAILABLE");
+        const target = users.find((user) => user.sessionId === targetSessionId && !user.isSelf && user.receivePokes);
+        if (!validSessionId(targetSessionId) || !target || targetSessionId === sessionId) throw pokeError("That teammate is not available for pokes.", "POKE_TARGET_UNAVAILABLE");
+        const time = now();
+        for (const [id, at] of pokeCooldowns) if (time - at >= 60000) pokeCooldowns.delete(id);
+        for (const [targetId, attempt] of pokeAttempts) if (time - attempt.at >= 90000) pokeAttempts.delete(targetId);
+        if (time - (pokeCooldowns.get(targetSessionId) || -Infinity) < 5000) throw pokeError("Give that face a moment to recover.", "POKE_COOLDOWN");
+        const id = pokeAttempts.get(targetSessionId)?.id || root.crypto?.randomUUID?.() || `poke-${sessionId.slice(0, 64)}-${time.toString(36)}-${(++pokeSequence).toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        if (pokeAttempts.size >= 256 && !pokeAttempts.has(targetSessionId)) pokeAttempts.delete(pokeAttempts.keys().next().value);
+        if (!pokeAttempts.has(targetSessionId)) pokeAttempts.set(targetSessionId, { id, at: time });
+        const result = await heartbeat({ poke: { id, targetSessionId } });
+        return result;
+      },
+      async setReceivePokes(value) { allowPokes = value !== false; onChange(state()); while (inFlight) await inFlight.done; return heartbeat(); },
       setDisplayName(value) { const next = String(value || "").trim().slice(0, 60); if (next !== name) generation += 1; name = next; return heartbeat(); },
       leave() { return heartbeat({ leave: true }); },
     });
   }
 
-  function initialize({ sessionProvider = () => root.PortfolioMasterUI?.getSession(), adapter = root.PortfolioMasterAdapter } = {}) {
+  function initialize({ sessionProvider = () => root.PortfolioMasterUI?.getSession(), adapter = root.PortfolioMasterAdapter, getActivityContext, onPoke } = {}) {
     if (active) return active;
     const brand = document.querySelector(".brand-block");
     if (!brand) return null;
@@ -109,7 +171,7 @@
     trigger.type = "button"; trigger.setAttribute("aria-haspopup", "dialog"); trigger.setAttribute("aria-expanded", "false"); trigger.setAttribute("aria-controls", "masterPresencePopover");
     const popover = make("section", "master-presence-popover"); popover.id = "masterPresencePopover"; popover.hidden = true; popover.setAttribute("role", "dialog"); popover.setAttribute("aria-labelledby", "masterPresenceTitle");
     const heading = make("header", "master-presence-heading"), title = make("h3", "", "Connected now"); title.id = "masterPresenceTitle";
-    const close = make("button", "icon-button", "×"); close.type = "button"; close.setAttribute("aria-label", "Close connected sessions"); heading.append(title, close);
+    const close = make("button", "icon-button master-presence-close", "×"); close.type = "button"; close.setAttribute("aria-label", "Close connected sessions"); heading.append(title, close);
     const connection = make("p", "master-presence-summary"), rows = make("div", "master-presence-list"); connection.setAttribute("role", "status"); connection.setAttribute("aria-live", "polite");
     const nameForm = make("form", "master-presence-name-form"), nameLabel = make("label", "", "Your display name (optional)"), nameInput = make("input", "master-presence-name");
     nameInput.type = "text"; nameInput.maxLength = 60; nameInput.autocomplete = "nickname"; nameInput.placeholder = "Name";
@@ -117,47 +179,181 @@
     nameInput.value = storedName.slice(0, 60); nameLabel.append(nameInput);
     const nameSave = make("button", "quiet-button", "Apply"); nameSave.type = "submit"; nameForm.append(nameLabel, nameSave);
     const githubConnect = make("button", "quiet-button", "Connect GitHub"); githubConnect.type = "button"; githubConnect.hidden = true; githubConnect.addEventListener("click", () => root.PortfolioMasterUI?.connectGitHub());
-    popover.append(heading, connection, rows, nameForm, githubConnect); shell.append(trigger, popover); brand.append(shell);
-    let open = false, debounceTimer = null;
-    function setOpen(value) { open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value)); if (value) controller.heartbeat(); else trigger.focus({ preventScroll: true }); }
-    function avatar(user, extraClass = user.editing ? "is-editing" : "") { const circle = make("span", `master-presence-avatar master-presence-tone-${avatarTone(user.sessionId)}${extraClass ? ` ${extraClass}` : ""}`, avatarText(user.displayName, user.sessionId)); circle.setAttribute("aria-hidden", "true"); circle.title = `${user.label}${user.categoryName || user.productName ? ` · ${activityText(user)}` : ""}`; return circle; }
+    const play = make("button", "presence-play", "Make a face"); play.type = "button"; play.title = "A little goof for your own face, just on this screen";
+    popover.append(heading, connection, rows, play, nameForm, githubConnect); shell.append(trigger, popover); brand.append(shell);
+    // Expression updates are entirely local. They never send an additional presence request.
+    const listeners = new root.AbortController(), signal = listeners.signal;
+    let open = false, disposed = false, debounceTimer = null, playTimer = null, gazeFrame = null, reactionFrame = null, playfulUntil = 0;
+    let lastInputAt = Date.now(), activeView = root.PortfolioSearchAdapter?.getActiveView?.() || "products", latestState;
+    if (activeView === "split") activeView = "roadmap";
+    const stack = make("span", "master-presence-avatars"), stackCache = new Map(), rowCache = new Map(); shell.insertBefore(stack, trigger);
+    const overflow = make("span", "master-presence-avatar master-presence-overflow"); overflow.setAttribute("aria-hidden", "true"); trigger.append(overflow);
+    const pendingPokes = new Set();
+    const socialStatus = make("span", "visually-hidden"); socialStatus.setAttribute("role", "status"); socialStatus.setAttribute("aria-live", "polite"); shell.append(socialStatus);
+    const reactions = root.PortfolioPresenceReactions?.create({ onChange: () => renderLocal() });
+    const bump = root.PortfolioPresenceBump?.create({ shell });
+    const observer = root.IntersectionObserver ? new root.IntersectionObserver((entries) => {
+      for (const entry of entries) entry.target.classList.toggle("is-in-view", entry.isIntersecting);
+    }) : null;
+    function setOpen(value, { restoreFocus = true } = {}) {
+      const opener = document.activeElement;
+      open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value));
+      for (const control of stack.querySelectorAll("[data-opens-roster]")) control.setAttribute("aria-expanded", String(value));
+      if (value) { renderLocal(); controller.heartbeat(); if (shell.contains(opener) && opener.matches(":focus-visible")) close.focus({ preventScroll: true }); }
+      else if (restoreFocus) trigger.focus({ preventScroll: true });
+    }
+    function contextFor(user, state) {
+      if (state.mode === "github") return { recent: true };
+      if (!state.connected || state.unavailable) return { mood: "offline" };
+      const editingForMs = user.editing ? Math.max(0, Date.now() - Number(user.editingSince ?? Date.now())) : 0;
+      if (!user.isSelf) return user.editing ? { editingForMs } : { mood: user.activity || "browsing" };
+      return { view: activeView, focused: Boolean(adapter?.getSelectedProductId?.()), idle: Date.now() - lastInputAt > 60000,
+        playful: Date.now() < playfulUntil, editingForMs, ...getActivityContext?.(user, state) };
+    }
+    function avatar(user, state) {
+      const context = contextFor(user, state);
+      const circle = root.PortfolioPresenceExpressions?.createAvatar(user, context) || make("span", "master-presence-avatar", avatarText(user.displayName, user.sessionId));
+      circle.classList.toggle("is-editing", state.connected && !state.unavailable && state.mode !== "github" && user.editing === true);
+      circle.setAttribute("aria-hidden", "true");
+      circle.title = `${user.label}${user.categoryName || user.productName ? ` · ${activityText(user)}` : ""}`;
+      reactions?.decorate(circle, user);
+      if (observer) observer.observe(circle); else circle.classList.add("is-in-view");
+      return circle;
+    }
+    function faceSignature(user, state) { return JSON.stringify([state.mode, state.connected, state.unavailable, state.pokeSupported, user.label, user.editing, user.activity, user.receivePokes, reactions?.get(user.sessionId), user.productName, user.categoryName, user.at, user.isSelf, root.PortfolioPresenceExpressions?.profile(user, contextFor(user, state)).mood || contextFor(user, state)]); }
+    function headerPortrait(user, state) {
+      const button = make("button", "presence-header-person"); button.type = "button"; button.dataset.sessionId = user.sessionId;
+      const reaction = reactions?.get(user.sessionId);
+      const canPoke = !user.isSelf && user.receivePokes !== false && state.connected && !state.unavailable && state.mode !== "github" && (state.pokeSupported || typeof onPoke === "function");
+      button.title = reaction?.message || (canPoke ? `Poke ${user.label}` : user.label);
+      button.setAttribute("aria-label", canPoke ? `Poke ${user.label}${reaction?.kind === "received" ? " back" : ""}` : `${user.label}. View people`);
+      if (canPoke) button.addEventListener("click", () => sendPokeTarget(user.sessionId));
+      else { button.dataset.opensRoster = "true"; button.setAttribute("aria-haspopup", "dialog"); button.setAttribute("aria-expanded", String(open)); button.setAttribute("aria-controls", popover.id); button.addEventListener("click", () => setOpen(!open)); }
+      button.append(avatar(user, state)); return button;
+    }
+    function updatePending(node, sessionId) {
+      const button = node.matches("button") ? node : node.querySelector(".presence-poke-button");
+      if (button) { const pending = pendingPokes.has(sessionId); button.setAttribute("aria-disabled", String(pending)); button.classList.toggle("is-poke-pending", pending); }
+    }
+    function forget(node) { for (const circle of node.matches?.(".presence-character") ? [node] : node.querySelectorAll(".presence-character")) observer?.unobserve(circle); }
+    function reconcile(parent, entries, cache) {
+      const keep = new Set(entries.map(([key]) => key));
+      for (const [key, entry] of cache) if (!keep.has(key)) { forget(entry.node); entry.node.remove(); cache.delete(key); }
+      let cursor = parent.firstChild;
+      for (const [, entry] of entries) { if (entry.node === cursor) cursor = cursor.nextSibling; else parent.insertBefore(entry.node, cursor); }
+    }
+    function remember(cache, key, signature, create) {
+      let entry = cache.get(key);
+      if (entry?.signature !== signature) {
+        const next = { signature, node: create() };
+        if (entry) {
+          bump?.cancel();
+          const focused = entry.node === document.activeElement || entry.node.contains(document.activeElement);
+          forget(entry.node); entry.node.replaceWith(next.node);
+          if (focused) (next.node.matches("button") ? next.node : next.node.querySelector("button"))?.focus({ preventScroll: true });
+        }
+        cache.set(key, next); entry = next;
+      }
+      return [key, entry];
+    }
     function render(state) {
-      trigger.replaceChildren(); rows.replaceChildren();
+      if (disposed) return;
+      latestState = state;
       title.textContent = state.mode === "github" ? "Recent editors" : "Connected now";
       close.setAttribute("aria-label", state.mode === "github" ? "Close recent editors" : "Close connected sessions");
       nameForm.hidden = state.mode === "github"; nameForm.style.display = state.mode === "github" ? "none" : "";
       githubConnect.hidden = state.mode !== "github"; githubConnect.style.display = state.mode === "github" ? "" : "none"; githubConnect.disabled = !state.hasKey;
       githubConnect.textContent = state.hasGitHubToken ? "Change GitHub account" : "Connect GitHub";
-      if (state.users.length) {
-        for (const user of state.users.slice(0, 3)) trigger.append(avatar(user));
-        if (state.users.length > 3) { const overflow = make("span", "master-presence-avatar master-presence-overflow", `+${state.users.length - 3}`); overflow.setAttribute("aria-hidden", "true"); trigger.append(overflow); }
-      } else { const empty = make("span", "master-presence-avatar master-presence-empty", "·"); empty.setAttribute("aria-hidden", "true"); trigger.append(empty); }
       const summary = connectionSummary(state);
-      connection.textContent = summary;
+      if (connection.textContent !== summary) connection.textContent = summary;
       trigger.title = summary;
       trigger.setAttribute("aria-label", state.mode === "github" ? "View recent master editors" : state.connected ? `View ${sessionSummary(state.onlineCount)}` : "View shared connection status");
       trigger.classList.toggle("master-presence-offline", state.unavailable);
-      for (const user of state.users) {
-        const row = make("div", "master-presence-row"), text = make("div", "master-presence-person");
-        const label = make("strong", "", user.label + (user.isSelf ? " (you)" : ""));
-        const date = user.at ? new Date(user.at) : null;
-        const activity = state.mode === "github" ? `Updated master${date && Number.isFinite(date.getTime()) ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)}` : ""}` : activityText(user);
-        text.append(label, make("span", "master-presence-activity", activity)); row.append(avatar(user), text); rows.append(row);
-      }
+      shell.classList.toggle("is-paused", document.visibilityState === "hidden" || !state.connected || state.unavailable || state.mode === "github");
+      play.hidden = state.mode === "github" || !state.connected || state.unavailable || !state.users.some((user) => user.isSelf);
       nameSave.disabled = state.mode === "github" || !state.configured || !state.hasKey;
+      // Keep each person's DOM and animation clock. Closed rosters do no drawing work.
+      const stackEntries = [];
+      const headerLimit = root.matchMedia?.("(max-width: 580px)").matches ? 3 : root.matchMedia?.("(max-width: 719px)").matches ? 5 : 7;
+      if (state.users.length) {
+        for (const user of (reactions?.prioritize(state.users) || state.users).slice(0, headerLimit)) { const entry = remember(stackCache, user.sessionId, faceSignature(user, state), () => headerPortrait(user, state)); updatePending(entry[1].node, user.sessionId); stackEntries.push(entry); }
+      } else {
+        stackEntries.push(remember(stackCache, "empty", summary, () => headerPortrait({ sessionId: "presence-offline", label: summary, isSelf: true }, { ...state, connected: false })));
+      }
+      overflow.textContent = state.users.length > headerLimit ? `+${state.users.length - headerLimit}` : "···";
+      reconcile(stack, stackEntries, stackCache);
+      if (!open) return;
+      const rowEntries = [];
+      if (!state.users.length) rowEntries.push(remember(rowCache, "empty", state.mode, () => make("p", "presence-empty-copy", state.mode === "github" ? "Recent editors will appear after a shared update." : "A little room for your crew. Connected people will appear here.")));
+      for (const user of state.users) {
+        const entry = remember(rowCache, user.sessionId, faceSignature(user, state), () => {
+          const row = make("div", "master-presence-row"), text = make("div", "master-presence-person");
+          const label = make("strong", "", user.label);
+          if (user.isSelf) label.append(make("span", "presence-self-label", "you"));
+          const date = user.at ? new Date(user.at) : null;
+          const activity = state.mode === "github" ? `Updated master${date && Number.isFinite(date.getTime()) ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)}` : ""}` : activityText(user);
+          const face = avatar(user, state);
+          let portrait = face;
+          // A host can supply an explicit ephemeral poke transport. Without it,
+          // presence stays read-only; no pretend cross-session delivery is shown.
+          if ((typeof onPoke === "function" || state.pokeSupported) && !user.isSelf && user.receivePokes !== false && state.mode !== "github" && state.connected && !state.unavailable) {
+            portrait = make("button", "presence-poke-button"); portrait.type = "button";
+            const reaction = reactions?.get(user.sessionId);
+            portrait.setAttribute("aria-label", `Poke ${user.label}${reaction?.kind === "received" ? " back" : ""}`); portrait.title = reaction?.message || `Poke ${user.label}`;
+            portrait.append(face);
+            portrait.addEventListener("click", () => sendPokeTarget(user.sessionId));
+          }
+          text.append(label, make("span", "master-presence-activity", activity)); row.append(portrait, text); return row;
+        }); updatePending(entry[1].node, user.sessionId); rowEntries.push(entry);
+      }
+      reconcile(rows, rowEntries, rowCache);
     }
-    const controller = createController({ sessionProvider, getSelectedProductId: () => adapter?.getSelectedProductId?.() || "", getSelectedCategoryId: () => adapter?.getSelectedCategoryId?.() || "", displayName: storedName, onChange: render });
+    const controller = createController({ sessionProvider, getSelectedProductId: () => adapter?.getSelectedProductId?.() || "", getSelectedCategoryId: () => adapter?.getSelectedCategoryId?.() || "", displayName: storedName, receivePokes: true,
+      getActivity: () => Date.now() - lastInputAt > 60000 ? "idle" : activeView === "roadmap" ? "roadmap" : adapter?.getSelectedProductId?.() ? "focused" : "browsing", onChange: render, onPokeReceived: (event) => {
+        const message = `${event.fromDisplayName || "A teammate"} poked you`; reactions?.mark(event.fromSessionId, "received", { name: event.fromDisplayName, message }); socialStatus.textContent = message;
+        if (reactionFrame !== null) root.cancelAnimationFrame(reactionFrame);
+        reactionFrame = root.requestAnimationFrame(() => { reactionFrame = null; if (!disposed) playHeaderBump(event.fromSessionId, controller.getState().sessionId); });
+      } });
+    function playHeaderBump(fromId, targetId) { const portraits = [...stack.children]; return bump?.play({ from: portraits.find((node) => node.dataset.sessionId === fromId), target: portraits.find((node) => node.dataset.sessionId === targetId) }); }
+    async function sendPokeTarget(targetSessionId) {
+      const user = latestState?.users.find((person) => person.sessionId === targetSessionId);
+      if (!user || pendingPokes.has(targetSessionId)) return;
+      pendingPokes.add(targetSessionId); renderLocal();
+      try {
+        const result = typeof onPoke === "function" ? await onPoke({ ...user }, { senderName: latestState.displayName || latestState.users.find((person) => person.isSelf)?.label || "A teammate" }) : await controller.poke(targetSessionId);
+        if (!["queued", "duplicate"].includes(result?.status)) throw new Error(result?.status === "throttled" ? "Give that face a moment to recover." : "That teammate is not available for pokes.");
+        const message = `Poke on its way to ${user.label}`; reactions?.mark(user.sessionId, "sent", { name: user.label, message }); socialStatus.textContent = message;
+        playHeaderBump(latestState.sessionId, targetSessionId);
+      } catch (error) { const message = error?.code === "POKE_COOLDOWN" || error?.message === "Give that face a moment to recover." ? "Give that face a moment to recover." : "Couldn’t confirm that poke. Try again when your teammate is connected."; reactions?.mark(user.sessionId, "failed", { name: user.label, message }); socialStatus.textContent = message; }
+      finally { pendingPokes.delete(targetSessionId); renderLocal(); }
+    }
     function soon() { root.clearTimeout(debounceTimer); debounceTimer = root.setTimeout(() => controller.heartbeat(), 500); }
-    trigger.addEventListener("click", () => setOpen(!open)); close.addEventListener("click", () => setOpen(false));
-    document.addEventListener("pointerdown", (event) => { if (open && !shell.contains(event.target)) { open = false; popover.hidden = true; trigger.setAttribute("aria-expanded", "false"); } });
-    document.addEventListener("keydown", (event) => { if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); } }, true);
-    nameForm.addEventListener("submit", (event) => { event.preventDefault(); const value = nameInput.value.trim().slice(0, 60); nameInput.value = value; try { if (value) root.localStorage.setItem(displayNameKey, value); else root.localStorage.removeItem(displayNameKey); } catch {} controller.setDisplayName(value); });
-    root.addEventListener("portfolio:render", soon); root.addEventListener("portfolio:master-status", soon);
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "hidden") controller.heartbeat(); });
-    root.addEventListener("pagehide", () => controller.leave());
+    function renderLocal() { if (latestState) render(latestState); }
+    function inputActivity() { const wasIdle = Date.now() - lastInputAt > 60000; lastInputAt = Date.now(); if (wasIdle) renderLocal(); }
+    trigger.addEventListener("click", () => setOpen(!open), { signal }); close.addEventListener("click", () => setOpen(false), { signal });
+    document.addEventListener("pointerdown", (event) => { inputActivity(); if (open && !shell.contains(event.target)) setOpen(false, { restoreFocus: false }); }, { signal });
+    document.addEventListener("keydown", (event) => { inputActivity(); if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); } }, { capture: true, signal });
+    document.addEventListener("pointermove", inputActivity, { passive: true, signal });
+    document.addEventListener("wheel", inputActivity, { passive: true, signal });
+    shell.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "touch" || root.matchMedia?.("(prefers-reduced-motion: reduce)").matches || gazeFrame !== null) return;
+      gazeFrame = root.requestAnimationFrame(() => {
+        gazeFrame = null; const rect = shell.getBoundingClientRect();
+        shell.style.setProperty("--presence-look-x", `${Math.max(-1.5, Math.min(1.5, (event.clientX - rect.left - rect.width / 2) / 30))}px`);
+        shell.style.setProperty("--presence-look-y", `${Math.max(-1, Math.min(1, (event.clientY - rect.top - rect.height / 2) / 30))}px`);
+      });
+    }, { passive: true, signal });
+    shell.addEventListener("pointerleave", () => { if (gazeFrame !== null) root.cancelAnimationFrame(gazeFrame); gazeFrame = null; shell.style.removeProperty("--presence-look-x"); shell.style.removeProperty("--presence-look-y"); }, { signal });
+    play.addEventListener("click", () => { playfulUntil = Date.now() + 3200; renderLocal(); root.clearTimeout(playTimer); playTimer = root.setTimeout(renderLocal, 3250); }, { signal });
+    nameForm.addEventListener("submit", (event) => { event.preventDefault(); const value = nameInput.value.trim().slice(0, 60); nameInput.value = value; try { if (value) root.localStorage.setItem(displayNameKey, value); else root.localStorage.removeItem(displayNameKey); } catch {} controller.setDisplayName(value); }, { signal });
+    root.addEventListener("portfolio:render", (event) => { activeView = event.detail?.activeView || activeView; renderLocal(); soon(); }, { signal }); root.addEventListener("portfolio:master-status", soon, { signal });
+    document.addEventListener("visibilitychange", () => { shell.classList.toggle("is-paused", document.visibilityState === "hidden" || !latestState?.connected || latestState?.unavailable || latestState?.mode === "github"); if (document.visibilityState !== "hidden") controller.heartbeat(); }, { signal });
+    root.addEventListener("pagehide", () => controller.leave(), { signal });
+    root.addEventListener("resize", renderLocal, { passive: true, signal });
     const timer = root.setInterval(() => controller.heartbeat(), 20000);
+    const expressionTimer = root.setInterval(renderLocal, 10000);
     render(controller.getState()); soon();
-    active = Object.freeze({ controller, refresh: () => controller.heartbeat(), close: () => setOpen(false), destroy() { root.clearInterval(timer); root.clearTimeout(debounceTimer); controller.leave(); shell.remove(); } });
+    active = Object.freeze({ controller, refresh: () => controller.heartbeat(), close: () => setOpen(false), destroy() { disposed = true; listeners.abort(); observer?.disconnect(); reactions?.destroy(); bump?.destroy(); root.clearInterval(timer); root.clearInterval(expressionTimer); root.clearTimeout(debounceTimer); root.clearTimeout(playTimer); if (gazeFrame !== null) root.cancelAnimationFrame(gazeFrame); if (reactionFrame !== null) root.cancelAnimationFrame(reactionFrame); controller.leave(); shell.remove(); active = null; } });
     return active;
   }
   root.PortfolioMasterPresence = Object.freeze({ anonymousName, avatarText, avatarTone, sessionSummary, connectionSummary, activityText, normalizeRoster, normalizeRecentEditors, createController, initialize, close() { active?.close(); }, leave() { return active?.controller.leave(); } });

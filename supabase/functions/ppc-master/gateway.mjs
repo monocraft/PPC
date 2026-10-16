@@ -310,9 +310,15 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       return review;
     }
     const sessionId = String(body.sessionId || '');
-    if (!SESSION_PATTERN.test(sessionId) || (body.displayName !== undefined && typeof body.displayName !== 'string') ||
+    if (typeof body.sessionId !== 'string' || !SESSION_PATTERN.test(sessionId) || (body.displayName !== undefined && typeof body.displayName !== 'string') ||
         (body.productId !== undefined && typeof body.productId !== 'string') ||
-        (body.categoryId !== undefined && typeof body.categoryId !== 'string')) throw problem(400, 'INVALID_REQUEST', 'The connected session is invalid.');
+        (body.categoryId !== undefined && typeof body.categoryId !== 'string') ||
+        (body.editing !== undefined && typeof body.editing !== 'boolean') || (body.leave !== undefined && typeof body.leave !== 'boolean') ||
+        (body.receivePokes !== undefined && typeof body.receivePokes !== 'boolean') ||
+        (body.activity !== undefined && !['browsing', 'editing', 'roadmap', 'focused', 'idle'].includes(body.activity)) ||
+        (body.ackPokeIds !== undefined && (!Array.isArray(body.ackPokeIds) || body.ackPokeIds.length > 32 || body.ackPokeIds.some((id) => typeof id !== 'string' || !SESSION_PATTERN.test(id)))) ||
+        (body.poke !== undefined && (!record(body.poke) || Object.keys(body.poke).some((name) => !['id', 'targetSessionId'].includes(name)) ||
+          typeof body.poke.id !== 'string' || typeof body.poke.targetSessionId !== 'string' || !SESSION_PATTERN.test(body.poke.id) || !SESSION_PATTERN.test(body.poke.targetSessionId) || body.leave === true))) throw problem(400, 'INVALID_REQUEST', 'The connected session is invalid.');
     await enforceRate(request, 'presence', true, sessionId);
     const state = requireState(await database('read', {}));
     const products = new Map(model.entriesFromManifest(state.manifest).map((entry) => [entry.productId, entry]));
@@ -329,6 +335,10 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     const result = await database('presence', {
       sessionId, displayName: String(body.displayName || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60),
       categoryId, productId, editing: body.editing === true, leave: body.leave === true,
+      ...(body.activity !== undefined ? { activity: body.editing === true ? 'editing' : body.activity === 'editing' ? 'browsing' : body.activity } : {}),
+      ...(body.receivePokes !== undefined ? { receivePokes: body.receivePokes } : {}),
+      ...(body.poke !== undefined ? { poke: { id: body.poke.id, targetSessionId: body.poke.targetSessionId } } : {}),
+      ...(body.ackPokeIds !== undefined ? { ackPokeIds: body.ackPokeIds } : {}),
     });
     if (result.status === 'full') throw problem(429, 'PRESENCE_FULL', 'The connected session list is full. Try again shortly.');
     const sessions = (result.sessions || []).map((entry) => {
@@ -392,7 +402,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       if (!record(body)) throw problem(400, 'INVALID_REQUEST', 'The master request is invalid.');
       const allowed = new Set(operation === 'save'
         ? ['key', 'editorToken', 'sessionId', 'displayName', 'actor', 'team', 'requestId', 'changes', 'reason', 'snapshotFormat']
-        : operation === 'presence' ? ['key', 'editorToken', 'sessionId', 'displayName', 'categoryId', 'productId', 'editing', 'leave']
+        : operation === 'presence' ? ['key', 'editorToken', 'sessionId', 'displayName', 'categoryId', 'productId', 'editing', 'leave', 'activity', 'receivePokes', 'poke', 'ackPokeIds']
         : operation === 'latest' ? ['key', 'editorToken', 'sessionId', 'displayName', 'snapshotFormat']
         : operation === 'review' ? ['key', 'editorToken', 'sessionId', 'productId', 'sourceProductId', 'snapshotFormat']
         : operation === 'bootstrap' ? ['publisherSecret', 'manifest', 'sourceSha', 'githubSha']
