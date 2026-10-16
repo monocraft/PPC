@@ -2533,12 +2533,14 @@ function drawSpecIcon(context, label, centerX, centerY) {
 function productPresentation(product) {
   const tone = PortfolioModel.productTone(product);
   const status = { ...standardizedStatus(product.statusType), color: tone };
-  if (PortfolioModel.isDiscontinued(product)) status.label = "Discontinued";
+  const discontinued = PortfolioModel.isDiscontinued(product);
+  if (discontinued) status.label = "Discontinued";
   const variantLabel = String(product.variantLabel || "").trim();
   const hasVariant = Boolean(variantLabel);
   const secondaryLabel = status.label && variantLabel && variantLabel.toUpperCase() !== status.label.toUpperCase()
     ? variantLabel : "";
   return {
+    discontinued,
     status,
     hasVariant,
     hasStatus: Boolean(status.label),
@@ -2682,7 +2684,12 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   const naturalAudio = framing?.usesAudioFraming(layout.categoryId) && !framing.usesAudioFraming(layout.categoryId, product);
   const imageHeight = headset ? HEADSET_IMAGE_HEIGHT : naturalAudio ? (layout.detailed ? FULL_SPEC_IMAGE_HEIGHT : IMAGE_SLOT_HEIGHT) : layout.imageSlotHeight;
   const imageInset = headset ? (CARD_WIDTH - HEADSET_IMAGE_WIDTH) / 2 : 18;
-  if (imageRecord.ready) drawContainedImage(context, imageRecord.image, x + imageInset, imageTop + (layout.imageSlotHeight - imageHeight) / 2, CARD_WIDTH - imageInset * 2, imageHeight, { categoryId: layout.categoryId, product, assetName: typeof productImageAssetName === "function" ? productImageAssetName(product) : "", assetId: typeof productDisplayImageAssetId === "function" ? productDisplayImageAssetId(product) : "" });
+  if (imageRecord.ready) {
+    context.save();
+    if (presentation.discontinued) context.globalAlpha *= .42;
+    drawContainedImage(context, imageRecord.image, x + imageInset, imageTop + (layout.imageSlotHeight - imageHeight) / 2, CARD_WIDTH - imageInset * 2, imageHeight, { categoryId: layout.categoryId, product, assetName: typeof productImageAssetName === "function" ? productImageAssetName(product) : "", assetId: typeof productDisplayImageAssetId === "function" ? productDisplayImageAssetId(product) : "" });
+    context.restore();
+  }
 
   if (presentation.secondaryLabel) {
     const label = presentation.secondaryLabel.toUpperCase();
@@ -2712,6 +2719,9 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   const footerHeight = footerLayout.height;
   const detailsBottom = y + cardHeight - footerHeight;
 
+  // Keep identifying text and actions clear while EOM cards recede visually.
+  context.save();
+  if (presentation.discontinued) context.globalAlpha *= .88;
   if (layout.detailed) {
     drawDetailedSpecs(context, product, x, detailsTop + 5, layout.categoryId);
   } else {
@@ -2729,6 +2739,8 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     });
 
   }
+
+  context.restore();
 
   if (footerHeight) {
     const footerY = y + cardHeight - footerHeight;
@@ -4237,7 +4249,7 @@ function renderSplitProduct() {
   if (globalThis.PortfolioViewRuntime?.panelCache.unchanged(splitProduct, signature)) return;
   const labelColor = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
   splitProduct.innerHTML = `
-    <article class="split-product-card split-product-card--detail" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)}">
+    <article class="split-product-card split-product-card--detail${presentation.discontinued ? ' is-discontinued' : ''}" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)}">
       ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(labelColor)}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
       <div class="split-product-hero">
         <img class="split-product-image" src="${escapeHtml(productImageSource(product))}" alt="">
