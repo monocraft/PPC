@@ -18,6 +18,7 @@ function node(tag = "div") {
     captureReleases: 0, childReplacements: 0, focusCalls: [],
     matches(selector) { return selector.startsWith(".") && this.className.split(/\s+/).includes(selector.slice(1)); },
     closest(selector) { return this.matches(selector) ? this : this.parentElement?.closest(selector) || null; },
+    contains(target) { return this === target || this.children.some(child => child.contains(target)); },
     querySelector(selector) { for (const child of this.children) { if (child.matches(selector)) return child; const found = child.querySelector(selector); if (found) return found; } return null; },
     append(...children) {
       for (const child of children) {
@@ -64,8 +65,8 @@ function node(tag = "div") {
 }
 
 function harness(overrides = {}) {
-  const root = node(), host = node("nav"), range = node("input"), position = node("span");
-  host.id = "testNavigator"; range.className = "nav-range"; position.className = "nav-position"; host.append(range, position);
+  const root = node(), host = node("nav"), range = node("input");
+  host.id = "testNavigator"; range.className = "nav-range"; host.append(range);
   root.document = { createElement: node, createDocumentFragment: () => node("#fragment") };
   root.AbortController = AbortController;
   vm.createContext(root); vm.runInContext(source, root);
@@ -84,7 +85,7 @@ function harness(overrides = {}) {
   const overview = host.querySelector(".nav-overview"), window = host.querySelector(".nav-window"), shapes = host.querySelector(".nav-silhouettes");
   const left = host.querySelector(".nav-window-left"), right = host.querySelector(".nav-window-right");
   const fire = (name, x, target = window, extras = {}) => overview.fire(name, { clientX: x, target, ...extras });
-  return { root, host, range, position, controller, overview, window, shapes, left, right, pans, resizes, fire,
+  return { root, host, range, controller, overview, window, shapes, left, right, pans, resizes, fire,
     state: () => current, set(value) { current = { ...current, ...value }; controller.update(); },
     verifyData() { assert.equal(JSON.stringify(items), snapshot, "navigation leaves source card geometry and selection unchanged"); },
   };
@@ -110,6 +111,46 @@ function harness(overrides = {}) {
   assert.equal(h.shapes.childReplacements, replacementCount, "scrolling updates the window without rebuilding card silhouettes");
   assert.equal(h.shapes.children[0], firstShape);
   assert.equal(h.pans.length, 0); assert.equal(h.resizes.length, 0, "painting cannot move or zoom the view");
+  h.verifyData(); h.controller.destroy();
+}
+
+// Pointer-initiated focus must not leave the blue keyboard treatment visible
+// after the pointer leaves. Returning to keyboard operation restores that cue,
+// while focus transfers between controls retain their original modality.
+{
+  const h = harness();
+  const pointerFocused = () => h.overview.classList.contains("is-pointer-focused");
+  assert.equal(pointerFocused(), false, "a new navigator permits keyboard focus cues");
+  h.fire("pointerdown", 475);
+  assert.equal(pointerFocused(), true, "pointer focus is distinguished from keyboard focus");
+  h.fire("pointerup", 475);
+  assert.equal(pointerFocused(), true, "ending a pointer gesture cannot leave an unwanted blue keyboard focus cue");
+  h.overview.fire("focusout", { target: h.range, relatedTarget: h.left });
+  assert.equal(pointerFocused(), true, "moving focus to a descendant handle preserves pointer modality");
+  h.overview.fire("focusout", { target: h.left, relatedTarget: h.overview });
+  assert.equal(pointerFocused(), true, "the overview itself is inside its focus boundary");
+  h.overview.fire("focusout", { target: h.left, relatedTarget: h.host });
+  assert.equal(pointerFocused(), false, "leaving the navigator clears stale pointer focus");
+  for (const key of ["ArrowRight", "Tab", "x"]) {
+    h.fire("pointerdown", 475); h.fire("pointerup", 475);
+    assert.equal(pointerFocused(), true);
+    const event = h.overview.fire("keydown", { target: h.range, key });
+    assert.equal(pointerFocused(), false, `${key} restores the keyboard focus cue even without a resize action`);
+    assert.equal(event.defaultPrevented, false, `${key} retains native range or tab behavior`);
+  }
+  h.fire("pointerdown", 475, h.right); h.fire("pointerup", 475, h.right);
+  assert.equal(pointerFocused(), true, "resize handles also record their pointer origin");
+  h.overview.fire("focusout", { target: h.right, relatedTarget: null });
+  assert.equal(pointerFocused(), false, "losing document focus without a related target clears pointer modality");
+  h.fire("pointerdown", 475);
+  h.root.fire("blur", { pointerId: undefined });
+  assert.equal(pointerFocused(), false, "window blur restores a visible focus cue on keyboard return");
+  assert.equal(h.overview.hasPointerCapture(1), false, "window blur still cancels an active pointer gesture");
+  assert.equal(h.overview.classList.contains("is-dragging"), false);
+  const pans = h.pans.length, resizes = h.resizes.length;
+  h.fire("pointermove", 900);
+  assert.equal(h.pans.length, pans, "focus cleanup cannot restart a cancelled pan");
+  assert.equal(h.resizes.length, resizes, "focus cleanup cannot request a resize");
   h.verifyData(); h.controller.destroy();
 }
 
@@ -271,4 +312,4 @@ const extract = name => {
   assert.equal(JSON.stringify(products), unchanged, "adapter pan and zoom cannot change dates, specifications or saved product data");
 }
 
-console.log("Board navigator checks passed: scaled card silhouettes, visible interval, track click, bounded pan and opposite-edge zoom, keyboard operation, pointer cancellation, listener cleanup, snapped app anchors, sticky roadmap labels and preserved product data.");
+console.log("Board navigator checks passed: scaled card silhouettes, visible interval, track click, bounded pan and opposite-edge zoom, keyboard operation, pointer and keyboard focus, pointer cancellation, listener cleanup, snapped app anchors, sticky roadmap labels and preserved product data.");
