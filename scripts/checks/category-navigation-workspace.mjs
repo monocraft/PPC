@@ -229,8 +229,8 @@ for (const controller of [null, {}]) {
   const unchangedUpdates = h.events.updates.length;
   invalidate(() => { h.context.workspaceSaveRevision++; });
   assert.equal(h.events.updates.length, unchangedUpdates, "a revision with unchanged visible counts does not cause redundant component work");
-  const originalCategories = [...h.portfolio.categories], pcBoard = originalCategories[0].board, keyboardBoard = originalCategories[2].board;
-  const originalPcProducts = pcBoard.products, originalKeyboardProducts = keyboardBoard.products, originalPcSettings = pcBoard.settings;
+  const originalCategories = [...h.portfolio.categories], pcBoard = originalCategories[0].board, mouseBoard = originalCategories[1].board, keyboardBoard = originalCategories[2].board;
+  const originalPcProducts = pcBoard.products, originalKeyboardProducts = keyboardBoard.products, originalPcSettings = pcBoard.settings, originalMouseSettings = mouseBoard.settings;
   invalidate(() => { keyboardBoard.products = [...keyboardBoard.products, freeze(product("new-keyboard", "launched"))]; }, value => assert.equal(value.categories.find(category => category.id === "keyboards").count, 1, "a new product-array reference updates its count without a revision bump"));
   invalidate(() => { pcBoard.settings = { ...pcBoard.settings, catalogGroups: ["eol"] }; }, value => assert.equal(value.categories.find(category => category.id === "pc-gaming-audio").count, 0, "visibility changes invalidate counts even without a save revision"));
   const sameCountsUpdates = h.events.updates.length;
@@ -240,11 +240,13 @@ for (const controller of [null, {}]) {
   assert.equal(h.events.updates.length, sameCountsUpdates, "a replaced portfolio invalidates evidence but skips an identical component payload");
   invalidate(() => { pcBoard.products = [...pcBoard.products, freeze({ ...product("boundary-headset", "launched"), endManufacturingDate: "2026-10-16" })]; }, value => assert.equal(value.categories.find(category => category.id === "pc-gaming-audio").count, 0));
   invalidate(() => { calendarDay = 16; }, value => assert.equal(value.categories.find(category => category.id === "pc-gaming-audio").count, 1, "local-day rollover includes newly discontinued products without a save revision"));
+  invalidate(() => { mouseBoard.settings = { ...mouseBoard.settings, catalogGroups: ["all"] }; }, value => assert.equal(value.categories.find(category => category.id === "mice").count, 2));
+  invalidate(() => { mouseBoard.settings = { ...mouseBoard.settings, catalogExcludedGroups: ["eol"] }; }, value => assert.equal(value.categories.find(category => category.id === "mice").count, 1, "exclusion-only preference changes invalidate counts without a save revision or positive-group change"));
   const stableScans = h.events.scans, stableUpdates = h.events.updates.length;
   for (let index = 0; index < 100; index++) h.context.syncCategoryNavigation();
   assert.equal(h.events.scans, stableScans); assert.equal(h.events.updates.length, stableUpdates, "the refreshed cache also remains stable across repeated paints");
   assert.equal(h.events.create, 1, "invalidation never recreates the component");
-  pcBoard.products = originalPcProducts; keyboardBoard.products = originalKeyboardProducts; pcBoard.settings = originalPcSettings;
+  pcBoard.products = originalPcProducts; keyboardBoard.products = originalKeyboardProducts; pcBoard.settings = originalPcSettings; mouseBoard.settings = originalMouseSettings;
   h.portfolio.categories = originalCategories; h.context.portfolio = h.portfolio;
   h.assertUnchanged(); checks += 5;
 }

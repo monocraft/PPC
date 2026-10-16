@@ -536,4 +536,79 @@ for (const malformed of [null, false, 'launched', {}, ['unknown'], ['all', 'laun
   assert.deepEqual(output, expected, 'deliberately removing a new selection restores legacy absence without altering facts');
   mark('multi-select absence remains distinct from explicit none during concurrent saves');
 }
+for (const exclusions of [[], ['eol'], ['embargo', 'eol', 'embargo']]) {
+  for (const factSide of ['current', 'proposed']) {
+    const base = viewFixture(), latest = clone(base), mine = clone(base);
+    const views = factSide === 'current' ? mine : latest, facts = factSide === 'current' ? latest : mine;
+    views.categories[0].board.settings.catalogGroups = ['all'];
+    views.categories[0].board.settings.catalogExcludedGroups = exclusions;
+    facts.categories[0].board.products[0].name = 'Accepted source while exclusions change';
+    const h = await diverged(base, latest), receipt = await h.second.save(JSON.stringify(mine), { reconcileViews: true });
+    const expected = clone(facts); expected.categories[0].board.settings.catalogGroups = ['all']; expected.categories[0].board.settings.catalogExcludedGroups = exclusions;
+    assert.deepEqual(JSON.parse(receipt.serialized), expected, 'exclusions merge only as presentation leaves and retain exact full accepted facts');
+    assert.equal(await h.second.read(), receipt.serialized);
+  }
+  mark('catalog exclusions ' + JSON.stringify(exclusions) + ' reconcile with accepted business edits in either direction');
+}
+for (const malformed of [null, false, 'eol', {}, ['all'], ['eol', 'all'], ['unknown'], ['constructor'], [null], Array(33).fill('eol')]) {
+  for (const target of ['baseline', 'proposed', 'current']) {
+    const base = viewFixture(), latest = clone(base), mine = clone(base);
+    ({ baseline: base, proposed: mine, current: latest })[target].categories[0].board.settings.catalogExcludedGroups = malformed;
+    latest.categories[0].board.products[0].name = 'Concurrent accepted source'; mine.settings.hashoutLabelMode = 'on';
+    const h = await diverged(base, latest);
+    await assert.rejects(h.second.save(JSON.stringify(mine), { reconcileViews: true }), { code: 'WORKSPACE_CONFLICT' });
+    assert.equal(h.d.state.stores.get('workspaces').get('production').serialized, JSON.stringify(latest));
+  }
+  mark('invalid exclusions ' + JSON.stringify(malformed) + ' cannot bypass full-fact CAS from any snapshot');
+}
+{
+  const base = viewFixture(); base.categories[0].board.settings.catalogGroups = ['all']; base.categories[0].board.settings.catalogExcludedGroups = ['eol'];
+  const latest = clone(base), mine = clone(base); latest.categories[0].board.products[0].name = 'Retain accepted correction'; mine.categories[0].board.settings.catalogExcludedGroups = [];
+  const h = await diverged(base, latest), output = JSON.parse((await h.second.save(JSON.stringify(mine), { reconcileViews: true })).serialized);
+  const expected = clone(latest); expected.categories[0].board.settings.catalogExcludedGroups = [];
+  assert.deepEqual(output, expected, 'explicit exclusion reset remains distinct from inherited previous exclusions');
+  mark('clearing exclusions preserves every concurrently accepted fact');
+}
+{
+  const base = viewFixture(), latest = clone(base), mine = clone(base); latest.categories[0].board.products[0].name = 'Accepted remote correction'; mine.categories[0].board.settings.catalogExcludedGroups = ['eol']; mine.categories[0].board.products[0].name = 'Independent local correction';
+  const h = await diverged(base, latest); await assert.rejects(h.second.save(JSON.stringify(mine), { reconcileViews: true }), { code: 'WORKSPACE_CONFLICT' });
+  assert.equal(h.d.state.stores.get('workspaces').get('production').serialized, JSON.stringify(latest));
+  mark('valid exclusions never authorize merging two independently changed business snapshots');
+}
+const visibilityBundleKeys = ['catalogGroups','catalogExcludedGroups','catalogGroup','hideDiscontinued'];
+const setVisibilityBundle = (category, bundle) => { for(const key of visibilityBundleKeys)delete category.board.settings[key]; Object.assign(category.board.settings,clone(bundle)); };
+const visibilityBundles = [
+  {name:'plain All',value:{catalogGroups:['all'],catalogExcludedGroups:[]}},
+  {name:'positive union',value:{catalogGroups:['launched','in-development'],catalogExcludedGroups:[]}},
+  {name:'inverse union',value:{catalogGroups:['all'],catalogExcludedGroups:['embargo','eol']}},
+  {name:'legacy checkbox',value:{hideDiscontinued:true}},
+];
+for(const localChoice of visibilityBundles)for(const remoteChoice of visibilityBundles) {
+  if(localChoice===remoteChoice)continue;
+  const base=viewFixture(); setVisibilityBundle(base.categories[0],{catalogGroup:'all',hideDiscontinued:false});
+  const latest=clone(base),mine=clone(base); setVisibilityBundle(latest.categories[0],remoteChoice.value); setVisibilityBundle(mine.categories[0],localChoice.value);
+  latest.categories[0].board.settings.showSkus=false;
+  const h=await diverged(base,latest),output=JSON.parse((await h.second.save(JSON.stringify(mine),{reconcileViews:true})).serialized);
+  const expected=clone(mine); expected.categories[0].board.settings.showSkus=false;
+  assert.deepEqual(output,expected,'a locally changed visibility bundle wins atomically, while an unrelated latest display preference survives');
+  mark(localChoice.name+' survives concurrent '+remoteChoice.name+' without a hybrid selection');
+}
+for(const remoteChoice of visibilityBundles) {
+  const base=viewFixture(); setVisibilityBundle(base.categories[0],{catalogGroups:['all'],catalogExcludedGroups:[]});
+  const latest=clone(base),mine=clone(base); setVisibilityBundle(latest.categories[0],remoteChoice.value);
+  mine.categories[0].board.products[0].name='Accepted local fact without visibility edit'; mine.categories[0].board.settings.showPrices=false;
+  const h=await diverged(base,latest),output=JSON.parse((await h.second.save(JSON.stringify(mine),{reconcileViews:true})).serialized);
+  const expected=clone(mine); setVisibilityBundle(expected.categories[0],remoteChoice.value);
+  assert.deepEqual(output,expected,'an unchanged local bundle adopts the complete current choice without losing local business or other view changes');
+  mark('unchanged local visibility adopts complete current '+remoteChoice.name);
+}
+{
+  const base=viewFixture(); setVisibilityBundle(base.categories[0],{catalogGroups:['all'],catalogExcludedGroups:[]});
+  const latest=clone(base),mine=clone(base); setVisibilityBundle(latest.categories[0],{catalogGroups:['in-development'],catalogExcludedGroups:[]});
+  // Exact manager repro: only the exclusion differs locally; the matching All
+  // positive base must still be included rather than borrowed from current.
+  mine.categories[0].board.settings.catalogExcludedGroups=['eol'];
+  const h=await diverged(base,latest),output=JSON.parse((await h.second.save(JSON.stringify(mine),{reconcileViews:true})).serialized);
+  assert.deepEqual(output,mine); mark('All plus one locally changed exclusion cannot inherit a different tab positive base');
+}
 console.log('Workspace store checks passed: ' + cases.length + ' bounded durability, quota, atomic images, opt-in view reconciliation/adoption, full-fact CAS, both-copy local recovery/adoption, recovery rollback, archive-aware transactional image cleanup and retry cases.');

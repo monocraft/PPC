@@ -51,6 +51,8 @@
     const catalogGroupPath = ["board", "settings", "catalogGroup"];
     const catalogGroups = ["all", "launched", "unreleased", "eol"];
     const catalogSelectionPath = ["board", "settings", "catalogGroups"];
+    const catalogExclusionPath = ["board", "settings", "catalogExcludedGroups"];
+    const visibilityKeys = ["catalogGroups", "catalogExcludedGroups", "catalogGroup", "hideDiscontinued"];
     const visibilityGroups = ["all", "launched", "in-development", "in-planning", "embargo", "unreleased", "eol"];
     const validSelection = value => Array.isArray(value) && value.length <= 32 && value.every(group => visibilityGroups.includes(group)) && (!value.includes("all") || value.every(group => group === "all"));
     // These preferences are strict view leaves only. An unknown shape is not a
@@ -59,9 +61,12 @@
       const leaf = leafAt(category, discontinuedPath);
       const group = leafAt(category, catalogGroupPath);
       const selection = leafAt(category, catalogSelectionPath);
-      return leaf.exists && typeof leaf.value !== "boolean" || group.exists && !catalogGroups.includes(group.value) || selection.exists && !validSelection(selection.value);
+      const exclusions = leafAt(category, catalogExclusionPath);
+      return leaf.exists && typeof leaf.value !== "boolean" || group.exists && !catalogGroups.includes(group.value) || selection.exists && !validSelection(selection.value)
+        || exclusions.exists && (!validSelection(exclusions.value) || exclusions.value.includes("all"));
     }))) return null;
-    const categoryPaths = [...new Set(maps.flatMap(map => [...map.keys()]))].flatMap(id => [...["startMonth", "endMonth"].map(key => ({ id, path: ["board", "settings", "roadmap", key] })), ...["showPrices", "showSkus", "hideDiscontinued", "catalogGroup", "catalogGroups"].map(key => ({ id, path: ["board", "settings", key] }))]);
+    const categoryIds = [...new Set(maps.flatMap(map => [...map.keys()]))];
+    const categoryPaths = categoryIds.flatMap(id => [...["startMonth", "endMonth"].map(key => ({ id, path: ["board", "settings", "roadmap", key] })), ...["showPrices", "showSkus", ...visibilityKeys].map(key => ({ id, path: ["board", "settings", key] }))]);
     const pruneEmptyContainer = (value, path) => { const leaf = leafAt(value, path); if (leaf.exists && object(leaf.value) && Object.keys(leaf.value).length === 0) putLeaf(value, path, { exists: false }); };
     const withoutViews = value => {
       const copy = JSON.parse(JSON.stringify(value));
@@ -98,7 +103,19 @@
     const resultCategories = categoryMap(result);
     for (const { id, path } of categoryPaths) {
       const target = resultCategories.get(id); if (!target) continue; // Never resurrect a removed category.
+      if (path.length === 3 && visibilityKeys.includes(path[2])) continue;
       mergeLeaf(target, maps[0].get(id), maps[1].get(id), maps[2].get(id), path);
+    }
+    // These four leaves describe one visibility choice. Combining independent
+    // tab edits can otherwise turn All-except-EOL into an inactive exclusion
+    // attached to a different tab's positive selection. Preserve the complete
+    // locally changed bundle, including deliberate absence, or adopt the latest
+    // bundle when this writer changed none of its visibility preferences.
+    const visibilityBundle = category => visibilityKeys.map(key => leafAt(category, ["board", "settings", key]));
+    for (const id of categoryIds) {
+      const target = resultCategories.get(id); if (!target) continue;
+      const local = maps[1].get(id), source = jsonSignature(visibilityBundle(local)) === jsonSignature(visibilityBundle(maps[0].get(id))) ? maps[2].get(id) : local;
+      for (const key of visibilityKeys) putLeaf(target, ["board", "settings", key], leafAt(source, ["board", "settings", key]));
     }
     return JSON.stringify(result);
   }

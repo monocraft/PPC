@@ -106,6 +106,31 @@ const multiDevice=storage(),multiStore=api.createStore(multiDevice),multiRecord=
 const multiSaved=json(multiRecord.preferences); selectionInput.push('eol'); multiInput.categoryVisibility[1].catalogGroups.push('eol');
 assert.deepEqual(json(api.createStore(multiDevice).list()[0].preferences),multiSaved,'real local persistence preserves independent canonical multi-selection arrays');
 assert.ok(!multiDevice.getItem(api.STORAGE_KEY).includes(secret));
+const inverseInput = { categoryVisibility:[
+  {categoryId:'all-except',catalogGroups:['all'],catalogExcludedGroups:['eol','embargo','eol'],source:[secret]},
+  {categoryId:'inactive',catalogGroups:['launched'],catalogExcludedGroups:['eol']},
+  {categoryId:'clear',catalogGroups:['all'],catalogExcludedGroups:[]},
+], display:{catalogGroups:['all'],catalogExcludedGroups:['eol','embargo','eol']} };
+const inverseBefore=JSON.stringify(inverseInput), inverse=api.sanitizePreferences('portfolio',inverseInput);
+assert.deepEqual(json(inverse.categoryVisibility),[
+  {categoryId:'all-except',catalogGroups:['all'],catalogExcludedGroups:['embargo','eol']},
+  {categoryId:'inactive',catalogGroups:['launched'],catalogExcludedGroups:['eol']},
+  {categoryId:'clear',catalogGroups:['all'],catalogExcludedGroups:[]},
+],'inverse filters preserve their All base, canonical copied concrete exclusions and inactive preferences');
+assert.deepEqual(json(inverse.display.catalogExcludedGroups),['embargo','eol']);
+assert.equal(JSON.stringify(inverseInput),inverseBefore); assert.notEqual(inverse.categoryVisibility[0].catalogExcludedGroups,inverseInput.categoryVisibility[0].catalogExcludedGroups);
+assert.deepEqual(json(api.sanitizePreferences('portfolio',inverse)),json(inverse),'inverse normalization is idempotent');
+for(const group of ['launched','in-development','in-planning','embargo','unreleased','eol'])assert.deepEqual(json(api.sanitizePreferences('portfolio',{display:{catalogGroups:['all'],catalogExcludedGroups:[group]}}).display.catalogExcludedGroups),[group]);
+for(const malformed of [null,false,'eol',{},['all'],['eol','all'],['unknown'],['constructor'],[undefined],Array(1),Array(33).fill('eol'),[{privateKey:secret}]]) {
+  assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'bad',catalogGroups:['all'],catalogExcludedGroups:malformed}]}).categoryVisibility),[],'invalid supplied inverse arrays reject a category preference');
+  assert.equal(api.sanitizePreferences('portfolio',{display:{catalogGroups:['all'],catalogExcludedGroups:malformed}}).display.catalogExcludedGroups,undefined);
+}
+assert.deepEqual(json(api.sanitizePreferences('portfolio',{categoryVisibility:[{categoryId:'bare',catalogExcludedGroups:['eol']}]}).categoryVisibility),[],'an exclusion is not a standalone category visibility choice');
+assert.equal(api.sanitizePreferences('portfolio',{display:{catalogGroup:'unreleased'}}).display.catalogExcludedGroups,undefined,'old saved views do not acquire exclusions');
+const inverseDevice=storage(),inverseStore=api.createStore(inverseDevice),inverseSaved=json(inverseStore.save('All except EOL','portfolio',inverseInput).preferences);
+inverseInput.categoryVisibility[0].catalogExcludedGroups.push('launched'); inverseInput.display.catalogExcludedGroups.length=0;
+assert.deepEqual(json(api.createStore(inverseDevice).list()[0].preferences),inverseSaved,'inverse choices survive local save/reload and never alias mutable input');
+assert.ok(!inverseDevice.getItem(api.STORAGE_KEY).includes(secret));
 const preferences = { view: 'roadmap', basis: 'ffs', categoryIds: ['audio','audio','removed'], activeCategoryId: 'audio', dateRange: { start: '2026-01', end: '2028-12' }, search: 'launch',
   display: { labelMode: 'off', showSeasonalWindows: true, detailsOpen: true, showPrices: false, showSkus: true, productZoom: 0.7, roadmapZoom: 1.1, privateKey: secret },
   products: [{ id: secret }], workbook: secret, sourceUrl: secret, accessToken: secret, privateKey: secret };
