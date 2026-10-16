@@ -68,6 +68,31 @@
     return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : "";
   }
 
+  // Discontinued is a presentation derived from the saved product-level EOM.
+  // Quarter anchors are placement days, so an active quarter ends on its last
+  // calendar day. Invalid active precision stays unknown rather than exact.
+  function endManufacturingDay(product) {
+    const value = String(product?.endManufacturingDate ?? "").trim();
+    const evidence = product?.plc?.fields?.endManufacturingDate;
+    const activePeriod = evidence?.period && !evidence.supersededAt
+      && String(evidence.value ?? "").trim() === value;
+    if (activePeriod) return root.PortfolioDatePrecision?.currentPeriod(product, "endManufacturingDate")?.end || "";
+    return exactProductDate(value);
+  }
+
+  function isDiscontinued(product, now = new Date()) {
+    const end = endManufacturingDay(product);
+    if (!end || !(now instanceof Date) || !Number.isFinite(now.getTime())) return false;
+    // Use the user's local calendar, including around UTC midnight.
+    const today = `${String(now.getFullYear()).padStart(4, "0")}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    return end <= today;
+  }
+
+  function catalogProducts(products, settings = {}, now = new Date()) {
+    const rows = Array.isArray(products) ? products : [];
+    return settings?.hideDiscontinued === true ? rows.filter(product => !isDiscontinued(product, now)) : rows;
+  }
+
   function dateInMonth(value, month) {
     const date = exactProductDate(value);
     if (!date) return value;
@@ -219,5 +244,5 @@
     });
   }
 
-  root.PortfolioModel = Object.freeze({ DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, productLabelColor, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
+  root.PortfolioModel = Object.freeze({ endManufacturingDay, isDiscontinued, catalogProducts, DEFAULT_STAGE_COLORS, THEME_ACCENTS, LIFECYCLE_TONES, lifecycleTone, productTone, productLabelColor, msrpText, layoutProductLanes, clearAllProducts, mergeProductUpdate, normalizeTimelineSettings, syncTimelineSettings, normalizeSpecifications, canonicalColorCode, resolveSkuColors });
 })(globalThis);

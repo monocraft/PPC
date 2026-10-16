@@ -268,6 +268,7 @@ const sandbox = {
   isFfsRoadmap: () => false,
   hasDedicatedHashoutView: () => false,
   UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
+  PortfolioModel: globalThis.PortfolioModel,
   PPTXPagination: globalThis.PPTXPagination, paginateRoadmapGroupsForPptx: paginateRoadmapGroups,
   CARD_WIDTH: 246, CARD_GAP: 10, GUTTER: 18, SIDE_PADDING: 40, LANE_TOP: 34,
   portfolio: { categories: exportCategories }, pptxSelectedCategoryIds: null, pptxExportInProgress: false,

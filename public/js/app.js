@@ -1099,7 +1099,8 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     ? target.lanes
     : definition.lanes.map((lane, order) => ({ ...lane, order }));
   target.products = Array.isArray(target.products) ? target.products : [];
-  target.settings = { showPrices: true, showSkus: true, ...target.settings, freeMove: false };
+  target.settings = { showPrices: true, showSkus: true, hideDiscontinued: false, ...target.settings, freeMove: false };
+  target.settings.hideDiscontinued = target.settings.hideDiscontinued === true;
   target.settings.roadmap = {
     startMonth: "2026-01",
     endMonth: "2030-12",
@@ -1628,9 +1629,36 @@ function sortedLanes() {
 }
 
 function visibleProducts() {
+  const products = PortfolioModel.catalogProducts(board.products, board.settings);
   const query = searchQuery.trim();
-  if (!query) return board.products;
-  return board.products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
+  if (!query) return products;
+  return products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
+}
+
+function portfolioForSearch() {
+  if (activeView !== "products") return portfolio;
+  // Catalog search follows each category's preference without replacing any
+  // saved arrays. Roadmap lookup continues to include historical products.
+  return { ...portfolio, categories: portfolio.categories.map(category => ({ ...category,
+    board: category.board ? { ...category.board, products: PortfolioModel.catalogProducts(category.board.products, category.board.settings) } : category.board,
+  })) };
+}
+
+function clearHiddenCatalogSelection() {
+  if (activeView !== "products" || board.settings.hideDiscontinued !== true) return;
+  const hidden = id => id && board.products.some(product => product.id === id && PortfolioModel.isDiscontinued(product));
+  let changed = false;
+  if (hidden(selectedId)) { selectedId = null; changed = true; }
+  if (hidden(viewerInfoProductId)) { closeViewerInfo({ render: false }); changed = true; }
+  if (changed) renderInspector();
+}
+
+function setCatalogHideDiscontinued(hidden) {
+  stopProductCardDrag();
+  updateBoard(current => {
+    current.settings.hideDiscontinued = hidden === true;
+    clearHiddenCatalogSelection();
+  });
 }
 
 function openPortfolioSearchResult(result) {
@@ -1638,6 +1666,7 @@ function openPortfolioSearchResult(result) {
   const locations = portfolio.categories.flatMap((category) => (category.board?.products || []).filter((product) => product.id === result.productId).map((product) => ({ category, product })));
   if (locations.length !== 1 || locations[0].category.id !== result.categoryId) return false;
   const { category, product } = locations[0];
+  if (activeView === "products" && !PortfolioModel.catalogProducts(category.board.products, category.board.settings).includes(product)) return false;
   const nextView = activeView === "products" ? "products" : "split";
   activateCategory(category.id, { render: false, fitVertical: true });
   selectedId = product.id;
@@ -2504,6 +2533,7 @@ function drawSpecIcon(context, label, centerX, centerY) {
 function productPresentation(product) {
   const tone = PortfolioModel.productTone(product);
   const status = { ...standardizedStatus(product.statusType), color: tone };
+  if (PortfolioModel.isDiscontinued(product)) status.label = "Discontinued";
   const variantLabel = String(product.variantLabel || "").trim();
   const hasVariant = Boolean(variantLabel);
   const secondaryLabel = status.label && variantLabel && variantLabel.toUpperCase() !== status.label.toUpperCase()
@@ -5925,6 +5955,7 @@ function syncControls() {
   updateProductLayoutEditControls();
   $("#showPrices").checked = board.settings.showPrices;
   $("#showSkus").checked = board.settings.showSkus;
+  $("#hideDiscontinued").checked = board.settings.hideDiscontinued;
   $("#roadmapStart").value = board.settings.roadmap.startMonth;
   $("#roadmapEnd").value = board.settings.roadmap.endMonth;
   $("#roadmapSnap").value = board.settings.roadmap.snap;
@@ -6742,7 +6773,9 @@ function productPagesForPptx(category, targetBoard = null, canvasWidth = 0) {
   const definition = categoryDefinition(category.id);
   const categoryBoard = targetBoard || ensureBoardSchema(JSON.parse(JSON.stringify(category.board)), definition);
   const layout = productCardLayout(categoryBoard, definition, { includeControls: false });
-  return PPTXPagination.paginateProductLanes(categoryBoard.lanes, categoryBoard.products, {
+  const products = PortfolioModel.catalogProducts(categoryBoard.products, categoryBoard.settings);
+  if (categoryBoard.settings?.hideDiscontinued && !products.length) return [];
+  return PPTXPagination.paginateProductLanes(categoryBoard.lanes, products, {
     canvasWidth,
     cardWidth: CARD_WIDTH, cardGap: CARD_GAP, cardHeight: layout.cardHeight,
     laneGap: layout.laneHeight - layout.cardHeight, gutter: GUTTER, sidePadding: SIDE_PADDING,
@@ -7037,7 +7070,7 @@ function buildPptxExportPlan(scope, categories, roadmapOptions = null) {
 
     preparedCategories.forEach(({ category, categoryIndex, definition, targetBoard, productPages }) => {
 
-      if (includeProducts) {
+      if (includeProducts && productPages.length) {
         const pages = productPages[0].width === productCanvasWidth ? productPages
         : productPagesForPptx(category, targetBoard, productCanvasWidth);
         pages.forEach((page, pageIndex) => {
@@ -7147,10 +7180,11 @@ function syncPptxExportSummary() {
   $("#pptxExportSlideCount").textContent = String(plan.length);
   $("#pptxSelectAllCategories").textContent = allSelected ? "Clear selection" : "Select all";
   $("#pptxExportSelectionHint").textContent = categories.length
-    ? `${categories.length} of ${available.length} categories selected`
+    ? plan.length ? `${categories.length} of ${available.length} categories selected`
+      : "No visible products to export. Show discontinued products in Display settings or include a roadmap."
     : "Select at least one category to export.";
-  $("#pptxExportSelectionHint").classList.toggle("is-empty", !categories.length);
-  confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length || Boolean(plan.roadmapPlan?.requiresDecision);
+  $("#pptxExportSelectionHint").classList.toggle("is-empty", !categories.length || !plan.length);
+  confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length || !plan.length || Boolean(plan.roadmapPlan?.requiresDecision);
 }
 
 function restorePptxExportPreferences() {
@@ -7247,6 +7281,7 @@ async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOpt
   try {
     const exportPlan = buildPptxExportPlan(scope, categories, roadmapOptions);
     if (exportPlan.roadmapPlan?.requiresDecision) throw new Error(exportPlan.roadmapPlan.reason || "Choose a valid roadmap period before exporting.");
+    if (!exportPlan.length) throw new Error("No visible products to export. Show discontinued products in Display settings or include a roadmap.");
 
     const pptx = new PptxGenJS();
     pptx.layout = "LAYOUT_WIDE";
@@ -8242,6 +8277,7 @@ pptxExportDialog.addEventListener("keydown", (event) => {
 $("#searchInput").oninput = (event) => { searchQuery = event.target.value; renderBoard(); };
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
+$("#hideDiscontinued").onchange = (event) => setCatalogHideDiscontinued(event.target.checked);
 $("#resetLayout").onclick = () => {
   stopProductCardDrag();
   zoom = 1;
@@ -8529,7 +8565,7 @@ function undoDiscardedDraft(undoId) {
   portfolio = record.previous; discardedDrafts.delete(undoId); updateDraftViews(); return true;
 }
 globalThis.PortfolioSearchAdapter = Object.freeze({
-  getPortfolio: () => portfolio,
+  getPortfolio: portfolioForSearch,
   getActiveCategoryId: () => activeCategoryId,
   getActiveView: () => activeView,
   openResult: openPortfolioSearchResult,
@@ -8582,7 +8618,7 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
     return { view: activeView, basis: portfolio.settings.roadmapBasis || "lifecycle", activeCategoryId,
       categoryIds: hashoutCategoryScope() || portfolio.categories.map(category => category.id), dateRange: { start: board.settings.roadmap.startMonth, end: board.settings.roadmap.endMonth },
       search: hasDedicatedHashoutView() && activeView !== "products" ? document.querySelector(".hashout-search")?.value || "" : activeView === "products" ? searchQuery : roadmapSearchQuery,
-      display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus } };
+      display: { labelMode: portfolio.settings.hashoutLabelMode || "default", showSeasonalWindows: portfolio.settings.hashoutWindowsVisible !== false, detailsOpen: roadmapDetailsOpen, productZoom: zoom, roadmapZoom: roadmapMonthWidth / ROADMAP_DEFAULT_MONTH_WIDTH, showPrices: board.settings.showPrices, showSkus: board.settings.showSkus, hideDiscontinued: board.settings.hideDiscontinued } };
   },
   applyView(value) {
     if (workspaceOpening || packageOperationInProgress || pptxExportInProgress || productLayoutEditing) throw new Error("Finish the current edit or export before opening a saved view.");
@@ -8597,8 +8633,9 @@ globalThis.PortfolioWorkflowAdapter = Object.freeze({
     if (typeof display.showSeasonalWindows === "boolean") portfolio.settings.hashoutWindowsVisible = display.showSeasonalWindows;
     if (typeof display.showPrices === "boolean") board.settings.showPrices = display.showPrices;
     if (typeof display.showSkus === "boolean") board.settings.showSkus = display.showSkus;
+    if (typeof display.hideDiscontinued === "boolean") board.settings.hideDiscontinued = display.hideDiscontinued;
     if (typeof display.detailsOpen === "boolean") roadmapDetailsOpen = display.detailsOpen;
-    resetHashoutView(); setView(safe.view || "products");
+    resetHashoutView(); setView(safe.view || "products"); clearHiddenCatalogSelection();
     searchQuery = roadmapSearchQuery = safe.search || "";
     const search = document.querySelector("#productControls input[type=search]"); if (search) search.value = searchQuery;
     if ($("#roadmapSearch")) $("#roadmapSearch").value = roadmapSearchQuery;
