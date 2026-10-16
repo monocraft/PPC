@@ -2274,6 +2274,7 @@ function drawContainedImage(context, image, x, y, width, height, { categoryId = 
   const framing = globalThis.PortfolioImageFraming;
   if (framing?.usesAudioFraming(categoryId, product) && framing.draw(context, image, { x, y, width, height }, { assetName })) return;
   if (framing?.usesMouseFraming?.(categoryId, assetName) && framing.drawMouse(context, image, { x, y, width, height }, { assetName })) return;
+  if (framing?.usesKeyboardFraming?.(categoryId, assetName) && framing.drawKeyboard(context, image, { x, y, width, height }, { assetName })) return;
   const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
   const drawWidth = image.naturalWidth * scale;
   const drawHeight = image.naturalHeight * scale;
