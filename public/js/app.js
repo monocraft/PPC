@@ -2779,6 +2779,7 @@ function productPresentation(product) {
   const primaryColor = cardStyle?.accent || tone;
   const status = { ...standardizedStatus(product.statusType), color: primaryColor };
   if (discontinued) status.label = "Discontinued";
+  else if (cardStage === "embargo") status.label = standardizedStatus("embargo").label;
   else if (!status.label && cardStage) status.label = cardStage === "in-planning" ? "IN-PLANNING" : "IN-DEVELOPMENT";
   const variantLabel = String(product.variantLabel || "").trim();
   const hasVariant = Boolean(variantLabel);
@@ -2931,7 +2932,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
     return;
   }
   const labelColor = presentation.primaryLabel
-    ? PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)) : UI_PALETTE.silver;
+    ? presentation.cardStyle?.label || PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor)) : UI_PALETTE.silver;
   const cardHeight = layout.cardHeight;
   context.save();
   context.shadowColor = "transparent";
@@ -3017,7 +3018,7 @@ function drawCard(context, product, x, y, selected, layout = productCardLayout()
   // Filled surfaces and gutters separate cards; outlines identify selection.
   if (selected) {
     context.save();
-    if (!layout.viewerExtended) roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, presentation.cardStyle?.accent || UI_PALETTE.selection, 1.25);
+    if (!layout.viewerExtended) roundRect(context, x + .75, y + .75, CARD_WIDTH - 1.5, cardHeight - 1.5, 4, null, presentation.cardStyle?.selection || presentation.cardStyle?.accent || UI_PALETTE.selection, 1.25);
     const markerY = y + STATUS_BANNER_HEIGHT + (presentation.secondaryLabel ? 28 : 9);
     roundRect(context, x + 8, markerY, 64, 18, 4, presentation.cardStyle?.footer || UI_PALETTE.charcoal700);
     context.fillStyle = presentation.cardStyle?.muted || UI_PALETTE.steelTealLight;
@@ -4547,7 +4548,7 @@ function renderSplitProduct() {
   const model = productDetailsModel(product);
   const signature = JSON.stringify([model, product.name, productImageSource(product), presentation, portfolio.settings?.showRoadmapMsrp]);
   if (globalThis.PortfolioViewRuntime?.panelCache.unchanged(splitProduct, signature)) return;
-  const labelColor = PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
+  const labelColor = presentation.cardStyle?.label || PortfolioModel.productLabelColor(product, contrastTextColor(presentation.primaryColor));
   splitProduct.innerHTML = `
     <article class="split-product-card split-product-card--detail${presentation.discontinued ? ' is-discontinued' : ''}" data-card-stage="${escapeHtml(presentation.cardStage)}" data-card-theme="${escapeHtml(presentation.controlStyle?.name || "neutral")}" style="--product-highlight:${escapeHtml(presentation.outlineColor)};--product-label-color:${escapeHtml(labelColor)};--product-card-surface:${escapeHtml(presentation.cardStyle?.surface || UI_PALETTE.carbon)};--product-card-accent:${escapeHtml(presentation.cardStyle?.muted || (presentation.controlStyle?.name === "embargo" ? presentation.controlStyle.focus : UI_PALETTE.silver))};--product-card-footer:${escapeHtml(presentation.cardStyle?.footer || UI_PALETTE.charcoal700)}">
       ${presentation.primaryLabel ? `<div class="split-status" style="background:${escapeHtml(presentation.primaryColor)};color:${escapeHtml(labelColor)}">${escapeHtml(presentation.primaryLabel)}</div>` : ''}
@@ -5045,7 +5046,7 @@ function positionViewerInfo() {
     const outlineWidth = stacked ? visibleWidth : (CARD_WIDTH * zoom) + visibleWidth;
     viewerInfoOutline.classList.toggle("is-open", viewerInfoProgress > .001);
     viewerInfoOutline.style.opacity = presentation.discontinued ? ".4" : "1";
-    viewerInfoOutline.style.borderColor = presentation.cardStyle?.accent || UI_PALETTE.selection;
+    viewerInfoOutline.style.borderColor = presentation.cardStyle?.selection || presentation.cardStyle?.accent || UI_PALETTE.selection;
     viewerInfoOutline.style.left = `${(card.integrationX ?? card.x) * zoom}px`;
     viewerInfoOutline.style.top = `${card.y * zoom}px`;
     viewerInfoOutline.style.width = `${outlineWidth}px`;

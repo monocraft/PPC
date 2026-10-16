@@ -39,14 +39,15 @@
   // The larger reference cards provide brighter series colors for dark charts.
   // Order is fixed: purple, indigo, blue, teal, green, yellow.
   const chartSeries = Object.freeze(["#895EF6", "#6984ED", "#4DA1F7", "#20CBDD", "#7AE3A9", "#FFC63B"]);
-  // Product cards reuse chart hues without changing timeline stage colors or
-  // saved merchandise swatches. These opaque shades also export to PowerPoint.
+  // Product card palettes stay independent of timeline stage colors and saved
+  // merchandise swatches. These opaque shades also export to PowerPoint.
   const productCardStyles = Object.freeze({
     "in-planning": Object.freeze({ accent: chartSeries[5], surface: "#3E3829", footer: "#4B412D", outline: "#8A6E32", muted: chartPalette.yellow[40] }),
     "in-development": Object.freeze({ accent: chartSeries[2], surface: "#293440", footer: "#2C3F54", outline: "#3E6A98", muted: chartPalette.blue[40] }),
+    embargo: Object.freeze({ accent: "#A52F3F", surface: "#3D282D", footer: "#4C2C33", outline: "#9E4B5A", muted: "#FFB8C2", label: "#FFFFFF", selection: "#FFB8C2" }),
   });
   function productCardStage(product) {
-    if (product?.statusType === "embargo" || product?.roadmap?.status === "embargo") return "";
+    if (product?.statusType === "embargo" || product?.roadmap?.status === "embargo") return "embargo";
     if (product?.statusType === "in-development") return "in-development";
     const stage = product?.roadmap?.status;
     return Object.hasOwn(productCardStyles, stage) ? stage : "";

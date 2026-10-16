@@ -194,6 +194,8 @@ assert.equal(JSON.stringify(mixedBoard.products), mixedProductsBefore);
     { id: "planned", roadmap: { status: "in-planning" } },
     { id: "development", statusType: "in-development", roadmap: { status: "in-development" } },
     { id: "embargo", statusType: "embargo", roadmap: { status: "in-planning" } },
+    { id: "roadmap-embargo", statusType: "none", roadmap: { status: "embargo" } },
+    { id: "conflicting-embargo", statusType: "in-development", roadmap: { status: "embargo" } },
     { id: "neutral", roadmap: { status: "launched" } },
     { id: "new", statusType: "new", roadmap: { status: "launched" } },
     { id: "sunsetting", statusType: "sunsetting", roadmap: { status: "launched" } },
@@ -210,16 +212,17 @@ assert.equal(JSON.stringify(mixedBoard.products), mixedProductsBefore);
   vm.runInContext(await fs.readFile(new URL("../../public/js/portfolio-model.js", import.meta.url), "utf8"), variantContext);
   variantContext.UI_PALETTE = variantContext.PortfolioTheme.uiPalette;
   vm.runInContext(["productPresentation", "variantPopoverItemHtml", "positionVariantPopover", "openVariantPopover"].map(extract).join("\n"), variantContext);
-  for (const id of ["planned", "neutral", "development", "embargo", "new", "planned", "discontinued", "development", "sunsetting", "neutral"]) {
+  for (const id of ["planned", "neutral", "development", "embargo", "new", "roadmap-embargo", "planned", "discontinued", "conflicting-embargo", "development", "sunsetting", "embargo", "neutral"]) {
     const product = products.find(item => item.id === id), presentation = variantContext.productPresentation(product);
     variantContext.openVariantPopover({ key: `variants-${id}`, productId: id, groups: variants }, 113, 81, { pinned: true });
     assert.equal(popover.dataset.cardStage, presentation.cardStage, `${id} resets the shared popup's previous stage.`);
     assert.equal(popover.dataset.cardTheme, presentation.controlStyle.name, `${id} resets the shared popup's previous control theme.`);
-    const colored = ["planned", "development"].includes(id), expectedStage = id === "planned" ? "in-planning" : "in-development";
+    const expectedStage = { planned: "in-planning", development: "in-development", embargo: "embargo", "roadmap-embargo": "embargo", "conflicting-embargo": "embargo" }[id];
+    const colored = Boolean(expectedStage);
     const style = colored ? variantContext.PortfolioTheme.productCardStyles[expectedStage] : null;
     assert.equal(popoverProperties.get("--product-card-surface"), style?.surface || "#242527");
     assert.equal(popoverProperties.get("--product-card-footer"), style?.footer || "#333538");
-    assert.equal(popoverProperties.get("--product-card-accent"), style?.muted || (id === "embargo" ? "#FF8A8A" : "#BBBCC0"));
+    assert.equal(popoverProperties.get("--product-card-accent"), style?.muted || "#BBBCC0");
     assert.equal(popover.style.left, "127px"); assert.equal(popover.style.top, "91px", "Theme changes cannot alter the established popup placement.");
     assert.equal(popover.style.opacity, undefined, "The independent variant list retains full opacity even when its source product is discontinued.");
     assert.equal(popover.classList.contains("hidden"), false); assert.equal(popover.classList.contains("is-pinned"), true);
@@ -230,8 +233,17 @@ assert.equal(JSON.stringify(mixedBoard.products), mixedProductsBefore);
   closeButton.onclick(); assert.deepEqual(plain(closes), [{ force: true }], "The pinned popup keeps its ordinary close control.");
   assert.equal(JSON.stringify(products), productsBefore); assert.equal(JSON.stringify(variants), variantsBefore, "The presentation change cannot mutate product metadata or variant groups.");
   const styles = await fs.readFile(new URL("../../public/css/styles.css", import.meta.url), "utf8");
-  assert.match(styles, /\.variant-popover\[data-card-stage="in-planning"\],\s*\.variant-popover\[data-card-stage="in-development"\]\s*\{[^}]*--color-surface:\s*var\(--product-card-surface\)/, "Colored variant lists participate in the complete scoped card palette.");
-  assert.match(styles, /\.variant-popover\[data-card-theme="embargo"\]\s*\{\s*--color-accent:\s*var\(--product-card-accent\);\s*\}/, "Embargo retains a neutral body with its existing warning accent.");
+  const paletteRule = [...styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(([, , body]) => /--color-surface:\s*var\(--product-card-surface\)/.test(body));
+  assert.ok(paletteRule, "The nested reading surfaces have a complete scoped palette.");
+  for (const scope of [".viewer-info", ".split-product-card", ".variant-popover"]) {
+    for (const stage of ["in-planning", "in-development", "embargo"]) {
+      assert.ok(paletteRule[1].includes(`${scope}[data-card-stage="${stage}"]`), `${scope} inherits the full ${stage} palette.`);
+    }
+  }
+  for (const token of ["--color-page", "--color-shell", "--color-surface", "--color-header", "--color-surface-raised", "--color-surface-hover", "--color-input", "--color-accent", "--color-border", "--color-border-strong", "--color-control-border"]) {
+    assert.ok(paletteRule[2].includes(`${token}:`), `${token} is inherited by nested specifications, date history, SKU cards, pricing and source menus.`);
+  }
+  assert.doesNotMatch(styles, /\[data-card-theme="embargo"\]/, "The complete native palette supersedes the partial Embargo accent override.");
 }
 // The recess stays within its physical card and reserved action band. On touch,
 // narrow zoomed cards stack the independent 44px targets above the SKU footer.

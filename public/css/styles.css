@@ -675,12 +675,12 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .split-product-card.is-highlighted { border-color: transparent; }
 .split-status { display: flex; align-items: center; justify-content: center; min-height: 27px; padding: 5px 9px; border-bottom: 1px solid transparent; background: var(--color-header); color: var(--color-text-secondary); font-size: 9px; font-weight: 600; text-align: center; }
 .split-status.status-new { background: var(--color-new-product); color: var(--color-on-accent); }
-.split-status.status-embargo { background: var(--color-embargo); color: var(--color-on-accent); }
+.split-status.status-embargo { background: #A52F3F; color: #FFFFFF; }
 .split-product-hero { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 9px; min-height: 98px; padding: 8px; border-bottom: 1px solid transparent; }
 .split-product-image { display: block; width: 80px; height: 80px; padding: 3px; object-fit: contain; }
 .split-product-card.is-discontinued { opacity: .4; }
-.split-product-card[data-card-stage="in-planning"], .split-product-card[data-card-stage="in-development"] { background: var(--product-card-surface); }
-.split-product-card[data-card-stage="in-planning"] .eyebrow, .split-product-card[data-card-stage="in-development"] .eyebrow { color: var(--product-card-accent); }
+.split-product-card[data-card-stage="in-planning"], .split-product-card[data-card-stage="in-development"], .split-product-card[data-card-stage="embargo"] { background: var(--product-card-surface); }
+.split-product-card[data-card-stage="in-planning"] .eyebrow, .split-product-card[data-card-stage="in-development"] .eyebrow, .split-product-card[data-card-stage="embargo"] .eyebrow { color: var(--product-card-accent); }
 .split-product-title { min-width: 0; }
 .split-product-title h2 { margin: 4px 0 0; font-size: 16px; font-weight: 650; letter-spacing: -.025em; line-height: 1.2; overflow-wrap: anywhere; }
 .split-platform-label { display: inline-block; width: fit-content; margin: 6px 0 0; padding: 3px 6px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--product-highlight, #242527); color: var(--product-label-color, #D5D7DC); font-size: 9px; font-weight: 700; line-height: 1.2; }
@@ -756,12 +756,12 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .variant-popover-item.is-active-hero { border-color: transparent;  box-shadow: inset 2px 0 0 var(--color-accent); }
 .hero-image-badge { position: absolute; top: 6px; right: 6px; color: var(--color-text-secondary); font-size: 7px; line-height: 1; }
 .viewer-info { position: absolute; z-index: 11; left: 0; top: 0; width: var(--viewer-info-width, 500px); height: var(--viewer-info-height, 0px); max-height: var(--viewer-info-height, 0px); min-height: 0; overflow: hidden; visibility: hidden; pointer-events: none; opacity: 1; transform: none; transform-origin: left center; clip-path: inset(0 100% 0 0); will-change: clip-path; border: 0; border-radius: 0 var(--corner-panel) var(--corner-panel) 0; background: linear-gradient(var(--viewer-info-band-color, var(--color-surface)), var(--viewer-info-band-color, var(--color-surface))) top / 100% var(--viewer-info-band-height, 0px) no-repeat, var(--product-card-surface, var(--color-surface)); box-shadow: none; }
-.viewer-info[data-card-stage="in-planning"] .product-detail-tabs button[aria-selected="true"], .viewer-info[data-card-stage="in-development"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-stage="in-planning"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-stage="in-development"] .product-detail-tabs button[aria-selected="true"] { color: var(--product-card-accent); background: var(--product-card-footer); }
+.viewer-info[data-card-stage="in-planning"] .product-detail-tabs button[aria-selected="true"], .viewer-info[data-card-stage="in-development"] .product-detail-tabs button[aria-selected="true"], .viewer-info[data-card-stage="embargo"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-stage="in-planning"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-stage="in-development"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-stage="embargo"] .product-detail-tabs button[aria-selected="true"] { color: var(--product-card-accent); background: var(--product-card-footer); }
 /* Scope the complete reading surface, including nested tables, SKU cards and
    menus. The global workspace palette and merchandise colors stay independent. */
-.viewer-info[data-card-stage="in-planning"], .viewer-info[data-card-stage="in-development"],
-.split-product-card[data-card-stage="in-planning"], .split-product-card[data-card-stage="in-development"],
-.variant-popover[data-card-stage="in-planning"], .variant-popover[data-card-stage="in-development"] {
+.viewer-info[data-card-stage="in-planning"], .viewer-info[data-card-stage="in-development"], .viewer-info[data-card-stage="embargo"],
+.split-product-card[data-card-stage="in-planning"], .split-product-card[data-card-stage="in-development"], .split-product-card[data-card-stage="embargo"],
+.variant-popover[data-card-stage="in-planning"], .variant-popover[data-card-stage="in-development"], .variant-popover[data-card-stage="embargo"] {
   --color-page: color-mix(in srgb, var(--product-card-surface) 84%, #000000);
   --color-shell: var(--product-card-surface);
   --color-surface: var(--product-card-surface);
@@ -776,8 +776,6 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
   --color-control-border: color-mix(in srgb, var(--product-card-accent) 65%, var(--product-card-surface));
   --color-emphasis-deep: var(--color-border-strong);
 }
-.viewer-info[data-card-theme="embargo"], .split-product-card[data-card-theme="embargo"], .variant-popover[data-card-theme="embargo"] { --color-accent: var(--product-card-accent); }
-.viewer-info[data-card-theme="embargo"] .product-detail-tabs button[aria-selected="true"], .split-product-card[data-card-theme="embargo"] .product-detail-tabs button[aria-selected="true"] { color: var(--product-card-accent); }
 .viewer-info.is-open { visibility: visible; }
 .viewer-info[data-stacked="true"] { border-radius: 0 0 var(--corner-panel) var(--corner-panel); }
 .viewer-info-outline { position: absolute; z-index: 12; display: none; pointer-events: none; border: 1.25px solid var(--color-selection); border-radius: var(--corner-panel); }
