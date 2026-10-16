@@ -1,0 +1,24 @@
+Category navigation icons from Solar by 480 Design.
+Source: https://icon-sets.iconify.design/solar/
+Author: https://www.figma.com/community/file/1166831539721848736
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+Retrieved through https://api.iconify.design/solar.json on 2026-10-16.
+The original vector paths are unchanged. The application uses local CSS masks
+to apply its own interface colors; no external asset requests are made at runtime.
+
+Local file                       Solar icon
+category-pc-audio.svg             headphones-round-linear
+category-console-audio.svg        gamepad-linear
+category-lifestyle-audio.svg      airbuds-linear
+category-audio-accessories.svg    soundwave-linear
+category-microphone.svg           microphone-3-linear
+category-microphone-accessories.svg tuning-2-linear
+category-keyboard.svg             keyboard-linear
+category-mouse.svg                mouse-linear
+category-accessories.svg          box-linear
+category-controller.svg           gamepad-minimalistic-linear
+category-backpack.svg             backpack-linear
+category-grid.svg                 widget-2-linear
+category-all.svg                  widget-2-linear

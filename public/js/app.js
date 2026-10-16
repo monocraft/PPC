@@ -214,7 +214,7 @@ const productMenuButton = $("#productMenuButton");
 const productMenu = $("#productMenu");
 const dataMenuButton = $("#dataMenuButton");
 const dataMenu = $("#dataMenu");
-const categorySelect = $("#categorySelect");
+let categoryNavigationController = null;
 const categorySettingsDialog = $("#categorySettingsDialog");
 const categorySettingsForm = $("#categorySettingsForm");
 const pptxExportDialog = $("#pptxExportDialog");
@@ -1735,7 +1735,71 @@ function setCatalogGroup(group) {
   return applyCatalogGroups(categories, selections);
 }
 
+function categoryNavigationLocked() {
+  return workspaceOpening || productLayoutEditing || packageOperationInProgress || pptxExportInProgress || Boolean(typeof roadmapDraft !== "undefined" && roadmapDraft);
+}
+
+function chooseCategoryNavigation(categoryId) {
+  if (categoryNavigationLocked() || !portfolio?.categories?.some(category => category.id === categoryId)) return false;
+  if (activeView !== "products" && isFfsRoadmap()) {
+    const controller = ensureHashoutView();
+    if (!controller?.setScope) return false;
+    const scope = hashoutCategoryScope(), selected = new Set(scope === null ? portfolio.categories.map(category => category.id) : scope);
+    if (selected.has(categoryId)) selected.delete(categoryId); else selected.add(categoryId);
+    const ids = portfolio.categories.filter(category => selected.has(category.id)).map(category => category.id);
+    controller.setScope(ids.length === portfolio.categories.length ? null : ids);
+  } else {
+    if (categoryId === activeCategoryId) return false;
+    activateCategory(categoryId, { fitVertical: true });
+  }
+  return true;
+}
+
+function chooseAllCategoryNavigation() {
+  if (categoryNavigationLocked() || activeView === "products" || !isFfsRoadmap() || !portfolio?.categories?.length) return false;
+  const controller = ensureHashoutView();
+  if (!controller?.setScope) return false;
+  const scope = hashoutCategoryScope();
+  controller.setScope(scope === null || scope.length === portfolio.categories.length ? [] : null);
+  return true;
+}
+
+function syncCategoryNavigation() {
+  const host = globalThis.document?.getElementById?.("categoryNavigation");
+  if (!host || !portfolio || !globalThis.PortfolioCategoryNavigation) return;
+  if (!categoryNavigationController) categoryNavigationController = globalThis.PortfolioCategoryNavigation.create(host, {
+    onChoose: chooseCategoryNavigation, onAll: chooseAllCategoryNavigation,
+  });
+  const multiple = activeView !== "products" && isFfsRoadmap(), scope = multiple ? hashoutCategoryScope() : null, now = new Date();
+  const selectedIds = multiple ? scope ?? portfolio.categories.map(category => category.id) : [activeCategoryId];
+  const revision = typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision;
+  const day = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const visibility = portfolio.categories.map(category => JSON.stringify([category.board?.settings?.catalogGroups, category.board?.settings?.catalogGroup, category.board?.settings?.hideDiscontinued]));
+  let cache = syncCategoryNavigation.counts;
+  if (!cache || cache.portfolio !== portfolio || cache.revision !== revision || cache.day !== day || cache.categories.length !== portfolio.categories.length
+      || portfolio.categories.some((category, index) => cache.categories[index] !== category || cache.products[index] !== category.board?.products || cache.visibility[index] !== visibility[index])) {
+    cache = { portfolio, revision, day, categories: [...portfolio.categories], products: portfolio.categories.map(category => category.board?.products), visibility,
+      counts: portfolio.categories.map(category => PortfolioModel.catalogProducts(category.board?.products || [], category.board?.settings, now).length) };
+    syncCategoryNavigation.counts = cache;
+  }
+  const presentation = {
+    categories: portfolio.categories.map((category, index) => ({ id: category.id, name: category.name, count: cache.counts[index] })),
+    mode: multiple ? "multiple" : "single", selectedIds,
+    allSelected: multiple && (scope === null || selectedIds.length === portfolio.categories.length),
+    disabled: categoryNavigationLocked(),
+  };
+  const signature = JSON.stringify(presentation), previous = syncCategoryNavigation.presentation;
+  if (previous?.controller !== categoryNavigationController || previous.signature !== signature) {
+    categoryNavigationController.update(presentation);
+    syncCategoryNavigation.presentation = { controller: categoryNavigationController, signature };
+  }
+  const context = document.getElementById("categoryContext");
+  const name = multiple ? "Hashout roadmap" : portfolio.categories.find(category => category.id === activeCategoryId)?.name || "Product Portfolio";
+  if (context && context.textContent !== name) context.textContent = name;
+}
+
 function syncCatalogFilterControls() {
+  if (typeof syncCategoryNavigation === "function") syncCategoryNavigation();
   const controls = globalThis.document?.getElementById?.("catalogVisibility");
   if (!controls || !board) return;
   const categories = catalogFilterCategories(), scoped = activeView !== "products" && isFfsRoadmap();
@@ -6227,7 +6291,7 @@ function applySort() {
 function syncControls() {
   syncFfsRoadmapControls();
   $("#boardTitle").textContent = board.title;
-  categorySelect.innerHTML = portfolio.categories.map((category) => `<option value="${escapeHtml(category.id)}" ${category.id === activeCategoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("");
+  syncCategoryNavigation();
   editSelectedButton.disabled = !selectedProduct();
   updateProductLayoutEditControls();
   $("#showPrices").checked = board.settings.showPrices;
@@ -8425,7 +8489,6 @@ navRight.onclick = () => scrollBoardBy(Math.max(260, canvasScroll.clientWidth * 
 
 $("#addProduct").onclick = addProduct;
 $("#categorySettings").onclick = openCategorySettings;
-categorySelect.onchange = (event) => activateCategory(event.target.value, { fitVertical: true });
 categorySettingsForm.onsubmit = (event) => { event.preventDefault(); saveCategorySettings(); };
 $("#closeCategorySettings").onclick = closeCategorySettings;
 $("#cancelCategorySettings").onclick = closeCategorySettings;
@@ -8724,7 +8787,10 @@ window.addEventListener("keydown", (event) => {
 });
 window.addEventListener("resize", () => { if (workspaceOpening) return; closeVariantPopover({ force: true }); renderActiveView(); });
 globalThis.matchMedia?.("(pointer: coarse)")?.addEventListener?.("change", () => { if (!workspaceOpening) renderActiveView(); });
-window.addEventListener("portfolio:ui-ready", publishWorkspaceState);
+window.addEventListener("portfolio:ui-ready", () => {
+  lastWorkspaceRenderSignature = "";
+  publishWorkspaceState();
+});
 
 // Draft actions keep complete records and images until the user saves or discards.
 function localizeSharedProduct(record, previous = null) {

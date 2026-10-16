@@ -24,18 +24,6 @@
 .hashout-windows-exceptions { padding-top: 10px; border-top: 1px solid var(--color-border); font-size: 10px; }
 .hashout-roadmap :is(button, input, summary, select, canvas):focus:not(:focus-visible), .hashout-ring-overlay:focus { outline: none; }
 .hashout-roadmap :is(button, input, summary, select, canvas):focus-visible { outline: 2px solid var(--hashout-selection); outline-offset: 2px; }
-.hashout-category-picker { position: relative; min-width: 125px; max-width: 240px; }
-.hashout-category-summary { display: block; padding: 6px 28px 6px 10px; overflow: hidden; border-radius: 4px; background: var(--color-header); color: var(--color-text); font-weight: 500; white-space: nowrap; text-overflow: ellipsis; list-style: none; cursor: pointer; }
-.hashout-category-summary::-webkit-details-marker { display: none; }
-.hashout-category-summary::after { position: absolute; top: 8px; right: 9px; content: "⌄"; color: var(--color-text-secondary); }
-.hashout-category-picker[open] .hashout-category-summary { box-shadow: inset 0 0 0 1px var(--color-border-strong); }
-.hashout-category-panel { position: absolute; top: calc(100% + 8px); left: 0; z-index: 15; width: min(320px, calc(100vw - 32px)); max-height: min(450px, 65dvh); overflow: auto; padding: 6px; border: 1px solid var(--color-border-strong); border-radius: 7px; background: var(--color-surface); box-shadow: 0 12px 32px #0007; overscroll-behavior: contain; }
-.hashout-category-option { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
-.hashout-category-option:hover { background: var(--color-header); }
-.hashout-category-option input { flex: 0 0 auto; margin: 0; }
-.hashout-category-name { min-width: 0; flex: 1 1 auto; }
-.hashout-category-option small { margin-left: auto; color: var(--color-text-muted); font-size: 10px; }
-.hashout-category-all { margin-bottom: 5px; border-bottom: 1px solid var(--color-border); border-radius: 0; font-weight: 600; }
 .hashout-search-shell { position: relative; display: flex; align-items: center; min-width: 100px; max-width: 330px; flex: 1 1 auto; }
 .hashout-search-icon { position: absolute; left: 9px; color: var(--color-text-secondary); font-size: 19px; pointer-events: none; }
 .hashout-search { min-height: 31px; padding: 5px 9px 5px 29px; border-radius: 4px; background: var(--color-page); font-size: 12px; }
@@ -176,7 +164,7 @@
 .hashout-product-card.is-capsule .hashout-card-actions button:hover { background: transparent; color: #7BE6CD; }
 .hashout-product-card.is-capsule :is(button):focus-visible { outline: 1px solid var(--hashout-selection); outline-offset: 2px; }
 @keyframes hashout-capsule-enter { from { opacity: 0; } to { opacity: 1; } }
-@media (max-width: 520px) { .hashout-toolbar { gap: 6px; padding-inline: 7px; } .hashout-category-picker { min-width: 107px; max-width: 142px; } .hashout-category-summary { padding-left: 8px; font-size: 11px; } .hashout-scope-count { display: none; } .hashout-search-results { left: auto; right: 0; } .hashout-lane-label { padding-inline: 8px; } .hashout-lane-heading { gap: 3px; } .hashout-lane-name { font-size: 10px; } .hashout-lane-label.is-compact .hashout-lane-count { display: none; } .hashout-product-card { padding: 9px 10px; } }
+@media (max-width: 520px) { .hashout-toolbar { gap: 6px; padding-inline: 7px; } .hashout-scope-count { display: none; } .hashout-search-results { left: auto; right: 0; } .hashout-lane-label { padding-inline: 8px; } .hashout-lane-heading { gap: 3px; } .hashout-lane-name { font-size: 10px; } .hashout-lane-label.is-compact .hashout-lane-count { display: none; } .hashout-product-card { padding: 9px 10px; } }
 @media (prefers-reduced-motion: reduce) { .hashout-product-card, .hashout-selection-wave.is-active::before, .hashout-orbit-product.is-selected::before { animation: none; } .hashout-selection-wave::before, .hashout-orbit-product.is-selected::before { opacity: 0; } .hashout-orbit-product, .hashout-orbit-product::after, .hashout-lane-label, .hashout-lane-hover-frame { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .hashout-selection-guide.is-active .hashout-selection-guide-stroke { animation: none; } .hashout-selection-guide.is-active .hashout-selection-guide-month { animation: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .hashout-product-card.is-capsule { animation: none; } .hashout-capsule-disclosure, .hashout-product-card.is-capsule .hashout-card-actions button { transition: none; } }
