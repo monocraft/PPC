@@ -6,6 +6,7 @@ await import("../../public/js/package-codec.js");
 await import("../../public/js/package-client.js");
 await import("../../public/js/workspace-store.js");
 await import("../../public/js/master-model.js");
+await import("../../public/js/portfolio-model.js");
 const codec = globalThis.PortfolioPackage;
 const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
 const catalogSandbox = { window: {} };
@@ -259,6 +260,101 @@ assert.ok(imageCleanupFailure.images.has(imageCleanupFailure.sandbox.portfolio.i
 assert.ok(imageCleanupFailure.images.has("shared-image"), "an aborted cleanup transaction must leave the existing image record intact");
 
 const key = codec.generateKey();
+const miceStartupManifest = portfolioFixture("Retained PC headset", ["headset-image", "mouse-image"]);
+miceStartupManifest.activeCategoryId = "mice";
+miceStartupManifest.packageInfo = { version: 1, updatedAt: "2026-10-10T12:30:00.000Z", comments: "Retained package notes." };
+const miceStartupCategory = miceStartupManifest.categories.find((category) => category.id === "mice");
+miceStartupCategory.board.products.push({
+  ...clone(miceStartupManifest.categories[0].board.products[0]),
+  id: "mouse-product", name: "Retained mouse", laneId: miceStartupCategory.board.lanes[0].id, imageAssetId: "mouse-image",
+});
+assert.equal(definitions[0].id, "pc-gaming-audio", "the first catalog category is the PC headset portfolio");
+for (const encryptedStartup of [false, true]) {
+  const savedManifest = clone(miceStartupManifest);
+  if (!encryptedStartup) delete savedManifest.packageInfo;
+  const subject = harness();
+  const bytes = packageBytes(savedManifest);
+  const incoming = encryptedStartup ? await codec.encrypt(bytes, key) : bytes;
+  const imported = await subject.sandbox.importProjectPackage(new Blob([incoming]), { key: encryptedStartup ? key : "", requireEncrypted: encryptedStartup, fromSharedDownload: encryptedStartup });
+  assert.equal(subject.sandbox.activeCategoryId, "pc-gaming-audio", "a package saved on Mice must immediately open PC headsets");
+  assert.equal(subject.sandbox.portfolio.activeCategoryId, "pc-gaming-audio");
+  assert.equal(JSON.parse(subject.stored.get(storageKey)).activeCategoryId, "pc-gaming-audio", "the first category must be durable before import completes");
+  assert.deepEqual(imported.packageInfo, savedManifest.packageInfo || null, "choosing the opening category preserves imported package metadata");
+  if (encryptedStartup) {
+    assert.equal(subject.sandbox.portfolio.loadedPackageInfo.gitBlobSha, await globalThis.PortfolioPackageClient.gitBlobSha(incoming), "shared package startup retains provenance from the exact encrypted download bytes");
+    assert.deepEqual(JSON.parse(subject.stored.get(storageKey)).loadedPackageInfo, clone(subject.sandbox.portfolio.loadedPackageInfo), "the first category and shared download provenance become durable together");
+  } else {
+    assert.equal(Object.hasOwn(subject.sandbox.portfolio, "loadedPackageInfo"), false, "a manual legacy import cannot claim shared download provenance");
+  }
+  const importedAssets = clone(subject.sandbox.portfolio.imageAssets);
+  const stagedIds = new Map(savedManifest.imageAssets.map((asset, index) => [asset.id, importedAssets[index].id]));
+  const expectedCategories = clone(savedManifest.categories);
+  for (const category of expectedCategories) for (const product of category.board.products) {
+    product.imageAssetId = stagedIds.get(product.imageAssetId) || product.imageAssetId;
+    for (const group of product.variantGroups) for (const item of group.items) item.imageAssetId = stagedIds.get(item.imageAssetId) || item.imageAssetId;
+  }
+  assert.deepEqual(clone(subject.sandbox.portfolio.categories), expectedCategories, "opening at PC headsets preserves every category, board, product fact, SKU, date, and variant apart from isolated image identities");
+  assert.deepEqual(importedAssets, savedManifest.imageAssets.map((asset) => ({
+    ...asset, id: stagedIds.get(asset.id), size: encoder.encode(`bytes:${asset.id}`).length, url: "", updatedAt: "",
+  })), "the existing image staging preserves asset metadata");
+  for (const asset of savedManifest.imageAssets) assert.equal(await subject.images.get(stagedIds.get(asset.id)).text(), `bytes:${asset.id}`, "the startup selection cannot alter image pixels");
+
+  subject.sandbox.activateCategory("mice");
+  await subject.sandbox.flushWorkspaceSave();
+  assert.equal(subject.sandbox.activeCategoryId, "mice", "Mice remains available after opening the package");
+  assert.equal(JSON.parse(subject.stored.get(storageKey)).activeCategoryId, "mice", "ordinary navigation remains saved within the active workspace");
+  assert.equal(subject.sandbox.ensurePortfolioSchema(clone(subject.sandbox.portfolio)).activeCategoryId, "mice", "normal schema loading must not force every category switch back to PC headsets");
+  const currentWorkspace = JSON.stringify(subject.sandbox.portfolio);
+  const currentStorage = subject.stored.get(storageKey);
+  const exportedInfo = await subject.sandbox.exportProjectPackage(encryptedStartup ? key : "", { comments: "Startup regression fixture." });
+  const downloaded = new Uint8Array(await subject.calls.downloads[0].blob.arrayBuffer());
+  const entries = codec.readZip(encryptedStartup ? await codec.decrypt(downloaded, key) : downloaded);
+  const manifest = JSON.parse(decoder.decode(entries.get("portfolio.json")));
+  assert.equal(Object.hasOwn(manifest, "loadedPackageInfo"), false, "the package startup default must not re-export local loaded identity");
+  const expectedManifest = JSON.parse(currentWorkspace);
+  expectedManifest.activeCategoryId = "pc-gaming-audio";
+  expectedManifest.packageInfo = exportedInfo;
+  delete expectedManifest.masterLocalAssetIds;
+  delete expectedManifest.loadedPackageInfo;
+  for (const asset of expectedManifest.imageAssets) asset.packagePath = `images/${asset.id}.png`;
+  assert.deepEqual(manifest, expectedManifest, "exporting while on Mice preserves source facts with the default opening category and established export metadata");
+  for (const asset of savedManifest.imageAssets) assert.equal(decoder.decode(entries.get(`images/${stagedIds.get(asset.id)}.png`)), `bytes:${asset.id}`, "package export retains every staged image byte");
+  assert.equal(JSON.stringify(subject.sandbox.portfolio), currentWorkspace, "building a package must preserve the live category and loaded package metadata");
+  assert.equal(subject.stored.get(storageKey), currentStorage, "building a package must preserve the saved active workspace");
+}
+
+const reorderedStartupManifest = clone(miceStartupManifest);
+reorderedStartupManifest.categories.unshift(reorderedStartupManifest.categories.splice(1, 1)[0]);
+const reorderedStartup = harness();
+await reorderedStartup.sandbox.importProjectPackage(new Blob([packageBytes(reorderedStartupManifest)]));
+assert.equal(reorderedStartup.sandbox.activeCategoryId, reorderedStartupManifest.categories[0].id, "package opening follows the actual first dropdown category when its order differs from the catalog");
+assert.deepEqual(clone(reorderedStartup.sandbox.portfolio.categories.map((category) => category.id)), reorderedStartupManifest.categories.map((category) => category.id), "package loading preserves dropdown ordering");
+assert.equal(JSON.parse(reorderedStartup.stored.get(storageKey)).activeCategoryId, reorderedStartupManifest.categories[0].id);
+reorderedStartup.sandbox.activateCategory("mice");
+const reorderedExport = codec.readZip(await reorderedStartup.sandbox.buildProjectPackageBytes());
+assert.equal(JSON.parse(decoder.decode(reorderedExport.get("portfolio.json"))).activeCategoryId, reorderedStartupManifest.categories[0].id, "package export uses the same first dropdown category as opening and refresh");
+assert.equal(reorderedStartup.sandbox.activeCategoryId, "mice");
+
+const legacyTimelineManifest = portfolioFixture("Legacy headset dates", []);
+legacyTimelineManifest.activeCategoryId = "mice";
+delete legacyTimelineManifest.settings.timeline;
+const legacyMiceCategory = legacyTimelineManifest.categories.find((category) => category.id === "mice");
+legacyMiceCategory.board.settings.roadmap = { startMonth: "2027-03", endMonth: "2034-11", snap: "quarter" };
+legacyMiceCategory.board.products.push({
+  ...clone(legacyTimelineManifest.categories[0].board.products[0]),
+  id: "legacy-mouse-product", name: "Legacy mouse dates", laneId: legacyMiceCategory.board.lanes[0].id,
+});
+const legacyProductFacts = clone(legacyTimelineManifest.categories.map((category) => category.board.products));
+const legacyTimeline = harness();
+legacyTimeline.sandbox.PortfolioModel = globalThis.PortfolioModel;
+await legacyTimeline.sandbox.importProjectPackage(new Blob([packageBytes(legacyTimelineManifest)]));
+assert.equal(legacyTimeline.sandbox.activeCategoryId, "pc-gaming-audio", "legacy timeline migration still opens the first dropdown category");
+const expectedLegacyTimeline = { ...legacyMiceCategory.board.settings.roadmap, statusColors: clone(globalThis.PortfolioModel.DEFAULT_STAGE_COLORS) };
+assert.deepEqual(clone(legacyTimeline.sandbox.portfolio.settings.timeline), expectedLegacyTimeline, "the real timeline migration inherits the package's saved Mice range before changing the opening category");
+assert.deepEqual(JSON.parse(legacyTimeline.stored.get(storageKey)).settings.timeline, expectedLegacyTimeline, "the inherited legacy timeline becomes durable with the PC headset opening selection");
+assert.deepEqual(clone(legacyTimeline.sandbox.portfolio.categories.map((category) => category.board.products)), legacyProductFacts, "legacy timeline migration preserves complete product facts, exact dates, and product roadmap dates");
+for (const category of legacyTimeline.sandbox.portfolio.categories) assert.deepEqual(clone(category.board.settings.roadmap), expectedLegacyTimeline, "each category retains the inherited global timeline when the opening category changes");
+
 const encrypted = await codec.encrypt(packageBytes(newManifest), key);
 const secured = harness();
 assert.equal((await secured.sandbox.importProjectPackage(new Blob([encrypted]), { key, requireEncrypted: true })).encrypted, true);
@@ -721,4 +817,4 @@ if (process.argv[2]) {
   console.log(`Local package fixture passed: ${actualResult.categoryCount} categories, ${actualResult.productCount} products.`);
 }
 
-console.log("Package workspace checks passed: automatically stamped update metadata, comments round trips and persistence, strict metadata/data-file preflight, complete export, encrypted and legacy import, isolated image staging/retry queues, rollback, retained merge undo/deleted-record images and stale-edit guards, canonical baselines, legacy snapshot cleanup, and bounded image cleanup.");
+console.log("Package workspace checks passed: first-dropdown package startup and export defaults, automatically stamped update metadata, comments round trips and persistence, strict metadata/data-file preflight, complete export, encrypted and legacy import, isolated image staging/retry queues, rollback, retained merge undo/deleted-record images and stale-edit guards, canonical baselines, legacy snapshot cleanup, and bounded image cleanup.");
