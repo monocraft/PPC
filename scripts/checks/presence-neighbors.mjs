@@ -245,4 +245,3 @@ for (const [random, expected] of [[() => 0, 8000], [() => 1, 16000]]) {
 }
 
 console.log("Presence neighbor checks passed: three bounded scenes, adjacent live people only, preserved controls and gaze, quiet scheduling, redraw stability, poke/focus/preference exclusions, lifecycle cancellation and full cleanup.");
-
