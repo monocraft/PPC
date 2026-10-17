@@ -187,17 +187,57 @@ function harness() {
 }
 {
   const h = harness(); h.context.startProductReorder(); h.context.reorderProduct("a", "first", 2); const latest = h.layouts();
-  const saveFlow = masterUi.match(/^    async function saveFlow\([^]*?^    \}/m)?.[0]; assert.ok(saveFlow, "Exercise the actual save entry point");
-  let reviews = 0;
-  Object.assign(h.context, { running: false, discarding: false, refreshRunning: false, localBaselineGeneration: 0, session: { getState: () => ({ busy: false }) }, adapter: { beforeSave: () => h.context.finishProductReorder() }, review: async () => { reviews++; assert.equal(h.context.productLayoutEditing, false, "Reordering finishes before save review starts"); return null; }, updateStatus() {} });
-  await new vm.Script(`${saveFlow}\n saveFlow();`).runInContext(h.context);
+  const saveHelpers = ["reviewIntent", "stopProgressTimer", "closeOperation", "retireProgress", "updateProgress", "hideProgress", "openProgress", "progress", "saveFlow"].map((name) => {
+    const match = masterUi.match(new RegExp(`^    (?:async )?function ${name}\\([^]*?^    \\}`, "m"));
+    assert.ok(match, `Exercise the actual Save helper ${name}`); return match[0];
+  }).join("\n");
+  let reviews = 0, saves = 0, nextTimer = 0, progressShows = 0;
+  const timers = new Set(), pending = () => h.layouts().map(({ id, laneId, order, manualPosition }) => ({ productId: id, categoryId: "audio", laneId, patch: { cardPlacement: { laneId, order, manualPosition } } }));
+  const progressNode = (_tag, _className, textContent = "") => ({ textContent, children: [], append(...children) { this.children.push(...children); }, setAttribute() {}, addEventListener() {} });
+  Object.assign(h.context, {
+    running: false, discarding: false, refreshRunning: false, destroyed: false, localBaselineGeneration: 0,
+    progressState: null, progressTimer: null, modalOperation: null, modalView: "", connectingGitHub: false, githubMode: false, teamMode: false,
+    dialog: { open: false }, saveButton: h.get("saveSharedChanges"), button: h.get("pullLatestData"), lastError: "", lastErrorWasSave: false, retryUntil: 0,
+    root: { setInterval() { const id = ++nextTimer; timers.add(id); return id; }, clearInterval: id => timers.delete(id) }, element: progressNode,
+    show(_title, _description, builder, options) { progressShows++; h.context.dialog.open = true; h.context.modalOperation = h.context.progressState; h.context.modalView = options.view; builder({ body: progressNode(), footer: progressNode() }); return Promise.resolve(null); },
+    close() { h.context.dialog.open = false; h.context.modalOperation = null; h.context.modalView = ""; },
+    session: { getState: () => ({ busy: false, hasKey: true }), track: pending, async save() { saves++; assert.equal(h.context.productLayoutEditing, false, "Accepted saves retain the finalized placement session"); return { saved: true }; } },
+    adapter: { beforeSave: () => h.context.finishProductReorder() },
+    review: async () => { reviews++; assert.equal(h.context.productLayoutEditing, false, "Reordering finishes before save review starts"); return null; },
+    updateStatus() {}, friendlyError: error => error.code || error.message, notices: { resolve() {}, publish() {}, show() {} },
+  });
+  await new vm.Script(`${saveHelpers}\n saveFlow();`).runInContext(h.context);
   assert.equal(reviews, 1); assert.deepEqual(h.layouts(), latest);
+  assert.equal(timers.size, 0, "Canceling save review never starts a progress timer");
   h.context.startProductReorder(); h.context.running = true;
+  h.context.progressState = { generation: 0, count: pending().length, phase: "save", startedAt: Date.now(), phaseStartedAt: Date.now(), hidden: true, nodes: null };
   await new vm.Script("saveFlow();").runInContext(h.context);
   assert.equal(h.context.productLayoutEditing, true, "A busy save ignores the action without prematurely ending another session");
+  assert.equal(progressShows, 1, "An active save reopens its hidden progress panel instead of starting another review");
+  await new vm.Script("saveFlow();").runInContext(h.context);
+  assert.equal(progressShows, 1, "Clicking Save again reuses the existing progress panel");
+  assert.equal(reviews, 1); assert.equal(timers.size, 1, "Reopening progress keeps one bounded timer");
+  h.context.retireProgress(); assert.equal(timers.size, 0);
   h.context.running = false; h.context.refreshRunning = true;
   await new vm.Script("saveFlow();").runInContext(h.context);
   assert.equal(reviews, 1, "a shared check cannot race a second save review");
+  h.context.refreshRunning = false;
+  h.context.review = async () => { reviews++; assert.equal(h.context.productLayoutEditing, false); return { reason: "Reviewed placement", intent: h.context.reviewIntent(pending()) }; };
+  await new vm.Script("saveFlow();").runInContext(h.context);
+  assert.equal(saves, 1, "The current reviewed placement reaches the actual save entry point");
+  assert.deepEqual(h.layouts(), latest, "Showing and retiring Save progress never rewrites placement");
+  assert.equal(h.context.productReorderSession, null); assert.equal(h.context.running, false);
+  assert.equal(h.context.dialog.open, false); assert.equal(h.context.progressState, null); assert.equal(timers.size, 0, "Finishing a reviewed placement save retires its real progress timer");
+  h.context.review = async () => {
+    const intent = h.context.reviewIntent(pending());
+    h.board.products.find(product => product.id === "a").order += 7;
+    return { reason: "An older placement review", intent };
+  };
+  await new vm.Script("saveFlow();").runInContext(h.context);
+  assert.equal(saves, 1, "A later placement draft cannot be saved under an older review");
+  assert.equal(h.context.lastError, "REVIEW_REQUIRED");
+  assert.equal(h.board.products.find(product => product.id === "a").order, latest.find(product => product.id === "a").order + 7, "A rejected stale review preserves the newer placement draft");
+  assert.equal(h.context.progressState, null); assert.equal(timers.size, 0);
 }
 
 assert.equal((html.match(/id="productLayoutEditToggle"/g) || []).length, 1);
