@@ -86,11 +86,12 @@
 #workspaceSettingsDialog .settings-tool-arrow { align-self: start; color: var(--color-text-muted); font-size: 13px; }
 #workspaceSettingsDialog #addProduct { width: auto; min-width: 170px; }
 #workspaceSettingsDialog #settingsDataPanel .settings-content { padding: 0; }
-#workspaceSettingsDialog #settingsPullLatestData, #workspaceSettingsDialog #restoreSample { grid-template-columns: 33px minmax(0, 1fr) 15px; gap: 11px; min-height: 66px; padding: 12px 15px; border-radius: 10px; }
+#workspaceSettingsDialog .settings-portfolio-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, .25fr); align-items: center; gap: 8px; }
+#workspaceSettingsDialog #settingsPullLatestData { grid-template-columns: 33px minmax(0, 1fr) 15px; gap: 11px; min-height: 66px; padding: 12px 15px; border-radius: 10px; }
 #workspaceSettingsDialog #settingsPullLatestData { background: var(--color-text); color: var(--color-on-accent); }
 #workspaceSettingsDialog #settingsPullLatestData:hover { background: #ECEDEF; }
-#workspaceSettingsDialog #settingsPullLatestData > svg, #workspaceSettingsDialog #restoreSample > svg { width: 32px; height: 32px; padding: 6px; border-radius: 8px; background: rgb(0 0 0 / .08); color: inherit; }
-#workspaceSettingsDialog #settingsPullLatestData .data-action-copy strong, #workspaceSettingsDialog #restoreSample .data-action-copy strong { font-size: 15px; }
+#workspaceSettingsDialog #settingsPullLatestData > svg { width: 32px; height: 32px; padding: 6px; border-radius: 8px; background: rgb(0 0 0 / .08); color: inherit; }
+#workspaceSettingsDialog #settingsPullLatestData .data-action-copy strong { font-size: 15px; }
 #workspaceSettingsDialog #settingsPullLatestData .data-action-copy small, #workspaceSettingsDialog #settingsPullLatestData .settings-tool-arrow { color: #4D5054; }
 #workspaceSettingsDialog .settings-access-note { margin: 7px 3px 13px; font-size: 11px; }
 #workspaceSettingsDialog .data-action-menu { gap: 12px; margin: 0; }
@@ -112,9 +113,8 @@
 #workspaceSettingsDialog .settings-package-details dt { color: var(--color-text-muted); font-size: 11px; }
 #workspaceSettingsDialog .settings-package-details dd { margin: 0; color: var(--color-text); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 #workspaceSettingsDialog #sharedPackageComments { max-height: none; white-space: pre-wrap; }
-#workspaceSettingsDialog #restoreSample { margin-top: 15px; background: #B42C2C; color: #FFFFFF; }
-#workspaceSettingsDialog #restoreSample:hover { background: #C73535; }
-#workspaceSettingsDialog #restoreSample .data-action-copy small, #workspaceSettingsDialog #restoreSample .settings-tool-arrow { color: #FFE5E5; }
+#workspaceSettingsDialog #restoreSample { min-width: 0; min-height: 44px; margin: 0; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--color-danger-text); box-shadow: none; font-size: 12px; font-weight: 400; white-space: nowrap; }
+#workspaceSettingsDialog #restoreSample:hover { background: var(--color-danger-surface); }
 @media (max-width: 650px) {
   #workspaceSettingsDialog { padding: 10px; }
   #workspaceSettingsDialog .workspace-settings { max-height: calc(100dvh - 20px); border-radius: 14px; }
@@ -149,8 +149,9 @@
   #workspaceSettingsDialog .settings-range-row label:last-child { grid-column: auto; }
   #workspaceSettingsDialog .settings-timeline { padding: 12px; }
   #workspaceSettingsDialog .settings-package-details > header { flex-wrap: wrap; gap: 4px; }
-  #workspaceSettingsDialog #settingsPullLatestData, #workspaceSettingsDialog #restoreSample { padding: 11px; gap: 8px; }
-  #workspaceSettingsDialog #restoreSample .data-action-copy strong { font-size: 14px; }
+  #workspaceSettingsDialog #settingsPullLatestData { grid-template-columns: 24px minmax(0, 1fr); padding: 11px; gap: 8px; }
+  #workspaceSettingsDialog #settingsPullLatestData > svg { width: 24px; height: 24px; padding: 4px; }
+  #workspaceSettingsDialog #settingsPullLatestData .settings-tool-arrow { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   #workspaceSettingsDialog *, #workspaceSettingsDialog *::before { transition: none !important; animation: none !important; }

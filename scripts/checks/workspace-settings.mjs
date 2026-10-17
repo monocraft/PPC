@@ -17,7 +17,7 @@ assert.match(settings, /role="tablist"[^>]*aria-orientation="horizontal"/);
 assert.ok(data.indexOf('id="dataWorkspaceTitle"') < data.indexOf('id="dataImportTitle"'));
 assert.ok(data.indexOf('id="dataImportTitle"') < data.indexOf('id="dataExportTitle"'));
 assert.ok(data.indexOf('id="settingsPullLatestData"') < data.indexOf('id="dataWorkspaceTitle"'));
-assert.ok(data.indexOf('id="restoreSample"') > data.indexOf('id="sharedPackageComments"'));
+assert.ok(data.indexOf('id="settingsPullLatestData"') < data.indexOf('id="restoreSample"') && data.indexOf('id="restoreSample"') < data.indexOf('id="dataWorkspaceTitle"'), "Clear all is the compact companion to Open portfolio, away from the package note");
 assert.ok(!data.includes("<details"), "Package information and specific imports are always discoverable");
 assert.match(settings, /<div hidden aria-hidden="true"><button id="editSelected"/);
 // Explicit grid ownership prevents older two-column export/detail rules in
