@@ -57,7 +57,7 @@ function harness({ reduced = false, zoom = 1 } = {}) {
     canvas, canvasScroll: scroll, renderedCards: [], renderedVariantOverflow: [], renderedHeroVariantRegions: [], renderedInfoButtons: [],
     GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, LANE_TOP: 34, SIDE_PADDING: 40,
     PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 2,
-    viewerInfoProductId: null, viewerInfoProgress: 0, viewerInfoOpen: false, inspectorOpen: false,
+    viewerInfoProductId: null, viewerInfoProgress: 0, viewerInfoOpen: false, inspectorOpen: false, inspector: null,
     UI_PALETTE: { charcoal800: "#1b1b1b", silver: "#c3c8c5", steelTeal: "#80958f", steelTealLight: "#a7b7b1", whiteSmoke: "#eeeeec", greyOlive: "#929593" },
     performance: { now: () => clock }, devicePixelRatio: 1, matchMedia: () => ({ matches: reduced }), window: { matchMedia: () => ({ matches: reduced }) },
     requestAnimationFrame(callback) { const id = ++nextFrame; frames.set(id, callback); return id; }, cancelAnimationFrame(id) { frames.delete(id); },

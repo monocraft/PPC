@@ -685,7 +685,7 @@ const laneSandbox = {
   sortedLanes: () => geometryLanes, visibleProducts: () => visibleLaneProducts, productCardLayout: () => geometryLayout,
   viewerInfoVisualWidth: () => 500, viewerInfoVisualHeight: () => 600, viewerInfoStacked: () => false,
   PRODUCT_MIN_ZOOM: .2, LANE_TOP: 34, GUTTER: 18, CARD_WIDTH: 246, CARD_GAP: 10, SIDE_PADDING: 40,
-  inspectorOpen: false, inspector: { offsetWidth: 0 }, canvasScroll: { clientWidth: 800, scrollTop: 0 },
+  inspectorOpen: false, inspector: { offsetWidth: 0 }, canvasScroll: { clientWidth: 800, scrollTop: 0, classList: { remove() {} } },
   laneRailInner: { style: {}, innerHTML: "" }, UI_PALETTE: { charcoal800: "#171717" },
   roundRect: (...args) => { laneBackgrounds.push(args.slice(1, 5)); },
   drawCard: (_context, item, x, y, selected, layout) => { drawnLaneCards.push({ id: item.id, x, y, selected, height: layout.cardHeight, extended: Boolean(layout.viewerExtended) }); },

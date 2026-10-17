@@ -45,7 +45,7 @@ new vm.Script(`${source.slice(0, source.indexOf("const $ ="))}
   const roadmapLaneHovers = new Map(), SAMPLE_ROADMAP = {}, pendingLegacyImageBlobs = [];
   const inputs = new Map();
   function $(selector) { if (!inputs.has(selector)) inputs.set(selector, { value: "" }); return inputs.get(selector); }
-  function finishProductReorder() {} function closeViewerInfo() {} function closeInspector() {}
+  function finishProductReorder() {} function stopProductCardDrag() {} function closeViewerInfo() {} function closeInspector() {}
   function updateProductLayoutEditControls() {} function closeVariantPopover() {} function stopRoadmapSlotEditing() {}
   function scheduleSave() {} function syncControls() {} function renderInspector() {} function renderActiveView() {}
   function fitProductLanesVertically() {}

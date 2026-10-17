@@ -122,11 +122,11 @@ function appHarness({ remembered = true, view = "products", opening = false, red
     selectedId: "large-0", viewerInfoProgress: 1, viewerInfoProductId: "large-0", viewerInfoOpen: true, viewerInfoOutline: null,
     searchQuery: "outgoing search", roadmapSearchQuery: "outgoing roadmap search", productLayoutEditing: false, hoveredHeroVariant: null,
     productView, roadmapView: makeNode(), splitView: makeNode(), productControls: makeNode(), roadmapControls: makeNode(), viewerInfo: viewer, splitProduct: viewer,
-    canvas: {}, canvasScroll: scroll, zoom: 1, roadmapMonthWidth: 82, ROADMAP_DEFAULT_MONTH_WIDTH: 82,
+    canvas: { style: {}, hasPointerCapture: () => false }, canvasScroll: Object.assign(scroll, { classList: { remove() {} } }), zoom: 1, roadmapMonthWidth: 82, ROADMAP_DEFAULT_MONTH_WIDTH: 82,
     PRODUCT_MIN_ZOOM: .2, PRODUCT_MAX_ZOOM: 2, initialVerticalFitPending: false, categoryZoomPreferences: preferences,
     roadmapLaneHovers: [], roadmapPanState: null, roadmapDraft: null, roadmapDetailsOpen: false, roadmapInteractionMode: "pan",
     packageOperationInProgress: false, pptxExportInProgress: false, hashoutViewController: null, productCardHover: null,
-    dragState: null, productCardMotion: null, renderedCards: [],
+    dragState: null, panState: null, productCardMotion: null, productCardMotionFrame: null, renderedCards: [],
     $: get, document: Object.assign(h.document, { querySelectorAll: () => [] }),
     PortfolioModel: { ...globalThis.PortfolioModel, syncTimelineSettings() {} },
     PortfolioDetails: { focusMatch() { events.push({ type: "match" }); } },
@@ -150,7 +150,7 @@ function appHarness({ remembered = true, view = "products", opening = false, red
   });
   const initialization = appSource.match(/^const categoryViewTransition = [^\n]+/m)?.[0];
   assert.ok(initialization, "The actual app initializes the category transition against its Products view.");
-  vm.runInContext(initialization + ["activateCategory", "categoryNavigationLocked", "chooseCategoryNavigation", "isFfsRoadmap", "renderBoard", "renderActiveView", "fitProductLanesVertically", "setView", "scrollSelectedIntoView", "openPortfolioSearchResult"].map(extract).join("\n"), context);
+  vm.runInContext(initialization + ["stopProductCardDrag", "activateCategory", "categoryNavigationLocked", "chooseCategoryNavigation", "isFfsRoadmap", "renderBoard", "renderActiveView", "fitProductLanesVertically", "setView", "scrollSelectedIntoView", "openPortfolioSearchResult"].map(extract).join("\n"), context);
   const session = globalThis.PortfolioMasterClient.createSession({ adapter: {
     getProducts: () => portfolio.categories.flatMap(category => category.board.products.map(product => ({ ...product, categoryId: category.id }))),
     getBaselineProducts: () => portfolio.masterLocalBaseline,

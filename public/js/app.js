@@ -243,6 +243,7 @@ let dragState = null;
 let productCardMotion = null;
 let productCardMotionFrame = null;
 let panState = null;
+const productTouchPointers = new Set();
 let renderedCards = [];
 let renderedVariantOverflow = [];
 let renderedHeroVariantRegions = [];
@@ -1615,6 +1616,7 @@ function activateCategory(categoryId, { render = true, fitVertical = true } = {}
   const category = portfolio?.categories?.find((item) => item.id === categoryId) || portfolio?.categories?.[0];
   if (!category) throw new Error("The portfolio contains no usable categories.");
   const categoryChanged = activeCategoryId !== category.id;
+  stopProductCardDrag();
   roadmapLaneHovers.forEach((hover) => hover.clear({ immediate: true }));
   finishProductReorder({ render: false });
 
@@ -1702,6 +1704,34 @@ function visibleProducts() {
   const query = searchQuery.trim();
   if (!query) return products;
   return products.filter((product) => Boolean(globalThis.PortfolioSearch.matchProduct(product, query, { completeIndex: true })));
+}
+
+function syncProductEditorSelectionContext() {
+  const context = inspector?.querySelector("#editorSelectionContext");
+  if (!context) return;
+  const product = selectedProduct();
+  const outsideResults = Boolean(inspectorOpen && activeView === "products" && product && !visibleProducts().some(item => item.id === product.id));
+  const message = outsideResults ? `Editing ${product.name} — outside current results` : "";
+  if (context.textContent !== message) context.textContent = message;
+  context.classList.toggle("hidden", !outsideResults);
+}
+
+function reconcileProductSearchSelection() {
+  const visible = new Set(visibleProducts().map(product => product.id));
+  // Search must never rebuild an open editor: a partially entered field may not
+  // have been committed to the product yet. Keep that explicit edit target.
+  if (selectedId && !visible.has(selectedId) && !inspectorOpen) {
+    selectedId = null;
+    renderInspector();
+  }
+  if (viewerInfoProductId && !visible.has(viewerInfoProductId)) closeViewerInfo({ render: false });
+  syncProductEditorSelectionContext();
+}
+
+function setProductSearchQuery(query) {
+  searchQuery = query;
+  reconcileProductSearchSelection();
+  renderBoard();
 }
 
 function portfolioForSearch() {
@@ -4744,12 +4774,14 @@ function restoreProductCardReorder(targetBoard, operation, blockedLanes) {
 }
 
 function stopProductCardDrag() {
-  const pointerId = dragState?.pointerId;
+  const pointerIds = [dragState?.pointerId, panState?.pointerId];
   dragState = null;
+  panState = null;
+  canvasScroll.classList.remove("is-panning");
   if (productCardMotionFrame != null) cancelAnimationFrame(productCardMotionFrame);
   productCardMotionFrame = null;
   productCardMotion = null;
-  if (pointerId != null && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+  for (const pointerId of pointerIds) if (pointerId != null && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
   canvas.style.cursor = "grab";
 }
 
@@ -4862,6 +4894,7 @@ function syncRoadmapDetailsVisibility() {
 }
 
 function setView(view, { focusSelected = false } = {}) {
+  stopProductCardDrag();
   if (typeof categoryViewTransition !== "undefined") categoryViewTransition?.cancel();
   if (typeof hashoutViewController !== "undefined") hashoutViewController?.closeOverlay?.();
   closePopupMenus();
@@ -5015,6 +5048,7 @@ function renderBoard() {
   syncViewZoomControls();
   renderStatus();
   if (typeof syncCatalogFilterControls === "function") syncCatalogFilterControls();
+  if (typeof syncProductEditorSelectionContext === "function") syncProductEditorSelectionContext();
   positionViewerInfo();
   if (typeof productCardActionLayer !== "undefined") syncProductCardActions();
   if (typeof productCardHover !== "undefined") productCardHover?.sync();
@@ -5152,14 +5186,15 @@ function positionViewerInfo() {
   viewerInfo.style.left = `${left}px`;
   viewerInfo.style.top = `${top}px`;
   viewerInfo.style.transform = "none";
-  viewerInfo.style.opacity = presentation.discontinued ? ".4" : "1";
+  // The board card stays subdued; its opened reading surface must stay legible.
+  viewerInfo.style.opacity = "1";
   viewerInfo.style.clipPath = stacked ? `inset(0 0 ${hiddenPercent}% 0)` : `inset(0 ${hiddenPercent}% 0 0)`;
   viewerInfo.style.pointerEvents = viewerInfoProgress > .96 ? "auto" : "none";
 
   if (viewerInfoOutline) {
     const outlineWidth = stacked ? visibleWidth : (CARD_WIDTH * zoom) + visibleWidth;
     viewerInfoOutline.classList.toggle("is-open", viewerInfoProgress > .001);
-    viewerInfoOutline.style.opacity = presentation.discontinued ? ".4" : "1";
+    viewerInfoOutline.style.opacity = "1";
     viewerInfoOutline.style.borderColor = presentation.cardStyle?.selection || presentation.cardStyle?.accent || UI_PALETTE.selection;
     viewerInfoOutline.style.left = `${(card.integrationX ?? card.x) * zoom}px`;
     viewerInfoOutline.style.top = `${card.y * zoom}px`;
@@ -5553,10 +5588,19 @@ function openInspector(sectionId = "") {
 function closeInspector() {
   const restoreEditorFocus = inspector.contains(document.activeElement);
   inspectorOpen = false;
+  if (activeView === "products") reconcileProductSearchSelection();
   updateDataEditIndicator();
   applyInspectorState(!selectedProduct());
   if (activeView === "products") renderBoard();
-  if (restoreEditorFocus) $("#quickEditSelected")?.focus();
+  if (restoreEditorFocus) {
+    const target = $(selectedProduct() ? "#quickEditSelected" : "#searchInput");
+    const focusAfterClose = document.activeElement;
+    // Let the closing click finish bubbling before focusing Search, otherwise
+    // its outside-click handler immediately blurs the newly focused input.
+    requestAnimationFrame(() => {
+      if (!inspectorOpen && document.activeElement === focusAfterClose && target?.isConnected !== false) target?.focus({ preventScroll: true });
+    });
+  }
 }
 
 function clearVariantHoverTimers() {
@@ -5739,7 +5783,7 @@ function renderInspector() {
   const statusSelection = effectiveCardStatus(product), lifecycleSelection = effectiveRoadmapStatus(product);
   inspector.innerHTML = `
     <div class="inspector-heading">
-      <div><span class="eyebrow">Selected product</span><h2>${escapeHtml(product.name)}</h2></div>
+      <div><span class="eyebrow">Selected product</span><h2>${escapeHtml(product.name)}</h2><p id="editorSelectionContext" class="editor-selection-context hidden" role="status" aria-atomic="true"></p></div>
       <div class="inspector-actions">
         <button id="mergeProduct" type="button" title="Combine information from another product">Merge</button>
         <button id="deleteProduct" class="danger-button">Delete</button>
@@ -5918,6 +5962,7 @@ function renderInspector() {
 `;
 
   setupEditorNavigation();
+  syncProductEditorSelectionContext();
 
   $("#deleteProduct").onclick = deleteSelected;
   $("#mergeProduct").onclick = () => globalThis.PortfolioProductMergeUI?.open({ productId: product.id });
@@ -6566,8 +6611,73 @@ if (globalThis.PortfolioViewRuntime) {
   });
 }
 
+function activateProductCanvasTouch(event) {
+  const point = canvasPoint(event);
+  const infoButton = hitInfoButton(point);
+  if (infoButton) { openViewerInfo(infoButton.productId); return; }
+  const heroVariant = hitHeroVariant(point);
+  if (heroVariant) {
+    selectedId = heroVariant.productId;
+    togglePinnedHeroVariant(heroVariant.productId, heroVariant.variantId);
+    renderInspector();
+    return;
+  }
+  const variantOverflow = hitVariantOverflow(point);
+  if (variantOverflow) {
+    if (variantPopoverPinned && variantPopoverKey === variantOverflow.key) closeVariantPopover({ force: true });
+    else {
+      selectedId = variantOverflow.productId;
+      renderInspector(); renderBoard();
+      openVariantPopover(variantOverflow, event.clientX, event.clientY, { pinned: true });
+    }
+    return;
+  }
+  closeVariantPopover({ force: true });
+  const card = hitCard(point);
+  if (!card) { clearSelection(); return; }
+  if (viewerInfoProductId && viewerInfoProgress > .001 && viewerInfoProductId !== card.productId) openViewerInfo(card.productId);
+  else { selectedId = card.productId; renderInspector(); }
+  stopRoadmapSlotEditing();
+  renderBoard();
+}
+
+// Observe additional fingers even when they start outside the canvas. A canceled
+// single-finger gesture must never become a tap or commit a reorder on release.
+window.addEventListener("pointerdown", (event) => {
+  if (event.pointerType !== "touch") return;
+  productTouchPointers.add(event.pointerId);
+  if (productTouchPointers.size > 1 && (dragState || panState)) {
+    stopProductCardDrag(); renderBoard();
+  }
+}, { capture: true, passive: true });
+for (const type of ["pointerup", "pointercancel"]) window.addEventListener(type, (event) => {
+  productTouchPointers.delete(event.pointerId);
+}, { capture: true, passive: true });
+window.addEventListener("blur", () => {
+  productTouchPointers.clear();
+  const active = Boolean(dragState || panState || productCardMotion);
+  stopProductCardDrag();
+  if (active) renderBoard();
+});
+
 canvas.addEventListener("pointerdown", (event) => {
-  if (event.isPrimary === false || event.button !== 0 || dragState || panState) return;
+  if (event.pointerType === "touch") {
+    productTouchPointers.add(event.pointerId);
+    if (event.isPrimary === false || productTouchPointers.size > 1) {
+      stopProductCardDrag(); return;
+    }
+  }
+  if (activeView !== "products" || event.isPrimary === false || event.button !== 0 || dragState || panState) return;
+  if (event.pointerType === "touch" && !productLayoutEditing) {
+    // Do not select, activate a card control, capture, or suppress a native
+    // gesture until intent is known. A touch tap is activated on pointerup.
+    panState = {
+      pointerId: event.pointerId, touch: true, startX: event.clientX, startY: event.clientY,
+      scrollLeft: canvasScroll.scrollLeft, moved: false, horizontal: false,
+      board, categoryId: activeCategoryId, zoom, searchQuery,
+    };
+    return;
+  }
   const point = canvasPoint(event);
   const infoButton = productLayoutEditing ? null : hitInfoButton(point);
   if (infoButton) {
@@ -6608,6 +6718,7 @@ canvas.addEventListener("pointerdown", (event) => {
       startY: event.clientY,
       scrollLeft: canvasScroll.scrollLeft,
       moved: false,
+      board, categoryId: activeCategoryId, zoom, searchQuery,
     };
     canvas.setPointerCapture(event.pointerId);
     canvasScroll.classList.add("is-panning");
@@ -6640,6 +6751,7 @@ canvas.addEventListener("pointerdown", (event) => {
       scrollLeft: canvasScroll.scrollLeft,
       moved: false,
       cardProductId: card.productId,
+      board, categoryId: activeCategoryId, zoom, searchQuery,
     };
     canvas.setPointerCapture(event.pointerId);
     canvasScroll.classList.add("is-panning");
@@ -6650,14 +6762,31 @@ canvas.addEventListener("pointerdown", (event) => {
 canvas.addEventListener("pointermove", (event) => {
   if ((dragState || panState)?.pointerId !== undefined && event.pointerId !== (dragState || panState).pointerId) return;
   if (panState) {
+    if (panState.board && (panState.board !== board || panState.categoryId !== activeCategoryId || panState.zoom !== zoom || panState.searchQuery !== searchQuery || activeView !== "products")) {
+      stopProductCardDrag(); return;
+    }
     const deltaX = event.clientX - panState.startX;
     const deltaY = event.clientY - panState.startY;
+    if (panState.touch) {
+      if (!panState.horizontal) {
+        if (Math.hypot(deltaX, deltaY) < 8) return;
+        panState.moved = true;
+        // Yield vertical or diagonal swipes immediately. The pre-existing
+        // pan-y/pinch-zoom touch action lets the browser own those gestures.
+        if (Math.abs(deltaX) < Math.abs(deltaY) * 1.2) { stopProductCardDrag(); return; }
+        panState.horizontal = true;
+        canvas.setPointerCapture(event.pointerId);
+        canvasScroll.classList.add("is-panning");
+      }
+      event.preventDefault();
+    }
     if (!panState.moved && Math.hypot(deltaX, deltaY) >= 5) panState.moved = true;
     canvasScroll.scrollLeft = panState.scrollLeft - deltaX;
     return;
   }
 
   if (!dragState) {
+    if (event.pointerType === "touch") return;
     const point = canvasPoint(event);
     const heroVariant = productLayoutEditing ? null : hitHeroVariant(point);
     if (heroVariant) setHoveredHeroVariant(heroVariant.productId, heroVariant.variantId);
@@ -6692,13 +6821,19 @@ canvas.addEventListener("pointerleave", () => {
 function finishDrag(event) {
   if (panState) {
     if (event.pointerId !== panState.pointerId) return;
-    const wasClick = !panState.moved;
-    const cardProductId = panState.cardProductId || "";
+    const current = panState;
+    // An up beyond the threshold can arrive without a final move event.
+    const tapTravel = Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+      ? Math.hypot(event.clientX - current.startX, event.clientY - current.startY) : 0;
+    const valid = !current.board || (current.board === board && current.categoryId === activeCategoryId && current.zoom === zoom && current.searchQuery === searchQuery && activeView === "products");
+    const wasClick = valid && event.type === "pointerup" && !current.moved && (!current.touch || tapTravel < 8);
+    const cardProductId = current.cardProductId || "";
     panState = null;
     canvasScroll.classList.remove("is-panning");
     if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
     syncBoardNavigator();
-    if (wasClick && !cardProductId) clearSelection();
+    if (wasClick && current.touch && !productLayoutEditing) activateProductCanvasTouch(event);
+    else if (wasClick && !cardProductId) clearSelection();
     return;
   }
   if (!dragState) return;
@@ -7926,20 +8061,22 @@ function renderLaneSettingsEditor() {
 }
 
 function openCategorySettings() {
+  if (globalThis.PortfolioDialogs?.isOpen?.()) return;
+  const returnFocus = globalThis.PortfolioWorkspaceUI?.closeSettings?.({ restoreFocus: false }) || document.activeElement;
   closePopupMenus();
   const category = activeCategoryRecord();
   if (!category) return;
   $("#settingsCategoryName").value = category.name;
   $("#settingsBoardTitle").value = board.title;
   $("#settingsRoadmapLabel").value = board.settings.roadmap.categoryLabel;
+  [$("#settingsCategoryName"), $("#settingsBoardTitle"), $("#settingsRoadmapLabel")].forEach((field) => field.setCustomValidity(""));
   categorySettingsDraftLanes = sortedLanes().map((lane) => ({ ...lane }));
   renderLaneSettingsEditor();
-  categorySettingsDialog.classList.remove("hidden");
-  requestAnimationFrame(() => $("#settingsBoardTitle").focus());
+  globalThis.PortfolioWorkspaceUI?.openCategorySettings?.({ returnFocus, initialFocus: $("#settingsBoardTitle") });
 }
 
 function closeCategorySettings() {
-  categorySettingsDialog.classList.add("hidden");
+  globalThis.PortfolioWorkspaceUI?.closeCategorySettings?.();
 }
 
 function saveCategorySettings() {
@@ -7955,7 +8092,15 @@ function saveCategorySettings() {
       subtitle: String(lane.subtitle || "").trim(),
       order,
     }));
-  if (!categoryName || !boardTitle || !roadmapLabel || !lanes.length) return;
+  const requiredFields = [$("#settingsCategoryName"), $("#settingsBoardTitle"), $("#settingsRoadmapLabel")];
+  const invalidField = requiredFields.find((field) => !field.value.trim());
+  if (invalidField) {
+    invalidField.setCustomValidity("Enter a value that contains more than spaces.");
+    invalidField.reportValidity();
+    invalidField.focus();
+    return;
+  }
+  if (!lanes.length) return;
   const validLaneIds = new Set(lanes.map((lane) => lane.id));
   const fallbackLaneId = lanes[0].id;
   category.name = categoryName;
@@ -8625,6 +8770,9 @@ canvasScroll.addEventListener("scroll", () => {
   productCardHover?.sync(); queueBoardScrollPaint?.();
 }, { passive: true });
 canvasScroll.addEventListener("wheel", (event) => {
+  // Trackpad pinch and browser zoom belong to the browser, even when a small
+  // horizontal delta accompanies the gesture.
+  if (event.ctrlKey || event.metaKey) return;
   const max = horizontalScrollMax();
   if (max <= 0) return;
   const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
@@ -8654,6 +8802,7 @@ navRight.onclick = () => scrollBoardBy(Math.max(260, canvasScroll.clientWidth * 
 $("#addProduct").onclick = addProduct;
 $("#categorySettings").onclick = openCategorySettings;
 categorySettingsForm.onsubmit = (event) => { event.preventDefault(); saveCategorySettings(); };
+categorySettingsForm.addEventListener("input", (event) => event.target.setCustomValidity?.(""));
 $("#closeCategorySettings").onclick = closeCategorySettings;
 $("#cancelCategorySettings").onclick = closeCategorySettings;
 $("#addLaneSetting").onclick = () => {
@@ -8786,7 +8935,7 @@ pptxExportDialog.addEventListener("keydown", (event) => {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   }
 });
-$("#searchInput").oninput = (event) => { searchQuery = event.target.value; renderBoard(); };
+$("#searchInput").oninput = (event) => setProductSearchQuery(event.target.value);
 $("#showPrices").onchange = (event) => updateBoard((current) => { current.settings.showPrices = event.target.checked; });
 $("#showSkus").onchange = (event) => updateBoard((current) => { current.settings.showSkus = event.target.checked; });
 $("#hideDiscontinued").onchange = (event) => setCatalogHideDiscontinued(event.target.checked);
@@ -8931,7 +9080,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest(".popup-menu-shell") && !event.target.closest(".popup-menu") && !event.target.closest(".workspace-tool-menu") && !event.target.closest("#workspaceSettingsDialog")) closePopupMenus();
 });
 window.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
+  if (event.key !== "Escape" || event.defaultPrevented || globalThis.PortfolioDialogs?.isOpen?.()) return;
   if (document.querySelector("dialog[open]")) return;
   closePopupMenus();
   closeVariantPopover({ force: true });

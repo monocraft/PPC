@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 await import("../../public/js/portfolio-search.js");
 await import("../../public/js/portfolio-search-ui.js");
+await import("../../public/js/portfolio-model.js");
 
 function createDocument() {
   const doc = { activeElement: null, defaultView: { innerHeight: 800 } };
@@ -39,10 +41,14 @@ function createDocument() {
     fire(type, payload = {}) {
       const event = { target: this, key: "", bubbles: true, defaultPrevented: false, propagationStopped: false,
         preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.propagationStopped = true; }, ...payload };
-      for (let node = this; node; node = event.bubbles && !event.propagationStopped ? node.parentNode : null) {
+      // Native dispatch snapshots the path before handlers can remove a node.
+      const path = [];
+      for (let node = this; node; node = node.parentNode) path.push(node);
+      for (const node of path) {
         event.currentTarget = node;
         node[`on${type}`]?.(event);
         for (const listener of [...(node.events.get(type) || [])]) listener(event);
+        if (!event.bubbles || event.propagationStopped) break;
       }
       return event;
     }
@@ -250,6 +256,56 @@ assert.ok([...clean.document.events.values()].every((listeners) => listeners.len
 clean.type("HP001"); assert.equal(clean.localFilter(), "HP001"); clean.document.fire("portfolio:render"); detachedRow.fire("click");
 assert.equal(clean.calls.length, 0); assert.equal(clean.controller.getState().destroyed, true);
 
+// Exercise editor closure against the complete production search controller.
+// Its document click listener must finish before focus returns to Search.
+const appSource = await readFile(new URL("../../public/js/app.js", import.meta.url), "utf8");
+const appFunction = name => {
+  const definition = appSource.match(new RegExp(`^function ${name}\\([^]*?^\\}`, "m"));
+  assert.ok(definition, `exercise actual ${name} with production search events`);
+  return definition[0];
+};
+for (const scenario of ["pointer", "keyboard", "visible", "newer focus", "reopened editor"]) {
+  const h = fixture(), doc = h.document, frames = [];
+  const inspector = doc.createElement("aside"), close = doc.createElement("button"), edit = doc.createElement("button");
+  inspector.append(close); doc.body.append(inspector, edit);
+  const portfolioBefore = JSON.stringify(h.getPortfolio());
+  const state = { inspector, inspectorOpen: true, activeView: "products", selectedId: "current", viewerInfoProductId: null, searchQuery: "",
+    board: h.getPortfolio().categories[0].board, PortfolioModel: globalThis.PortfolioModel, PortfolioSearch: globalThis.PortfolioSearch, document: doc,
+    $: selector => selector === "#quickEditSelected" ? edit : selector === "#searchInput" ? h.inputs[0] : null,
+    requestAnimationFrame(callback) { frames.push(callback); }, updateDataEditIndicator() {},
+    renderInspector() {
+      assert.equal(state.inspectorOpen, false);
+      const removedFocus = inspector.contains(doc.activeElement);
+      inspector.replaceChildren();
+      if (removedFocus) doc.activeElement = doc.body;
+      edit.disabled = !state.selectedProduct();
+    },
+    closeViewerInfo() { throw new Error("No read panel is open in this fixture"); },
+    renderBoard() { doc.fire("portfolio:render"); },
+  };
+  vm.createContext(state);
+  vm.runInContext(["selectedProduct", "visibleProducts", "syncProductEditorSelectionContext", "reconcileProductSearchSelection", "setProductSearchQuery", "applyInspectorState", "closeInspector"].map(appFunction).join("\n"), state);
+  h.inputs[0].oninput = event => state.setProductSearchQuery(event.target.value);
+  h.type(scenario === "visible" ? "Cloud" : "HP001");
+  assert.equal(state.selectedId, "current", "filtering preserves the already open editor target");
+  assert.equal(h.controller.getState("searchInput").open, true, "the production search listener is active");
+  close.onclick = state.closeInspector;
+  close.focus();
+  if (scenario === "pointer") close.fire("pointerdown");
+  close.fire("click", { detail: scenario === "keyboard" ? 0 : 1 });
+  assert.equal(h.controller.getState("searchInput").open, false, "the real bubbled outside click closes suggestions");
+  assert.notEqual(doc.activeElement, h.inputs[0], "focus waits until the closing event has finished bubbling");
+  if (scenario === "newer focus") h.outside.focus();
+  if (scenario === "reopened editor") state.inspectorOpen = true;
+  while (frames.length) frames.shift()();
+  if (scenario === "newer focus") assert.equal(doc.activeElement, h.outside, "deferred restoration never steals a newer intentional focus");
+  else if (scenario === "reopened editor") assert.equal(doc.activeElement, doc.body, "a newly reopened editor cancels stale close focus");
+  else assert.equal(doc.activeElement, scenario === "visible" ? edit : h.inputs[0], "pointer and keyboard closure return focus to a usable target after production dismissal");
+  assert.equal(state.selectedId, scenario === "visible" ? "current" : null);
+  assert.equal(JSON.stringify(h.getPortfolio()), portfolioBefore, "focus restoration cannot change products, placements or saved facts");
+  h.controller.destroy();
+}
+
 const css = await readFile(new URL("../../public/css/portfolio-search.css", import.meta.url), "utf8");
 const source = await readFile(new URL("../../public/js/portfolio-search-ui.js", import.meta.url), "utf8");
 assert.match(css, /\.portfolio-search-shell\s*\{[^}]*--search-idle-width:\s*36px[^}]*flex:\s*0 0 var\(--search-idle-width\)[^}]*width:\s*var\(--search-idle-width\)/s, "Idle desktop search reserves only a compact magnifier target.");
@@ -260,4 +316,4 @@ assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.portfoli
 assert.match(css, /portfolio-search-panel\s*\{[^}]*position:\s*absolute[^}]*max-width:\s*calc\(100vw - 40px\)[^}]*max-height:\s*min\(320px[^}]*overflow:\s*auto/s);
 assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.portfolio-search-panel\s*\{[^}]*position:\s*fixed[^}]*left:\s*12px[^}]*right:\s*12px[^}]*width:\s*auto/);
 assert.doesNotMatch(source, /\.innerHTML\s*=|\bfetch\s*\(|localStorage|saveChanges\s*\(/);
-console.log("Portfolio search UI checks passed: compact idle and expanded focus/query states, cross-category name/SKU lookup, additive local filters, accessible keyboard selection, cancellation, current result validation, literal text rendering, counts and bounded paging, outside/focus dismissal, view switching, metadata immutability, and full listener cleanup.");
+console.log("Portfolio search UI checks passed: compact idle and expanded focus/query states, cross-category name/SKU lookup, additive local filters, accessible keyboard selection, cancellation, current result validation, literal text rendering, counts and bounded paging, production outside/focus dismissal with guarded editor-close return, view switching, metadata immutability, and full listener cleanup.");
