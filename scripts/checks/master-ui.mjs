@@ -14,6 +14,24 @@ const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve
 
 function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null, mode = "service", describeChanges = model.describeChanges } = {}) {
   const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, adoptions: 0, discards: [], undos: [], beforeSaves: 0, packageOpens: [] };
+  let now = 1700000000000, timerId = 0;
+  const timers = new Map();
+  const clock = {
+    now: () => now,
+    count: () => timers.size,
+    async advance(milliseconds) {
+      const until = now + milliseconds;
+      for (;;) {
+        const next = [...timers].filter(([, timer]) => timer.at <= until).sort((left, right) => left[1].at - right[1].at)[0];
+        if (!next) break;
+        const [id, timer] = next; now = timer.at;
+        if (timer.interval) timer.at += timer.interval; else timers.delete(id);
+        timer.callback(); await flush();
+      }
+      now = until; await flush();
+    },
+  };
+  const schedule = (callback, delay, interval) => { const id = ++timerId; timers.set(id, { callback, at: now + delay, interval }); return id; };
   const notificationEvents = [], messageStore = globalThis.PortfolioNotifications.createStore({ acknowledgmentStorage });
   const syncNotices = () => { notices.clear(); for (const item of messageStore.getState().items) notices.set(item.id, item); };
   messageStore.subscribe(event => { notificationEvents.push(event); syncNotices(); });
@@ -29,6 +47,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
       dispatchEvent(event) { for (const handler of handlers.get(event.type) || []) handler({ preventDefault() {}, stopImmediatePropagation() {}, ...event }); },
       querySelector(selector) { return all(this).slice(1).find((child) => selector === "[autofocus]" ? attributes.has("autofocus") : selector.split(",").some((tagName) => child.tagName === tagName.toUpperCase())); },
       focus() { document.activeElement = this; }, showModal() { this.open = true; }, close() { this.open = false; }, remove() { this.isConnected = false; },
+      getBoundingClientRect: () => ({ left: 100, right: 500, top: 100, bottom: 400 }),
     };
     Object.defineProperty(node, "innerHTML", { set() { throw new Error("Review copy must stay plain text."); } });
     return node;
@@ -41,12 +60,13 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
   let saveHandler = async () => { state.pending = []; return { saved: true, snapshot: state.snapshot }; };
   let scopedSaveHandler = async () => ({ status: "saved", saved: true, message: "Imported values shared." });
   let refreshHandler = async () => { state.connected = true; };
+  let connectHandler = async () => { state.hasKey = true; };
   let githubHandler = async () => ({ login: "test-user" });
   let discardedPending = [], discardFailure = false;
   const session = {
     getState: () => state, track: () => state.pending,
     async refresh() { calls.refreshes += 1; return refreshHandler(); },
-    async connect(options) { calls.connects.push(options); state.hasKey = true; },
+    async connect(options) { calls.connects.push(options); return connectHandler(options); },
     async save(options) { calls.saves.push(options); return saveHandler(options); },
     async saveScoped(options) { calls.scopedSaves.push(options); return scopedSaveHandler(options); },
     disconnect() { calls.disconnects += 1; state.hasKey = false; },
@@ -68,12 +88,15 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
     PortfolioPackageUI: { open: mode => calls.packageOpens.push(mode) },
     PortfolioProductMergeAdapter: { getImageSource: (id) => id === "local-image" ? "blob:local-preview" : id === "latest-image" ? "blob:latest-preview" : "" },
     PortfolioNotifications: { publish(notice) { const result = messageStore.publish(notice); syncNotices(); return result; }, resolve: messageStore.resolve, show() {} },
-    addEventListener(name, handler) { listeners.set(name, handler); }, dispatchEvent() {}, setInterval: () => 1, clearInterval() {},
+    addEventListener(name, handler) { listeners.set(name, handler); }, dispatchEvent() {},
+    Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } },
+    setInterval: (callback, delay) => schedule(callback, delay, delay), clearInterval: id => timers.delete(id),
+    setTimeout: (callback, delay) => schedule(callback, delay, 0), clearTimeout: id => timers.delete(id),
   };
   vm.createContext(sandbox); new vm.Script(source).runInContext(sandbox);
   const api = sandbox.PortfolioMasterUI.initialize({ source: { mode, team: mode === "service", owner: "fixture", repo: "fixture", endpoint: "https://private.example/api/master" }, adapter });
   const dialog = document.getElementById("masterDialog");
-  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, saveButton, document, adapter, calls, notices, state, listeners, messageStore, notificationEvents, setSave: (handler) => { saveHandler = handler; }, setGitHub: handler => { githubHandler = handler; }, setRefresh: (handler) => { refreshHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
+  return { api, publicApi: sandbox.PortfolioMasterUI, dialog, button, saveButton, document, adapter, calls, notices, state, listeners, messageStore, notificationEvents, clock, setSave: (handler) => { saveHandler = handler; }, setGitHub: handler => { githubHandler = handler; }, setRefresh: (handler) => { refreshHandler = handler; }, setConnect: (handler) => { connectHandler = handler; }, setScopedSave: (handler) => { scopedSaveHandler = handler; }, failDiscard: () => { discardFailure = true; }, submit: () => byTag(dialog, "form")[0].dispatchEvent({ type: "submit" }) };
 }
 
 const base = model.productValues({ id: "p1", name: "Headset", specs: [{ id: "s1", label: "Weight", value: "200g" }, { id: "s2", label: "Notes", value: "Original" }], partSkus: [], variantGroups: [], roadmap: { startMonth: "2027-01", endMonth: "2028-01" } });
@@ -254,6 +277,212 @@ assert.match(text(savingReview.dialog), /Saving changes/, "a standalone conflict
 await savingReview.api.save();
 assert.equal(savingReview.calls.beforeSaves, 1, "a busy save does not restart the layout settlement hook");
 finishSaving({ saved: true }); await savingReviewFlow;
+assert.equal(savingReview.clock.count(), 1, "completion removes the visible progress timer and keeps only the existing refresh interval");
+assert.equal(savingReview.dialog.open, false);
+
+async function heldProgress() {
+  const review = createUi([edited]); await flush();
+  let finish, fail;
+  const held = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+  review.setSave(async () => { review.state.busy = true; try { return await held; } finally { review.state.busy = false; } });
+  const operation = review.api.save(); review.submit(); await flush();
+  return { review, operation, finish, fail };
+}
+const keepWorking = review => byTag(review.dialog, "button").find(button => button.textContent === "Keep working");
+const closeProgress = review => byTag(review.dialog, "button").find(button => button.getAttribute("aria-label") === "Close save progress");
+
+for (const dismissal of ["keep-working", "close", "escape", "outside"]) {
+  const { review, operation, finish } = await heldProgress();
+  const drafts = structuredClone(review.state.pending), refreshes = review.calls.refreshes;
+  assert.equal(review.dialog.open, true); assert.equal(review.clock.count(), 2, "visible progress adds one bounded elapsed-time timer beside the existing refresh timer");
+  assert.equal(byClass(review.dialog, "master-progress-title").length, 1);
+  assert.equal(byClass(review.dialog, "master-progress-detail").length, 1);
+  assert.equal(byClass(review.dialog, "master-progress-elapsed").length, 1);
+  assert.ok(keepWorking(review)); assert.ok(closeProgress(review), "save progress has an explicitly named close control");
+  await review.clock.advance(9000);
+  const beforeWait = text(byClass(review.dialog, "master-progress-detail")[0]);
+  await review.clock.advance(1000);
+  const afterWait = text(byClass(review.dialog, "master-progress-detail")[0]);
+  assert.notEqual(afterWait, beforeWait, "a longer wait changes the explanatory copy at ten seconds");
+  assert.match(afterWait, /wait|respond|longer|still|working|confirm/i);
+  assert.doesNotMatch(text(review.dialog), /\d+\s*%/, "an indeterminate save never fabricates a completion percentage");
+  assert.match(text(byClass(review.dialog, "master-progress-elapsed")[0]), /10/);
+  if (dismissal === "keep-working") keepWorking(review).dispatchEvent({ type: "click" });
+  else if (dismissal === "close") closeProgress(review).dispatchEvent({ type: "click" });
+  else if (dismissal === "escape") review.dialog.dispatchEvent({ type: "cancel" });
+  else review.dialog.dispatchEvent({ type: "click", target: review.dialog, clientX: 0, clientY: 0 });
+  assert.equal(review.dialog.open, false, `${dismissal} dismisses the progress presentation`);
+  assert.equal(review.clock.count(), 1, "hidden progress stops its own timer rather than polling off screen");
+  assert.equal(review.api.getSummary().busy, true); assert.equal(review.state.busy, true);
+  assert.deepEqual(review.state.pending, drafts); assert.equal(review.state.hasKey, true); assert.equal(review.calls.disconnects, 0);
+  assert.equal(review.document.activeElement, review.saveButton, "dismissal returns keyboard focus to the persistent save status action");
+  assert.equal(review.saveButton.disabled, false, "an ongoing save can be inspected again from the header");
+  await review.api.refresh();
+  assert.equal(review.calls.refreshes, refreshes, "hiding progress does not permit a competing refresh");
+  assert.equal((await review.publicApi.saveScoped({ patches: [] })).code, "MASTER_BUSY");
+  assert.equal(review.calls.scopedSaves.length, 0);
+  assert.equal(review.publicApi.reviewConflicts(reviewConflicts), null, "an independent conflict chooser cannot replace the current save");
+  await review.clock.advance(5000);
+  review.saveButton.dispatchEvent({ type: "click" }); await flush();
+  assert.equal(review.dialog.open, true); assert.equal(review.clock.count(), 2);
+  assert.match(text(byClass(review.dialog, "master-progress-elapsed")[0]), /15/, "reopening retains the operation's original start time");
+  assert.equal(review.calls.beforeSaves, 1); assert.equal(review.calls.saves.length, 1); assert.equal(review.calls.connects.length, 0);
+  await review.api.save();
+  assert.equal(review.calls.beforeSaves, 1); assert.equal(review.calls.saves.length, 1, "API and header reopens never submit another save");
+  keepWorking(review).dispatchEvent({ type: "click" }); review.state.pending = [];
+  const ongoingEdit = review.document.createElement("input"); ongoingEdit.focus();
+  finish({ saved: true }); await operation;
+  assert.equal(review.dialog.open, false, "a hidden save completes without reopening a modal");
+  assert.equal(review.document.activeElement, ongoingEdit, "background completion leaves the user's current edit focus alone");
+  assert.equal(review.clock.count(), 1); assert.equal(review.api.getSummary().busy, false);
+  assert.equal(review.notices.get("master-save-result").title, "Changes saved"); assert.equal(review.saveButton.hidden, true);
+}
+
+for (const outcome of ["success", "failure"]) {
+  const { review, operation, finish, fail } = await heldProgress();
+  assert.equal(review.dialog.open, true);
+  if (outcome === "success") { review.state.pending = []; finish({ saved: true }); }
+  else fail(new Error("The visible request failed"));
+  await operation;
+  assert.equal(review.dialog.open, false); assert.equal(review.clock.count(), 1); assert.equal(review.api.getSummary().busy, false);
+  assert.equal(review.document.activeElement, outcome === "success" ? review.button : review.saveButton,
+    "visible completion restores focus to Updates when clean, or the actionable Save control when drafts remain");
+  assert.equal(review.document.activeElement.disabled, false); assert.equal(review.document.activeElement.hidden, false);
+}
+
+{
+  const { review, operation, fail } = await heldProgress();
+  keepWorking(review).dispatchEvent({ type: "click" });
+  fail(new Error("Private backend detail at https://private.example/?key=secret")); await operation;
+  assert.equal(review.dialog.open, false); assert.equal(review.clock.count(), 1); assert.equal(review.api.getSummary().busy, false);
+  assert.equal(review.state.pending.length, 1); assert.equal(review.state.hasKey, true);
+  assert.equal(review.saveButton.textContent, "Save changes (1)"); assert.equal(review.saveButton.disabled, false);
+  assert.equal(review.notices.get("master-sync-error").title, "Changes still need saving");
+  assert.doesNotMatch(review.notices.get("master-sync-error").message, /private|secret|backend/i);
+}
+
+{
+  const { review, operation, finish } = await heldProgress();
+  keepWorking(review).dispatchEvent({ type: "click" });
+  review.state.pending = [{ ...structuredClone(edited), productId: "later-draft", productName: "Edited after submission" }];
+  finish({ saved: true }); await operation;
+  assert.equal(review.state.pending[0].productId, "later-draft");
+  assert.equal(review.saveButton.textContent, "Save changes (1)"); assert.equal(review.saveButton.hidden, false); assert.equal(review.saveButton.disabled, false);
+  assert.equal(review.notices.get("master-save-result").title, "Changes saved");
+  assert.match(review.notices.get("master-pending").message, /1 product.*unsaved/, "accepted earlier changes do not hide newer pending work");
+}
+
+{
+  const review = createUi([edited]); await flush(); let releaseConflict, choices;
+  const held = new Promise(resolve => { releaseConflict = resolve; });
+  review.setSave(async ({ resolveConflicts }) => {
+    review.state.busy = true;
+    try { await held; choices = await resolveConflicts(reviewConflicts); return { saved: false, cancelled: true }; }
+    finally { review.state.busy = false; }
+  });
+  const operation = review.api.save(); review.submit(); await flush(); keepWorking(review).dispatchEvent({ type: "click" });
+  releaseConflict(); await flush();
+  assert.equal(review.dialog.open, true); assert.match(text(review.dialog), /Choose the final values/);
+  assert.equal(review.clock.count(), 1, "a conflict chooser does not retain the progress repaint timer");
+  assert.ok(byTag(review.dialog, "input").every(radio => radio.checked !== true && radio.required === true));
+  assert.equal(byTag(review.dialog, "button").find(button => button.type === "submit").disabled, true);
+  review.saveButton.dispatchEvent({ type: "click" }); await review.api.save();
+  assert.match(text(review.dialog), /Choose the final values/, "progress reopening never replaces a required conflict decision");
+  assert.equal(review.clock.count(), 1); assert.equal(review.calls.saves.length, 1); assert.equal(review.calls.beforeSaves, 1);
+  review.dialog.dispatchEvent({ type: "cancel" }); await operation;
+  assert.equal(choices, null); assert.equal(review.state.pending.length, 1); assert.equal(review.notices.has("master-save-result"), false);
+  assert.equal(review.clock.count(), 1); assert.equal(review.api.getSummary().busy, false);
+}
+
+for (const replacement of ["adopt", "disconnect", "destroy"]) {
+  for (const outcome of ["success", "failure"]) {
+    const { review, operation, finish, fail } = await heldProgress();
+    if (replacement === "adopt") review.publicApi.adoptLocalBaseline();
+    else if (replacement === "disconnect") review.publicApi.disconnect();
+    else review.api.destroy();
+    assert.equal(review.dialog.open, false, `${replacement} retires the obsolete progress view immediately`);
+    assert.equal(review.clock.count(), replacement === "destroy" ? 0 : 1, `${replacement} retires its progress timer`);
+    if (outcome === "failure") fail(new Error("An obsolete request failed")); else finish({ saved: true });
+    await operation; await review.clock.advance(11000);
+    assert.equal(review.dialog.open, false);
+    assert.equal(review.clock.count(), replacement === "destroy" ? 0 : 1);
+    assert.equal(review.notices.has("master-save-result"), false, `${replacement}/${outcome} cannot announce an obsolete save`);
+    assert.equal(review.notices.has("master-sync-error"), false, `${replacement}/${outcome} cannot restore an obsolete error`);
+    assert.equal(review.calls.saves.length, 1);
+  }
+}
+
+const reviewedMerge = {
+  ...structuredClone(pending[3]), sourceProductId: "source", categoryId: "audio", laneId: "wireless", sourceCategoryId: "legacy-audio", sourceLaneId: "wired",
+  base: { values: structuredClone(base), productVersion: "keeper-v1" }, sourceBase: { values: structuredClone(base), productVersion: "source-v1" },
+  baseProductVersion: "keeper-v1", sourceBaseProductVersion: "source-v1", choices: { name: "mine" },
+  keeperProduct: { id: "merged", name: "Keeper", specs: [] }, sourceProduct: { id: "source", name: "Source", specs: [] },
+};
+const changedReviewCases = [
+  { label: "edited field", pending: [edited], mutate: entries => { entries[0].patch.name = "Changed after review"; entries[0].mine.name = "Changed after review"; } },
+  { label: "category placement", pending: [edited], mutate: entries => { entries[0].categoryId = "another-category"; } },
+  { label: "new product", pending: [pending[1]], mutate: entries => { entries[0].mine.name = "A different new product"; } },
+  { label: "deletion baseline", pending: [{ ...pending[2], baseProductVersion: "reviewed-version" }], mutate: entries => { entries[0].baseProductVersion = "later-version"; } },
+  { label: "added draft", pending: [edited], mutate: entries => { entries.push({ ...structuredClone(edited), productId: "unreviewed-product" }); } },
+  { label: "merge choice", pending: [reviewedMerge], mutate: entries => { entries[0].choices.name = "master"; } },
+  { label: "merge source identity", pending: [reviewedMerge], mutate: entries => { entries[0].sourceProductId = "different-source"; } },
+  { label: "merge source content", pending: [reviewedMerge], mutate: entries => { entries[0].sourceProduct.specs.push({ id: "new-spec", label: "Notes", value: "Unreviewed" }); } },
+];
+{
+  const review = createUi([edited], { hasKey: false }); await flush(); let finishConnect, finishSave;
+  review.setConnect(() => new Promise(resolve => { finishConnect = () => { review.state.hasKey = true; resolve(); }; }));
+  review.setSave(() => new Promise(resolve => { finishSave = resolve; }));
+  const operation = review.api.save(); review.submit(); await flush(); byClass(review.dialog, "master-key")[0].value = "synthetic-package-key"; review.submit(); await flush();
+  await review.clock.advance(12000);
+  assert.match(text(byClass(review.dialog, "master-progress-elapsed")[0]), /12/);
+  assert.match(text(byClass(review.dialog, "master-progress-detail")[0]), /Still waiting/i);
+  finishConnect(); await flush();
+  assert.equal(review.calls.saves.length, 1);
+  assert.match(text(byClass(review.dialog, "master-progress-elapsed")[0]), /12/, "real phase transitions keep the total elapsed save time");
+  assert.doesNotMatch(text(byClass(review.dialog, "master-progress-detail")[0]), /Still waiting/i, "a newly started request receives its own waiting threshold");
+  await review.clock.advance(9000);
+  assert.match(text(byClass(review.dialog, "master-progress-elapsed")[0]), /21/);
+  assert.doesNotMatch(text(byClass(review.dialog, "master-progress-detail")[0]), /Still waiting/i);
+  await review.clock.advance(1000); assert.match(text(byClass(review.dialog, "master-progress-detail")[0]), /Still waiting/i);
+  review.state.pending = []; finishSave({ saved: true }); await operation;
+  assert.equal(review.clock.count(), 1);
+}
+
+for (const fixture of changedReviewCases) {
+  const review = createUi(fixture.pending, { hasKey: false }); await flush(); let finishConnect;
+  review.setConnect(() => new Promise(resolve => { finishConnect = () => { review.state.hasKey = true; resolve(); }; }));
+  const operation = review.api.save(); review.submit(); await flush();
+  byClass(review.dialog, "master-key")[0].value = "synthetic-package-key"; review.submit(); await flush();
+  assert.equal(review.calls.connects.length, 1); assert.equal(review.calls.saves.length, 0);
+  keepWorking(review).dispatchEvent({ type: "click" }); fixture.mutate(review.state.pending);
+  const changedDrafts = structuredClone(review.state.pending);
+  finishConnect(); await operation;
+  assert.equal(review.calls.saves.length, 0, `${fixture.label}: edits made while connecting require a fresh review before any write`);
+  assert.deepEqual(review.state.pending, changedDrafts); assert.equal(review.state.hasKey, true);
+  assert.equal(review.api.getSummary().busy, false); assert.equal(review.clock.count(), 1);
+  assert.match(review.notices.get("master-sync-error").message, /Your draft changed\. Review the latest changes before saving\./);
+}
+
+{
+  const review = createUi([edited]); await flush();
+  const operation = review.api.save(); review.state.pending[0].patch.name = "Changed while review was open"; review.submit(); await operation;
+  assert.equal(review.calls.saves.length, 0, "the reviewed intent is captured when the review renders, not after submission");
+  assert.match(review.notices.get("master-sync-error").message, /Your draft changed/);
+}
+
+{
+  const review = createUi([edited, { ...structuredClone(edited), productId: "second-reviewed-product" }], { hasKey: false }); await flush(); let finishConnect;
+  review.setConnect(() => new Promise(resolve => { finishConnect = () => { review.state.hasKey = true; resolve(); }; }));
+  const operation = review.api.save(); review.submit(); await flush(); byClass(review.dialog, "master-key")[0].value = "synthetic-package-key"; review.submit(); await flush();
+  review.state.pending.reverse();
+  for (const entry of review.state.pending) {
+    entry.baseRevisions = { unrelated: 12 }; entry.base.name = "Another accepted baseline value";
+    entry.patch = Object.fromEntries(Object.entries(entry.patch).reverse());
+  }
+  finishConnect(); await operation;
+  assert.equal(review.calls.saves.length, 1, "list order, object property order and unrelated baseline/revision changes do not manufacture a new reviewed update intent");
+  assert.equal(review.notices.has("master-sync-error"), false);
+}
 
 const unavailable = createUi([edited], { configured: false, publication: { status: "error" } });
 const unavailableFlow = unavailable.api.save();
@@ -438,4 +667,4 @@ for (const operation of ["save", "scoped", "github-profile", "github-refresh"]) 
     assert.equal(oldUi.api.getSummary().error, false); assert.equal(oldUi.api.getSummary().busy, false); assert.equal(oldUi.state.hasKey, true);
   }
 }
-console.log("Master UI checks passed: explicit Updates/Save controls, checked/error/busy/unknown package states and exact package identity, protected drafts, accessible save/conflict/discard decisions, publisher/scoped-sharing protections, and local-baseline adoption without fetching or stale check/save/scoped/GitHub results.");
+console.log("Master UI checks passed: explicit Updates/Save controls, checked/error/busy/unknown package states and exact package identity, protected drafts, accessible save/conflict/discard decisions, dismissible/reopenable progress with truthful phase timing and bounded timers, reviewed-intent fences, newer-draft preservation, publisher/scoped-sharing protections, and adoption/disconnect/teardown without fetching or stale check/save/scoped/GitHub results.");

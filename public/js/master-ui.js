@@ -33,6 +33,7 @@
     switch (error?.code) {
       case "INVALID_KEY": return "Please unlock the portfolio again. Your changes are safe.";
       case "MERGE_REVIEW_REQUIRED": return "These products changed. Review the merge again. Your draft is safe.";
+      case "REVIEW_REQUIRED": return "Your draft changed. Review the latest changes before saving.";
       case "CONFLICT": case "MASTER_CONFLICT": case "STALE_MERGE": case "MERGE_CONFLICT": return "Another team updated these products. Review the latest values and try again.";
       case "INVALID_CHANGE": case "INVALID_CHANGES": case "VALIDATION_FAILED": case "INVALID_PRODUCT": return "Some product details need checking. Review dates and repeated SKUs, then try again.";
       case "RATE_LIMIT": case "RATE_LIMITED": case "RETRY_LATER": case "MASTER_BUSY": return `Please wait a moment before trying again. ${safe}`;
@@ -65,6 +66,7 @@
     dialog.setAttribute("aria-labelledby", "masterDialogTitle"); dialog.setAttribute("aria-describedby", "masterDialogDescription");
     document.body.append(dialog);
     let running = false, discarding = false, connectingGitHub = false, modalResolve = null, modalCancel = null, lastError = "", lastErrorWasSave = false, publicationDelayed = false;
+    let progressState = null, progressTimer = null, modalOperation = null, modalView = "", destroyed = false;
     let lastCheckedAt = 0, checkedPublication = null, lastCheckError = "", checkMessage = "", localBaselineGeneration = 0;
     const updates = element("dialog", "master-dialog portfolio-updates-dialog");
     updates.id = "portfolioUpdatesDialog"; updates.setAttribute("aria-labelledby", "portfolioUpdatesTitle");
@@ -125,7 +127,15 @@
       button.textContent = "Updates";
       button.disabled = Boolean(adapter.hasPendingPackageOperation?.());
       button.title = "Check team records and complete package status";
-      if (saveButton) { saveButton.hidden = !count && !running && !discarding; saveButton.textContent = discarding ? "Discarding…" : running ? connectingGitHub ? "Connecting…" : "Saving…" : `Save changes${count ? ` (${count})` : ""}`; saveButton.disabled = running || discarding || refreshRunning || state.busy || Boolean(adapter.hasPendingPackageOperation?.()); }
+      if (saveButton) {
+        const canShowProgress = running && progressState && progressState.generation === localBaselineGeneration;
+        saveButton.hidden = !count && !running && !discarding;
+        saveButton.textContent = discarding ? "Discarding…" : running ? connectingGitHub ? "Connecting…" : "Saving…" : `Save changes${count ? ` (${count})` : ""}`;
+        saveButton.disabled = discarding || refreshRunning || Boolean(adapter.hasPendingPackageOperation?.()) || Boolean((running || state.busy) && !canShowProgress);
+        saveButton.classList.toggle("master-save-active", Boolean(canShowProgress));
+        saveButton.setAttribute("aria-label", canShowProgress ? connectingGitHub ? "Show connection progress" : "Show save progress" : saveButton.textContent);
+        saveButton.title = canShowProgress ? "View progress. Closing the panel keeps this operation running." : "Review and save your product changes";
+      }
       if (publicationDelayed) button.title += ". Saved changes are available to the team; the downloadable copy is waiting to update. See Messages for status.";
       button.classList.toggle("master-has-changes", count > 0);
       if (count) notices?.publish({ id: "master-pending", severity: "info", title: discarding ? "Discarding changes…" : running ? connectingGitHub ? "Connecting…" : "Saving changes…" : "Changes ready to save", message: running || discarding ? "Your changes are safe while this update finishes." : `${count} ${count === 1 ? "product has" : "products have"} unsaved changes. Review them when you’re ready.`, toast: false, dismissible: false, actions: running || discarding ? [] : [{ label: "Review changes", onClick: saveFlow }] });
@@ -142,13 +152,18 @@
 
     function close(value) {
       const resolve = modalResolve; modalResolve = null; modalCancel = null;
+      stopProgressTimer();
+      if (progressState) progressState.nodes = null;
+      modalOperation = null; modalView = "";
       if (dialog.open) dialog.close();
       resolve?.(value);
       if (!running && !discarding && button.isConnected) button.focus({ preventScroll: true });
     }
 
-    function show(title, description, contentBuilder, { cancellable = true } = {}) {
+    function show(title, description, contentBuilder, { cancellable = true, view = "", dismissLabel = "Close and keep local changes", onDismiss } = {}) {
       if (modalResolve) close(null);
+      modalOperation = running ? progressState : null; modalView = view;
+      dialog.setAttribute("data-view", view);
       dialog.replaceChildren();
       const form = element("form", "master-dialog-form"); form.method = "dialog";
       const header = element("header", "master-dialog-heading"), titleWrap = element("div");
@@ -156,13 +171,13 @@
       const descriptionNode = element("p", "master-dialog-description", description); descriptionNode.id = "masterDialogDescription";
       titleWrap.append(titleNode, descriptionNode); header.append(titleWrap);
       if (cancellable) {
-        const dismiss = element("button", "icon-button master-dialog-close", "×"); dismiss.type = "button"; dismiss.setAttribute("aria-label", "Close and keep local changes");
-        dismiss.addEventListener("click", () => close(null)); header.append(dismiss);
+        const dismiss = element("button", "icon-button master-dialog-close", "×"); dismiss.type = "button"; dismiss.setAttribute("aria-label", dismissLabel);
+        dismiss.addEventListener("click", () => onDismiss ? onDismiss() : close(null)); header.append(dismiss);
       }
       const body = element("div", "master-dialog-body"), footer = element("footer", "master-dialog-actions");
       form.append(header, body, footer); dialog.append(form);
       return new Promise((resolve) => {
-        modalResolve = resolve; modalCancel = cancellable ? () => close(null) : () => {};
+        modalResolve = resolve; modalCancel = cancellable ? () => onDismiss ? onDismiss() : close(null) : () => {};
         contentBuilder({ body, footer, form, finish: close });
         dialog.showModal();
         (form.querySelector("[autofocus]") || form.querySelector("input,button,textarea"))?.focus({ preventScroll: true });
@@ -173,9 +188,23 @@
     const addCancel = (footer, text = "Cancel") => { const cancel = element("button", "quiet-button", text); cancel.type = "button"; cancel.addEventListener("click", () => close(null)); footer.append(cancel); };
     const addSubmit = (footer, text) => { const submit = element("button", "primary-button", text); submit.type = "submit"; footer.append(submit); return submit; };
 
+    function reviewIntent(pending) {
+      const products = pending.map((item) => {
+        const kind = item.kind || "update", identity = { kind, productId: item.productId, categoryId: item.categoryId, laneId: item.laneId };
+        if (kind === "create") return { ...identity, mine: item.mine };
+        if (kind === "delete") return { ...identity, base: item.base, baseProductVersion: item.baseProductVersion };
+        if (kind === "merge") return { ...identity, sourceProductId: item.sourceProductId, sourceCategoryId: item.sourceCategoryId, sourceLaneId: item.sourceLaneId,
+          mine: item.mine, choices: item.choices || {}, base: item.base, sourceBase: item.sourceBase, baseProductVersion: item.baseProductVersion, sourceBaseProductVersion: item.sourceBaseProductVersion,
+          keeperProduct: adapter.serializeNewProduct?.(item.keeperProduct) || item.keeperProduct, sourceProduct: adapter.serializeNewProduct?.(item.sourceProduct) || item.sourceProduct };
+        return { ...identity, patch: item.patch };
+      }).sort((a, b) => String(a.productId).localeCompare(String(b.productId)));
+      return JSON.stringify(products, (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+    }
+
     function review() {
-      const pending = session.track();
-      return show("Review changes", "Open a product for details, or save all changes below. Other team updates are kept automatically.", ({ body, footer, form, finish }) => {
+      const pending = session.track(), intent = reviewIntent(pending);
+      return show("Review changes", "Expand a product to check its changes.", ({ body, footer, form, finish }) => {
         const overview = element("div", "master-review-overview");
         overview.append(element("strong", "master-review-count", `${pending.length} ${pending.length === 1 ? "product" : "products"}`));
         const kinds = new Map();
@@ -245,8 +274,8 @@
         }
         addCancel(footer, "Keep editing");
         const submit = addSubmit(footer, "Save changes"); submit.disabled = !configured || !pending.length;
-        form.addEventListener("submit", (event) => { event.preventDefault(); finish({ reason: reason.value }); });
-      });
+        form.addEventListener("submit", (event) => { event.preventDefault(); finish({ reason: reason.value, intent }); });
+      }, { view: "review" });
     }
 
     async function discardFlow(productIds) {
@@ -328,64 +357,142 @@
       });
     }
 
-    function progress() {
-      show(connectingGitHub ? "Connecting…" : "Saving changes…", connectingGitHub ? "Checking your access." : "Your team will see these updates automatically.", ({ body }) => { const message = element("p", "master-saving", connectingGitHub ? "Checking your account…" : "Saving your product updates…"); message.setAttribute("role", "status"); body.append(message); }, { cancellable: false });
+    function stopProgressTimer() {
+      if (progressTimer !== null) root.clearInterval(progressTimer);
+      progressTimer = null;
+    }
+
+    function closeOperation(operation) {
+      if (operation && modalOperation === operation) {
+        if (dialog.open && !operation.hidden) operation.restoreFocus = true;
+        close(null);
+      }
+    }
+
+    function retireProgress(operation = progressState) {
+      if (!operation || progressState !== operation) return false;
+      const restoreFocus = !operation.hidden && Boolean(operation.restoreFocus || (dialog.open && modalOperation === operation));
+      closeOperation(operation); stopProgressTimer(); progressState = null;
+      return restoreFocus;
+    }
+
+    function updateProgress(operation) {
+      if (progressState !== operation || modalOperation !== operation || modalView !== "progress" || !dialog.open || !operation.nodes) return;
+      const seconds = Math.max(0, Math.floor((Date.now() - operation.startedAt) / 1000));
+      const waiting = Date.now() - operation.phaseStartedAt >= 10000;
+      const phases = { save: "Saving your updates", connect: "Connecting to your portfolio", account: "Checking your access", refresh: "Loading the latest records" };
+      const title = waiting ? "Waiting for confirmation" : phases[operation.phase];
+      const detail = waiting ? "Still waiting for a response. You can keep working." : "Closing this panel keeps the update running.";
+      if (operation.nodes.title.textContent !== title) operation.nodes.title.textContent = title;
+      if (operation.nodes.detail.textContent !== detail) operation.nodes.detail.textContent = detail;
+      operation.nodes.elapsed.textContent = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+      operation.nodes.elapsed.setAttribute("aria-label", `Elapsed ${seconds} ${seconds === 1 ? "second" : "seconds"}`);
+    }
+
+    function hideProgress(operation) {
+      if (progressState !== operation || modalOperation !== operation || modalView !== "progress") return;
+      operation.hidden = true; closeOperation(operation);
+      if (saveButton?.isConnected && !saveButton.disabled) saveButton.focus({ preventScroll: true });
+    }
+
+    function openProgress() {
+      const operation = progressState;
+      if (!operation || !running || destroyed || operation.generation !== localBaselineGeneration || (dialog.open && modalView !== "progress")) return;
+      operation.hidden = false;
+      if (dialog.open && modalOperation === operation && modalView === "progress") { updateProgress(operation); return; }
+      const description = operation.count ? `${operation.count} ${operation.count === 1 ? "product" : "products"}` : "";
+      void show(connectingGitHub ? "Connecting" : "Saving changes", description, ({ body, footer }) => {
+        const row = element("div", "master-progress"), indicator = element("span", "master-progress-indicator"), copy = element("div", "master-progress-copy");
+        indicator.setAttribute("aria-hidden", "true");
+        const title = element("span", "master-progress-title"), detail = element("span", "master-progress-detail"), elapsed = element("span", "master-progress-elapsed");
+        title.setAttribute("role", "status"); elapsed.setAttribute("role", "timer"); elapsed.setAttribute("aria-live", "off");
+        copy.append(title, detail); row.append(indicator, copy, elapsed); body.append(row);
+        operation.nodes = { title, detail, elapsed };
+        const hide = element("button", "quiet-button", "Keep working"); hide.type = "button"; hide.addEventListener("click", () => hideProgress(operation)); footer.append(hide);
+      }, { view: "progress", dismissLabel: "Close save progress", onDismiss: () => hideProgress(operation) }).catch(() => hideProgress(operation));
+      updateProgress(operation);
+      stopProgressTimer();
+      progressTimer = root.setInterval(() => updateProgress(operation), 1000);
+    }
+
+    function progress(phase = "save") {
+      const operation = progressState;
+      if (!operation || operation.generation !== localBaselineGeneration || destroyed) return;
+      if (operation.startedAt === null) operation.startedAt = Date.now();
+      if (operation.phase !== phase) { operation.phase = phase; operation.phaseStartedAt = Date.now(); }
+      updateStatus();
+      if (!operation.hidden) openProgress();
     }
 
     async function connectGitHub() {
-      if (!githubMode || running || dialog.open || !session.getState().hasKey) return;
+      if (destroyed || !githubMode || running || dialog.open || !session.getState().hasKey) return;
       const operationGeneration = localBaselineGeneration;
       root.PortfolioMasterPresence?.close?.();
       const token = await getAccess("github"); if (!token || operationGeneration !== localBaselineGeneration) return;
-      running = true; connectingGitHub = true; updateStatus(); progress();
+      const operation = { generation: operationGeneration, count: 0, phase: "", startedAt: null, phaseStartedAt: null, hidden: false, nodes: null };
+      progressState = operation; running = true; connectingGitHub = true; progress("account");
       try {
         const account = await session.setGitHubToken(token);
-        if (operationGeneration !== localBaselineGeneration) { close(null); return; }
+        if (operationGeneration !== localBaselineGeneration) { closeOperation(operation); return; }
         lastError = "";
-        await session.refresh(); close(null); if (operationGeneration !== localBaselineGeneration) return; retryUntil = 0; lastRefreshAt = Date.now();
+        progress("refresh"); await session.refresh(); closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; retryUntil = 0; lastRefreshAt = Date.now();
         notices?.publish({ id: "master-github-connected", severity: "success", title: "Connected", message: `Connected as ${account.name || account.login}.`, revision: String(Date.now()), toast: true });
-      } catch (error) { close(null); if (operationGeneration !== localBaselineGeneration) return; if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = friendlyError(error); }
-      finally { running = false; connectingGitHub = false; updateStatus(); }
+      } catch (error) { closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = friendlyError(error); }
+      finally {
+        const restoreFocus = retireProgress(operation); running = false; connectingGitHub = false; if (!destroyed) updateStatus();
+        if (restoreFocus && !destroyed) (saveButton && !saveButton.hidden && !saveButton.disabled ? saveButton : button).focus({ preventScroll: true });
+      }
     }
 
     async function saveFlow() {
-      if (running || discarding || refreshRunning || session.getState().busy || adapter.hasPendingPackageOperation?.()) return;
+      if (destroyed) return;
+      if (running) { openProgress(); return; }
+      if (discarding || refreshRunning || dialog.open || session.getState().busy || adapter.hasPendingPackageOperation?.()) return;
       const operationGeneration = localBaselineGeneration;
+      let operation = null;
       try {
         adapter.beforeSave?.();
         const reviewed = await review();
         if (!reviewed || operationGeneration !== localBaselineGeneration) return;
         lastError = "";
-        running = true; updateStatus();
+        operation = { generation: operationGeneration, count: session.track().length, phase: "", startedAt: null, phaseStartedAt: null, hidden: false, nodes: null };
+        progressState = operation; running = true; updateStatus();
         while (!session.getState().hasKey) {
           const key = await getAccess();
           if (!key || operationGeneration !== localBaselineGeneration) return;
-          progress();
-          try { await session.connect({ key }); close(null); if (operationGeneration !== localBaselineGeneration) return; }
-          catch (error) { close(null); if (operationGeneration !== localBaselineGeneration) return; if (error.code === "INVALID_KEY") { const retryKey = await getAccess(false, friendlyError(error)); if (!retryKey || operationGeneration !== localBaselineGeneration) return; progress(); await session.connect({ key: retryKey }); close(null); if (operationGeneration !== localBaselineGeneration) return; } else throw error; }
+          progress("connect");
+          try { await session.connect({ key }); closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; }
+          catch (error) { closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; if (error.code === "INVALID_KEY") { const retryKey = await getAccess(false, friendlyError(error)); if (!retryKey || operationGeneration !== localBaselineGeneration) return; progress("connect"); await session.connect({ key: retryKey }); closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; } else throw error; }
         }
         let result;
         for (;;) {
-          progress();
           try {
             if (githubMode && !session.getState().hasGitHubToken) {
-              close(null); const token = await getAccess("github"); if (!token || operationGeneration !== localBaselineGeneration) return;
-              progress(); await session.setGitHubToken(token); if (operationGeneration !== localBaselineGeneration) { close(null); return; }
+              closeOperation(operation); const token = await getAccess("github"); if (!token || operationGeneration !== localBaselineGeneration) return;
+              progress("account"); await session.setGitHubToken(token); if (operationGeneration !== localBaselineGeneration) { closeOperation(operation); return; }
             }
-            result = await session.save({ reason: reviewed.reason, resolveConflicts: async (conflicts) => { if (operationGeneration !== localBaselineGeneration) return null; close(null); const selected = await resolveConflicts(conflicts); if (operationGeneration !== localBaselineGeneration) return null; if (selected) progress(); return selected; } });
-            close(null); if (operationGeneration !== localBaselineGeneration) return; break;
+            if (reviewIntent(session.track()) !== reviewed.intent) throw Object.assign(new Error("The reviewed draft changed."), { code: "REVIEW_REQUIRED" });
+            progress("save");
+            result = await session.save({ reason: reviewed.reason, resolveConflicts: async (conflicts) => {
+              if (operationGeneration !== localBaselineGeneration) return null;
+              closeOperation(operation); operation.phase = "review";
+              const selected = await resolveConflicts(conflicts);
+              if (operationGeneration !== localBaselineGeneration) return null;
+              if (selected) progress("save"); return selected;
+            } });
+            closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; break;
           } catch (error) {
-            close(null);
+            closeOperation(operation);
             if (operationGeneration !== localBaselineGeneration) return;
             if (error.code === "INVALID_KEY") {
               const newKey = await getAccess(false, friendlyError(error));
               if (!newKey || operationGeneration !== localBaselineGeneration) return;
-              progress(); await session.connect({ key: newKey }); close(null); if (operationGeneration !== localBaselineGeneration) return;
+              progress("connect"); await session.connect({ key: newKey }); closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return;
               continue;
             }
             if (githubMode && ["GITHUB_TOKEN_REQUIRED", "INVALID_GITHUB_TOKEN", "GITHUB_PERMISSION_DENIED"].includes(error.code)) {
               const token = await getAccess("github", friendlyError(error)); if (!token || operationGeneration !== localBaselineGeneration) return;
-              progress(); await session.setGitHubToken(token); close(null); if (operationGeneration !== localBaselineGeneration) return; continue;
+              progress("account"); await session.setGitHubToken(token); closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; continue;
             }
             if (error.code !== "EDITOR_KEY_REQUIRED" || teamMode) throw error;
             const token = await getAccess(true, session.getState().snapshot?.requiresEditorToken ? "" : friendlyError(error));
@@ -399,11 +506,15 @@
           notices?.publish({ id: "master-save-result", severity: "success", title: result.keptMaster ? "Latest values kept" : "Changes saved", message: "Your team will see these updates automatically.", revision: String(Date.now()), toast: true });
         }
       } catch (error) {
-        if (operationGeneration !== localBaselineGeneration) { close(null); return; }
+        if (operationGeneration !== localBaselineGeneration) { closeOperation(operation); return; }
         if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
-        close(null); lastError = friendlyError(error, true); lastErrorWasSave = true;
+        if (operation) closeOperation(operation); else if (modalView === "review") close(null);
+        lastError = friendlyError(error, true); lastErrorWasSave = true;
         updateStatus(); notices?.show("master-sync-error");
-      } finally { running = false; updateStatus(); }
+      } finally {
+        const restoreFocus = retireProgress(operation); running = false; if (!destroyed) updateStatus();
+        if (restoreFocus && !destroyed) (saveButton && !saveButton.hidden && !saveButton.disabled ? saveButton : button).focus({ preventScroll: true });
+      }
     }
 
     async function saveScoped(options) {
@@ -446,10 +557,10 @@
     active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow, saveScoped, openUpdates: showUpdates,
       getSummary() { const state = session.getState(); return { pendingCount: session.track().length, busy: Boolean(state.busy || running || discarding || refreshRunning), connected: state.connected, lastCheckedAt, publicationStatus: checkedPublication?.status || state.snapshot?.publication?.status || '', error: Boolean(lastError || lastCheckError) }; },
       reviewConflicts(conflicts) { if (running || discarding || session.getState().busy || !Array.isArray(conflicts) || !conflicts.length) return null; return resolveConflicts(conflicts); },
-      markImported(products, key) { session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
-      adoptLocalBaseline() { localBaselineGeneration += 1; session.adoptLocalBaseline(); lastError = ""; lastErrorWasSave = false; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; checkMessage = ""; publicationDelayed = false; lastRefreshAt = 0; retryUntil = 0; for (const id of ["master-save-result", "master-sync-error", "master-publication", "master-github-connected", "plc-master-sharing", "master-discard-result", "master-discard-undone"]) notices?.resolve(id); updateStatus(); },
-      disconnect() { root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckedAt = 0; checkedPublication = null; lastCheckError = ""; updateStatus(); },
-      destroy() { root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); updates.remove(); dialog.remove(); },
+      markImported(products, key) { localBaselineGeneration += 1; retireProgress(); session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
+      adoptLocalBaseline() { localBaselineGeneration += 1; retireProgress(); session.adoptLocalBaseline(); lastError = ""; lastErrorWasSave = false; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; checkMessage = ""; publicationDelayed = false; lastRefreshAt = 0; retryUntil = 0; for (const id of ["master-save-result", "master-sync-error", "master-publication", "master-github-connected", "plc-master-sharing", "master-discard-result", "master-discard-undone"]) notices?.resolve(id); updateStatus(); },
+      disconnect() { localBaselineGeneration += 1; retireProgress(); root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckedAt = 0; checkedPublication = null; lastCheckError = ""; updateStatus(); },
+      destroy() { destroyed = true; localBaselineGeneration += 1; retireProgress(); root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); updates.remove(); dialog.remove(); },
     });
     updateStatus();
     if (teamMode && configured && session.getState().hasKey) refreshQuietly();
