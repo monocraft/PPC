@@ -1,6 +1,7 @@
 import './shared/package-codec.js';
 import './shared/master-model.js';
 import './shared/product-merge.js';
+import { createAscmApi } from './ascm-api.mjs';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -157,7 +158,7 @@ export function publicSnapshot(state, snapshotFormat) {
   return ['compact-v1', 'compact-conflict-v1'].includes(snapshotFormat) ? model.compactSnapshot(snapshot) : snapshot;
 }
 
-function requireReadableManifest(manifest) {
+export function requireReadableManifest(manifest) {
   const state = { manifest, storageRevision: Number.MAX_SAFE_INTEGER,
     publication: { requestedRevision: Number.MAX_SAFE_INTEGER, publishedRevision: 0, status: 'pending' } };
   const snapshot = publicSnapshot(state, 'compact-v1');
@@ -376,6 +377,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     return { storageRevision: Number(state.storageRevision), revision: Number(state.storageRevision), publication: safePublication(state.publication), status: state.status };
   }
 
+  const ascmApi = createAscmApi({ env, database, now, dispatchPublication, validateManifest, validateReadableManifest: requireReadableManifest });
   return async function handle(request) {
     const origin = request.headers.get('origin') || '';
     const headers = {
@@ -386,6 +388,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     try {
       const path = new URL(request.url).pathname;
       const operation = /\/api\/master\/([a-z]+)\/?$/.exec(path)?.[1];
+      if (operation === 'ascm') return await ascmApi(request);
       if (!PUBLIC_OPERATIONS.has(operation) && !PRIVATE_OPERATIONS.has(operation)) throw problem(404, 'NOT_FOUND', 'This master action is unavailable.');
       if (origin && !origins.has(origin)) throw problem(403, 'ORIGIN_DENIED', 'This portfolio address is not allowed to connect.');
       if (origin) headers['Access-Control-Allow-Origin'] = origin;
