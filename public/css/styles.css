@@ -411,9 +411,13 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .product-board-shell { display: grid; grid-template-columns: 48px minmax(0, 1fr); min-width: 0; min-height: 0; }
 .canvas-scroll { position: relative; min-width: 0; min-height: 0; height: auto; overflow: auto; background: transparent; scrollbar-width: none; overscroll-behavior: contain; }
 .canvas-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
-#boardCanvas, #roadmapCanvas, #splitRoadmapCanvas { display: block; background: transparent; touch-action: none; user-select: none; cursor: grab; }
+#boardCanvas, #roadmapCanvas, #splitRoadmapCanvas { display: block; background: transparent; user-select: none; cursor: grab; }
+/* Keep viewing gestures native before a touch starts. Reorder deliberately owns
+   its gesture; changing touch-action after pointerdown cannot affect that touch. */
+#boardCanvas { touch-action: pan-y pinch-zoom; }
+#roadmapCanvas, #splitRoadmapCanvas { touch-action: none; }
 .canvas-scroll.is-panning, .canvas-scroll.is-panning canvas { cursor: grabbing !important; }
-#boardCanvas.is-layout-editing { cursor: move; }
+#boardCanvas.is-layout-editing { touch-action: none; cursor: move; }
 .roadmap-scroll { background: var(--color-page); }
 .roadmap-view, .split-roadmap-shell { position: relative; }
 .roadmap-header-overlay { position: absolute; z-index: 3; pointer-events: none; }
@@ -667,6 +671,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .inspector-navigation { position: sticky; z-index: 7; top: -16px; margin: -16px -16px 0; background: var(--color-header); }
 .inspector-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px 6px; border: 0; background: var(--color-header); }
 .inspector-heading > div:first-child { min-width: 0; }
+.editor-selection-context { margin: 6px 0 0; color: var(--color-text); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .inspector-heading .eyebrow { margin-bottom: 3px; font-size: 11px; line-height: 1.4; }
 .inspector-heading .inspector-actions { flex: 0 0 auto; gap: 5px; }
 .inspector-heading .inspector-actions > button { min-height: 30px; padding: 4px 7px; font-size: 12px; }

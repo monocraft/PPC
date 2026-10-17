@@ -120,7 +120,7 @@ const categoryData = { categories, activeCategoryId: "audio", metadata: { preser
 const controls = new Map();
 const categoryContext = { portfolio: categoryData, activeCategoryId: "audio", canvasScroll: { scrollLeft: 0, scrollTop: 0 }, categoryZoomPreferences: restarted, zoom: 1, roadmapMonthWidth: 82,
   ROADMAP_DEFAULT_MONTH_WIDTH: 82, roadmapLaneHovers: new Map(), viewerInfoOutline: null, productCardHover: null,
-  finishProductReorder() {}, closeViewerInfo() {}, categoryDefinition: id => ({ id }), ensureBoardSchema: value => value,
+  finishProductReorder() {}, stopProductCardDrag() {}, closeViewerInfo() {}, categoryDefinition: id => ({ id }), ensureBoardSchema: value => value,
   PortfolioModel: { syncTimelineSettings() {} }, closeInspector() {}, updateProductLayoutEditControls() {},
   closeVariantPopover() {}, stopRoadmapSlotEditing() {}, scheduleSave() {}, syncControls() {}, renderInspector() {}, renderActiveView() {}, fitProductLanesVertically() {},
   $: id => { if (!controls.has(id)) controls.set(id, {}); return controls.get(id); }, activeView: "roadmap" };

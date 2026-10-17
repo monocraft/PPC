@@ -74,7 +74,7 @@ function harness({ view = "products", basis = "lifecycle", scope = ["pc-gaming-a
     updateBoard() { throw new Error("Category navigation must never write product records."); },
     categoryDefinition: id => ({ id }), ensureBoardSchema: value => value,
     closeViewerInfo() { context.viewerInfoProductId = null; context.viewerInfoOpen = false; },
-    closeInspector() { context.inspectorOpen = false; }, finishProductReorder() { events.reorderFinished++; },
+    closeInspector() { context.inspectorOpen = false; }, finishProductReorder() { events.reorderFinished++; }, stopProductCardDrag() {},
     updateProductLayoutEditControls() {}, closeVariantPopover() {}, stopRoadmapSlotEditing() { context.roadmapDraft = null; },
     renderInspector() {}, renderViewerInfo() {}, updateLinkedViewButton() {}, updateRoadmapEditControls() {}, syncFfsRoadmapControls() {},
     productPriceText: () => "", roadmapRange: () => ({ count: 60 }),
