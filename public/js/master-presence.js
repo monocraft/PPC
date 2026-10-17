@@ -192,6 +192,10 @@
     const socialStatus = make("span", "visually-hidden"); socialStatus.setAttribute("role", "status"); socialStatus.setAttribute("aria-live", "polite"); shell.append(socialStatus);
     const reactions = root.PortfolioPresenceReactions?.create({ onChange: () => renderLocal() });
     const bump = root.PortfolioPresenceBump?.create({ shell });
+    let socialTrip = false, tripSequence = 0;
+    const neighbors = root.PortfolioPresenceNeighbors?.create({ shell,
+      isAvailable: () => !disposed && !open && !socialTrip && !pendingPokes.size && Date.now() >= playfulUntil &&
+        latestState?.connected && !latestState.unavailable && latestState.mode !== "github" });
     const observer = root.IntersectionObserver ? new root.IntersectionObserver((entries) => {
       for (const entry of entries) entry.target.classList.toggle("is-in-view", entry.isIntersecting);
     }) : null;
@@ -201,6 +205,7 @@
       for (const control of stack.querySelectorAll("[data-opens-roster]")) control.setAttribute("aria-expanded", String(value));
       if (value) { renderLocal(); controller.heartbeat(); if (shell.contains(opener) && opener.matches(":focus-visible")) close.focus({ preventScroll: true }); }
       else if (restoreFocus) trigger.focus({ preventScroll: true });
+      neighbors?.refresh();
     }
     function contextFor(user, state) {
       if (state.mode === "github") return { recent: true };
@@ -238,9 +243,9 @@
     function forget(node) { for (const circle of node.matches?.(".presence-character") ? [node] : node.querySelectorAll(".presence-character")) observer?.unobserve(circle); }
     function reconcile(parent, entries, cache) {
       const keep = new Set(entries.map(([key]) => key));
-      for (const [key, entry] of cache) if (!keep.has(key)) { forget(entry.node); entry.node.remove(); cache.delete(key); }
+      for (const [key, entry] of cache) if (!keep.has(key)) { if (parent === stack) neighbors?.cancel(); forget(entry.node); entry.node.remove(); cache.delete(key); }
       let cursor = parent.firstChild;
-      for (const [, entry] of entries) { if (entry.node === cursor) cursor = cursor.nextSibling; else parent.insertBefore(entry.node, cursor); }
+      for (const [, entry] of entries) { if (entry.node === cursor) cursor = cursor.nextSibling; else { if (parent === stack) neighbors?.cancel(); parent.insertBefore(entry.node, cursor); } }
     }
     function remember(cache, key, signature, create) {
       let entry = cache.get(key);
@@ -248,6 +253,7 @@
         const next = { signature, node: create() };
         if (entry) {
           bump?.cancel();
+          neighbors?.cancel();
           const focused = entry.node === document.activeElement || entry.node.contains(document.activeElement);
           forget(entry.node); entry.node.replaceWith(next.node);
           if (focused) (next.node.matches("button") ? next.node : next.node.querySelector("button"))?.focus({ preventScroll: true });
@@ -282,6 +288,7 @@
       }
       overflow.textContent = state.users.length > headerLimit ? `+${state.users.length - headerLimit}` : "···";
       reconcile(stack, stackEntries, stackCache);
+      neighbors?.refresh();
       if (!open) return;
       const rowEntries = [];
       if (!state.users.length) rowEntries.push(remember(rowCache, "empty", state.mode, () => make("p", "presence-empty-copy", state.mode === "github" ? "Recent editors will appear after a shared update." : "A little room for your crew. Connected people will appear here.")));
@@ -314,10 +321,16 @@
         if (reactionFrame !== null) root.cancelAnimationFrame(reactionFrame);
         reactionFrame = root.requestAnimationFrame(() => { reactionFrame = null; if (!disposed) playHeaderBump(event.fromSessionId, controller.getState().sessionId); });
       } });
-    function playHeaderBump(fromId, targetId) { const portraits = [...stack.children]; return bump?.play({ from: portraits.find((node) => node.dataset.sessionId === fromId), target: portraits.find((node) => node.dataset.sessionId === targetId) }); }
+    async function playHeaderBump(fromId, targetId) {
+      const sequence = ++tripSequence, portraits = [...stack.children];
+      socialTrip = true; neighbors?.cancel();
+      try { return await bump?.play({ from: portraits.find((node) => node.dataset.sessionId === fromId), target: portraits.find((node) => node.dataset.sessionId === targetId) }); }
+      finally { if (sequence === tripSequence) { socialTrip = false; neighbors?.refresh(); } }
+    }
     async function sendPokeTarget(targetSessionId) {
       const user = latestState?.users.find((person) => person.sessionId === targetSessionId);
       if (!user || pendingPokes.has(targetSessionId)) return;
+      neighbors?.cancel();
       pendingPokes.add(targetSessionId); renderLocal();
       try {
         const result = typeof onPoke === "function" ? await onPoke({ ...user }, { senderName: latestState.displayName || latestState.users.find((person) => person.isSelf)?.label || "A teammate" }) : await controller.poke(targetSessionId);
@@ -330,6 +343,7 @@
     function soon() { root.clearTimeout(debounceTimer); debounceTimer = root.setTimeout(() => controller.heartbeat(), 500); }
     function renderLocal() { if (latestState) render(latestState); }
     function inputActivity() { const wasIdle = Date.now() - lastInputAt > 60000; lastInputAt = Date.now(); if (wasIdle) renderLocal(); }
+    shell.addEventListener("pointerdown", () => neighbors?.cancel(), { capture: true, signal });
     trigger.addEventListener("click", () => setOpen(!open), { signal }); close.addEventListener("click", () => setOpen(false), { signal });
     document.addEventListener("pointerdown", (event) => { inputActivity(); if (open && !shell.contains(event.target)) setOpen(false, { restoreFocus: false }); }, { signal });
     document.addEventListener("keydown", (event) => { inputActivity(); if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); } }, { capture: true, signal });
@@ -353,7 +367,7 @@
     const timer = root.setInterval(() => controller.heartbeat(), 20000);
     const expressionTimer = root.setInterval(renderLocal, 10000);
     render(controller.getState()); soon();
-    active = Object.freeze({ controller, refresh: () => controller.heartbeat(), close: () => setOpen(false), destroy() { disposed = true; listeners.abort(); observer?.disconnect(); reactions?.destroy(); bump?.destroy(); root.clearInterval(timer); root.clearInterval(expressionTimer); root.clearTimeout(debounceTimer); root.clearTimeout(playTimer); if (gazeFrame !== null) root.cancelAnimationFrame(gazeFrame); if (reactionFrame !== null) root.cancelAnimationFrame(reactionFrame); controller.leave(); shell.remove(); active = null; } });
+    active = Object.freeze({ controller, refresh: () => controller.heartbeat(), playNeighborScene: (kind) => { neighbors?.cancel(); return neighbors?.play(kind) || false; }, close: () => setOpen(false), destroy() { disposed = true; listeners.abort(); observer?.disconnect(); neighbors?.destroy(); reactions?.destroy(); bump?.destroy(); root.clearInterval(timer); root.clearInterval(expressionTimer); root.clearTimeout(debounceTimer); root.clearTimeout(playTimer); if (gazeFrame !== null) root.cancelAnimationFrame(gazeFrame); if (reactionFrame !== null) root.cancelAnimationFrame(reactionFrame); controller.leave(); shell.remove(); active = null; } });
     return active;
   }
   root.PortfolioMasterPresence = Object.freeze({ anonymousName, avatarText, avatarTone, sessionSummary, connectionSummary, activityText, normalizeRoster, normalizeRecentEditors, createController, initialize, close() { active?.close(); }, leave() { return active?.controller.leave(); } });

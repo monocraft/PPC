@@ -1,0 +1,126 @@
+/* A short, silent bit of neighborly nonsense. Slots and controls stay still. */
+.presence-neighbor-puppet { position: relative; display: block; width: 100%; height: 100%; pointer-events: none; transform-origin: 50% 78%; will-change: transform; }
+.presence-character.presence-neighbor-active { position: relative; z-index: 2; color: var(--color-text); --presence-neighbor-x: 3px; --presence-neighbor-step: 6px; --presence-neighbor-away: -4px; --presence-neighbor-angle: 22deg; }
+.presence-character.presence-neighbor-active[data-neighbor-direction="left"] { --presence-neighbor-x: -3px; --presence-neighbor-step: -6px; --presence-neighbor-away: 4px; --presence-neighbor-angle: -22deg; }
+.presence-character.presence-neighbor-active .presence-ring { opacity: 1; }
+.presence-character.presence-neighbor-active .presence-face,
+.presence-character.presence-neighbor-active .presence-eyes,
+.presence-character.presence-neighbor-active .presence-eye-left,
+.presence-character.presence-neighbor-active .presence-eye-right { animation: none !important; }
+.presence-character.presence-neighbor-active .presence-face { transform: rotate(var(--presence-tilt, 0deg)); }
+.presence-character.presence-neighbor-active .presence-features { transition: none; animation: presence-neighbor-look var(--presence-neighbor-duration) ease-in-out 1 !important; }
+.presence-character[data-neighbor-scene="chat"] { --presence-neighbor-duration: 3800ms; }
+.presence-character[data-neighbor-scene="giggle"] { --presence-neighbor-duration: 3400ms; }
+.presence-character[data-neighbor-scene="bonk"] { --presence-neighbor-duration: 3600ms; }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="lead"] .presence-neighbor-puppet { animation: presence-neighbor-chat-lead 3800ms ease-in-out 1; }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="reply"] .presence-neighbor-puppet { animation: presence-neighbor-chat-reply 3800ms ease-in-out 1; }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="lead"] .presence-mouth { animation: presence-neighbor-speak-lead 3800ms ease-in-out 1; }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="reply"] .presence-mouth { animation: presence-neighbor-speak-reply 3800ms ease-in-out 1; }
+/* Two tiny marks make a mouth movement legible at 25px, without speech text. */
+.presence-character[data-neighbor-scene="chat"] .presence-neighbor-puppet::before,
+.presence-character[data-neighbor-scene="chat"] .presence-neighbor-puppet::after { content: ""; position: absolute; right: -1px; top: 6px; width: 3px; height: 1.5px; border-radius: 1px; background: currentColor; opacity: 0; transform: rotate(-30deg); }
+.presence-character[data-neighbor-scene="chat"] .presence-neighbor-puppet::after { top: 11px; right: -3px; transform: rotate(14deg); }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-direction="left"] .presence-neighbor-puppet::before { right: auto; left: -1px; transform: rotate(30deg); }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-direction="left"] .presence-neighbor-puppet::after { right: auto; left: -3px; transform: rotate(-14deg); }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="lead"] .presence-neighbor-puppet::before,
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="lead"] .presence-neighbor-puppet::after { animation: presence-neighbor-talk-ticks-lead 3800ms ease-out 1; }
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="reply"] .presence-neighbor-puppet::before,
+.presence-character[data-neighbor-scene="chat"][data-neighbor-role="reply"] .presence-neighbor-puppet::after { animation: presence-neighbor-talk-ticks-reply 3800ms ease-out 1; }
+.presence-character[data-neighbor-scene="giggle"] .presence-neighbor-puppet { animation: presence-neighbor-giggle 3400ms ease-in-out 1; }
+.presence-character[data-neighbor-scene="giggle"][data-neighbor-role="reply"] .presence-neighbor-puppet { animation-name: presence-neighbor-giggle-reply; }
+.presence-character[data-neighbor-scene="giggle"] .presence-mouth { animation: presence-neighbor-grin 3400ms ease-in-out 1; }
+.presence-character.presence-neighbor-active[data-neighbor-scene="giggle"] .presence-eyes { animation: presence-neighbor-squint 3400ms ease-in-out 1 !important; }
+.presence-character[data-neighbor-scene="bonk"][data-neighbor-role="lead"] .presence-neighbor-puppet { animation: presence-neighbor-bonk-lead 3600ms ease-in-out 1; }
+.presence-character[data-neighbor-scene="bonk"][data-neighbor-role="reply"] .presence-neighbor-puppet { animation: presence-neighbor-bonk-reply 3600ms ease-in-out 1; }
+.presence-character[data-neighbor-scene="bonk"] .presence-orbit { animation: presence-neighbor-bonk-star 3600ms ease-in-out 1; }
+@keyframes presence-neighbor-look {
+  0%, 100% { transform: translate(var(--presence-look-x, 0px), var(--presence-look-y, 0px)); }
+  13%, 84% { transform: translate(var(--presence-neighbor-x), -.5px); }
+}
+@keyframes presence-neighbor-chat-lead {
+  0%, 100% { transform: none; }
+  12%, 44%, 85% { transform: scale(1.12); }
+  20%, 35% { transform: translate(calc(var(--presence-neighbor-x) * .5), -3px) rotate(var(--presence-neighbor-angle)) scale(1.12); }
+  27%, 41% { transform: translateY(1px) rotate(calc(var(--presence-neighbor-angle) * -.3)) scale(1.12); }
+  60% { transform: translateY(2px) rotate(calc(var(--presence-neighbor-angle) * .7)) scale(1.12); }
+  69% { transform: translateY(-1px) scale(1.12); }
+}
+@keyframes presence-neighbor-chat-reply {
+  0%, 100% { transform: none; }
+  12%, 43%, 85% { transform: scale(1.12); }
+  26% { transform: translateY(2px) rotate(calc(var(--presence-neighbor-angle) * .7)) scale(1.12); }
+  35% { transform: translateY(-1px) scale(1.12); }
+  52%, 68% { transform: translate(calc(var(--presence-neighbor-x) * .5), -3px) rotate(var(--presence-neighbor-angle)) scale(1.12); }
+  60%, 77% { transform: translateY(1px) rotate(calc(var(--presence-neighbor-angle) * -.3)) scale(1.12); }
+}
+@keyframes presence-neighbor-speak-lead {
+  0%, 15%, 43%, 100% { transform: scale(1); }
+  21%, 35% { transform: scale(.72, 2.3); }
+  27%, 41% { transform: scale(1.15, .55); }
+}
+@keyframes presence-neighbor-speak-reply {
+  0%, 46%, 82%, 100% { transform: scale(1); }
+  53%, 68% { transform: scale(.72, 2.3); }
+  60%, 77% { transform: scale(1.15, .55); }
+}
+@keyframes presence-neighbor-talk-ticks-lead {
+  0%, 16%, 27%, 41%, 100% { opacity: 0; }
+  21%, 35% { opacity: 1; }
+}
+@keyframes presence-neighbor-talk-ticks-reply {
+  0%, 48%, 60%, 79%, 100% { opacity: 0; }
+  53%, 70% { opacity: 1; }
+}
+@keyframes presence-neighbor-giggle {
+  0%, 100% { transform: none; }
+  12%, 87% { transform: scale(1.12); }
+  25%, 45%, 65% { transform: translateY(-3px) rotate(var(--presence-neighbor-angle)) scale(1.15, 1.08); }
+  35%, 55%, 75% { transform: translateY(1.5px) rotate(calc(var(--presence-neighbor-angle) * -.35)) scale(1.08, 1.15); }
+}
+@keyframes presence-neighbor-giggle-reply {
+  0%, 100% { transform: none; }
+  12%, 92% { transform: scale(1.12); }
+  33%, 53%, 73% { transform: translateY(-3px) rotate(var(--presence-neighbor-angle)) scale(1.15, 1.08); }
+  43%, 63%, 83% { transform: translateY(1.5px) rotate(calc(var(--presence-neighbor-angle) * -.35)) scale(1.08, 1.15); }
+}
+@keyframes presence-neighbor-grin {
+  0%, 15%, 89%, 100% { transform: scale(1); }
+  25%, 45%, 65% { transform: scale(1.3, 2.2); }
+  35%, 55%, 75% { transform: scale(1.1, 1.15); }
+}
+@keyframes presence-neighbor-squint {
+  0%, 15%, 89%, 100% { transform: scaleY(1); }
+  25%, 45%, 65% { transform: scaleY(.16); }
+  35%, 55%, 75% { transform: scaleY(.55); }
+}
+@keyframes presence-neighbor-bonk-lead {
+  0%, 100% { transform: none; }
+  12%, 90% { transform: scale(1.12); }
+  25% { transform: translate(var(--presence-neighbor-away), -2px) rotate(calc(var(--presence-neighbor-angle) * -.7)) scale(1.12); }
+  44% { transform: translate(var(--presence-neighbor-step), -1px) rotate(var(--presence-neighbor-angle)) scale(.94, 1.2); }
+  54% { transform: translate(var(--presence-neighbor-away), 1px) rotate(calc(var(--presence-neighbor-angle) * -.85)) scale(1.18, 1.04); }
+  67% { transform: translateY(-2px) rotate(calc(var(--presence-neighbor-angle) * .6)) scale(1.12); }
+  79% { transform: rotate(calc(var(--presence-neighbor-angle) * -.3)) scale(1.12); }
+}
+@keyframes presence-neighbor-bonk-reply {
+  0%, 100% { transform: none; }
+  12%, 90% { transform: scale(1.12); }
+  35% { transform: translateX(calc(var(--presence-neighbor-step) * .3)) rotate(calc(var(--presence-neighbor-angle) * .4)) scale(1.12); }
+  44% { transform: translateX(calc(var(--presence-neighbor-step) * .45)) rotate(var(--presence-neighbor-angle)) scale(.94, 1.2); }
+  54% { transform: translate(var(--presence-neighbor-away), 1px) rotate(calc(var(--presence-neighbor-angle) * -1.05)) scale(1.2, 1.03); }
+  67% { transform: translateY(-2px) rotate(calc(var(--presence-neighbor-angle) * .7)) scale(1.12); }
+  79% { transform: rotate(calc(var(--presence-neighbor-angle) * -.35)) scale(1.12); }
+}
+@keyframes presence-neighbor-bonk-star {
+  0%, 36%, 74%, 100% { transform: scale(1); }
+  47% { transform: scale(1.65) rotate(30deg); }
+  58% { transform: scale(.85) rotate(-20deg); }
+}
+.preview-reduced-motion .presence-neighbor-puppet,
+.preview-reduced-motion .presence-neighbor-active * { animation: none !important; transition: none !important; transform: none !important; }
+.preview-reduced-motion .presence-neighbor-puppet::before,
+.preview-reduced-motion .presence-neighbor-puppet::after { content: none !important; animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .presence-neighbor-puppet, .presence-neighbor-active * { animation: none !important; transition: none !important; transform: none !important; }
+  .presence-neighbor-puppet::before, .presence-neighbor-puppet::after { content: none !important; animation: none !important; }
+}
