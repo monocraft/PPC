@@ -5005,6 +5005,33 @@ function syncBoardNavigator() {
   navLeft.disabled = !hasOverflow || current <= 1;
   navRight.disabled = !hasOverflow || current >= max - 1;
   syncHorizontalOverview(canvasScroll, boardNavigator);
+  syncVerticalProductOverview();
+}
+
+let verticalProductNavigator = null;
+function syncVerticalProductOverview() {
+  const density = globalThis.PortfolioRoadmapDensity;
+  if (!density?.createNavigator || !canvasScroll.clientHeight) return;
+  if (!verticalProductNavigator) {
+    verticalProductNavigator = density.createNavigator(canvasScroll.parentElement, {
+      label: "Product vertical navigation", className: "product-vertical-navigator",
+      getState: () => ({
+        total: canvasScroll.scrollHeight, visible: canvasScroll.clientHeight, offset: canvasScroll.scrollTop,
+        crossTotal: canvasScroll.scrollWidth, scale: zoom, minScale: PRODUCT_MIN_ZOOM, maxScale: PRODUCT_MAX_ZOOM,
+        rowCount: renderedCards.length,
+        items: renderedCards.map(item => ({ x: item.x * zoom, y: item.y * zoom, width: item.width * zoom,
+          height: item.height * zoom, selected: item.productId === selectedId })),
+      }),
+      onPan: offset => { canvasScroll.scrollTop = offset; },
+      onResize: ({ scale, edge, anchor }) => {
+        setProductZoom(scale);
+        canvasScroll.scrollTop = Math.max(0, Math.min(canvasScroll.scrollHeight - canvasScroll.clientHeight,
+          anchor * zoom - (edge === "top" ? canvasScroll.clientHeight : 0)));
+        syncLaneRail();
+      },
+    });
+  }
+  verticalProductNavigator.update();
 }
 
 function syncHorizontalOverview(targetScroll, element, roadmap = false) {

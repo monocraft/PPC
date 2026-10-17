@@ -54,10 +54,10 @@ function environment(stored = null) {
   vm.createContext(root); vm.runInContext(source, root);
   return { root, api: root.PortfolioRoadmapDensity, storage };
 }
-function harness() {
+function harness(overrides = {}) {
   const environmentValue = environment(), { api, root } = environmentValue, host = node();
   const items = Object.freeze([Object.freeze({ y: 100, height: 40, selected: true }), Object.freeze({ y: 600, height: 40 })]);
-  let current = { total: 1000, visible: 400, offset: 200, height: 40, rowCount: 20, overhead: 200, items };
+  let current = { total: 1000, visible: 400, offset: 200, height: 40, rowCount: 20, overhead: 200, items, ...overrides };
   const pans = [], resizes = [];
   const controller = api.createNavigator(host, { getState: () => current,
     onPan(offset) { pans.push(offset); current = { ...current, offset }; },
@@ -138,6 +138,45 @@ for (const edge of ["top", "bottom"]) {
   h.rail.fire("keydown", { target: h.bottom, key: "Home" }); assert.equal(h.resizes.at(-1).height, 24);
   h.rail.fire("keydown", { target: h.top, key: "End" }); assert.equal(h.resizes.at(-1).height, 48);
   assert.equal(h.rail.fire("keydown", { target: h.pan, key: "Tab" }).defaultPrevented, false);
+  h.controller.destroy();
+}
+// The Products view uses the same control with uniform card zoom. Reusing the
+// row-height normalization would silently clamp its 20%-200% scale to 24px.
+for (const edge of ["top", "bottom"]) {
+  const h = harness({ scale: 1, minScale: .2, maxScale: 2, crossTotal: 800,
+    items: [{ x: 100, width: 240, y: 100, height: 40, selected: true }] });
+  const shape = h.host.querySelector('.roadmap-vertical-silhouette');
+  assert.equal(shape.style.left, '12.5%', 'Card columns retain their horizontal position in the vertical overview.');
+  assert.equal(shape.style.width, '30%');
+  assert.equal(shape.style.top, '10%'); assert.equal(shape.style.height, '4%');
+  assert.equal(h.top.attributes['aria-valuemin'], '20'); assert.equal(h.bottom.attributes['aria-valuemax'], '200');
+  assert.equal(h.bottom.attributes['aria-valuenow'], '100');
+  const start = edge === 'top' ? 200 : 400, target = edge === 'top' ? 150 : 450;
+  h.pointer('pointerdown', start, h[edge]); h.pointer('pointermove', target, h[edge]);
+  near(h.resizes.at(-1).scale, .8, 'Dragging an edge grows the visible interval through uniform zoom');
+  assert.equal(h.resizes.at(-1).anchor, edge === 'top' ? 600 : 200, 'The opposite content edge is the logical zoom anchor.');
+  assert.equal(h.resizes.at(-1).edge, edge);
+  h.set({ total: 800, scale: .8, offset: 100 });
+  h.pointer('pointermove', target, h[edge]); near(h.resizes.at(-1).scale, .8, 'Reflow does not reset gesture geometry');
+  h.pointer('pointermove', start, h[edge]); near(h.resizes.at(-1).scale, 1, 'Returning the handle restores its initial zoom');
+  h.pointer('pointerup', start, h[edge]);
+  assert.equal(h.api.getHeight(), 38, 'Product zoom never changes roadmap density or its preference.');
+  h.controller.destroy();
+}
+{
+  const h = harness({ scale: 1, minScale: .2, maxScale: 2 });
+  h.api.setHeight(24); h.set({height:undefined});
+  h.rail.fire('keydown', { target:h.pan, key:'ArrowDown' });
+  assert.equal(h.state().offset,240,'Products keyboard scrolling is independent of the roadmap row preference');
+  h.rail.fire('keydown', { target:h.bottom, key:'ArrowDown' }); near(h.resizes.at(-1).scale,.9,'Keyboard edge resize uses the existing ten-percent zoom step');
+  h.rail.fire('keydown', { target:h.top, key:'Home' }); near(h.resizes.at(-1).scale,.2,'Keyboard zoom reaches the lower limit');
+  h.rail.fire('keydown', { target:h.top, key:'End' }); near(h.resizes.at(-1).scale,2,'Keyboard zoom reaches the upper limit');
+  h.controller.destroy();
+}
+{
+  const h = harness({ total:400, visible:400, offset:0, scale:.7, minScale:.2, maxScale:2 });
+  h.pointer('pointerdown',600,h.bottom); h.pointer('pointermove',600,h.bottom);
+  near(h.resizes.at(-1).scale,.7,'A fitted view never jumps zoom before a handle moves');
   h.controller.destroy();
 }
 for (const termination of ["pointerup", "pointercancel", "lostpointercapture", "Escape", "blur", "destroy"]) {

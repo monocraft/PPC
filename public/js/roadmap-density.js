@@ -68,7 +68,8 @@
   function createNavigator(host, adapter) {
     const abort = new AbortController();
     const rail = make("div", "roadmap-vertical-navigator");
-    rail.setAttribute("aria-label", "Roadmap vertical navigation");
+    rail.setAttribute("aria-label", adapter.label || "Roadmap vertical navigation");
+    if (adapter.className) rail.classList.add(adapter.className);
     const silhouettes = make("div", "roadmap-vertical-silhouettes"); silhouettes.setAttribute("aria-hidden", "true");
     const window = make("div", "roadmap-vertical-window");
     const pan = make("button", "roadmap-vertical-pan");
@@ -86,7 +87,9 @@
       const raw = adapter.getState();
       const total = Math.max(1, number(raw.total, 1));
       const visible = clamp(number(raw.visible, total), 1, total);
-      return { ...raw, total, visible, offset: clamp(number(raw.offset), 0, Math.max(0, total - visible)), height: normalize(raw.height ?? getHeight()), rowCount: Math.max(0, number(raw.rowCount)), overhead: Math.max(0, number(raw.overhead)) };
+      const minScale = Math.max(.01, number(raw.minScale, .2)), maxScale = Math.max(minScale, number(raw.maxScale, 2));
+      const scale = Number.isFinite(raw.scale) ? clamp(raw.scale, minScale, maxScale) : null;
+      return { ...raw, total, visible, scale, minScale, maxScale, offset: clamp(number(raw.offset), 0, Math.max(0, total - visible)), height: normalize(raw.height ?? getHeight()), rowCount: Math.max(0, number(raw.rowCount)), overhead: Math.max(0, number(raw.overhead)) };
     }
     function update() {
       if (destroyed) return;
@@ -97,8 +100,14 @@
       const description = `Viewing ${Math.round(first * 100)}% to ${Math.round((first + span) * 100)}% of products`;
       pan.setAttribute("aria-valuemin", "0"); pan.setAttribute("aria-valuemax", String(Math.round(Math.max(0, value.total - value.visible))));
       pan.setAttribute("aria-valuenow", String(Math.round(value.offset))); pan.setAttribute("aria-valuetext", description);
-      for (const handle of handles) { handle.setAttribute("aria-valuenow", value.height); handle.setAttribute("aria-valuetext", `${value.height} pixels per row; ${description.toLowerCase()}`); }
-      const next = JSON.stringify([value.total, value.items]);
+      for (const handle of handles) {
+        const scaling = value.scale !== null;
+        handle.setAttribute("aria-valuemin", scaling ? Math.round(value.minScale * 100) : MIN);
+        handle.setAttribute("aria-valuemax", scaling ? Math.round(value.maxScale * 100) : MAX);
+        handle.setAttribute("aria-valuenow", scaling ? Math.round(value.scale * 100) : value.height);
+        handle.setAttribute("aria-valuetext", `${scaling ? `${Math.round(value.scale * 100)}% card zoom` : `${value.height} pixels per row`}; ${description.toLowerCase()}`);
+      }
+      const next = JSON.stringify([value.total, value.crossTotal, value.items]);
       if (next === signature) return;
       signature = next;
       const fragment = document.createDocumentFragment();
@@ -107,7 +116,13 @@
         const size = clamp(number(item.height) / value.total, 0, 1 - top);
         if (!size) continue;
         const shape = make("i", `roadmap-vertical-silhouette${item.selected ? " is-selected" : ""}`);
-        shape.style.top = `${top * 100}%`; shape.style.height = `${size * 100}%`; fragment.append(shape);
+        shape.style.top = `${top * 100}%`; shape.style.height = `${size * 100}%`;
+        if (value.crossTotal > 0) {
+          const left = clamp(number(item.x) / value.crossTotal, 0, 1);
+          shape.style.left = `${left * 100}%`; shape.style.right = "auto";
+          shape.style.width = `${clamp(number(item.width) / value.crossTotal, 0, 1 - left) * 100}%`;
+        }
+        fragment.append(shape);
       }
       silhouettes.replaceChildren(fragment);
     }
@@ -116,10 +131,15 @@
       const anchor = initial.offset + (edge === "top" ? initial.visible : 0);
       adapter.onResize?.({ height: normalize(height), edge, anchor, initialHeight: initial.height }); update();
     }
+    function requestScale(scale, edge, initial) {
+      const anchor = (initial.offset + (edge === "top" ? initial.visible : 0)) / initial.scale;
+      adapter.onResize?.({ scale: clamp(scale, initial.minScale, initial.maxScale), edge, anchor }); update();
+    }
     function resize(edge, fraction, initial) {
       if (!initial.rowCount) return;
       const first = initial.offset / initial.total, last = (initial.offset + initial.visible) / initial.total;
       const span = Math.max(.001, edge === "top" ? last - fraction : fraction - first);
+      if (initial.scale !== null) { requestScale(initial.scale * initial.visible / initial.total / span, edge, initial); return; }
       requestResize((initial.visible / span - initial.overhead) / initial.rowCount, edge, initial);
     }
     const fractionAt = (event, rect) => clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
@@ -153,10 +173,16 @@
       event.preventDefault(); const initial = state(), edge = event.target.dataset.edge;
       if (edge) {
         const direction = (event.key === "ArrowUp" || event.key === "PageUp" ? -1 : 1) * (edge === "top" ? 1 : -1);
+        if (initial.scale !== null) {
+          const value = event.key === "Home" ? initial.minScale : event.key === "End" ? initial.maxScale
+            : Math.round((initial.scale + direction * (event.shiftKey || event.key.startsWith("Page") ? .5 : .1)) * 100) / 100;
+          requestScale(value, edge, initial); return;
+        }
         const value = event.key === "Home" ? MIN : event.key === "End" ? MAX : initial.height + direction * (event.shiftKey || event.key.startsWith("Page") ? 6 : 2);
         requestResize(value, edge, initial);
       } else {
-        const distance = event.key.startsWith("Page") ? initial.visible * .9 : initial.height * (event.shiftKey ? 5 : 1);
+        const step = initial.scale !== null ? 40 : initial.height;
+        const distance = event.key.startsWith("Page") ? initial.visible * .9 : step * (event.shiftKey ? 5 : 1);
         const next = event.key === "Home" ? 0 : event.key === "End" ? initial.total - initial.visible : initial.offset + (event.key.endsWith("Up") ? -distance : distance);
         adapter.onPan?.(clamp(next, 0, initial.total - initial.visible)); update();
       }
