@@ -829,8 +829,8 @@ let viewSelectedProduct = null;
 const viewRenderCalls = [];
 const normalizedViewLanes = [];
 const viewBoard = { settings: { freeMove: true }, lanes: [{ id: "audio" }, { id: "accessories" }], products: [
-  { id: "a", laneId: "audio", manualPosition: { x: 200, y: 100 }, order: 0 },
-  { id: "b", laneId: "accessories", manualPosition: { x: 460, y: 100 }, order: 0 },
+  { id: "a", laneId: "audio", manualPosition: { x: 200, y: 100 }, order: 9 },
+  { id: "b", laneId: "accessories", manualPosition: { x: 460, y: 100 }, order: 14 },
 ] };
 const viewSandbox = {
   isFfsRoadmap: () => false,
@@ -947,11 +947,13 @@ viewElement("#zoomReset").onclick();
 assert.equal(viewSandbox.zoom, 1, "clicking the product percentage resets zoom only");
 assert.ok(viewBoard.products.every((product) => product.manualPosition), "resetting zoom preserves the saved product layout");
 viewSandbox.zoom = .65;
+const retainedViewPlacements = viewBoard.products.map(({ id, laneId, order }) => ({ id, laneId, order }));
 viewElement("#resetLayout").onclick();
 assert.equal(viewSandbox.zoom, 1, "Reset layout restores normal product scale");
 assert.ok(viewBoard.products.every((product) => !Object.hasOwn(product, "manualPosition")), "Reset layout restores automatic card positions");
 assert.equal(viewBoard.settings.freeMove, false);
-assert.deepEqual(normalizedViewLanes, ["audio", "accessories"], "Reset layout normalizes each saved product lane");
+assert.deepEqual(normalizedViewLanes, [], "Reset layout never normalizes accepted shared lane/order facts");
+assert.deepEqual(viewBoard.products.map(({ id, laneId, order }) => ({ id, laneId, order })), retainedViewPlacements, "Reset layout preserves the exact sparse accepted product placements");
 assert.equal(viewSandbox.roadmapMonthWidth, retainedTimelineWidth, "all product view actions preserve the shared timeline scale");
 assert.ok(viewRenderCalls.includes("roadmap") && viewRenderCalls.includes("split") && viewRenderCalls.includes("products"), "view controls render the active Products, Roadmap, and details surfaces");
 

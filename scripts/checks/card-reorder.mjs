@@ -84,11 +84,24 @@ function harness() {
 {
   const h = harness(); h.context.startProductReorder(); h.context.reorderProduct("a", "second", 1);
   h.board.products = h.board.products.filter((product) => product.id !== "c");
-  h.board.products.push({ id: "new", name: "New product", laneId: "first", order: -1, specs: [{ label: "Keys", value: "Optical" }] });
+  h.board.products.push({ id: "new", name: "New product", laneId: "first", order: 50, specs: [{ label: "Keys", value: "Optical" }] });
+  const latest = h.layouts();
   h.context.finishProductReorder({ cancel: true });
-  assert.deepEqual(h.order("first"), ["new", "a", "b"]); assert.deepEqual(h.order("second"), ["d", "e"]);
+  assert.deepEqual(h.layouts(), latest, "A concurrent new member preserves the connected lanes' exact latest placements rather than manufacturing numeric order changes while canceling.");
+  assert.equal(h.notices.length, 1); assert.equal(h.notices[0].options.severity, "warning");
   assert.ok(!h.board.products.some((product) => product.id === "c"), "Cancel does not resurrect deleted products");
   assert.equal(h.board.products.find((product) => product.id === "new").specs[0].value, "Optical", "New records and their facts remain intact");
+}
+{
+  const h = harness();
+  for (const [index, order] of [0, 5, 8].entries()) h.board.products[index].order = order;
+  const before = h.layouts();
+  h.context.startProductReorder(); h.context.reorderProduct("a", "second", 1);
+  h.board.products = h.board.products.filter(product => product.id !== "c");
+  h.context.finishProductReorder({ cancel: true });
+  assert.deepEqual(h.layouts(), before.filter(product => product.id !== "c"), "Without new members, cancel restores the exact accepted sparse order and manual positions of surviving products.");
+  assert.equal(h.board.products.find(product => product.id === "b").order, 5, "A deleted neighbor never turns accepted numeric gaps into a dense placement draft.");
+  assert.equal(h.notices.length, 0, "A deletion alone can be preserved without blocking safe layout restoration.");
 }
 {
   const h = harness(); h.context.startProductReorder(); h.context.reorderProduct("a", "first", 2);

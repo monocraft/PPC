@@ -754,4 +754,74 @@ const editedThenRemoved = integration.state().categories[0].board.products[0].sp
 assert.equal(editedThenRemoved.length, normalizedOriginalProduct.specs.length - 1);
 assert.equal(editedThenRemoved[0].value, "Edited before removal", "removing another specification must retain current edits");
 
-console.log("ASCM importer checks passed: workbook portfolio-scoped SKU retention, grouping, category-aware audio matches, genuine same-portfolio ambiguity, additive updates, preserved specs/prices/images, partial reports, idempotence, app normalization/category moves, new-product category/lane baseline specs, and specification editing.");
+// Importing source facts does not authorize compacting accepted product order.
+// Exercise the real application importer and its complete schema normalizers
+// with both sparse and duplicate positions in matched, target and other boards.
+const placementSeed = structuredClone(normalizedOriginal);
+placementSeed.categories[0].board.products[0].order = 8;
+function addPlacementRows(categoryId, laneId, orders) {
+  const category = placementSeed.categories.find(item => item.id === categoryId);
+  assert.ok(category.board.lanes.some(lane => lane.id === laneId));
+  for (const [index, order] of orders.entries()) category.board.products.push({
+    ...structuredClone(normalizedOriginalProduct), id: `placement-${categoryId}-${laneId}-${index}`,
+    name: `Unrelated placement ${categoryId} ${laneId} ${index}`, laneId, order,
+    partSkus: [], variantGroups: [], ascm: null,
+  });
+}
+addPlacementRows("pc-gaming-audio", "wired", [0, 3, 3, 17]);
+addPlacementRows("pc-gaming-audio", "wireless", [2, 11, 11]);
+addPlacementRows("lifestyle-audio", "wired", [4, 12, 12]);
+addPlacementRows("lifestyle-audio", "wireless", [3, 9]);
+addPlacementRows("mice", "wired", [2, 8, 8]);
+addPlacementRows("mice", "wireless", [1, 15]);
+integration.load(placementSeed);
+const acceptedPlacementState = integration.state();
+const placementsOf = state => state.categories.flatMap(category => category.board.products.map(({ id, laneId, order }) => ({ id, categoryId: category.id, laneId, order })));
+const acceptedPlacements = placementsOf(acceptedPlacementState);
+const acceptedProductMap = new Map(acceptedPlacementState.categories.flatMap(category => category.board.products.map(product => [product.id, product])));
+const checkUnchangedPlacements = (label, excluded = []) => {
+  const ignored = new Set(excluded);
+  assert.deepEqual(placementsOf(integration.state()).filter(product => acceptedProductMap.has(product.id) && !ignored.has(product.id)), acceptedPlacements.filter(product => !ignored.has(product.id)), `${label}: every preexisting raw category/lane/order value survives.`);
+};
+for (const skipped of [false, true]) {
+  integration.load(structuredClone(acceptedPlacementState));
+  const matchedPlan = integration.plan(integrationDataset), newPlan = integration.plan(addDataset);
+  const plan = skipped ? { ...matchedPlan, items: [
+    ...matchedPlan.items, ...newPlan.items,
+    { ...matchedPlan.items[0], action: "ambiguous", match: { status: "ambiguous" } },
+  ] } : { ...matchedPlan, items: [] };
+  const result = integration.apply(plan, { updateMatched: false, addNew: false });
+  assert.equal(result.updated, 0); assert.equal(result.added, 0); assert.equal(result.skipped, plan.items.length);
+  checkUnchangedPlacements(skipped ? "Skipped source update" : "Empty source update");
+  assert.deepEqual(integration.state().categories, acceptedPlacementState.categories, "Empty/skipped ASCM application leaves full accepted product records and every category unchanged.");
+}
+integration.load(structuredClone(acceptedPlacementState));
+const sameCategoryPlan = integration.plan(integrationDataset);
+assert.equal(sameCategoryPlan.items[0].matchedProductId, curatedProduct.id);
+assert.equal(integration.apply(sameCategoryPlan).updated, 1);
+checkUnchangedPlacements("Genuine matched source update in the same category");
+for (const category of integration.state().categories) for (const product of category.board.products) if (product.id !== curatedProduct.id) {
+  assert.deepEqual(product, acceptedProductMap.get(product.id), "A matched update preserves every unrelated accepted record, including images, dates and source metadata.");
+}
+integration.load(structuredClone(acceptedPlacementState));
+const placementAddPlan = integration.plan(addDataset), newGroup = placementAddPlan.items.find(item => item.action === "new").group;
+const newTarget = acceptedPlacementState.categories.find(category => category.id === newGroup.categoryId);
+const newLaneId = newTarget.board.lanes.some(lane => lane.id === newGroup.laneId) ? newGroup.laneId : newTarget.board.lanes[0].id;
+const appendOrder = Math.max(-1, ...newTarget.board.products.filter(product => product.laneId === newLaneId).map(product => product.order)) + 1;
+assert.equal(integration.apply(placementAddPlan).added, 1);
+checkUnchangedPlacements("Genuine imported newcomer");
+const addedPlacement = placementsOf(integration.state()).find(product => !acceptedProductMap.has(product.id));
+assert.equal(addedPlacement.categoryId, newTarget.id); assert.equal(addedPlacement.laneId, newLaneId);
+assert.equal(addedPlacement.order, appendOrder, "A new imported product appends after the destination lane's actual maximum, regardless of gaps or duplicate positions.");
+integration.load(structuredClone(acceptedPlacementState));
+const sparseMoveGroup = { ...cloud, categoryId: "lifestyle-audio" };
+const sparseMoveTarget = acceptedPlacementState.categories.find(category => category.id === sparseMoveGroup.categoryId);
+const sparseMoveLane = sparseMoveTarget.board.lanes.some(lane => lane.id === sparseMoveGroup.laneId) ? sparseMoveGroup.laneId : sparseMoveTarget.board.lanes[0].id;
+const movedAppendOrder = Math.max(-1, ...sparseMoveTarget.board.products.filter(product => product.laneId === sparseMoveLane).map(product => product.order)) + 1;
+assert.equal(integration.apply({ dataset: integrationDataset, currentPns: cloud.basePns, items: [{ group: sparseMoveGroup, match: importer.matchProductGroup(sparseMoveGroup, integration.state()), action: "update", matchedProductId: curatedProduct.id }] }).updated, 1);
+checkUnchangedPlacements("Explicit imported category correction", [curatedProduct.id]);
+const movedPlacement = placementsOf(integration.state()).find(product => product.id === curatedProduct.id);
+assert.equal(movedPlacement.categoryId, sparseMoveTarget.id); assert.equal(movedPlacement.laneId, sparseMoveLane);
+assert.equal(movedPlacement.order, movedAppendOrder, "An explicitly moved imported product appends after the destination lane's maximum without reordering source or target siblings.");
+
+console.log("ASCM importer checks passed: workbook portfolio-scoped SKU retention, grouping, category-aware audio matches, genuine same-portfolio ambiguity, additive updates, preserved specs/prices/images, partial reports, idempotence, app normalization/category moves, gapped/duplicate accepted placement stability for empty/skipped/matched/new/moved plans, new-product category/lane baseline specs, and specification editing.");

@@ -80,7 +80,9 @@ for (let index = 0; index < 101; index++) {
   const emptyDates = index >= 15 && index < 27;
   category.board.products.push({
     id: `accepted-${index}`, name: `Synthetic accepted product ${index}`, laneId: category.board.lanes[0].id,
-    order: Math.floor(index / 2), price: 99, statusType: "none", statusLabel: "", specs: [], partSkus: [],
+    // Accepted positions can have both a missing slot and duplicate numbers;
+    // repeated schema loads/category switches must preserve these facts too.
+    order: index === 30 || index === 31 ? 15 : Math.floor(index / 2) + (index >= 14 ? 1 : 0), price: 99, statusType: "none", statusLabel: "", specs: [], partSkus: [],
     generalAvailabilityDate: "", endManufacturingDate: emptyDates ? "2024-12-31" : "",
     roadmap: { family: "Other", status: "in-planning", confidence: "medium", startMonth: emptyDates ? "" : "2026-01", launchMonth: emptyDates ? "" : "2026-01", endMonth: emptyDates ? "2024-12" : index === 27 ? "" : "2030-12", predecessorId: "", successorId: "" },
     variantGroups: [{ id: `colors-${index}`, type: "color", label: index % 2 ? "" : "Color", items: acceptedRows(index) }],

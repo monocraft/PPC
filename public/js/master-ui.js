@@ -37,6 +37,7 @@
       case "INVALID_CHANGE": case "INVALID_CHANGES": case "VALIDATION_FAILED": case "INVALID_PRODUCT": return "Some product details need checking. Review dates and repeated SKUs, then try again.";
       case "RATE_LIMIT": case "RATE_LIMITED": case "RETRY_LATER": case "MASTER_BUSY": return `Please wait a moment before trying again. ${safe}`;
       case "REQUEST_TOO_LARGE": case "MASTER_TOO_LARGE": return "This update is too large to finish. Your changes are safe; ask your portfolio owner to help.";
+      case "PLACEMENT_UNAVAILABLE": return "These product positions are saved on this device. Sharing positions needs a service update; retrying cannot finish it yet. Your other edits are safe.";
       case "EDITOR_KEY_REQUIRED": case "GITHUB_PERMISSION_DENIED": case "TEAM_SETUP_REQUIRED": case "WRITES_DISABLED": return "Editing access needs attention. Ask your portfolio owner to check it. Your changes are safe.";
       default: return `${saving ? "Could not save these changes yet." : "Updates are temporarily unavailable."} ${safe}`;
     }

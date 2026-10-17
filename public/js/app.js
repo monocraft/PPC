@@ -4719,9 +4719,10 @@ function restoreProductCardReorder(targetBoard, operation, blockedLanes) {
   const validLanes = new Set(targetBoard.lanes.map((lane) => lane.id));
   const sequence = (records, laneId) => records.filter((product) => product.laneId === laneId && affectedIds.has(product.id) && products.has(product.id)).sort((a, b) => a.order - b.order).map((product) => product.id);
   const changedElsewhere = laneIds.some((laneId) => blockedLanes.has(laneId) || !validLanes.has(laneId))
+    || targetBoard.products.some((product) => laneIds.includes(product.laneId) && !affectedIds.has(product.id))
     || after.some((layout) => {
       const product = products.get(layout.id);
-      return product && (product.laneId !== layout.laneId || JSON.stringify(product.manualPosition) !== JSON.stringify(layout.manualPosition));
+      return product && (product.laneId !== layout.laneId || product.order !== layout.order || JSON.stringify(product.manualPosition) !== JSON.stringify(layout.manualPosition));
     })
     || laneIds.some((laneId) => JSON.stringify(sequence(targetBoard.products, laneId)) !== JSON.stringify(sequence(after, laneId)));
   if (changedElsewhere) {
@@ -4729,20 +4730,15 @@ function restoreProductCardReorder(targetBoard, operation, blockedLanes) {
     return false;
   }
 
-  // Revert only our layout fields. New records retain their current slots;
-  // deleted records stay deleted, and product facts are never replaced.
-  const newcomers = new Map(laneIds.map((laneId) => [laneId, targetBoard.products.filter((product) => product.laneId === laneId).sort((a, b) => a.order - b.order).map((product, index) => ({ product, index })).filter(({ product }) => !affectedIds.has(product.id))]));
+  // Revert only our exact layout fields, including accepted gaps and ties.
+  // New lane members are protected above; deleted records stay deleted.
   for (const layout of before) {
     const product = products.get(layout.id);
     if (!product) continue;
     product.laneId = layout.laneId;
+    product.order = layout.order;
     if (Object.hasOwn(layout, "manualPosition")) product.manualPosition = layout.manualPosition == null ? layout.manualPosition : JSON.parse(JSON.stringify(layout.manualPosition));
     else delete product.manualPosition;
-  }
-  for (const laneId of laneIds) {
-    const ordered = before.filter((layout) => layout.laneId === laneId && products.has(layout.id)).sort((a, b) => a.order - b.order).map((layout) => products.get(layout.id));
-    for (const { product, index } of newcomers.get(laneId)) ordered.splice(Math.min(index, ordered.length), 0, product);
-    ordered.forEach((product, index) => { product.order = index; });
   }
   return true;
 }
@@ -6362,8 +6358,10 @@ function reorderProduct(productId, targetLaneId, targetIndex) {
     const oldLaneId = moving.laneId;
     const laneIds = [...new Set([oldLaneId, targetLaneId])];
     const before = captureProductCardLayout(current, laneIds);
-    const target = current.products.filter((product) => product.laneId === targetLaneId && product.id !== productId).sort((a, b) => a.order - b.order);
+    const laneProducts = current.products.filter((product) => product.laneId === targetLaneId).sort((a, b) => a.order - b.order);
+    const target = laneProducts.filter((product) => product.id !== productId);
     const clamped = Math.max(0, Math.min(targetIndex, target.length));
+    if (oldLaneId === targetLaneId && laneProducts.findIndex((product) => product.id === productId) === clamped) return;
     moving.laneId = targetLaneId;
     delete moving.manualPosition;
     target.splice(clamped, 0, moving);
@@ -6420,7 +6418,8 @@ function applySort() {
   if (mode === "custom") return;
   updateBoard((current) => {
     current.lanes.forEach((lane) => {
-      const products = current.products.filter((product) => product.laneId === lane.id);
+      const products = current.products.filter((product) => product.laneId === lane.id).sort((a, b) => a.order - b.order);
+      const previous = [...products];
       products.sort((a, b) => {
         if (mode === "name-asc") return a.name.localeCompare(b.name);
         if (mode === "price-asc") return (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER);
@@ -6429,7 +6428,8 @@ function applySort() {
         if (mode === "sku-count") return productVariantCount(b) - productVariantCount(a) || a.name.localeCompare(b.name);
         return a.order - b.order;
       });
-      products.forEach((product, index) => { product.order = index; delete product.manualPosition; });
+      const orderChanged = products.some((product, index) => product !== previous[index]);
+      products.forEach((product, index) => { if (orderChanged) product.order = index; delete product.manualPosition; });
     });
     current.settings.freeMove = false;
   });
@@ -7962,10 +7962,19 @@ function saveCategorySettings() {
   board.title = boardTitle;
   board.settings.roadmap.categoryLabel = roadmapLabel;
   board.lanes = lanes;
+  let relocatedProducts = false;
+  let relocatedOrder = board.products.filter((product) => product.laneId === fallbackLaneId)
+    .reduce((maximum, product) => Number.isFinite(product.order) ? Math.max(maximum, product.order) : maximum, -1);
   board.products.forEach((product) => {
-    if (!validLaneIds.has(product.laneId)) product.laneId = fallbackLaneId;
+    if (!validLaneIds.has(product.laneId)) {
+      product.laneId = fallbackLaneId;
+      product.order = ++relocatedOrder;
+      relocatedProducts = true;
+    }
   });
-  lanes.forEach((lane) => normalizeLaneOrders(lane.id));
+  // Labels, titles and lane display order do not move products. Renumber only
+  // the destination of an explicit lane removal, never unrelated lanes.
+  if (relocatedProducts) normalizeLaneOrders(fallbackLaneId);
   scheduleSave();
   closeCategorySettings();
   syncControls();
@@ -8560,7 +8569,8 @@ function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {})
         product.laneId = targetCategory.board.lanes.some((lane) => lane.id === item.group.laneId)
           ? item.group.laneId
           : targetCategory.board.lanes[0]?.id || "default";
-        product.order = targetCategory.board.products.length;
+        product.order = targetCategory.board.products.filter((item) => item.laneId === product.laneId)
+          .reduce((maximum, item) => Number.isFinite(item.order) ? Math.max(maximum, item.order) : maximum, -1) + 1;
         targetCategory.board.products.push(product);
       }
       applyAscmGroupToProduct(product, item.group, plan.dataset, importedAt, false);
@@ -8585,7 +8595,8 @@ function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {})
       String(item.group.displayName || item.group.records?.[0]?.description || "ASCM product"),
       null,
       laneId,
-      category.board.products.length,
+      category.board.products.filter((item) => item.laneId === laneId)
+        .reduce((maximum, item) => Number.isFinite(item.order) ? Math.max(maximum, item.order) : maximum, -1) + 1,
       { priceLabel: "Price TBD", roadmap: null, specs: defaultSpecificationsForCategory(category.id, laneId) }
     );
     applyAscmGroupToProduct(product, item.group, plan.dataset, importedAt, true);
@@ -8593,9 +8604,7 @@ function applyAscmImportPlan(plan, { updateMatched = true, addNew = true } = {})
     added += 1;
   }
 
-  for (const category of next.categories) {
-    for (const lane of category.board.lanes) normalizeOrdersForBoard(category.board, lane.id);
-  }
+  // Source-data updates do not authorize reordering existing lane members.
   next.ascmSnapshot = normalizeAscmSnapshot({
     sourceFile: plan.dataset.metadata?.fileName || "ASCM report.xlsx",
     exportedAt: plan.dataset.metadata?.exportedAt || "",
@@ -8804,7 +8813,7 @@ $("#resetLayout").onclick = () => {
   stopProductCardDrag();
   zoom = 1;
   closePopupMenus();
-  updateBoard((current) => { current.products.forEach((product) => delete product.manualPosition); current.settings.freeMove = false; current.lanes.forEach((lane) => normalizeLaneOrders(lane.id)); });
+  updateBoard((current) => { current.products.forEach((product) => delete product.manualPosition); current.settings.freeMove = false; });
 };
 $("#fitProducts").onclick = () => { closePopupMenus(); fitProductBoard(); };
 $("#zoomOut").onclick = () => setProductZoom(steppedViewZoom(zoom, -1, PRODUCT_MIN_ZOOM, PRODUCT_MAX_ZOOM));

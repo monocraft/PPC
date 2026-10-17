@@ -186,6 +186,13 @@ failed.setSave(async () => { failed.state.pending = []; return { saved: true }; 
 const retrySaved = failed.api.save(); failed.submit(); await retrySaved;
 assert.equal(failed.notices.has("master-sync-error"), false, "the write failure resolves after an accepted save");
 
+const unsupportedPlacement = createUi([edited]); await flush();
+unsupportedPlacement.setSave(async () => { throw Object.assign(new Error("Private placement service details"), { code: "PLACEMENT_UNAVAILABLE" }); });
+const unsupportedPlacementFlow = unsupportedPlacement.api.save(); unsupportedPlacement.submit(); await unsupportedPlacementFlow;
+assert.match(unsupportedPlacement.notices.get("master-sync-error").message, /positions.*saved on this device.*service update/i, "A known unsupported service explains the actual dependency instead of promising a retry will save positions.");
+assert.doesNotMatch(unsupportedPlacement.notices.get("master-sync-error").message, /try saving again|Private placement/i);
+assert.equal(unsupportedPlacement.state.pending.length, 1, "Capability feedback preserves the genuine pending edit.");
+
 const staleMergeUi = createUi([pending[3]]); await flush();
 staleMergeUi.setSave(async () => { const error = new Error("A private master merge changed"); error.code = "MERGE_REVIEW_REQUIRED"; throw error; });
 const staleMergeFlow = staleMergeUi.api.save(); staleMergeUi.submit(); await staleMergeFlow;
