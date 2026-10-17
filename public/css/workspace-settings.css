@@ -25,9 +25,9 @@
 #workspaceSettingsDialog .workspace-settings-heading .icon-button { width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgb(0 0 0 / .15); font-size: 22px; }
 #workspaceSettingsDialog .workspace-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 #workspaceSettingsDialog .settings-navigation { display: flex; gap: 4px; padding: 0 20px 12px; border: 0; background: transparent; }
-#workspaceSettingsDialog .settings-tab { display: block; min-width: 0; min-height: 40px; padding: 7px 14px; border: 0; border-radius: 999px; color: var(--color-text-muted); background: transparent; font-size: 12px; text-align: center; white-space: nowrap; }
-#workspaceSettingsDialog .settings-tab:hover { color: var(--color-text); background: rgb(255 255 255 / .045); }
-#workspaceSettingsDialog .settings-tab.is-active { color: var(--settings-amber); background: rgb(255 200 87 / .085); box-shadow: inset 0 0 0 1px rgb(255 200 87 / .16); }
+#workspaceSettingsDialog .settings-tab { display: block; min-width: 0; min-height: 40px; padding: 7px 14px; border: 0; border-radius: var(--corner-control); color: var(--color-text-secondary); background: transparent; font-size: 12px; text-align: center; white-space: nowrap; }
+#workspaceSettingsDialog .settings-tab:hover { color: var(--color-text); background: var(--color-header); }
+#workspaceSettingsDialog .settings-tab.is-active { color: var(--color-page); background: var(--color-text); box-shadow: none; }
 #workspaceSettingsDialog .settings-content { padding: 0 20px 16px; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--color-border-strong) transparent; }
 #workspaceSettingsDialog .workspace-settings-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border: 0; background: rgb(255 255 255 / .02); }
 #workspaceSettingsDialog .workspace-settings-footer > span { max-width: none; color: var(--color-text-muted); font-size: 11px; line-height: 1.45; }
@@ -86,13 +86,17 @@
 #workspaceSettingsDialog .settings-tool-arrow { align-self: start; color: var(--color-text-muted); font-size: 13px; }
 #workspaceSettingsDialog #addProduct { width: auto; min-width: 170px; }
 #workspaceSettingsDialog #settingsDataPanel .settings-content { padding: 0; }
-#workspaceSettingsDialog .settings-portfolio-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, .25fr); align-items: center; gap: 8px; }
-#workspaceSettingsDialog #settingsPullLatestData { grid-template-columns: 33px minmax(0, 1fr) 15px; gap: 11px; min-height: 66px; padding: 12px 15px; border-radius: 10px; }
+#workspaceSettingsDialog .settings-portfolio-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, .25fr); align-items: stretch; gap: 0; border-radius: 10px; background: var(--color-text); }
+#workspaceSettingsDialog #settingsPullLatestData { grid-template-columns: 33px minmax(0, 1fr); gap: 11px; min-height: 66px; padding: 12px 15px; border-radius: 10px 0 0 10px; }
 #workspaceSettingsDialog #settingsPullLatestData { background: var(--color-text); color: var(--color-on-accent); }
 #workspaceSettingsDialog #settingsPullLatestData:hover { background: #ECEDEF; }
+#workspaceSettingsDialog #settingsPullLatestData:active { background: #CACCD1; transform: none; }
+#workspaceSettingsDialog .settings-portfolio-actions > button:focus-visible { outline-offset: -4px; }
+#workspaceSettingsDialog #settingsPullLatestData:focus-visible { outline-color: var(--color-on-accent); }
+#workspaceSettingsDialog #restoreSample:focus-visible { outline-color: #FFFFFF; }
 #workspaceSettingsDialog #settingsPullLatestData > svg { width: 32px; height: 32px; padding: 6px; border-radius: 8px; background: rgb(0 0 0 / .08); color: inherit; }
 #workspaceSettingsDialog #settingsPullLatestData .data-action-copy strong { font-size: 15px; }
-#workspaceSettingsDialog #settingsPullLatestData .data-action-copy small, #workspaceSettingsDialog #settingsPullLatestData .settings-tool-arrow { color: #4D5054; }
+#workspaceSettingsDialog #settingsPullLatestData .data-action-copy small { color: #4D5054; }
 #workspaceSettingsDialog .settings-access-note { margin: 7px 3px 13px; font-size: 11px; }
 #workspaceSettingsDialog .data-action-menu { gap: 12px; margin: 0; }
 #workspaceSettingsDialog .settings-data-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
@@ -113,8 +117,9 @@
 #workspaceSettingsDialog .settings-package-details dt { color: var(--color-text-muted); font-size: 11px; }
 #workspaceSettingsDialog .settings-package-details dd { margin: 0; color: var(--color-text); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 #workspaceSettingsDialog #sharedPackageComments { max-height: none; white-space: pre-wrap; }
-#workspaceSettingsDialog #restoreSample { min-width: 0; min-height: 44px; margin: 0; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--color-danger-text); box-shadow: none; font-size: 12px; font-weight: 400; white-space: nowrap; }
-#workspaceSettingsDialog #restoreSample:hover { background: var(--color-danger-surface); }
+#workspaceSettingsDialog #restoreSample { min-width: 0; min-height: 66px; margin: 0; padding: 8px 10px; border: 0; border-radius: 0 10px 10px 0; background: #B42C2C; color: #FFFFFF; box-shadow: none; font-size: 12px; font-weight: 400; white-space: nowrap; transition: background-color 150ms cubic-bezier(.2, 0, 0, 1); }
+#workspaceSettingsDialog #restoreSample:hover { background: #C13232; }
+#workspaceSettingsDialog #restoreSample:active { background: #9B2323; }
 @media (max-width: 650px) {
   #workspaceSettingsDialog { padding: 10px; }
   #workspaceSettingsDialog .workspace-settings { max-height: calc(100dvh - 20px); border-radius: 14px; }
@@ -122,7 +127,7 @@
   #workspaceSettingsDialog .workspace-settings-heading h2 { font-size: 19px; }
   #workspaceSettingsDialog .workspace-settings-heading p { max-width: 230px; }
   #workspaceSettingsDialog .settings-navigation { gap: 2px; padding: 0 12px 12px; }
-  #workspaceSettingsDialog .settings-tab { flex: 1; min-height: 44px; padding: 7px 8px; font-size: 11px; }
+  #workspaceSettingsDialog .settings-tab { flex: 1 1 auto; min-height: 44px; padding: 7px 6px; font-size: 11px; }
   #workspaceSettingsDialog .settings-content { padding: 0 14px 14px; }
   #workspaceSettingsDialog .workspace-settings-footer { padding: 12px 14px; }
   #workspaceSettingsDialog .workspace-settings-footer > button { min-height: 44px; }
@@ -151,7 +156,6 @@
   #workspaceSettingsDialog .settings-package-details > header { flex-wrap: wrap; gap: 4px; }
   #workspaceSettingsDialog #settingsPullLatestData { grid-template-columns: 24px minmax(0, 1fr); padding: 11px; gap: 8px; }
   #workspaceSettingsDialog #settingsPullLatestData > svg { width: 24px; height: 24px; padding: 4px; }
-  #workspaceSettingsDialog #settingsPullLatestData .settings-tool-arrow { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   #workspaceSettingsDialog *, #workspaceSettingsDialog *::before { transition: none !important; animation: none !important; }

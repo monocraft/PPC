@@ -69,7 +69,7 @@
     let draft = null, base = "", selected = adapter.getPortfolio().activeCategoryId, dragging = null;
     const status = node("p", "category-layout-status"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
     const problem = node("p", "category-layout-error"); problem.setAttribute("role", "alert");
-    const dock = node("div", "category-layout-dock"); dock.setAttribute("aria-label", "Category order");
+    const dock = node("div", "category-layout-dock"); dock.setAttribute("aria-label", "Category order"); dock.setAttribute("role", "region"); dock.tabIndex = 0;
     const addRow = node("form", "category-layout-add");
     const newName = node("input"); newName.type = "text"; newName.maxLength = 240; newName.placeholder = "New category name"; newName.setAttribute("aria-label", "New category name");
     const add = node("button", "", "Add category"); add.type = "submit"; addRow.append(newName, add);
@@ -82,7 +82,17 @@
     const setDirty = () => { save.disabled = cancel.disabled = !draft; root.PortfolioWorkspaceUI?.setCategoryDraftState?.(Boolean(draft)); problem.textContent = ""; };
     const uniqueId = () => "custom-" + root.crypto.randomUUID();
     const action = (label, text, callback, disabled = false) => { const button = node("button", "category-layout-move", text); button.type = "button"; button.setAttribute("aria-label", label); button.disabled = disabled; button.addEventListener("click", callback); return button; };
-    function focusKey(key) { [...host.querySelectorAll("[data-focus-key]")].find(element => element.dataset.focusKey === key)?.focus({ preventScroll: true }); }
+    function focusKey(key) {
+      const element = [...host.querySelectorAll("[data-focus-key]")].find(item => item.dataset.focusKey === key);
+      if (!element) return;
+      element.focus({ preventScroll: true });
+      const rail = element.closest(".category-layout-dock,.category-layout-lanes"), card = element.closest(".category-layout-chip,.category-layout-lane");
+      if (rail && card) {
+        const viewport = rail.getBoundingClientRect(), target = card.getBoundingClientRect();
+        if (target.left < viewport.left) rail.scrollLeft -= viewport.left - target.left;
+        else if (target.right > viewport.right) rail.scrollLeft += target.right - viewport.right;
+      }
+    }
     function moveCategory(id, delta) {
       const values = ensureDraft(), index = values.findIndex(item => item.id === id), target = values[index + delta];
       if (target && move(values, id, target.id)) { render(); focusKey(`category-${id}`); status.textContent = "Category order updated in this draft."; }
@@ -108,6 +118,8 @@
     }
     function render() {
       const values = current(); if (!values.some(category => category.id === selected)) selected = values[0]?.id;
+      const dockScroll = dock.scrollLeft, priorLanes = editor.querySelector(".category-layout-lanes");
+      const laneScroll = priorLanes?.dataset.categoryId === selected ? priorLanes.scrollLeft : 0;
       dock.replaceChildren(); editor.replaceChildren();
       values.forEach((category, index) => {
         const chip = node("div", "category-layout-chip"), choose = node("button", "category-layout-choice"); choose.type = "button"; choose.dataset.focusKey = `category-${category.id}`; choose.setAttribute("aria-pressed", String(category.id === selected));
@@ -120,8 +132,8 @@
       const productAction = doc.getElementById("addProduct");
       if (productAction) { productAction.setAttribute("aria-label", `Add product to ${category.name}`); const scope = productAction.querySelector("small"); if (scope) scope.textContent = `To ${category.name}`; }
       const labels = node("div", "category-layout-labels"); labels.append(field("Category name", "name", category), field("Board title", "title", category), field("Side label", "sideLabel", category));
-      const heading = node("div", "category-layout-lane-heading"); heading.append(node("h4", "", "Board layout"), node("span", "", "Drag lanes or use the arrows"));
-      const lanes = node("div", "category-layout-lanes");
+      const heading = node("div", "category-layout-lane-heading"); heading.append(node("h4", "", "Board layout"), node("span", "", "Drag lanes left or right, or use the arrows"));
+      const lanes = node("div", "category-layout-lanes"); lanes.dataset.categoryId = category.id; lanes.tabIndex = 0; lanes.setAttribute("role", "region"); lanes.setAttribute("aria-label", "Lane order: drag left or right, or use the move buttons");
       category.lanes.forEach((lane, index) => {
         const row = node("div", "category-layout-lane"); dragEvents(row, "lane", lane.id);
         const handle = node("span", "category-layout-grip", "⠿"); handle.setAttribute("aria-hidden", "true");
@@ -130,15 +142,15 @@
         const record = adapter.getPortfolio().categories.find(item => item.id === category.id), count = record?.board.products.filter(product => product.laneId === lane.id).length || 0;
         for (let number = 0; number < Math.max(1, Math.min(count, 5)); number++) silhouette.append(node("span", "category-layout-card"));
         const countLabel = node("span", "category-layout-count", `${count} ${count === 1 ? "product" : "products"}`);
-        const moves = node("div", "category-layout-lane-moves"); moves.append(action(`Move ${lane.label} up`, "↑", () => moveLane(lane.id, -1), index === 0), action(`Move ${lane.label} down`, "↓", () => moveLane(lane.id, 1), index === category.lanes.length - 1));
+        const moves = node("div", "category-layout-lane-moves"); moves.append(action(`Move ${lane.label} left`, "←", () => moveLane(lane.id, -1), index === 0), action(`Move ${lane.label} right`, "→", () => moveLane(lane.id, 1), index === category.lanes.length - 1));
         row.append(handle, laneFields, silhouette, countLabel, moves); lanes.append(row);
       });
       const addLane = node("form", "category-layout-add category-layout-add-lane"), laneName = node("input"); laneName.type = "text"; laneName.maxLength = 240; laneName.placeholder = "New lane name"; laneName.setAttribute("aria-label", "New lane name");
       const laneAdd = node("button", "", "Add lane"); laneAdd.type = "submit"; addLane.append(laneName, laneAdd);
       addLane.addEventListener("submit", event => { event.preventDefault(); if (!laneName.value.trim()) { laneName.focus(); return; } const target = ensureDraft().find(item => item.id === selected); if (target.lanes.length >= 100) { problem.textContent = "This category already has 100 lanes."; return; } const laneId = "lane-" + root.crypto.randomUUID(); target.lanes.push({ id: laneId, label: laneName.value.trim(), subtitle: "", order: target.lanes.length }); render(); focusKey(`lane-${laneId}`); });
-      editor.append(labels, heading, lanes, addLane); setDirty();
+      editor.append(labels, heading, lanes, addLane); dock.scrollLeft = dockScroll; lanes.scrollLeft = laneScroll; setDirty();
     }
-    addRow.addEventListener("submit", event => { event.preventDefault(); const name = newName.value.trim(); if (!name) { newName.focus(); return; } const values = current(); if (values.length >= 200 || values.some(category => category.name.trim().toLowerCase() === name.toLowerCase())) { problem.textContent = values.length >= 200 ? "This portfolio already has 200 categories." : "A category with this name already exists."; return; } selected = uniqueId(); ensureDraft().push({ id: selected, custom: true, name, title: `${name} Portfolio`, sideLabel: name, lanes: [{ id: "main", label: "Main", subtitle: "", order: 0 }] }); newName.value = ""; render(); focusKey("field-title"); status.textContent = "Category added to this draft. Save layout to use it."; });
+    addRow.addEventListener("submit", event => { event.preventDefault(); const name = newName.value.trim(); if (!name) { newName.focus(); return; } const values = current(); if (values.length >= 200 || values.some(category => category.name.trim().toLowerCase() === name.toLowerCase())) { problem.textContent = values.length >= 200 ? "This portfolio already has 200 categories." : "A category with this name already exists."; return; } selected = uniqueId(); ensureDraft().push({ id: selected, custom: true, name, title: `${name} Portfolio`, sideLabel: name, lanes: [{ id: "main", label: "Main", subtitle: "", order: 0 }] }); newName.value = ""; render(); focusKey(`category-${selected}`); focusKey("field-title"); status.textContent = "Category added to this draft. Save layout to use it."; });
     cancel.addEventListener("click", () => { draft = null; base = ""; render(); focusKey(`category-${selected}`); status.textContent = "Draft cancelled. Current layout restored."; });
     save.addEventListener("click", () => { if (!draft) return; try { validate(draft, adapter.getPortfolio()); adapter.applyLayout(copy(draft), base); draft = null; base = ""; render(); focusKey(`category-${selected}`); status.textContent = "Category layout saved on this device."; } catch (error) { problem.textContent = error.message; } });
     doc.getElementById("addProduct")?.addEventListener("click", event => {
