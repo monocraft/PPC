@@ -417,6 +417,7 @@ const statusContext = { portfolio: { categories: [{ id: "audio", name: "Audio", 
   activeCategoryId: "audio", activeView: "products", roadmapDetailsOpen: true, workspaceSaveRevision: 1, lastWorkspaceRenderSignature: "",
   hasDedicatedHashoutView: () => false,
   selectedProduct: () => board.products[0], visibleProducts: () => board.products,
+  productPriceText: () => "", productPartSkus: () => [],
   window: { dispatchEvent(event) { workspaceEvents++; workspaceDetail = event.detail; } }, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } } };
 vm.createContext(statusContext); vm.runInContext(extract("publishWorkspaceState"), statusContext);
 for (let i = 0; i < 40; i++) statusContext.publishWorkspaceState();

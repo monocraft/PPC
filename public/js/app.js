@@ -916,8 +916,15 @@ function normalizeMonth(value, fallback) {
   return index == null ? fallback : monthString(index);
 }
 
-function categoryDefinition(categoryId = activeCategoryId) {
-  const definition = CATEGORY_DEFINITIONS.find((item) => item.id === categoryId) || CATEGORY_DEFINITIONS[0];
+function categoryDefinition(categoryId = activeCategoryId, customRecord = null) {
+  const known = CATEGORY_DEFINITIONS.find((item) => item.id === categoryId);
+  const custom = customRecord || (typeof portfolio !== "undefined" ? portfolio?.categories?.find(item => item.id === categoryId && item.custom === true) : null);
+  const definition = known || (custom ? {
+    id: custom.id, name: custom.name, itemName: "product", boardTitle: custom.board?.title || `${custom.name} Portfolio`,
+    categoryLabel: custom.board?.settings?.roadmap?.categoryLabel || custom.name,
+    placeholderImage: PLACEHOLDER_IMAGE, lanes: custom.board?.lanes || [{ id: "main", label: "Main", subtitle: "" }],
+    familyOrder: [], defaultSpecs: [], defaultVariantType: "color", fullSpecCards: true,
+  } : CATEGORY_DEFINITIONS[0]);
   if (!definition) {
     throw new Error("No category definitions are available. Confirm catalog-data.js loads before app.js and contains at least one category.");
   }
@@ -1445,7 +1452,15 @@ function ensurePortfolioSchema(target) {
   normalized.settings.hashoutWindowsVisible = normalized.settings.hashoutWindowsVisible !== false;
   normalized.ascmSnapshot = normalizeAscmSnapshot(normalized.ascmSnapshot);
   normalized.packageInfo = packageCodec().normalizePackageInfo(normalized.packageInfo);
-  normalized.categories = Array.isArray(normalized.categories) ? normalized.categories.filter((category) => CATEGORY_DEFINITIONS.some((definition) => definition.id === category.id)) : [];
+  const seenCategories = new Set();
+  normalized.categories = Array.isArray(normalized.categories) ? normalized.categories.filter((category) => {
+    if (!category || seenCategories.has(category.id)) return false;
+    const supported = CATEGORY_DEFINITIONS.some((definition) => definition.id === category.id)
+      || category.custom === true && typeof category.id === "string" && /^custom-[a-z0-9][a-z0-9-]{0,170}$/.test(category.id)
+        && category.board && Array.isArray(category.board.lanes) && Array.isArray(category.board.products);
+    if (supported) seenCategories.add(category.id);
+    return supported;
+  }).slice(0, 200) : [];
   ensureImageAssetRegistry(normalized);
   const catalogAssets = catalogImageAssets();
   const existingAssetIds = new Set(normalized.imageAssets.map((asset) => asset.id));
@@ -1459,6 +1474,10 @@ function ensurePortfolioSchema(target) {
     category.name = String(category.name || definition.name).trim() || definition.name;
     category.board = ensureBoardSchema(category.board || createCategoryBoard(definition), definition);
   });
+  for (const category of normalized.categories.filter(item => item.custom === true && !CATEGORY_DEFINITIONS.some(definition => definition.id === item.id))) {
+    category.name = String(category.name || "New category").trim() || "New category";
+    category.board = ensureBoardSchema(category.board, categoryDefinition(category.id, category));
+  }
   const fallbackCategoryId = CATEGORY_DEFINITIONS[0]?.id;
   normalized.activeCategoryId = normalized.categories.some((item) => item.id === normalized.activeCategoryId)
     ? normalized.activeCategoryId
@@ -5064,11 +5083,13 @@ function publishWorkspaceState() {
   if (!portfolio || !board) return;
   const hashout = hasDedicatedHashoutView() && activeView !== "products";
   const hashoutEntries = hashout ? globalThis.PortfolioHashoutLayout.project(portfolioForSearch(), hashoutCategoryScope()) : [];
+  const previewProduct = selectedProduct() || visibleProducts()[0] || board.products[0];
   const detail = {
     categories: portfolio.categories.map((category) => ({ id: category.id, name: category.name, count: category.board.products.length })),
     activeCategoryId, title: hashout ? "Hashout roadmap" : board.title, selectedName: hashout ? hashoutSelectionEntry()?.product.name || "" : selectedProduct()?.name || "", productCount: hashout ? portfolio.categories.reduce((total, category) => total + category.board.products.length, 0) : board.products.length,
     visibleCount: hashout ? hashoutEntries.length : activeView === "products" ? visibleProducts().length : visibleRoadmapProducts().length,
     activeView: activeView === "products" ? "products" : "roadmap", roadmapDetailsOpen, timeline: portfolio.settings.timeline,
+    settingsPreview: { name: previewProduct?.name || "", price: previewProduct ? productPriceText(previewProduct) : "", sku: previewProduct ? productPartSkus(previewProduct).map(item => item.code).slice(0, 2).join(" · ") : "", timing: previewProduct ? [previewProduct.roadmap?.launchMonth, previewProduct.roadmap?.endMonth].filter(Boolean).join(" – ") : "" },
   };
   const signature = JSON.stringify([detail, typeof workspaceSaveRevision === "undefined" ? 0 : workspaceSaveRevision]);
   if (typeof lastWorkspaceRenderSignature !== "undefined") {
@@ -6978,7 +6999,7 @@ function validatePackageManifest(manifest) {
     const categoryIds = new Set();
     const knownCategoryIds = new Set(CATEGORY_DEFINITIONS.map((definition) => definition.id));
     for (const category of manifest.categories) {
-      if (!isRecord(category) || !knownCategoryIds.has(category.id) || categoryIds.has(category.id)) {
+      if (!isRecord(category) || !(knownCategoryIds.has(category.id) || category.custom === true && typeof category.id === "string" && /^custom-[a-z0-9][a-z0-9-]{0,170}$/.test(category.id)) || categoryIds.has(category.id)) {
         throw new Error("The package contains an unsupported or repeated category.");
       }
       categoryIds.add(category.id);
@@ -9256,6 +9277,22 @@ globalThis.PortfolioSearchAdapter = Object.freeze({
 });
 
 // Workflow modules navigate existing tools; this remains the only portfolio mutation owner.
+globalThis.PortfolioCategoryLayoutAdapter = Object.freeze({
+  getPortfolio: () => portfolio,
+  applyLayout(layout, expected) {
+    if (workspaceOpening || packageOperationInProgress || globalThis.PortfolioMasterUI?.getSession?.()?.getState().busy) throw new Error("Finish the current file or shared update before saving the layout.");
+    globalThis.PortfolioCategoryLayout.apply(portfolio, layout, expected);
+    board = portfolio.categories.find(category => category.id === activeCategoryId).board;
+    PortfolioModel.syncTimelineSettings(portfolio);
+    scheduleSave(); syncControls(); renderInspector(); renderActiveView();
+    requestAnimationFrame(fitProductLanesVertically);
+  },
+  addProduct(categoryId) {
+    if (workspaceOpening || packageOperationInProgress) throw new Error("Finish opening the current file first.");
+    if (categoryId !== activeCategoryId) activateCategory(categoryId);
+    addProduct();
+  },
+});
 globalThis.PortfolioWorkflowAdapter = Object.freeze({
   getKind: () => "portfolio",
   getPortfolio: () => portfolio,

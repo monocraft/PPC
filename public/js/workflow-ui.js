@@ -107,14 +107,33 @@
     planning = root.PortfolioPlanningIntakeUI?.create({ getPortfolio: adapter.getPortfolio, applyPlanning: adapter.applyPlanning, openProduct: adapter.openProduct, onStateChange: () => root.dispatchEvent(new CustomEvent('portfolio:planning-review')) });
     const review = dialog('Needs review', 'workflowReviewDialog'), protection = dialog('Date evidence and protection', 'workflowProtectionDialog');
     const reviewSearch = node('input'); reviewSearch.type = 'search'; reviewSearch.placeholder = 'Find a product or issue'; reviewSearch.setAttribute('aria-label', 'Filter review items');
-    const reviewFilter = node('select'); reviewFilter.setAttribute('aria-label', 'Review issue type');
-    for (const [value, title] of [['attention','Actions to resolve'],['missing','Missing dates · optional'],['stale','Source age · optional'],['images','Images · optional'],['deferred','Deferred']]) { const option = node('option', '', title); option.value = value; reviewFilter.append(option); }
-    const reviewList = node('div', 'workflow-review-list');
-    const actions = node('div', 'workflow-actions');
-    actions.append(button('PLC source review', () => { review.el.close(); adapter.openPlcReview(); }), button('Planning candidates', () => { review.el.close(); planning?.open(); }), button('Date evidence & protection', () => { review.el.close(); openProtection(); }), button('Portfolio plan source diagnostics', async () => { review.el.close(); await adapter.navigateToAnalytics('source'); }), button('All messages', () => { review.el.close(); root.PortfolioNotifications.show(); }), button('Saved local copies',()=>{review.el.close();openLocalRecovery();}));
-    const tools=node('details','workflow-review-tools');tools.append(node('summary','','Other review tools'),actions);
-    const reviewHeading=node('p','workflow-review-summary'),localBlock=node('section','workflow-save-block');localBlock.id='workflowLocalSaveBlock';
-    review.body.append(localBlock,reviewHeading,reviewFilter,reviewSearch,reviewList,tools);
+    const reviewFilter = node('div', 'workflow-review-filters'); reviewFilter.value = 'attention'; reviewFilter.setAttribute('role', 'group'); reviewFilter.setAttribute('aria-label', 'Review issue type');
+    const filterButtons = new Map();
+    for (const [value, title, label] of [['attention','Actions','Actions to resolve'],['missing','Missing dates','Missing dates · optional'],['stale','Source age','Source age · optional'],['images','Images','Images · optional'],['deferred','Deferred','Deferred']]) {
+      const action = button(title, () => { reviewFilter.value = value; reviewLimit = 150; selectedReviewId = ''; selectedReviewField = ''; renderReview({ resetScroll: true }); });
+      action.setAttribute('aria-label', label); action.setAttribute('aria-pressed', value === 'attention'); action.title = label; filterButtons.set(value, action); reviewFilter.append(action);
+    }
+    const toolbar = node('div', 'workflow-review-toolbar'); toolbar.append(reviewFilter, reviewSearch);
+    const selectedEvidence = node('section', 'workflow-selected-evidence'); selectedEvidence.setAttribute('aria-label', 'Selected issue evidence');
+    const reviewList = node('div', 'workflow-review-list'); reviewList.id = 'workflowReviewMessages'; reviewList.setAttribute('role', 'region'); reviewList.setAttribute('aria-label', 'Review messages'); reviewList.tabIndex = 0;
+    const actions = node('div', 'workflow-review-tool-grid');
+    const toolDefinitions = [
+      ['PLC source review', 'PLC source review', 'Dates & identity', 'source', () => adapter.openPlcReview()],
+      ['Planning candidates', 'Planning candidates', 'Match source rows', 'planning', () => planning?.open()],
+      ['Date evidence & protection', 'Date evidence', 'Protection & history', 'shield', () => openProtection()],
+      ['Portfolio plan diagnostics', 'Plan diagnostics', 'Portfolio source', 'diagnostics', () => adapter.navigateToAnalytics('source')],
+      ['All messages', 'All messages', 'Notices & outcomes', 'messages', () => root.PortfolioNotifications.show()],
+      ['Saved local copies', 'Saved local copies', 'Device recovery', 'recovery', () => openLocalRecovery()],
+    ];
+    for (const [label, title, help, icon, open] of toolDefinitions) {
+      const action = button('', async () => { review.el.close(); try { await open(); } catch (error) { announce(error.message); } }, 'workflow-review-tool'); action.setAttribute('aria-label', label);
+      const copy = node('span'); copy.append(node('strong', '', title), node('small', '', help)); action.append(reviewIcon(icon), copy, node('span', 'workflow-review-arrow', '↗')); actions.append(action);
+    }
+    const tools = node('section', 'workflow-review-tools'); tools.setAttribute('aria-label', 'Review tools'); const toolsHeading = node('header'); toolsHeading.append(node('h3', '', 'Review tools'), node('span', '', 'Always available')); tools.append(toolsHeading, actions);
+    const messages = node('section', 'workflow-review-messages'), messagesHeading = node('header'), messageCount = node('span'); messagesHeading.append(node('h3', '', 'Messages'), messageCount); messages.append(messagesHeading, reviewList);
+    const reviewHeading = node('p', 'workflow-review-summary'), localBlock = node('section', 'workflow-save-block'); localBlock.id = 'workflowLocalSaveBlock';
+    review.body.append(localBlock, reviewHeading, toolbar, selectedEvidence, tools, messages);
+    let reviewLimit = 150, selectedReviewId = '', selectedReviewField = '', renderedReviewIds = [];
     const deferKey = 'ppc-review-deferrals-v1'; let deferrals = {};
     try { const raw = root.localStorage.getItem(deferKey); const parsed = raw && raw.length <= 262144 ? JSON.parse(raw) : null; if (parsed?.version === 1 && parsed.items && typeof parsed.items === 'object' && !Array.isArray(parsed.items)) deferrals = Object.fromEntries(Object.entries(parsed.items).filter(([id, value]) => id.length < 500 && typeof value === 'string' && value.length <= 16384).slice(0, 500)); } catch (_) {}
     function items() {
@@ -122,40 +141,107 @@
       const pendingPlanning=planning?.getState();
       if(pendingPlanning?.rowCount)all.push({id:'planning:current',type:'attention',title:`${pendingPlanning.rowCount} planning candidates`,detail:'Finish the current match, create or ignore decisions. Nothing is accepted until you apply the reviewed choices.',fingerprint:JSON.stringify([pendingPlanning.source?.fingerprint,pendingPlanning.source?.sheet,pendingPlanning.rowCount]),open:()=>planning.open()});
       for (const item of root.PortfolioNotifications.getState().items.filter(item => ['warning','error'].includes(item.severity) && !item.acknowledged)) all.push({ id: 'message:' + item.id, type: 'attention', title: item.title, detail: item.message, fingerprint: JSON.stringify([item.title,item.message,item.revision]), urgent: item.severity === 'error' || item.dismissible === false, actionLabel:item.id==='workspace-local-save'?'Resolve local save':'Open details',open: () => item.id==='workspace-local-save'?openLocalRecovery():root.PortfolioNotifications.show(item.id) });
-      for (const entry of portfolio.plcReview?.entries || []) all.push({ id: 'plc:' + entry.key, type: 'attention', title: entry.row?.name || entry.row?.codename || 'PLC project match', detail: entry.matchNeeded ? 'Match this source project to a product.' : 'Review source dates: ' + (entry.fields || []).map(field => root.PLCImporter.fieldLabels[field]).join(', '), fingerprint: JSON.stringify([entry.metadata?.fingerprint,entry.fields,entry.row?.dates]), open: () => adapter.openPlcReview() });
+      for (const entry of portfolio.plcReview?.entries || []) all.push({ id: 'plc:' + entry.key, type: 'attention', title: entry.row?.name || entry.row?.codename || 'PLC project match', detail: entry.matchNeeded ? 'Match this source project to a product.' : 'Review source dates: ' + (entry.fields || []).map(field => root.PLCImporter.fieldLabels[field]).join(', '), fingerprint: JSON.stringify([entry.metadata?.fingerprint,entry.fields,entry.row?.dates]), reviewEntry: entry, open: () => adapter.openPlcReview() });
       for (const category of portfolio.categories) for (const product of category.board.products) {
         const open = () => adapter.openProduct(product.id), name = product.name || 'Unnamed product';
-        if (!product.ffsDate && ['in-planning','in-development'].includes(product.roadmap?.status)) all.push({ id: 'missing:' + product.id, type: 'missing', title: name, detail: 'FFS timing is not supplied. Review its source before adding a date.', fingerprint: JSON.stringify([product.id,product.ffsDate,product.plc?.fields?.ffsDate]), open });
-        if (root.PLCImporter.freshness(product.plc || {}).status === 'overdue') all.push({ id: 'stale:' + product.id, type: 'stale', title: name, detail: 'Project evidence is older than the regular source cycle. Open the product or collect a newer report.', fingerprint: JSON.stringify([product.plc?.reportDate,product.plc?.importedAt]), open });
-        if (!product.imageAssetId && !product.imageUrl) all.push({ id: 'image:' + product.id, type: 'images', title: name, detail: 'No assigned main image. Unavailable or ambiguous artwork may remain unchanged.', fingerprint: JSON.stringify([product.imageAssetId,product.imageUrl,product.variantGroups?.map(group => group.items.map(item => item.imageAssetId))]), open });
+        if (!product.ffsDate && ['in-planning','in-development'].includes(product.roadmap?.status)) all.push({ id: 'missing:' + product.id, type: 'missing', title: name, detail: 'FFS timing is not supplied. Review its source before adding a date.', fingerprint: JSON.stringify([product.id,product.ffsDate,product.plc?.fields?.ffsDate]), product, open });
+        if (root.PLCImporter.freshness(product.plc || {}).status === 'overdue') all.push({ id: 'stale:' + product.id, type: 'stale', title: name, detail: 'Project evidence is older than the regular source cycle. Open the product or collect a newer report.', fingerprint: JSON.stringify([product.plc?.reportDate,product.plc?.importedAt]), product, open });
+        if (!product.imageAssetId && !product.imageUrl) all.push({ id: 'image:' + product.id, type: 'images', title: name, detail: 'No assigned main image. Unavailable or ambiguous artwork may remain unchanged.', fingerprint: JSON.stringify([product.imageAssetId,product.imageUrl,product.variantGroups?.map(group => group.items.map(item => item.imageAssetId))]), product, open });
       }
       return all;
     }
-    function renderReview() {
+    function reviewIcon(kind) {
+      const paths = { source: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M14 2v6h6M8 13h8M8 17h5', planning: 'm3 6 1 1 2-2M10 6h11M3 12l1 1 2-2M10 12h11M3 18l1 1 2-2M10 18h11', shield: 'M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Zm-4-11 3 3 5-5', diagnostics: 'M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M7 12h3l2-4 2 8 2-4h1', messages: 'M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z', recovery: 'M3 3h18v4H3zM5 7v14h14V7M9 12h6', alert: 'M12 3 2 21h20L12 3Zm0 6v5m0 3h.01' };
+      const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg'), path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+      for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' })) svg.setAttribute(key, value);
+      path.setAttribute('d', paths[kind] || paths.source); svg.append(path); return svg;
+    }
+    function reviewActionLabel(item) { return item.actionLabel || (item.id.startsWith('plc:') ? 'Review milestones' : item.id.startsWith('planning:') ? 'Match planning rows' : 'Open product'); }
+    async function openReviewItem(item) { review.el.close(); try { await item.open(); } catch (error) { announce(error.message); } }
+    function deferReviewItem(item) {
+      if (item.urgent) return;
+      const restoring = reviewFilter.value === 'deferred', next = { ...deferrals }; if (restoring) delete next[item.id]; else next[item.id] = item.fingerprint;
+      try {
+        const entries = Object.entries(next).filter(([id, value]) => id.length < 500 && value.length <= 16384).slice(-500); if (!restoring && item.fingerprint.length > 16384) throw Error('Issue is too large to defer.');
+        let stored; while ((stored = JSON.stringify({ version: 1, items: Object.fromEntries(entries) })).length > 262144) entries.shift();
+        root.localStorage.setItem(deferKey, stored); deferrals = Object.fromEntries(entries); updateStatus(); announce(restoring ? 'Review item restored.' : 'Review item deferred. It returns when its source changes.');
+      } catch (_) { announce('This browser could not save the review preference. The issue remains visible.'); }
+    }
+    function evidenceWell(label, value, precision, incoming = false) {
+      const well = node('div', 'workflow-review-value' + (incoming ? ' is-source' : '')); well.append(node('span', '', label), node('strong', '', value), node('small', '', precision)); return well;
+    }
+    function renderSelectedEvidence(item, filtered) {
+      selectedEvidence.replaceChildren();
+      if (!item) { selectedEvidence.append(node('span', 'workflow-review-eyebrow', 'Review queue'), node('h3', '', 'Nothing in this view'), node('p', 'workflow-note', 'Choose another check or use a review tool below.')); return; }
+      const entry = item.reviewEntry; let planItem = null;
+      if (entry && !entry.matchNeeded && !entry.variantBindingNeeded) {
+        try { planItem = root.PLCImporter.buildReviewPlan(adapter.getPortfolio()).items.find(value => value.key === entry.key); } catch (_) { /* The full source workflow retains validation and repair. */ }
+      }
+      const fields = planItem?.match?.status === 'matched' && !planItem.variantBindingNeeded ? planItem.fields || [] : [], field = fields.find(value => value.field === selectedReviewField) || fields[0]; selectedReviewField = field?.field || '';
+      const kind = entry ? 'Source decision' : item.id.startsWith('planning:') ? 'Planning match' : item.type === 'attention' ? 'Workspace notice' : 'Optional check';
+      const heading = node('header', 'workflow-review-evidence-heading'); heading.append(node('span', 'workflow-review-eyebrow', kind + (field ? ' · ' + field.label : '')), node('h3', '', field ? field.label + ' timing needs review' : item.title));
+      if (field) heading.append(node('span', 'workflow-review-product', item.title)); selectedEvidence.append(heading);
+      if (fields.length > 1) {
+        const choices = node('div', 'workflow-review-field-picker'); choices.setAttribute('role', 'group'); choices.setAttribute('aria-label', 'Milestone evidence');
+        for (const candidate of fields) { const choose = button(candidate.label, () => { selectedReviewField = candidate.field; renderReview(); }); choose.setAttribute('aria-pressed', candidate.field === selectedReviewField); choose.dataset.reviewControl = 'field:' + candidate.field; choices.append(choose); } selectedEvidence.append(choices);
+      }
+      if (field) {
+        const currentPeriod = field.currentPeriod, sourcePeriod = field.period;
+        if (currentPeriod?.precision === 'quarter' && sourcePeriod?.precision === 'quarter' && currentPeriod.year === sourcePeriod.year) {
+          const rail = node('div', 'workflow-review-time-rail'); rail.setAttribute('aria-label', 'Current and source timing at calendar quarter precision');
+          const ticks = node('div', 'workflow-review-time-ticks'); for (const title of ['Q1', 'Q2', 'Q3', 'Q4']) ticks.append(node('span', '', title));
+          const observations = node('div', 'workflow-review-time-observations'), current = node('span', 'is-current', 'Current · ' + field.displayCurrent), source = node('span', 'is-source', 'Source · ' + field.displayIncoming);
+          current.style.setProperty('--review-quarter', currentPeriod.quarter); source.style.setProperty('--review-quarter', sourcePeriod.quarter); observations.append(current, source); rail.append(ticks, observations, node('small', '', currentPeriod.year + ' · calendar quarter precision retained')); selectedEvidence.append(rail);
+        } else {
+          const compare = node('div', 'workflow-review-compare'), precision = (period, value) => period?.precision === 'quarter' ? 'Calendar quarter' : value ? 'Exact day' : 'Not supplied';
+          compare.append(evidenceWell('Current', field.displayCurrent || 'Not supplied', precision(currentPeriod, field.current)), evidenceWell('Source observation', field.incoming ? field.displayIncoming : field.raw || 'Not supplied', field.incoming ? precision(sourcePeriod, field.incoming) : 'Unresolved source text', true)); selectedEvidence.append(compare);
+        }
+        if (field.reason) selectedEvidence.append(node('p', 'workflow-review-reason', field.reason));
+      } else if (entry) {
+        const compare = node('div', 'workflow-review-compare'); compare.append(evidenceWell('Current', entry.variantBindingNeeded ? 'Color option needs a choice' : entry.matchNeeded ? 'Product match required' : 'Open source review', 'Accepted records retained'), evidenceWell('Source project', entry.row?.name || entry.row?.codename || item.title, 'Identity and dates reviewed together', true)); selectedEvidence.append(compare);
+      } else {
+        selectedEvidence.append(node('p', 'workflow-review-description', item.detail));
+        if (item.type === 'missing') { const compare = node('div', 'workflow-review-compare'); compare.append(evidenceWell('Current FFS', 'Not supplied', 'Unknown timing'), evidenceWell('Next step', 'Inspect date evidence', 'A date is never inferred', true)); selectedEvidence.append(compare); }
+        else if (item.type === 'stale') { const info = node('div', 'workflow-review-observation'); info.append(node('span', '', 'Last source report'), node('strong', '', item.product?.plc?.reportDate || 'Not recorded')); selectedEvidence.append(info); }
+      }
+      const notes = node('div', 'workflow-review-evidence-note'); notes.append(node('span', '', entry?.metadata?.fileName || item.product?.plc?.sourceFile || (item.type === 'attention' ? 'Workspace messages' : 'Product record')), node('small', '', item.urgent ? 'Needs attention · cannot defer' : entry?.reportDate ? 'Report ' + entry.reportDate : item.type !== 'attention' ? 'Optional check · accepted values retained' : 'Inspect before changing records')); selectedEvidence.append(notes);
+      const controls = node('div', 'workflow-review-evidence-actions'); const open = button(reviewActionLabel(item) + ' ↗', () => openReviewItem(item), 'workflow-review-primary'); open.dataset.reviewControl = 'open'; controls.append(open);
+      if (!item.urgent) { const defer = button(reviewFilter.value === 'deferred' ? 'Restore' : 'Defer', () => deferReviewItem(item), 'quiet-button'); defer.dataset.reviewControl = 'defer-selected'; controls.append(defer); }
+      const next = button('Next item →', () => { const following = filtered[(filtered.findIndex(value => value.id === item.id) + 1) % filtered.length]; selectedReviewId = following?.id || ''; selectedReviewField = ''; renderReview(); if (following) announce(following.title + ' selected. Evidence is above Review tools.'); }, 'quiet-button'); next.disabled = filtered.length < 2; next.dataset.reviewControl = 'next'; controls.append(next); selectedEvidence.append(controls);
+    }
+    function renderReview({ resetScroll = false } = {}) {
+      const scrollTop = resetScroll ? 0 : reviewList.scrollTop, focused = review.body.contains(doc.activeElement) ? doc.activeElement : null, focusControl = focused?.dataset?.reviewControl, focusItem = focused?.dataset?.reviewItem;
       const all = items(), query = reviewSearch.value.trim().toLowerCase(), type = reviewFilter.value;
       const blocked=adapter.getStatus().localError;
       localBlock.hidden=!blocked;localBlock.replaceChildren();
       if(blocked){const failure=adapter.getLocalSaveFailure(),conflict=failure?.code==='WORKSPACE_CONFLICT';localBlock.append(node('strong','',conflict?'Two local copies need a choice':'Local save failed'),node('p','',conflict?'Choose the copy to continue with. Both originals will be kept automatically.':failure?.message||'The browser could not save your open edits.'),button(conflict?'Resolve local save':'Fix local save',()=>{review.el.close();openLocalRecovery();},'primary-button'));}
       const attention=all.filter(item=>item.type==='attention'&&deferrals[item.id]!==item.fingerprint).length;
-      reviewHeading.textContent=attention?`${attention} action${attention===1?'':'s'} to resolve`:'No actions needed. Optional data checks are below.';
+      reviewHeading.textContent=attention?`${attention} action${attention===1?'':'s'} to resolve`:'No actions needed · optional checks are available';
       const filtered = all.filter(item => item.id!=='message:workspace-local-save'&&(type === 'deferred' ? deferrals[item.id] === item.fingerprint : item.type === type && deferrals[item.id] !== item.fingerprint) && (item.title + ' ' + item.detail).toLowerCase().includes(query));
-      reviewList.replaceChildren();if(filtered.length)reviewList.append(node('p', 'workflow-note', `${filtered.length} item${filtered.length === 1 ? '' : 's'} in this view`));
+      const previousSelectedIndex = renderedReviewIds.indexOf(selectedReviewId), previousFocusIndex = renderedReviewIds.indexOf(focusItem);
+      const selected = filtered.find(item => item.id === selectedReviewId) || (previousSelectedIndex >= 0 ? filtered[Math.min(previousSelectedIndex, filtered.length - 1)] : null) || filtered.find(item => item.urgent) || filtered.find(item => item.reviewEntry) || filtered[0]; selectedReviewId = selected?.id || '';
+      for (const [value, action] of filterButtons) action.setAttribute('aria-pressed', value === type);
+      renderSelectedEvidence(selected, filtered); messageCount.textContent = `${filtered.length} ${type === 'deferred' ? 'deferred' : filtered.length === 1 ? 'item' : 'items'}`; reviewList.replaceChildren();
       for (const item of filtered.slice(0, reviewLimit)) {
-        const card = node('article', 'workflow-review-item'), text = node('div'); text.append(node('strong','',item.title),node('p','',item.detail));
-        card.append(text, button(item.actionLabel||(item.id.startsWith('plc:')?'Review milestones':item.id.startsWith('planning:')?'Match planning rows':'Open product'), () => { review.el.close(); try { item.open(); } catch (error) { announce(error.message); } }));
-        if (!item.urgent) card.append(button(type === 'deferred' ? 'Restore' : 'Defer', () => {
-          const next = { ...deferrals }; if (type === 'deferred') delete next[item.id]; else next[item.id] = item.fingerprint;
-          try { const entries = Object.entries(next).filter(([id,value])=>id.length<500 && value.length<=16384).slice(-500); if(type !== 'deferred' && item.fingerprint.length>16384) throw Error('Issue is too large to defer.'); let stored; while((stored=JSON.stringify({version:1,items:Object.fromEntries(entries)})).length>262144)entries.shift(); root.localStorage.setItem(deferKey,stored); deferrals = Object.fromEntries(entries); updateStatus(); }
-          catch (_) { announce('This browser could not save the review preference. The issue remains visible.'); }
-        }, 'quiet-button'));
+        const card = node('article', 'workflow-review-item' + (item.id === selectedReviewId ? ' is-selected' : '') + (item.urgent ? ' is-urgent' : '')), copy = node('span', 'workflow-review-item-copy'); copy.append(node('strong', '', item.title), node('small', '', item.detail));
+        if (item.urgent) copy.append(node('span', 'workflow-review-urgent-note', 'Needs attention · cannot defer'));
+        const choose = button('', () => { selectedReviewId = item.id; selectedReviewField = ''; renderReview(); announce(item.title + ' selected. Evidence is above Review tools.'); }, 'workflow-review-item-main'); choose.append(reviewIcon(item.urgent ? 'alert' : item.reviewEntry ? 'source' : 'messages'), copy); choose.setAttribute('aria-pressed', item.id === selectedReviewId); choose.setAttribute('aria-controls', 'workflowSelectedEvidence'); choose.dataset.reviewControl = 'select'; choose.dataset.reviewItem = item.id; card.append(choose);
+        if (!item.urgent) { const defer = button(type === 'deferred' ? 'Restore' : 'Defer', () => deferReviewItem(item), 'workflow-review-defer quiet-button'); defer.setAttribute('aria-label', (type === 'deferred' ? 'Restore ' : 'Defer ') + item.title); defer.dataset.reviewControl = 'defer'; defer.dataset.reviewItem = item.id; card.append(defer); }
         reviewList.append(card);
       }
       if(filtered.length>reviewLimit)reviewList.append(button(`Show more (${filtered.length-reviewLimit} remaining)`,()=>{reviewLimit+=150;renderReview();}));
       if (!filtered.length) reviewList.append(node('p','',blocked?'No other actions need attention. Optional checks are available above.':type==='attention'?'No actions need attention.':'No matching items for this optional check.'));
+      reviewList.scrollTop = scrollTop;
+      if (focusControl) {
+        const target = [...review.body.querySelectorAll('[data-review-control]')].find(value => value.dataset.reviewControl === focusControl && value.dataset.reviewItem === focusItem);
+        if (target) target.focus({ preventScroll: true });
+        else if (focusItem) { const nextId = filtered[Math.max(0, Math.min(previousFocusIndex, Math.min(reviewLimit, filtered.length) - 1))]?.id; [...reviewList.querySelectorAll('[data-review-control="select"]')].find(value => value.dataset.reviewItem === nextId)?.focus({ preventScroll: true }); }
+      }
+      renderedReviewIds = filtered.slice(0, reviewLimit).map(item => item.id);
     }
-    let reviewLimit=150;
-    reviewSearch.addEventListener('input', ()=>{reviewLimit=150;renderReview();}); reviewFilter.addEventListener('change', ()=>{reviewLimit=150;renderReview();});
-    function openReview(){reviewFilter.value='attention';reviewSearch.value='';reviewLimit=150;renderReview();review.open();}
+    selectedEvidence.id = 'workflowSelectedEvidence';
+    reviewSearch.addEventListener('input', () => { reviewLimit = 150; selectedReviewId = ''; selectedReviewField = ''; renderReview({ resetScroll: true }); });
+    function openReview(){root.PortfolioWorkspaceUI?.closeSettings?.();reviewFilter.value='attention';reviewSearch.value='';reviewLimit=150;selectedReviewId='';selectedReviewField='';renderReview({resetScroll:true});review.open();}
     doc.getElementById('workflowReviewButton')?.addEventListener('click',openReview);
     const recovery=dialog('Resolve local save','workflowLocalRecoveryDialog');
     let recoveryBusy=false,recoveryFailureCode=null,recoveryRender=0;
@@ -203,6 +289,7 @@
       await appendLocalCopies(generation);
     }
     async function openLocalRecovery(){recovery.open();recovery.body.replaceChildren(node('p','','Opening local copies…'));try{await showLocalRecovery();}catch(error){recovery.body.replaceChildren(node('p','workflow-error',error.message),button('Download my open copy',()=>downloadCopy({serialized:JSON.stringify(adapter.getPortfolio()),kind:'open'})));}}
+    doc.getElementById('settingsLocalCopies')?.addEventListener('click', () => { root.PortfolioWorkspaceUI?.closeSettings?.(); void openLocalRecovery(); });
     for(const link of doc.querySelectorAll('a[href="analytics.html"]'))link.addEventListener('click',event=>{if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();void adapter.navigateToAnalytics();});
     const select = node('select'); select.id = 'workflowProtectionProduct'; select.setAttribute('aria-label','Product for date evidence');
     const evidence = node('div', 'workflow-evidence'); protection.body.append(node('p','workflow-note','Protection applies to automatic imports on this browser and follows the product when it moves category. Teammates have independent settings. Manual edits remain available.'), select, evidence);

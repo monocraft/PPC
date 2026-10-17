@@ -747,6 +747,7 @@ const basisPortfolio = { settings: { roadmapBasis: "lifecycle", hashoutCategoryI
 const basisPublications = [], basisOrder = [], basisPreferences = JSON.stringify(basisPortfolio.categories.map(category => category.board.settings));
 const basisFacts = JSON.stringify(basisPortfolio.categories.map(category => category.board.products));
 const basisOverrides = {
+  productPriceText: product => globalThis.PortfolioModel.msrpText(product), productPartSkus: product => product.partSkus || [],
   portfolio: basisPortfolio, board: basisPortfolio.categories[0].board, searchQuery: "", roadmapSearchQuery: "",
   hasDedicatedHashoutView: undefined, selectedProduct: undefined,
   roadmapDragState: null, roadmapDetailsOpen: false, roadmapInteractionMode: "pan",
