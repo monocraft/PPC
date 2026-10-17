@@ -14,6 +14,22 @@
   let activeTab = "display";
   let snapshot = null;
   let activeSettingsModal = null;
+  let categoryDraftDirty = false;
+
+  const setText = (id, value) => { const element = get(id); if (element) element.textContent = value; };
+
+  function refreshSettingsFooter() {
+    const note = categoryDraftDirty ? "Category draft retained · Save or Cancel in Category" :
+      activeTab === "category" ? "Category names and order use Save layout." :
+      activeTab === "data" ? "File operations open their own review." : "View preferences apply immediately on this device.";
+    setText("workspaceSettingsFootnote", note);
+    setText("workspaceSettingsDone", categoryDraftDirty ? "Close · keep draft" : "Done");
+  }
+
+  function setCategoryDraftState(dirty) {
+    categoryDraftDirty = Boolean(dirty);
+    refreshSettingsFooter();
+  }
 
   function isAvailable(element) {
     return Boolean(element?.isConnected && !element.disabled &&
@@ -171,6 +187,10 @@
     }
     for (const panel of panels) panel.classList.toggle("hidden", panel.dataset.settingsPanel !== activeTab);
     get("settingsActiveCategory").textContent = snapshot?.categories?.find(category => category.id === snapshot.activeCategoryId)?.name || categoryContext?.textContent || "Active category";
+    refreshSettingsFooter();
+    refreshDisplayPreviews();
+    updateTimelineSummary();
+    window.dispatchEvent(new CustomEvent("portfolio:settings-section", { detail: { section: activeTab } }));
   }
 
   function openSettings(tabName = activeTab) {
@@ -222,12 +242,42 @@
     get("workspaceEmpty").classList.toggle("hidden", total !== 0);
     get("workspaceEmptyTitle").textContent = hasPortfolioProducts ? "This category is empty" : "Start your portfolio";
     updateTimelineSummary();
+    refreshDisplayPreviews();
   }
 
   function updateTimelineSummary() {
     const from = get("roadmapStart").value;
     const to = get("roadmapEnd").value;
     get("timelineRangeSummary").textContent = from && to ? `${from.slice(0, 4)}–${to.slice(0, 4)}` : "";
+    const monthNumber = value => /^\d{4}-\d{2}$/.test(value) ? Number(value.slice(0, 4)) * 12 + Number(value.slice(5)) - 1 : NaN;
+    const count = monthNumber(to) - monthNumber(from) + 1;
+    setText("settingsRangeStart", from ? from.slice(0, 4) : "From");
+    setText("settingsRangeEnd", to ? to.slice(0, 4) : "To");
+    setText("settingsRangeLength", count > 0 ? count % 12 === 0 ? `${count / 12} years` : `${count} months` : "Choose a valid range");
+    for (const button of document.querySelectorAll("[data-roadmap-years]")) {
+      const selected = count === Number(button.dataset.roadmapYears) * 12;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    }
+  }
+
+  function refreshDisplayPreviews() {
+    const preview = snapshot?.settingsPreview;
+    const name = preview?.name || "No products in this category";
+    setText("settingsCardPreviewName", name);
+    setText("settingsRoadmapPreviewName", name);
+    setText("settingsRoadmapPreviewTiming", preview?.timing || "Saved lifecycle timing");
+    const reveal = (id, visible, value) => {
+      const element = get(id);
+      if (!element) return;
+      element.hidden = !visible || !value;
+      element.textContent = value || "";
+    };
+    reveal("settingsCardPreviewPrice", get("showPrices")?.checked, preview?.price);
+    reveal("settingsCardPreviewSku", get("showSkus")?.checked, preview?.sku);
+    reveal("settingsRoadmapPreviewPrice", get("roadmapShowMsrp")?.checked, preview?.price);
+    setText("settingsCardPreviewVisibility", get("hideDiscontinued")?.checked ? "Discontinued hidden" : "Current visibility");
+    setText("settingsRoadmapPreviewVisibility", get("roadmapShowMsrp")?.checked ? preview?.price ? "" : "No saved MSRP" : "MSRP hidden");
   }
 
   trigger.addEventListener("click", () => openSettings());
@@ -259,10 +309,15 @@
   window.addEventListener("portfolio:render", (event) => refresh(event.detail));
   get("roadmapStart").addEventListener("change", updateTimelineSummary);
   get("roadmapEnd").addEventListener("change", updateTimelineSummary);
+  for (const id of ["showPrices", "showSkus", "hideDiscontinued", "roadmapShowMsrp"]) {
+    get(id)?.addEventListener("change", () => queueMicrotask(refreshDisplayPreviews));
+  }
   new MutationObserver(() => { get("quickEditSelected").disabled = get("editSelected").disabled; })
     .observe(get("editSelected"), { attributes: true, attributeFilter: ["disabled"] });
 
   window.PortfolioWorkspaceUI = Object.freeze({ openSettings, closeSettings, refresh, closeToolMenus,
+    setCategoryDraftState,
+    refreshSettings: () => { refreshDisplayPreviews(); updateTimelineSummary(); refreshSettingsFooter(); },
     openCategorySettings: (options) => categoryModal.open(options),
     closeCategorySettings: () => categoryModal.close(),
   });

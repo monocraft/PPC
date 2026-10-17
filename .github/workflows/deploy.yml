@@ -54,6 +54,8 @@ jobs:
           mkdir -p _site/css _site/js _site/data
           cp public/index.html _site/
           cp public/css/interface-system.css _site/css/
+          cp public/css/workspace-settings.css public/css/category-layout.css _site/css/
+          cp public/js/category-layout.js _site/js/
           cp public/css/workflow-ui.css public/css/planning-intake.css public/css/saved-views.css _site/css/
           cp public/js/workflow-model.js public/js/workflow-ui.js public/js/planning-intake.js public/js/planning-intake-ui.js public/js/saved-views.js _site/js/
           cp public/analytics.html _site/
@@ -159,6 +161,9 @@ jobs:
           test -f _site/js/board-navigator.js
           test -f _site/js/category-navigation.js
           test -f _site/css/interface-system.css
+          test -f _site/css/workspace-settings.css
+          test -f _site/css/category-layout.css
+          test -f _site/js/category-layout.js
           test -f _site/js/pptx-export-planner.js
           test -f _site/analytics.html
           test -f _site/analytics-auth.html

@@ -1,0 +1,52 @@
+/* Intent: a compact, editable silhouette of the real horizontal product lanes. */
+#settingsCategoryLayout { min-width: 0; }
+#settingsCategoryLayout input { min-width: 0; width: 100%; box-sizing: border-box; }
+.category-layout-add { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.category-layout-add input { flex: 1; }
+.category-layout-add button { flex: 0 0 auto; white-space: nowrap; }
+.category-layout-dock { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px; }
+.category-layout-chip { display: flex; align-items: center; background: var(--color-page); border-radius: 10px; max-width: 100%; min-width: 0; }
+.category-layout-chip button { border: 0; background: transparent; box-shadow: none; }
+.category-layout-chip .category-layout-choice { padding: 8px 10px; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.category-layout-choice[aria-pressed="true"] { color: var(--settings-amber, #edbd5c); }
+.category-layout-move { min-width: 40px; min-height: 40px; padding: 4px 8px; }
+.category-layout-labels { display: grid; grid-template-columns: 1fr 1.25fr .75fr; gap: 10px; }
+.category-layout-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--color-text-secondary); min-width: 0; }
+.category-layout-field input { color: var(--color-text); min-height: 36px; font-size: 13px; padding: 6px 8px; }
+.category-layout-lane-heading { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin: 18px 0 8px; }
+.category-layout-lane-heading h4 { margin: 0; font-size: 14px; font-weight: 500; }
+.category-layout-lane-heading span { color: var(--color-text-secondary); font-size: 11px; }
+.category-layout-lanes { display: grid; gap: 6px; padding: 8px; border-radius: 12px; background: var(--color-page); }
+.category-layout-lane { display: grid; grid-template-columns: 16px minmax(100px, 145px) minmax(0, 1fr) auto 40px; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; background: var(--color-surface-raised); }
+.category-layout-grip { color: var(--color-text-secondary); cursor: grab; }
+.category-layout-lane-fields { display: grid; gap: 6px; min-width: 0; }
+.category-layout-lane-fields .category-layout-field { gap: 2px; }
+.category-layout-lane-fields input { min-height: 32px; }
+.category-layout-silhouette { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; height: 76px; }
+.category-layout-card { flex: 0 0 30px; height: 58px; border-radius: 4px; background: var(--color-input); opacity: .55; }
+.category-layout-count { font-size: 11px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.category-layout-lane-moves { display: grid; }
+.category-layout-lane-moves button { border: 0; padding: 0; background: transparent; }
+.category-layout-actions { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
+.category-layout-actions p { flex: 1; margin: 0; font-size: 11px; color: var(--color-text-secondary); max-width: 40ch; }
+.category-layout-status, .category-layout-error { margin: 8px 0 0; font-size: 12px; }
+.category-layout-status:empty, .category-layout-error:empty { display: none; }
+.category-layout-error { color: var(--color-danger-text); }
+.category-layout-chip.is-dragging, .category-layout-lane.is-dragging { opacity: .45; }
+.category-layout-chip.is-drop-target, .category-layout-lane.is-drop-target { box-shadow: inset 0 0 0 2px var(--settings-amber, #edbd5c); }
+@media(max-width: 600px) {
+  .category-layout-labels { grid-template-columns: 1fr; }
+  .category-layout-lane { grid-template-columns: 12px minmax(0, 1fr) 44px; gap: 6px; }
+  .category-layout-silhouette { grid-column: 2; grid-row: 2; height: 52px; }
+  .category-layout-card { height: 44px; }
+  .category-layout-count { grid-column: 2; grid-row: 3; }
+  .category-layout-lane-moves { grid-column: 3; grid-row: 1 / 4; }
+  .category-layout-grip { grid-row: 1 / 4; }
+  .category-layout-move { min-width: 44px; min-height: 44px; }
+  .category-layout-field input, .category-layout-add input { min-height: 44px; font-size: 16px; }
+  .category-layout-lane-heading { align-items: start; }
+  .category-layout-lane-heading span { max-width: 15ch; text-align: right; }
+  .category-layout-actions { flex-wrap: wrap; }
+  .category-layout-actions p { flex-basis: 100%; max-width: none; }
+  .category-layout-actions button { flex: 1; min-height: 44px; }
+}

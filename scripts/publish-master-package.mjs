@@ -102,7 +102,7 @@ export function validateDecryptedPackage(bytes) {
   if ([2, 3, 4].includes(manifest.version) && Array.isArray(manifest.categories) && manifest.categories.length) {
     const seen = new Set();
     boards = manifest.categories.map((category) => {
-      if (!isRecord(category) || !categoryIds.has(category.id) || seen.has(category.id)) throw new Error("The package contains an unsupported or repeated category.");
+      if (!isRecord(category) || !(categoryIds.has(category.id) || category.custom === true && typeof category.id === "string" && /^custom-[a-z0-9][a-z0-9-]{0,170}$/.test(category.id)) || seen.has(category.id)) throw new Error("The package contains an unsupported or repeated category.");
       seen.add(category.id);
       return category.board;
     });

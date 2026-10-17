@@ -1,0 +1,158 @@
+/* Selected Merge Desk / Split Lens composition. Lifecycle colors stay native. */
+#workspaceSettingsDialog {
+  --settings-well: #1A1B1C;
+  --settings-preview: #303235;
+  --settings-amber: #FFC857;
+  --settings-mint: #64D9AE;
+  padding: 20px;
+}
+#workspaceSettingsDialog .workspace-settings {
+  width: min(780px, 100%);
+  max-height: min(860px, calc(100dvh - 40px));
+  border: 0;
+  border-radius: 18px;
+  background: var(--color-surface);
+  box-shadow: 0 24px 80px rgb(0 0 0 / .42), inset 0 1px rgb(255 255 255 / .055);
+}
+#workspaceSettingsDialog .workspace-settings-heading {
+  align-items: center;
+  padding: 17px 20px 12px;
+  border: 0;
+  background: transparent;
+}
+#workspaceSettingsDialog .workspace-settings-heading h2 { margin: 0 0 3px; font-size: 20px; font-weight: 500; letter-spacing: -.035em; }
+#workspaceSettingsDialog .workspace-settings-heading p { font-size: 11px; color: var(--color-text-muted); }
+#workspaceSettingsDialog .workspace-settings-heading .icon-button { width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgb(0 0 0 / .15); font-size: 22px; }
+#workspaceSettingsDialog .workspace-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+#workspaceSettingsDialog .settings-navigation { display: flex; gap: 4px; padding: 0 20px 12px; border: 0; background: transparent; }
+#workspaceSettingsDialog .settings-tab { display: block; min-width: 0; min-height: 40px; padding: 7px 14px; border: 0; border-radius: 999px; color: var(--color-text-muted); background: transparent; font-size: 12px; text-align: center; white-space: nowrap; }
+#workspaceSettingsDialog .settings-tab:hover { color: var(--color-text); background: rgb(255 255 255 / .045); }
+#workspaceSettingsDialog .settings-tab.is-active { color: var(--settings-amber); background: rgb(255 200 87 / .085); box-shadow: inset 0 0 0 1px rgb(255 200 87 / .16); }
+#workspaceSettingsDialog .settings-content { padding: 0 20px 16px; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--color-border-strong) transparent; }
+#workspaceSettingsDialog .workspace-settings-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border: 0; background: rgb(255 255 255 / .02); }
+#workspaceSettingsDialog .workspace-settings-footer > span { max-width: none; color: var(--color-text-muted); font-size: 11px; line-height: 1.45; }
+#workspaceSettingsDialog .workspace-settings-footer > button { min-height: 36px; min-width: 72px; padding: 7px 15px; border: 0; border-radius: 999px; background: var(--color-text); color: var(--color-on-accent); font-weight: 500; white-space: nowrap; }
+#workspaceSettingsDialog .settings-eyebrow { margin: 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.4; font-weight: 500; letter-spacing: .075em; text-transform: uppercase; }
+#workspaceSettingsDialog .settings-display-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+#workspaceSettingsDialog .settings-display-scope { min-width: 0; }
+#workspaceSettingsDialog .settings-display-scope > header, #workspaceSettingsDialog .settings-scope-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 0 3px 8px; }
+#workspaceSettingsDialog .settings-display-scope h3, #workspaceSettingsDialog .settings-scope-heading h3 { margin: 0; font-size: 15px; font-weight: 500; letter-spacing: -.025em; }
+#workspaceSettingsDialog .settings-display-scope > header > span, #workspaceSettingsDialog .settings-scope-heading > span { color: var(--color-text-muted); font-size: 11px; text-align: right; }
+#workspaceSettingsDialog .settings-scope-preview { display: grid; gap: 5px; min-height: 96px; padding: 12px; border-radius: 10px; background: var(--settings-preview); box-shadow: inset 0 1px rgb(255 255 255 / .035); }
+#workspaceSettingsDialog .settings-scope-preview > .settings-eyebrow { font-size: 11px; }
+#workspaceSettingsDialog .settings-scope-preview > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); font-size: 14px; font-weight: 500; letter-spacing: -.02em; }
+#workspaceSettingsDialog .settings-scope-preview > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 9px; font-size: 11px; font-variant-numeric: tabular-nums; }
+#workspaceSettingsDialog .settings-scope-preview b { color: var(--settings-amber); font-weight: 500; }
+#workspaceSettingsDialog .settings-scope-preview small { margin-left: auto; color: var(--color-text-muted); font-size: 11px; }
+#workspaceSettingsDialog .settings-display-controls { margin-top: 4px; padding: 5px 11px 7px; border-radius: 0 0 10px 10px; background: var(--settings-well); }
+#workspaceSettingsDialog .settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 5px 0; cursor: pointer; }
+#workspaceSettingsDialog .settings-toggle > span { display: grid; gap: 1px; }
+#workspaceSettingsDialog .settings-toggle strong { color: var(--color-text); font-size: 12px; font-weight: 500; }
+#workspaceSettingsDialog .settings-toggle small { color: var(--color-text-muted); font-size: 11px; }
+#workspaceSettingsDialog input.settings-switch { appearance: none; box-sizing: border-box; flex: 0 0 30px; width: 30px; height: 18px; min-height: 18px; margin: 0; padding: 0; border: 0; border-radius: 999px; background: var(--color-input); cursor: pointer; transition: background-color 160ms cubic-bezier(.2, 0, 0, 1); }
+#workspaceSettingsDialog input.settings-switch::before { content: ""; display: block; width: 14px; height: 14px; margin: 2px; border-radius: 50%; background: var(--color-text); box-shadow: 0 1px 2px rgb(0 0 0 / .2); transform: translateX(0); transition: transform 160ms cubic-bezier(.2, 0, 0, 1); }
+#workspaceSettingsDialog input.settings-switch:checked { background: var(--settings-mint); }
+#workspaceSettingsDialog input.settings-switch:checked::before { transform: translateX(12px); background: var(--settings-well); }
+#workspaceSettingsDialog .settings-display-note { margin-top: 9px; font-size: 11px; }
+#workspaceSettingsDialog .settings-timeline { display: block; padding: 15px; border-radius: 12px; background: var(--settings-well); }
+#workspaceSettingsDialog .settings-year-picker { display: flex; gap: 5px; }
+#workspaceSettingsDialog .settings-year-picker > button { flex: 1; min-height: 40px; border: 0; border-radius: 7px; background: var(--settings-preview); font-size: 12px; }
+#workspaceSettingsDialog .settings-year-picker > button.is-active { background: rgb(255 200 87 / .09); color: var(--settings-amber); box-shadow: inset 0 0 0 1px rgb(255 200 87 / .2); }
+#workspaceSettingsDialog .settings-range-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(110px, .72fr); gap: 10px; margin-top: 15px; }
+#workspaceSettingsDialog .settings-range-row label { display: grid; gap: 6px; min-width: 0; color: var(--color-text-muted); font-size: 11px; }
+#workspaceSettingsDialog .settings-range-row :is(input, select) { width: 100%; min-width: 0; min-height: 40px; border: 0; border-radius: 6px; background-color: var(--settings-preview); color: var(--color-text); font-size: 12px; }
+#workspaceSettingsDialog .settings-timeline-preview { display: flex; align-items: center; gap: 12px; margin: 23px 0; color: var(--color-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+#workspaceSettingsDialog .settings-timeline-preview i { flex: 1; height: 1px; background: rgb(213 215 220 / .12); }
+#workspaceSettingsDialog .settings-timeline-preview strong { color: var(--settings-amber); font-size: 13px; font-weight: 400; }
+#workspaceSettingsDialog .timeline-stage-legend { gap: 6px; padding: 8px 0; font-size: 11px; }
+#workspaceSettingsDialog .timeline-stage-legend > span { gap: 6px; min-height: 32px; padding: 6px 9px; border-radius: 6px; background: var(--settings-preview); color: var(--color-text); }
+#workspaceSettingsDialog .timeline-stage-legend i { width: 12px; height: 12px; flex: 0 0 12px; border: 1px solid rgb(213 215 220 / .25); border-radius: 3px; }
+/* Reuse the same production tokens as actual roadmap bars and status labels. */
+#workspaceSettingsDialog .stage-launched { background: var(--color-stage-launched); }
+#workspaceSettingsDialog .stage-development { background: var(--color-stage-development); }
+#workspaceSettingsDialog .stage-planning { background: var(--color-stage-planning); }
+#workspaceSettingsDialog .timeline-stage-legend .status-embargo { background: var(--color-embargo); border-color: var(--color-embargo); }
+#workspaceSettingsDialog .timeline-stage-legend .status-new { background: var(--color-new-product); border-color: var(--color-new-product); }
+#workspaceSettingsDialog .settings-stage-palette .settings-note { font-size: 11px; }
+#workspaceSettingsDialog .settings-category-heading { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 12px; }
+#workspaceSettingsDialog .settings-category-heading h3 { margin: 4px 0 0; font-size: 17px; font-weight: 500; letter-spacing: -.025em; }
+#workspaceSettingsDialog .settings-tool { display: grid; grid-template-columns: 19px minmax(0, 1fr) 12px; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 54px; margin: 0; padding: 9px 10px; border: 0; border-radius: 7px; background: var(--settings-well); color: var(--color-text); text-align: left; box-shadow: none; transition: background-color 150ms cubic-bezier(.2, 0, 0, 1), transform 120ms cubic-bezier(.2, 0, 0, 1); }
+#workspaceSettingsDialog .settings-tool:hover { background: var(--settings-preview); }
+#workspaceSettingsDialog .settings-tool:active { transform: scale(.96); }
+#workspaceSettingsDialog .settings-tool > svg { width: 19px; height: 19px; padding: 0; border: 0; color: var(--color-text-muted); background: transparent; }
+#workspaceSettingsDialog .settings-tool .data-action-copy { display: grid; min-width: 0; gap: 2px; }
+#workspaceSettingsDialog .settings-tool .data-action-copy strong { color: inherit; font-size: 12px; font-weight: 500; line-height: 1.25; }
+#workspaceSettingsDialog .settings-tool .data-action-copy small { color: var(--color-text-muted); font-size: 11px; line-height: 1.35; }
+#workspaceSettingsDialog .settings-tool-arrow { align-self: start; color: var(--color-text-muted); font-size: 13px; }
+#workspaceSettingsDialog #addProduct { width: auto; min-width: 170px; }
+#workspaceSettingsDialog #settingsDataPanel .settings-content { padding: 0; }
+#workspaceSettingsDialog #settingsPullLatestData, #workspaceSettingsDialog #restoreSample { grid-template-columns: 33px minmax(0, 1fr) 15px; gap: 11px; min-height: 66px; padding: 12px 15px; border-radius: 10px; }
+#workspaceSettingsDialog #settingsPullLatestData { background: var(--color-text); color: var(--color-on-accent); }
+#workspaceSettingsDialog #settingsPullLatestData:hover { background: #ECEDEF; }
+#workspaceSettingsDialog #settingsPullLatestData > svg, #workspaceSettingsDialog #restoreSample > svg { width: 32px; height: 32px; padding: 6px; border-radius: 8px; background: rgb(0 0 0 / .08); color: inherit; }
+#workspaceSettingsDialog #settingsPullLatestData .data-action-copy strong, #workspaceSettingsDialog #restoreSample .data-action-copy strong { font-size: 15px; }
+#workspaceSettingsDialog #settingsPullLatestData .data-action-copy small, #workspaceSettingsDialog #settingsPullLatestData .settings-tool-arrow { color: #4D5054; }
+#workspaceSettingsDialog .settings-access-note { margin: 7px 3px 13px; font-size: 11px; }
+#workspaceSettingsDialog .data-action-menu { gap: 12px; margin: 0; }
+#workspaceSettingsDialog .settings-data-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+#workspaceSettingsDialog .settings-data-column { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 5px; min-width: 0; padding: 0; border: 0; background: transparent; }
+#workspaceSettingsDialog .settings-data-column > h4 { margin: 0 3px 4px; }
+#workspaceSettingsDialog .settings-data-column > .settings-note { margin: 4px 3px; font-size: 11px; }
+#workspaceSettingsDialog .settings-data-column .settings-tool { min-height: 55px; grid-template-columns: 16px minmax(0, 1fr) 10px; gap: 6px; padding: 8px; }
+#workspaceSettingsDialog .settings-data-column .settings-tool > svg { width: 16px; height: 16px; }
+#workspaceSettingsDialog .settings-data-column .data-action-copy strong { font-size: 12px; }
+#workspaceSettingsDialog .settings-data-column .data-action-copy small { font-size: 11px; }
+#workspaceSettingsDialog #dataCopyFallback { padding: 10px; border-radius: 8px; background: var(--settings-well); }
+#workspaceSettingsDialog #dataCopyFallback textarea { display: block; width: 100%; margin-top: 6px; font-family: ui-monospace, monospace; font-size: 11px; }
+#workspaceSettingsDialog .settings-package-details { margin: 15px 0; padding: 12px 3px 0; border: 0; background: transparent; }
+#workspaceSettingsDialog .settings-package-details > header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+#workspaceSettingsDialog .settings-package-details > header > span { color: var(--color-text-muted); font-size: 11px; }
+#workspaceSettingsDialog .settings-package-details dl { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; margin: 0; padding: 0; }
+#workspaceSettingsDialog .settings-package-details dl > div { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 10px; }
+#workspaceSettingsDialog .settings-package-details dt { color: var(--color-text-muted); font-size: 11px; }
+#workspaceSettingsDialog .settings-package-details dd { margin: 0; color: var(--color-text); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+#workspaceSettingsDialog #sharedPackageComments { max-height: none; white-space: pre-wrap; }
+#workspaceSettingsDialog #restoreSample { margin-top: 15px; background: #B42C2C; color: #FFFFFF; }
+#workspaceSettingsDialog #restoreSample:hover { background: #C73535; }
+#workspaceSettingsDialog #restoreSample .data-action-copy small, #workspaceSettingsDialog #restoreSample .settings-tool-arrow { color: #FFE5E5; }
+@media (max-width: 650px) {
+  #workspaceSettingsDialog { padding: 10px; }
+  #workspaceSettingsDialog .workspace-settings { max-height: calc(100dvh - 20px); border-radius: 14px; }
+  #workspaceSettingsDialog .workspace-settings-heading { padding: 15px 14px 12px; }
+  #workspaceSettingsDialog .workspace-settings-heading h2 { font-size: 19px; }
+  #workspaceSettingsDialog .workspace-settings-heading p { max-width: 230px; }
+  #workspaceSettingsDialog .settings-navigation { gap: 2px; padding: 0 12px 12px; }
+  #workspaceSettingsDialog .settings-tab { flex: 1; min-height: 44px; padding: 7px 8px; font-size: 11px; }
+  #workspaceSettingsDialog .settings-content { padding: 0 14px 14px; }
+  #workspaceSettingsDialog .workspace-settings-footer { padding: 12px 14px; }
+  #workspaceSettingsDialog .workspace-settings-footer > button { min-height: 44px; }
+  #workspaceSettingsDialog .settings-display-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  #workspaceSettingsDialog .settings-toggle { min-height: 50px; }
+  #workspaceSettingsDialog .settings-range-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #workspaceSettingsDialog .settings-range-row label:last-child { grid-column: 1 / -1; }
+  #workspaceSettingsDialog .settings-range-row label:last-child select { max-width: 180px; }
+  #workspaceSettingsDialog .settings-range-row :is(input, select) { min-height: 44px; font-size: 16px; }
+  #workspaceSettingsDialog .settings-data-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  #workspaceSettingsDialog .settings-data-column { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  #workspaceSettingsDialog .settings-data-column > h4, #workspaceSettingsDialog .settings-data-column > .settings-note { grid-column: 1 / -1; }
+  #workspaceSettingsDialog .settings-data-column .settings-tool { min-height: 60px; grid-template-columns: 18px minmax(0, 1fr); gap: 7px; }
+  #workspaceSettingsDialog .settings-data-column .settings-tool-arrow { display: none; }
+  #workspaceSettingsDialog .settings-package-details dl > div { grid-template-columns: 85px minmax(0, 1fr); }
+  #workspaceSettingsDialog .settings-category-heading { align-items: stretch; }
+  #workspaceSettingsDialog .settings-category-heading h3 { font-size: 15px; }
+  #workspaceSettingsDialog #addProduct { grid-template-columns: 19px minmax(0, 1fr); align-self: center; min-width: 130px; width: auto; min-height: 54px; }
+  #workspaceSettingsDialog #addProduct .settings-tool-arrow, #workspaceSettingsDialog #addProduct .data-action-copy small { display: none; }
+  #workspaceSettingsDialog #addProduct .data-action-copy strong { white-space: nowrap; }
+}
+@media (max-width: 420px) {
+  #workspaceSettingsDialog .settings-range-row { grid-template-columns: minmax(0, 1fr); }
+  #workspaceSettingsDialog .settings-range-row label:last-child { grid-column: auto; }
+  #workspaceSettingsDialog .settings-timeline { padding: 12px; }
+  #workspaceSettingsDialog .settings-package-details > header { flex-wrap: wrap; gap: 4px; }
+  #workspaceSettingsDialog #settingsPullLatestData, #workspaceSettingsDialog #restoreSample { padding: 11px; gap: 8px; }
+  #workspaceSettingsDialog #restoreSample .data-action-copy strong { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #workspaceSettingsDialog *, #workspaceSettingsDialog *::before { transition: none !important; animation: none !important; }
+  #workspaceSettingsDialog .settings-tool:active { transform: none; }
+}

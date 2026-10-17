@@ -302,6 +302,7 @@ for (const controller of [null, {}]) {
     selectedId: "headset", hashoutSelectedKey: null, hashoutView: {}, PortfolioHashoutView: {},
     workspaceSaveRevision: 9, lastWorkspaceRenderSignature: "", searchQuery: "", roadmapSearchQuery: "",
     PortfolioModel: globalThis.PortfolioModel, PortfolioSearch: globalThis.PortfolioSearch, PortfolioHashoutLayout: globalThis.PortfolioHashoutLayout,
+    productPriceText: product => globalThis.PortfolioModel.msrpText(product), productPartSkus: product => product.partSkus || [],
     CustomEvent: class { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } },
     MutationObserver: class { constructor(callback) { this.callback = callback; } observe(target, options) { assert.ok(target instanceof Element, "MutationObserver must never observe a removed/null category dropdown"); observed.push({ target, options, callback: this.callback }); } },
   };
