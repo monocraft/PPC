@@ -3,6 +3,7 @@ import "./presence-expressions.mjs";
 import "./presence-poke-controller.mjs";
 import "./presence-reactions.mjs";
 import "./presence-bump.mjs";
+import "./presence-neighbors.mjs";
 import "../../public/js/master-model.js";
 import "../../public/js/master-client.js";
 import "../../public/js/master-presence.js";
