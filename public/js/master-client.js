@@ -591,13 +591,23 @@
       if (!key) throw errorOf("Connect to the master before saving.", "INVALID_KEY", 401);
       const originals = scopedPatches === undefined ? new Map(track().map((item) => [item.productId, item])) : scopedOriginals(scopedPatches);
       if (!originals.size) return { saved: false, snapshot };
-      if ([...originals.values()].some(item => Object.hasOwn(item.patch || {}, "cardPlacement")) && snapshot?.cardPlacementVersion !== 1) throw errorOf("These product positions remain saved on this device. The shared service needs its placement update before they can be shared.", "PLACEMENT_UNAVAILABLE");
+      const needsPlacement = [...originals.values()].some(item => Object.hasOwn(item.patch || {}, "cardPlacement"));
       let changes = [...originals.values()].map(toChange);
       changes = changes.map(change => placementFences(change, [...baseline.values()]));
       let rebase = null, attempt = 0, keptFences = [], recheckChanges = [];
       const operationGeneration = generation, operationVersion = accessVersion;
       busy = true;
       try {
+        if (needsPlacement) {
+          // Choosing a saved local copy clears the connection snapshot but can
+          // retain access. Unknown capability is not an unsupported service.
+          // Check once under the save lock; keep the reviewed baseline/drafts
+          // intact so the normal save still reviews any concurrent changes.
+          const capabilities = snapshot || (await send("latest")).snapshot;
+          if (generation !== operationGeneration) throw new Error("The workspace changed while checking position sharing. Your current workspace was kept; reconnect before saving again.");
+          if (accessVersion !== operationVersion) throw errorOf("The master connection changed while checking position sharing. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");
+          if (capabilities.cardPlacementVersion !== 1) throw errorOf("These product positions remain saved on this device. The shared service needs its placement update before they can be shared.", "PLACEMENT_UNAVAILABLE");
+        }
         for (;;) {
           if (generation !== operationGeneration) throw new Error("The workspace changed while the master was updating. Your current workspace was kept; reconnect before saving again.");
           if (accessVersion !== operationVersion) throw errorOf("The master connection changed while saving. Your current workspace and access were kept.", "MASTER_CONNECTION_CHANGED");

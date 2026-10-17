@@ -84,7 +84,7 @@ assert.deepEqual(model.resolveConflicts(plan, { cardPlacement: "master" }).cardP
 
 function harness({ legacyBaseline = false, oldService = false } = {}) {
   let remote = fixture(), local = clone(remote.categories[0].board.products).map(product => ({ ...product, categoryId: "mice" }));
-  let baseline = clone(model.snapshot(remote).products), hook = null, failReply = false;
+  let baseline = clone(model.snapshot(remote).products), hook = null, latestHook = null, failReply = false;
   if (legacyBaseline) for (const entry of baseline) delete entry.values.cardPlacement;
   const calls = [], receipts = new Map();
   const snapshot = () => {
@@ -101,7 +101,11 @@ function harness({ legacyBaseline = false, oldService = false } = {}) {
     } } };
   const fetchImpl = async (url, options) => {
     const body = JSON.parse(options.body); calls.push({ url, body: clone(body) });
-    if (url.endsWith("/latest")) return Response.json({ snapshot: snapshot() });
+    if (url.endsWith("/latest")) {
+      const beforeLatest = latestHook; latestHook = null;
+      await beforeLatest?.();
+      return Response.json({ snapshot: snapshot() });
+    }
     if (receipts.has(body.requestId)) return Response.json({ ...receipts.get(body.requestId), snapshot: snapshot(), alreadySaved: true });
     if (oldService) for (const change of body.changes) assert.equal(Object.hasOwn(change.mine || {}, "cardPlacement"), false, "legacy creation requests cannot contain unsupported placement fields");
     await hook?.(); hook = null;
@@ -124,7 +128,7 @@ function harness({ legacyBaseline = false, oldService = false } = {}) {
     connect: () => session.connect({ key: "synthetic-key-for-tests" }),
     reload: () => client.createSession({ endpoint: "https://fixture.invalid/api/master", source: { mode: "service", team: true }, adapter, fetchImpl }),
     remoteMove: (id, laneId, order) => { remote = apply(remote, [changeFor(remote, id, { laneId, order })]).manifest; },
-    beforeSave: value => { hook = value; }, loseReply: () => { failReply = true; } };
+    beforeSave: value => { hook = value; }, beforeLatest: value => { latestHook = value; }, loseReply: () => { failReply = true; } };
 }
 {
   const h = harness({ legacyBaseline: true });
@@ -170,6 +174,74 @@ for (const choice of ["mine", "master", "cancel"]) {
   assert.equal(h.local.find(product => product.id === "a").laneId, "wireless");
 }
 {
+  const h = harness(); await h.connect(); h.session.adoptLocalBaseline(); h.move("a", "wireless", 2);
+  assert.equal(h.session.getState().hasKey, true, "Choosing a local copy retains access rather than asking for the key again.");
+  assert.equal(h.session.getState().snapshot, null, "A newly adopted local baseline has unknown service placement capability.");
+  const localBefore = clone(h.local), latestBefore = h.calls.filter(call => call.url.endsWith("/latest")).length;
+  const originalRemoteName = h.local.find(product => product.id === "b").name;
+  stored(h.remote, "b").name = "Synthetic accepted remote name";
+  h.beforeSave(() => assert.equal(h.local.find(product => product.id === "b").name, originalRemoteName, "The capability lookup does not apply remote values or silently replace the pending draft baseline before the reviewed save."));
+  const result = await h.session.save();
+  assert.equal(result.saved, true);
+  assert.equal(h.calls.filter(call => call.url.endsWith("/latest")).length, latestBefore + 1, "An explicit Save resolves unknown capability with exactly one latest request.");
+  assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, 1);
+  assert.equal(h.session.track().length, 0, "A capable service accepts the retained local placement draft without a reconnect/discard loop.");
+  assert.equal(stored(h.remote, "a").laneId, "wireless");
+  assert.equal(h.local.find(product => product.id === "b").name, "Synthetic accepted remote name", "Normal acknowledgement still reconciles independently accepted remote facts.");
+  assert.deepEqual(h.local.map(product => ({ id: product.id, specs: product.specs, imageAssetId: product.imageAssetId, customNote: product.customNote })), localBefore.map(product => ({ id: product.id, specs: product.specs, imageAssetId: product.imageAssetId, customNote: product.customNote })), "Capability discovery preserves local product facts and image references.");
+}
+{
+  const h = harness(); await h.connect(); h.session.adoptLocalBaseline(); h.move("a", "wireless", 2);
+  const draft = clone(h.session.track()), localBefore = clone(h.local), latestBefore = h.calls.filter(call => call.url.endsWith("/latest")).length;
+  h.beforeLatest(() => { throw new Error("Synthetic capability lookup failure"); });
+  await assert.rejects(h.session.save(), { code: "UNAVAILABLE" });
+  assert.equal(h.calls.filter(call => call.url.endsWith("/latest")).length, latestBefore + 1);
+  assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, 0, "Failed discovery cannot send an unverified placement write.");
+  assert.deepEqual(h.local, localBefore); assert.deepEqual(h.session.track(), draft, "A failed lookup retains every pending placement and its comparison baseline.");
+  assert.equal(h.session.getState().busy, false); assert.equal(h.session.getState().hasKey, true);
+  await h.session.save(); assert.equal(h.session.track().length, 0, "Retry can discover capability and share the same draft after a lookup failure.");
+}
+{
+  const h = harness({ legacyBaseline: true, oldService: true }); await h.connect(); h.session.adoptLocalBaseline(); h.move("a", "wireless", 2);
+  const draft = clone(h.session.track()), localBefore = clone(h.local), latestBefore = h.calls.filter(call => call.url.endsWith("/latest")).length;
+  await assert.rejects(h.session.save(), { code: "PLACEMENT_UNAVAILABLE" });
+  assert.equal(h.calls.filter(call => call.url.endsWith("/latest")).length, latestBefore + 1, "A real old service is identified from a fresh response, not a missing local snapshot.");
+  assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, 0);
+  assert.deepEqual(h.local, localBefore); assert.deepEqual(h.session.track(), draft, "Known unsupported placement remains a reviewable local draft.");
+  assert.equal(h.session.getState().busy, false);
+}
+{
+  const h = harness(); await h.connect(); h.session.adoptLocalBaseline(); h.move("a", "wireless", 2);
+  let release, reached;
+  const gate = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { reached = resolve; });
+  h.beforeLatest(async () => { reached(); await gate; });
+  const first = h.session.save();
+  await Promise.race([started, first.then(() => { throw new Error("Save completed before its controlled capability request."); })]);
+  try {
+    assert.equal(h.session.getState().busy, true, "Capability discovery is inside the save's busy guard.");
+    await assert.rejects(h.session.save(), /already updating/i, "A second Save cannot race the capability lookup and publish duplicate changes.");
+  } finally { release(); }
+  await first;
+  assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, 1);
+  assert.equal(h.session.track().length, 0);
+}
+for (const interruptedBy of ["baseline", "access"]) {
+  const h = harness(); await h.connect(); h.session.adoptLocalBaseline(); h.move("a", "wireless", 2);
+  const draft = clone(h.session.track()), localBefore = clone(h.local);
+  let release, reached;
+  const gate = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { reached = resolve; });
+  h.beforeLatest(async () => { reached(); await gate; });
+  const first = h.session.save();
+  await Promise.race([started, first.then(() => { throw new Error("Save completed before its controlled capability request."); })]);
+  if (interruptedBy === "baseline") h.session.adoptLocalBaseline();
+  else h.session.disconnect();
+  release();
+  await assert.rejects(first, interruptedBy === "baseline" ? /workspace changed/i : { code: "MASTER_CONNECTION_CHANGED" });
+  assert.equal(h.calls.filter(call => call.url.endsWith("/save")).length, 0, "A stale capability response cannot publish after the baseline or connection changes.");
+  assert.deepEqual(h.local, localBefore); assert.deepEqual(h.session.track(), draft);
+  assert.equal(h.session.getState().busy, false);
+}
+{
   const h = harness(); await h.connect(); h.move("a", "wireless", 2); h.loseReply();
   await assert.rejects(h.session.save(), { code: "UNAVAILABLE" });
   const result = await h.session.save();
@@ -186,4 +258,4 @@ for (const choice of ["mine", "master", "cancel"]) {
   assert.equal(h.local.find(product => product.id === "a").order, 0);
   assert.ok(h.session.track().some(change => change.productId === "a" && change.patch.cardPlacement.order === 0), "a newer local reorder remains pending after an older save response");
 }
-console.log("Shared card placement checks passed: atomic lane/order conflicts, bounded existing-lane validation, projected batch tails, affected-lane fingerprints, revisioned renumbering, legacy migration/old-client preservation, explicit mine/master/cancel, reload, lost replies and newer in-flight drafts.");
+console.log("Shared card placement checks passed: atomic lane/order conflicts, bounded existing-lane validation, projected batch tails, affected-lane fingerprints, revisioned renumbering, legacy migration/old-client preservation, explicit mine/master/cancel, reload, retained-access capability discovery with guarded retry/old-service preservation, lost replies and newer in-flight drafts.");
