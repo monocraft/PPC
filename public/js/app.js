@@ -9758,7 +9758,7 @@ async function initializeWorkspace() {
   const openingMessage = document.getElementById("workspaceOpeningMessage");
   const openingRetry = document.getElementById("workspaceOpeningRetry");
   if (openingStatus) openingStatus.classList.remove("hidden");
-  if (openingMessage) openingMessage.textContent = "Opening the saved portfolio…";
+  if (openingMessage) openingMessage.textContent = "Preparing your workspace…";
   if (openingRetry) { openingRetry.hidden = true; openingRetry.onclick = () => { void startWorkspace(); }; }
   const pendingStart = pendingLegacyImageBlobs.length;
   try {
