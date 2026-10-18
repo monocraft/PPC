@@ -1,0 +1,1098 @@
+{
+  "format": "ppc-standard-sync-flow/v1",
+  "kind": "command",
+  "readiness": {
+    "state": "Off",
+    "activationAllowed": false,
+    "importTested": false,
+    "runtimeSyntax": "binding-required",
+    "note": "Offline reviewed binding blueprint. BindingRequired is deliberately not a Power Automate action. The guard must remain until exact designer/export binding, persistence, collision and restart proofs pass."
+  },
+  "authority": {
+    "provider": "sharepoint",
+    "hostname": "hp.sharepoint.com",
+    "sitePath": "/teams/IPSG_SCM_and_Product_Requirements_Info",
+    "site": "https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info",
+    "library": "ASCM-Accessories Commercial",
+    "driveId": "b!Dxcy8q8LE0GivbyM3D6Dq5C5iXHjfxBMsvQrwTpLknS0JFIuvvhlQoilkLMqZkl9",
+    "listId": "2e5224b4-f8be-4265-88a5-90b32a66497d"
+  },
+  "destination": {
+    "site": "https://hp.sharepoint.com/teams/PCGamingCategory",
+    "serverRelativeFolder": "/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC",
+    "connectorFolder": "/Shared Documents/Product Portfolio/PPC",
+    "driveId": "__BIND_VERIFIED_FIXED_PPC_DRIVE_ID__",
+    "folderId": "__BIND_VERIFIED_FIXED_PPC_FOLDER_ID__",
+    "callerOverride": false
+  },
+  "handoff": {
+    "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+    "root": "/Documents/PPC ASCM",
+    "intake": "/Documents/PPC ASCM/intake",
+    "commands": "/Documents/PPC ASCM/commands",
+    "results": "/Documents/PPC ASCM/results",
+    "attempts": "/Documents/PPC ASCM/results/attempts",
+    "cursors": "/Documents/PPC ASCM/intake/cursors",
+    "access": "verified-owner-flow-worker-only-with-corporate-administration",
+    "verified": false,
+    "jsonMaxBytes": 65536,
+    "canonicalProducer": "checked-worker-within-verified-private-boundary",
+    "cloudDuplicateMemberRejection": false
+  },
+  "connectionReferences": {
+    "shared_sharepointonline": {
+      "connectionName": "__BIND_EXISTING_STANDARD_SHAREPOINT_CONNECTION__",
+      "source": "Embedded",
+      "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "apiName": "sharepointonline",
+      "newConnectionAllowed": false
+    }
+  },
+  "evidence": {
+    "scheduled": "standard-scheduled-export-proof.json",
+    "transfer": "standard-transfer-proof-flow-export-proof.json",
+    "transport": "standard-sync-transport-proof.json",
+    "nativeActionShapes": "scripts/native-ascm-flow.mjs#indexNativeActions",
+    "officialConnector": "https://learn.microsoft.com/en-us/connectors/sharepointonline/",
+    "provenOperations": [
+      "GetFolderMetadataByPath",
+      "GetFileContentByPath",
+      "CreateFile"
+    ],
+    "documentedNotReplacementVerified": [
+      "GetFileItems",
+      "GetFileMetadataByPath",
+      "GetOnUpdatedFileItems",
+      "HttpRequest"
+    ]
+  },
+  "errorPolicy": {
+    "secureInputs": true,
+    "secureOutputs": true,
+    "rawException": false,
+    "publicDiagnostic": "closed-code-only",
+    "reconnect": "actual-observed-connector-auth-failure-only",
+    "available": "actual-supported-sharepoint-success-only",
+    "ppcCalls": 0
+  },
+  "bindingRequirements": [
+    {
+      "id": "folder-event",
+      "status": "unverified",
+      "requiredProof": "Persisted GetOnUpdatedFileItems exact existing Documents library ID, commands-only folder, output file-name/path mapping, splitOn and concurrency behavior."
+    },
+    {
+      "id": "canonical-command",
+      "status": "unverified",
+      "requiredProof": "Closed schema and strict dynamic binding, actual64KiB limit, UUID/candidate/calendar/expiry/name/fixed-destination validation; canonical output inside verified private boundary. ParseJson alone does not reject duplicate members."
+    },
+    {
+      "id": "durable-attempt",
+      "status": "unverified",
+      "requiredProof": "Immutable phase records via Standard HttpRequest Files/add overwrite=false; exact raw canonical command retained; creation acknowledged or positively reconciled before package mutation; existing/unknown records never authorize repeat."
+    },
+    {
+      "id": "private-create-only",
+      "status": "unverified",
+      "requiredProof": "Exact Standard binary Files/add overwrite=false body; private record/readback/manifest no-overwrite and uncertain create behavior."
+    },
+    {
+      "id": "final-create-only",
+      "status": "unverified",
+      "requiredProof": "Fresh stage create-only binary body, positive readback, then actual MoveTo flags=0 collision/timeout proof with fixed authority."
+    },
+    {
+      "id": "final-metadata",
+      "status": "unverified",
+      "requiredProof": "Exact fixed final drive/folder IDs and actual item/eTag/version/size mapping before and after remote content read; no list-row eTag substitution."
+    },
+    {
+      "id": "private-boundary",
+      "status": "unverified",
+      "requiredProof": "Private canonical worker/flow handoff, inherited access and mapping. Records/results never enter commands."
+    }
+  ],
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$authentication": {
+        "type": "SecureObject",
+        "defaultValue": {}
+      },
+      "$connections": {
+        "type": "Object",
+        "defaultValue": {}
+      }
+    },
+    "triggers": {
+      "File_created_or_modified": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+            "connectionName": "shared_sharepointonline",
+            "operationId": "GetOnUpdatedFileItems"
+          },
+          "parameters": {
+            "dataset": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+            "table": "__BIND_VERIFIED_PRIVATE_DOCUMENTS_LIST_ID__",
+            "folderPath": "/Documents/PPC ASCM/commands"
+          },
+          "authentication": "@parameters('$authentication')",
+          "retryPolicy": {
+            "type": "none"
+          }
+        },
+        "splitOn": "@triggerOutputs()?['body/value']",
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          },
+          "concurrency": {
+            "runs": 1
+          }
+        }
+      }
+    },
+    "actions": {
+      "Runtime_binding_required": {
+        "type": "Terminate",
+        "inputs": {
+          "runStatus": "Failed",
+          "runError": {
+            "code": "FLOW_BINDING_REQUIRED",
+            "message": "FLOW_BINDING_REQUIRED"
+          }
+        },
+        "runAfter": {},
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Exact_command_event": {
+        "type": "BindingRequired",
+        "inputs": {
+          "bindingId": "folder-event",
+          "contract": {
+            "operation": "validate_command_event",
+            "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+            "exactFolder": "/Documents/PPC ASCM/commands",
+            "basenamePattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.json$",
+            "noSubfolders": true,
+            "rejectResults": true,
+            "rejectAttempts": true,
+            "callerPath": false,
+            "outputs": [
+              "commandFile"
+            ]
+          }
+        },
+        "runAfter": {
+          "Runtime_binding_required": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Read_command": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+            "connectionName": "shared_sharepointonline",
+            "operationId": "GetFileContentByPath"
+          },
+          "parameters": {
+            "dataset": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+            "path": "@concat('/Documents/PPC ASCM/commands/',outputs('Exact_command_event')?['commandFile'])",
+            "inferContentType": false
+          },
+          "authentication": "@parameters('$authentication')",
+          "retryPolicy": {
+            "type": "none"
+          }
+        },
+        "runAfter": {
+          "Exact_command_event": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        },
+        "limit": {
+          "timeout": "PT2M"
+        }
+      },
+      "Parse_command": {
+        "type": "ParseJson",
+        "inputs": {
+          "content": "@base64ToString(body('Read_command')?['$content'])",
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "kind",
+              "operationId",
+              "attemptId",
+              "createdAt",
+              "candidate",
+              "ciphertextFile",
+              "stageFile"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "type": "integer",
+                "enum": [
+                  1
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "publication"
+                ]
+              },
+              "operationId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              },
+              "attemptId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              },
+              "createdAt": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+              },
+              "candidate": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "candidateId",
+                  "generation",
+                  "storageRevision",
+                  "sha256",
+                  "bytes",
+                  "expiresAt",
+                  "fileName",
+                  "provider",
+                  "driveId",
+                  "folderId"
+                ],
+                "properties": {
+                  "candidateId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  },
+                  "generation": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "storageRevision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 36,
+                    "maximum": 67108864
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+                  },
+                  "fileName": {
+                    "type": "string",
+                    "pattern": "^master-r[1-9][0-9]*-g[1-9][0-9]*-[0-9a-f-]{36}\\.pkg$"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "sharepoint"
+                    ]
+                  },
+                  "driveId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "folderId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                }
+              },
+              "ciphertextFile": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.pkg$"
+              },
+              "stageFile": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.pkg$"
+              }
+            }
+          }
+        },
+        "runAfter": {
+          "Read_command": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Validate_command": {
+        "type": "BindingRequired",
+        "inputs": {
+          "bindingId": "canonical-command",
+          "contract": {
+            "operation": "validate_canonical_command",
+            "schemaAction": "Parse_command",
+            "maxBytes": 65536,
+            "exactFields": [
+              "schemaVersion",
+              "kind",
+              "operationId",
+              "attemptId",
+              "createdAt",
+              "candidate",
+              "ciphertextFile",
+              "stageFile"
+            ],
+            "candidateFields": [
+              "candidateId",
+              "generation",
+              "storageRevision",
+              "sha256",
+              "bytes",
+              "expiresAt",
+              "fileName",
+              "provider",
+              "driveId",
+              "folderId"
+            ],
+            "kind": "publication",
+            "sameAttemptDifferentContent": "held",
+            "commandFile": "attemptId.json",
+            "canonicalProducerOnly": true,
+            "rawDuplicateRejectionClaimed": false,
+            "strictCalendarAndUtc": true,
+            "newAttemptMustBeUnexpired": true,
+            "reconcileKnownAttemptAfterExpiry": true,
+            "uuid": "canonical-lowercase",
+            "fileReference": "uuid-basename-only",
+            "filenamesDistinct": [
+              "ciphertextFile",
+              "stageFile",
+              "readbackFile"
+            ],
+            "fixedDestination": true,
+            "driveId": "__BIND_VERIFIED_FIXED_PPC_DRIVE_ID__",
+            "folderId": "__BIND_VERIFIED_FIXED_PPC_FOLDER_ID__",
+            "candidateName": "master-r{storageRevision}-g{generation}-{candidateId}.pkg",
+            "rawCommand": "@body('Read_command')?['$content']"
+          }
+        },
+        "runAfter": {
+          "Parse_command": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Read_private_ciphertext": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+            "connectionName": "shared_sharepointonline",
+            "operationId": "GetFileContentByPath"
+          },
+          "parameters": {
+            "dataset": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+            "path": "@concat('/Documents/PPC ASCM/commands/',body('Parse_command')?['ciphertextFile'])",
+            "inferContentType": false
+          },
+          "authentication": "@parameters('$authentication')",
+          "retryPolicy": {
+            "type": "none"
+          }
+        },
+        "runAfter": {
+          "Validate_command": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        },
+        "limit": {
+          "timeout": "PT2M"
+        }
+      },
+      "Ciphertext_envelope_valid": {
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "equals": [
+                "@and(greaterOrEquals(body('Parse_command')?['candidate']?['bytes'],36),lessOrEquals(body('Parse_command')?['candidate']?['bytes'],67108864),equals(sub(mul(div(length(body('Read_private_ciphertext')?['$content']),4),3),if(endsWith(body('Read_private_ciphertext')?['$content'],'=='),2,if(endsWith(body('Read_private_ciphertext')?['$content'],'='),1,0))),body('Parse_command')?['candidate']?['bytes']),equals(substring(body('Read_private_ciphertext')?['$content'],0,10),'UFBDUEtHMD'),contains(createArray('E','F','G','H'),substring(body('Read_private_ciphertext')?['$content'],10,1)))",
+                true
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "Claim_exact_attempt": {
+            "type": "BindingRequired",
+            "inputs": {
+              "bindingId": "durable-attempt",
+              "contract": {
+                "operation": "claim_exact_attempt",
+                "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                "folderPath": "/Documents/PPC ASCM/results/attempts",
+                "recordName": "{attemptId}-claimed.json",
+                "exactCommand": "@body('Parse_command')",
+                "rawCommand": "@body('Read_command')?['$content']",
+                "phase": "claimed",
+                "createOnly": true,
+                "overwrite": false,
+                "retryPolicy": {
+                  "type": "none"
+                },
+                "exactMatchBeforeMutation": true,
+                "duplicate": "positive-reconcile-only",
+                "changedContent": "held",
+                "missingRecord": "not-proof-of-no-mutation",
+                "uncertainRecordWrite": "positive-exact-record-read-only",
+                "outputPermission": "new-positively-created-claim-only"
+              }
+            },
+            "runAfter": {},
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          },
+          "Try_new_attempt": {
+            "type": "If",
+            "expression": {
+              "and": [
+                {
+                  "equals": [
+                    "@equals(outputs('Claim_exact_attempt')?['permission'],'new-positively-created-claim-only')",
+                    true
+                  ]
+                }
+              ]
+            },
+            "actions": {
+              "Persist_stage_started": {
+                "type": "BindingRequired",
+                "inputs": {
+                  "bindingId": "durable-attempt",
+                  "contract": {
+                    "operation": "append_attempt_phase",
+                    "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                    "folderPath": "/Documents/PPC ASCM/results/attempts",
+                    "recordName": "{attemptId}-stage-started.json",
+                    "phase": "stage_started",
+                    "exactCommand": "@body('Parse_command')",
+                    "createOnly": true,
+                    "overwrite": false,
+                    "retryPolicy": {
+                      "type": "none"
+                    },
+                    "beforeMutation": "Create_fresh_stage",
+                    "alreadyExists": "reconcile-only",
+                    "uncertain": "hold"
+                  }
+                },
+                "runAfter": {},
+                "runtimeConfiguration": {
+                  "secureData": {
+                    "properties": [
+                      "inputs",
+                      "outputs"
+                    ]
+                  }
+                }
+              },
+              "Create_fresh_stage": {
+                "type": "BindingRequired",
+                "inputs": {
+                  "bindingId": "final-create-only",
+                  "contract": {
+                    "operation": "create_only_file",
+                    "site": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                    "folderPath": "/Shared Documents/Product Portfolio/PPC",
+                    "name": "@body('Parse_command')?['stageFile']",
+                    "body": "@body('Read_private_ciphertext')",
+                    "overwrite": false,
+                    "retryPolicy": {
+                      "type": "none"
+                    },
+                    "freshUuid": true,
+                    "onCollision": "held",
+                    "uncertain": "positive-reconcile-only",
+                    "no404RetryPermission": true
+                  }
+                },
+                "runAfter": {
+                  "Persist_stage_started": [
+                    "Succeeded"
+                  ]
+                },
+                "runtimeConfiguration": {
+                  "secureData": {
+                    "properties": [
+                      "inputs",
+                      "outputs"
+                    ]
+                  }
+                }
+              },
+              "Read_actual_stage": {
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "host": {
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                    "connectionName": "shared_sharepointonline",
+                    "operationId": "GetFileContentByPath"
+                  },
+                  "parameters": {
+                    "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                    "path": "@concat('/Shared Documents/Product Portfolio/PPC/',body('Parse_command')?['stageFile'])",
+                    "inferContentType": false
+                  },
+                  "authentication": "@parameters('$authentication')",
+                  "retryPolicy": {
+                    "type": "none"
+                  }
+                },
+                "runAfter": {
+                  "Create_fresh_stage": [
+                    "Succeeded",
+                    "Failed",
+                    "TimedOut"
+                  ]
+                },
+                "runtimeConfiguration": {
+                  "secureData": {
+                    "properties": [
+                      "inputs",
+                      "outputs"
+                    ]
+                  }
+                },
+                "limit": {
+                  "timeout": "PT2M"
+                }
+              },
+              "Stage_bytes_match": {
+                "type": "If",
+                "expression": {
+                  "and": [
+                    {
+                      "equals": [
+                        "@and(equals(body('Read_actual_stage')?['$content'],body('Read_private_ciphertext')?['$content']),equals(sub(mul(div(length(body('Read_actual_stage')?['$content']),4),3),if(endsWith(body('Read_actual_stage')?['$content'],'=='),2,if(endsWith(body('Read_actual_stage')?['$content'],'='),1,0))),body('Parse_command')?['candidate']?['bytes']))",
+                        true
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "Persist_promote_started": {
+                    "type": "BindingRequired",
+                    "inputs": {
+                      "bindingId": "durable-attempt",
+                      "contract": {
+                        "operation": "append_attempt_phase",
+                        "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                        "folderPath": "/Documents/PPC ASCM/results/attempts",
+                        "recordName": "{attemptId}-promote-started.json",
+                        "phase": "promote_started",
+                        "exactCommand": "@body('Parse_command')",
+                        "createOnly": true,
+                        "overwrite": false,
+                        "retryPolicy": {
+                          "type": "none"
+                        },
+                        "beforeMutation": "Promote_package",
+                        "alreadyExists": "reconcile-only",
+                        "uncertain": "hold"
+                      }
+                    },
+                    "runAfter": {},
+                    "runtimeConfiguration": {
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    }
+                  },
+                  "Promote_package": {
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                      "host": {
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                        "connectionName": "shared_sharepointonline",
+                        "operationId": "HttpRequest"
+                      },
+                      "parameters": {
+                        "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                        "parameters/method": "POST",
+                        "parameters/uri": "@concat('_api/web/GetFileByServerRelativeUrl(''/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC/',body('Parse_command')?['stageFile'],''')/MoveTo(newurl=''/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC/',body('Parse_command')?['candidate']?['fileName'],''',flags=0)')",
+                        "parameters/headers": {
+                          "Accept": "application/json;odata=verbose"
+                        }
+                      },
+                      "authentication": "@parameters('$authentication')",
+                      "retryPolicy": {
+                        "type": "none"
+                      }
+                    },
+                    "runAfter": {
+                      "Persist_promote_started": [
+                        "Succeeded"
+                      ]
+                    },
+                    "runtimeConfiguration": {
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    },
+                    "limit": {
+                      "timeout": "PT2M"
+                    }
+                  }
+                },
+                "else": {
+                  "actions": {}
+                },
+                "runAfter": {
+                  "Read_actual_stage": [
+                    "Succeeded"
+                  ]
+                },
+                "runtimeConfiguration": {
+                  "secureData": {
+                    "properties": [
+                      "inputs",
+                      "outputs"
+                    ]
+                  }
+                }
+              }
+            },
+            "else": {
+              "actions": {}
+            },
+            "runAfter": {
+              "Claim_exact_attempt": [
+                "Succeeded"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          },
+          "Final_before": {
+            "type": "BindingRequired",
+            "inputs": {
+              "bindingId": "final-metadata",
+              "contract": {
+                "operation": "final_metadata",
+                "phase": "before",
+                "site": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                "exactCandidate": true,
+                "driveId": "__BIND_VERIFIED_FIXED_PPC_DRIVE_ID__",
+                "folderId": "__BIND_VERIFIED_FIXED_PPC_FOLDER_ID__",
+                "itemFields": [
+                  "driveId",
+                  "folderId",
+                  "itemId",
+                  "versionId",
+                  "fileName"
+                ],
+                "proofFields": [
+                  "itemId",
+                  "eTag",
+                  "versionId",
+                  "bytes"
+                ],
+                "requiresPositiveIdentity": true,
+                "missingOr404": "held-no-retry-permission"
+              }
+            },
+            "runAfter": {
+              "Try_new_attempt": [
+                "Succeeded",
+                "Failed",
+                "TimedOut"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          },
+          "Read_actual_final": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                "connectionName": "shared_sharepointonline",
+                "operationId": "GetFileContentByPath"
+              },
+              "parameters": {
+                "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                "path": "@concat('/Shared Documents/Product Portfolio/PPC/',body('Parse_command')?['candidate']?['fileName'])",
+                "inferContentType": false
+              },
+              "authentication": "@parameters('$authentication')",
+              "retryPolicy": {
+                "type": "none"
+              }
+            },
+            "runAfter": {
+              "Final_before": [
+                "Succeeded"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            },
+            "limit": {
+              "timeout": "PT2M"
+            }
+          },
+          "Final_after": {
+            "type": "BindingRequired",
+            "inputs": {
+              "bindingId": "final-metadata",
+              "contract": {
+                "operation": "final_metadata",
+                "phase": "after",
+                "site": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                "exactCandidate": true,
+                "driveId": "__BIND_VERIFIED_FIXED_PPC_DRIVE_ID__",
+                "folderId": "__BIND_VERIFIED_FIXED_PPC_FOLDER_ID__",
+                "itemFields": [
+                  "driveId",
+                  "folderId",
+                  "itemId",
+                  "versionId",
+                  "fileName"
+                ],
+                "proofFields": [
+                  "itemId",
+                  "eTag",
+                  "versionId",
+                  "bytes"
+                ],
+                "sameObjectAs": "Final_before",
+                "requiresPositiveIdentity": true,
+                "missingOr404": "held-no-retry-permission"
+              }
+            },
+            "runAfter": {
+              "Read_actual_final": [
+                "Succeeded"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          },
+          "Final_stable_and_equal": {
+            "type": "If",
+            "expression": {
+              "and": [
+                {
+                  "equals": [
+                    "@and(equals(outputs('Final_before')?['proof'],outputs('Final_after')?['proof']),equals(outputs('Final_before')?['item'],outputs('Final_after')?['item']),not(empty(outputs('Final_before')?['proof']?['eTag'])),not(empty(outputs('Final_before')?['proof']?['versionId'])),equals(outputs('Final_before')?['proof']?['bytes'],body('Parse_command')?['candidate']?['bytes']),equals(sub(mul(div(length(body('Read_actual_final')?['$content']),4),3),if(endsWith(body('Read_actual_final')?['$content'],'=='),2,if(endsWith(body('Read_actual_final')?['$content'],'='),1,0))),body('Parse_command')?['candidate']?['bytes']),equals(body('Read_actual_final')?['$content'],body('Read_private_ciphertext')?['$content']))",
+                    true
+                  ]
+                }
+              ]
+            },
+            "actions": {
+              "Readback_name": {
+                "type": "Compose",
+                "inputs": "@concat(toLower(guid()),'.pkg')",
+                "runAfter": {},
+                "runtimeConfiguration": {
+                  "secureData": {
+                    "properties": [
+                      "inputs",
+                      "outputs"
+                    ]
+                  }
+                }
+              },
+              "Readback_names_distinct": {
+                "type": "If",
+                "expression": {
+                  "and": [
+                    {
+                      "equals": [
+                        "@and(not(equals(outputs('Readback_name'),body('Parse_command')?['ciphertextFile'])),not(equals(outputs('Readback_name'),body('Parse_command')?['stageFile'])),not(equals(body('Parse_command')?['ciphertextFile'],body('Parse_command')?['stageFile'])))",
+                        true
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "Create_fresh_readback": {
+                    "type": "BindingRequired",
+                    "inputs": {
+                      "bindingId": "private-create-only",
+                      "contract": {
+                        "operation": "create_only_file",
+                        "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                        "folderPath": "/Documents/PPC ASCM/results",
+                        "name": "@outputs('Readback_name')",
+                        "body": "@body('Read_actual_final')",
+                        "overwrite": false,
+                        "retryPolicy": {
+                          "type": "none"
+                        },
+                        "distinctFrom": [
+                          "ciphertextFile",
+                          "stageFile"
+                        ],
+                        "uncertain": "hold-no-blind-repeat",
+                        "actualFinalBytesOnly": true
+                      }
+                    },
+                    "runAfter": {},
+                    "runtimeConfiguration": {
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    }
+                  },
+                  "Result_manifest": {
+                    "type": "Compose",
+                    "inputs": {
+                      "schemaVersion": 1,
+                      "kind": "publication_result",
+                      "operationId": "@body('Parse_command')?['operationId']",
+                      "attemptId": "@body('Parse_command')?['attemptId']",
+                      "createdAt": "@formatDateTime(utcNow(),'yyyy-MM-ddTHH:mm:ss.fffZ')",
+                      "status": "verified",
+                      "candidateId": "@body('Parse_command')?['candidate']?['candidateId']",
+                      "generation": "@body('Parse_command')?['candidate']?['generation']",
+                      "item": "@outputs('Final_before')?['item']",
+                      "before": "@outputs('Final_before')?['proof']",
+                      "after": "@outputs('Final_after')?['proof']",
+                      "readbackFile": "@outputs('Readback_name')",
+                      "code": "VERIFIED"
+                    },
+                    "runAfter": {
+                      "Create_fresh_readback": [
+                        "Succeeded"
+                      ]
+                    },
+                    "runtimeConfiguration": {
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    }
+                  },
+                  "Create_result_manifest_last": {
+                    "type": "BindingRequired",
+                    "inputs": {
+                      "bindingId": "private-create-only",
+                      "contract": {
+                        "operation": "create_only_file",
+                        "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                        "folderPath": "/Documents/PPC ASCM/results",
+                        "name": "@concat(toLower(guid()),'.json')",
+                        "body": "@string(outputs('Result_manifest'))",
+                        "maxBytes": 65536,
+                        "overwrite": false,
+                        "retryPolicy": {
+                          "type": "none"
+                        },
+                        "manifestLast": true,
+                        "uncertain": "hold-no-blind-repeat"
+                      }
+                    },
+                    "runAfter": {
+                      "Result_manifest": [
+                        "Succeeded"
+                      ]
+                    },
+                    "runtimeConfiguration": {
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "else": {
+                  "actions": {}
+                },
+                "runAfter": {
+                  "Readback_name": [
+                    "Succeeded"
+                  ]
+                },
+                "runtimeConfiguration": {
+                  "secureData": {
+                    "properties": [
+                      "inputs",
+                      "outputs"
+                    ]
+                  }
+                }
+              }
+            },
+            "else": {
+              "actions": {}
+            },
+            "runAfter": {
+              "Final_after": [
+                "Succeeded"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {}
+        },
+        "runAfter": {
+          "Read_private_ciphertext": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Safe_diagnostic": {
+        "type": "Compose",
+        "inputs": {
+          "status": "unknown",
+          "code": "PUBLICATION_OPERATION_HELD",
+          "details": null
+        },
+        "runAfter": {
+          "Ciphertext_envelope_valid": [
+            "Succeeded",
+            "Failed",
+            "TimedOut"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
