@@ -188,6 +188,9 @@ function harness(initial = portfolioFixture()) {
   return { sandbox, images, stored, faults, calls, timers };
 }
 
+// Reuse the transaction/image fixture for the cross-service browser integration.
+export { harness, portfolioFixture, packageBytes };
+
 const first = harness();
 const newManifest = portfolioFixture("Updated", ["shared-image", "variant-image"]);
 const result = await first.sandbox.importProjectPackage(new Blob([packageBytes(newManifest)]));
@@ -363,6 +366,19 @@ const provenance = harness();
 await provenance.sandbox.importProjectPackage(new Blob([encrypted]), { key, requireEncrypted: true, fromSharedDownload: true });
 assert.equal(provenance.sandbox.portfolio.loadedPackageInfo.gitBlobSha, await globalThis.PortfolioPackageClient.gitBlobSha(encrypted), "loaded identity is calculated from the exact encrypted input bytes");
 assert.equal(provenance.sandbox.portfolio.loadedPackageInfo.version, 1);
+const deliveryIdentity = { provider: "sharepoint", generation: 7, candidateId: "12345678-1234-4234-8234-123456789abc", sha256: await globalThis.PortfolioPackageClient.sha256(encrypted), bytes: encrypted.length, storageRevision: 9 };
+const verifiedDelivery = harness();
+await verifiedDelivery.sandbox.importProjectPackage(new Blob([encrypted]), { key, requireEncrypted: true, fromSharedDownload: true, deliveryIdentity });
+assert.deepEqual(clone(verifiedDelivery.sandbox.portfolio.loadedPackageInfo), { version: 2, ...deliveryIdentity, loadedAt: verifiedDelivery.sandbox.portfolio.loadedPackageInfo.loadedAt }, "service_binary_digest: verified delivery identity persists atomically with complete images");
+assert.equal(verifiedDelivery.images.size, 2, "complete image replacement is committed with the verified package");
+const staleDelivery = harness(), staleBefore = JSON.stringify(staleDelivery.sandbox.portfolio);
+staleDelivery.sandbox.PortfolioMasterUI = { getSession: () => ({ getState: () => ({ busy: false, pending: [], snapshot: { publication: { status: "current", ...deliveryIdentity, generation: 8 } } }) }) };
+await assert.rejects(staleDelivery.sandbox.importProjectPackage(new Blob([encrypted]), { key, fromSharedDownload: true, deliveryIdentity }), /does not match the published copy/);
+assert.equal(JSON.stringify(staleDelivery.sandbox.portfolio), staleBefore, "stale_or_missing_identity: checked snapshot mismatch keeps the workspace");
+assert.equal(staleDelivery.images.size, 1, "stale_or_missing_identity: old pixels remain available");
+const wrongDigest = harness();
+await assert.rejects(wrongDigest.sandbox.importProjectPackage(new Blob([encrypted]), { key, fromSharedDownload: true, deliveryIdentity: { ...deliveryIdentity, sha256: "0".repeat(64) } }), /does not match the published copy/);
+assert.equal(wrongDigest.calls.workspaceWrites, 0, "service_binary_digest: forged identity cannot persist");
 const loadedMarker = JSON.stringify(provenance.sandbox.portfolio.loadedPackageInfo);
 provenance.sandbox.portfolio.masterSync = { supabaseRevision: 999 }; provenance.sandbox.portfolio.packageInfo = codec.createPackageInfo();
 assert.equal(JSON.stringify(provenance.sandbox.portfolio.loadedPackageInfo), loadedMarker, "mutable team metadata cannot advance the loaded image package identity");
@@ -374,7 +390,7 @@ await provenance.sandbox.importProjectPackage(new Blob([packageBytes(forgedManif
 assert.equal(Object.hasOwn(provenance.sandbox.portfolio, "loadedPackageInfo"), false, "manual imported files cannot claim a verified shared download identity");
 const pendingPackage = harness(), pendingBefore = JSON.stringify(pendingPackage.sandbox.portfolio);
 pendingPackage.sandbox.PortfolioMasterUI = { getSession: () => ({ getState: () => ({ busy: false, pending: [{ productId: "draft" }] }) }) };
-await assert.rejects(pendingPackage.sandbox.importProjectPackage(new Blob([encrypted]), { key, fromSharedDownload: true }), /Save or discard/);
+await assert.rejects(pendingPackage.sandbox.importProjectPackage(new Blob([encrypted]), { key, fromSharedDownload: true, deliveryIdentity }), /Save or discard/);
 assert.equal(JSON.stringify(pendingPackage.sandbox.portfolio), pendingBefore); assert.equal(pendingPackage.calls.workspaceWrites, 0); assert.equal(pendingPackage.sandbox.packageOperationInProgress, false);
 const wrongPublished = harness(), wrongBefore = JSON.stringify(wrongPublished.sandbox.portfolio);
 wrongPublished.sandbox.PortfolioMasterUI = { getSession: () => ({ getState: () => ({ busy: false, pending: [], snapshot: { publication: { status: "current", githubSha: "f".repeat(40) } } }) }) };

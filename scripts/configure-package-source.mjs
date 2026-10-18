@@ -21,6 +21,8 @@ export function normalizeMasterEndpoint(value = "") {
 export function renderPackageSource(value = "", masterValue = "", options = {}) {
   const endpoint = String(value || "").trim() ? globalThis.PortfolioPackageClient.normalizeEndpoint(value) : "";
   const masterEndpoint = normalizeMasterEndpoint(masterValue);
+  const deliveryService = endpoint && new URL(endpoint).pathname.includes("/functions/v1/ppc-package/");
+  if (deliveryService && (new URL(endpoint).pathname !== "/functions/v1/ppc-package/api/package/latest" || (masterEndpoint && (new URL(masterEndpoint).origin !== new URL(endpoint).origin || new URL(masterEndpoint).pathname !== "/functions/v1/ppc-master/api/master")))) throw new Error("Use the same project package and master service addresses.");
   const mode = options.mode || (endpoint || masterEndpoint ? "service" : "github");
   if (!["github", "service", "static"].includes(mode)) throw new Error("Choose GitHub, service or static master sharing.");
   if (mode === "github") {

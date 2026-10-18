@@ -61,6 +61,15 @@
     if (snapshot.publication) {
       const value = snapshot.publication;
       if (!["current", "pending", "error"].includes(value.status) || !Number.isSafeInteger(value.requestedRevision) || !Number.isSafeInteger(value.publishedRevision) || value.publishedRevision < 0 || value.requestedRevision < value.publishedRevision) invalid();
+      if (value.provider != null) {
+        const validDelivery = value.provider === "sharepoint" && ["seed", "publication"].includes(value.kind) &&
+          Number.isSafeInteger(value.generation) && value.generation > 0 &&
+          /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value.candidateId || "") &&
+          /^[a-f0-9]{64}$/.test(value.sha256 || "") && Number.isSafeInteger(value.bytes) && value.bytes >= 36 && value.bytes <= 67108864 &&
+          Number.isSafeInteger(value.storageRevision) && value.storageRevision > 0 &&
+          typeof value.publishedAt === "string" && Number.isFinite(Date.parse(value.publishedAt));
+        if (!validDelivery) invalid();
+      }
     }
     return { ...snapshot, products, tombstones };
   }

@@ -36,10 +36,15 @@ jobs:
         env:
           PPC_REQUIRE_SQL_TESTS: '1'
           PPC_TEST_PGLITE_MODULE: node_modules/@electric-sql/pglite/dist/index.js
+          PPC_PACKAGE_ENDPOINT: ${{ vars.PPC_PACKAGE_ENDPOINT }}
         run: |
           npm run check
           node scripts/build-supabase-master.mjs --check
-          node scripts/checks/hosted-package.mjs --required --deployment-only
+          if [[ "${PPC_PACKAGE_ENDPOINT}" == */functions/v1/ppc-package/api/package/latest ]]; then
+            node scripts/checks/hosted-package.mjs --deployment-only
+          else
+            node scripts/checks/hosted-package.mjs --required --deployment-only
+          fi
 
       - name: Prepare static site
         env:
@@ -113,7 +118,9 @@ jobs:
           node scripts/configure-package-source.mjs
           node scripts/configure-sharepoint-source.mjs
           node scripts/configure-site-version.mjs
-          cp public/data/master_ppc.pkg _site/data/
+          if [[ "${PPC_PACKAGE_ENDPOINT}" != */functions/v1/ppc-package/api/package/latest ]]; then
+            cp public/data/master_ppc.pkg _site/data/
+          fi
           cp -R public/assets public/vendor _site/
 
           for required_path in index.html css/styles.css css/workspace-notifications.css css/product-issues.css css/product-merge.css css/portfolio-search.css js/portfolio-search.js js/portfolio-search-ui.js js/product-merge.js js/product-merge-ui.js js/workspace-notifications.js js/product-issues.js js/app.js js/app-dialogs.js js/workspace-ui.js js/workspace-store.js js/portfolio-model.js js/master-model.js js/master-github.js js/master-client.js js/master-ui.js js/master-presence.js js/roadmap-interaction.js js/product-details.js js/ascm-import.js js/catalog-data.js js/pptx-pagination.js js/pptx-editable.js js/package-codec.js js/package-source.js js/package-client.js js/package-ui.js assets vendor; do
@@ -132,7 +139,11 @@ jobs:
           test ! -e _site/artifacts
           test ! -e _site/scripts
           test ! -e _site/server
-          test -f _site/data/master_ppc.pkg
+          if [[ "${PPC_PACKAGE_ENDPOINT}" == */functions/v1/ppc-package/api/package/latest ]]; then
+            test ! -e _site/data/master_ppc.pkg
+          else
+            test -f _site/data/master_ppc.pkg
+          fi
           test -f _site/css/presence-expressions.css
           test -f _site/css/presence-reactions.css
           test -f _site/css/presence-bump.css

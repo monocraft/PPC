@@ -7184,13 +7184,14 @@ async function exportProjectPackage(key = "", { comments = "" } = {}) {
   }
 }
 
-async function importProjectPackage(file, { key = "", requireEncrypted = false, fromSharedDownload = false } = {}) {
+async function importProjectPackage(file, { key = "", requireEncrypted = false, fromSharedDownload = false, deliveryIdentity = null } = {}) {
   if (packageOperationInProgress) throw new Error("A package operation is already in progress.");
   const sharingState = globalThis.PortfolioMasterUI?.getSession?.()?.getState();
   if (sharingState?.busy) throw new Error("Wait for the master update to finish before loading a package.");
   if (sharingState?.pending?.length) throw new Error("Save or discard your shared record changes before loading a complete package. Your current workspace has been kept.");
   if (fromSharedDownload && ["pending", "error"].includes(sharingState?.snapshot?.publication?.status)) throw new Error("The complete package is not ready. Check team updates again before opening it. Your current workspace has been kept.");
-  const expectedPackageSha = fromSharedDownload && /^[a-f0-9]{40}$/i.test(sharingState?.snapshot?.publication?.githubSha || "") ? sharingState.snapshot.publication.githubSha.toLowerCase() : "";
+  const checkedPublication = sharingState?.snapshot?.publication;
+  const expectedPackageSha = fromSharedDownload && !deliveryIdentity && checkedPublication?.provider !== "sharepoint" && /^[a-f0-9]{40}$/i.test(checkedPublication?.githubSha || "") ? checkedPublication.githubSha.toLowerCase() : "";
   const codec = packageCodec();
   if (Number(file?.size || 0) > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
   packageOperationInProgress = true;
@@ -7201,6 +7202,16 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false, 
   try {
     const input = new Uint8Array(await file.arrayBuffer());
     if (input.length > codec.MAX_PACKAGE_BYTES) throw new Error("The package is too large.");
+    if (fromSharedDownload && (deliveryIdentity || checkedPublication?.provider === "sharepoint")) {
+      const identity = deliveryIdentity;
+      const valid = identity?.provider === "sharepoint" && Number.isSafeInteger(identity.generation) && identity.generation > 0 &&
+        /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(identity.candidateId || "") &&
+        /^[a-f0-9]{64}$/.test(identity.sha256 || "") && identity.bytes === input.length &&
+        Number.isSafeInteger(identity.storageRevision) && identity.storageRevision > 0;
+      const snapshotDiffers = checkedPublication?.provider === "sharepoint" &&
+        ["generation", "candidateId", "sha256", "bytes", "storageRevision"].some(field => checkedPublication[field] !== identity?.[field]);
+      if (!valid || await globalThis.PortfolioPackageClient.sha256(input) !== identity.sha256 || snapshotDiffers) throw new Error("The downloaded package does not match the published copy from your last team check. Your current workspace has been kept.");
+    }
     const encrypted = codec.isEncrypted(input);
     if ((requireEncrypted || fromSharedDownload) && !encrypted) throw new Error("The shared master must be an encrypted package.");
     const bytes = encrypted ? await codec.decrypt(input, key) : input;
@@ -7247,13 +7258,14 @@ async function importProjectPackage(file, { key = "", requireEncrypted = false, 
     draft.masterLocalAssetIds = Object.fromEntries(replacements);
     delete draft.loadedPackageInfo;
     if (fromSharedDownload && encrypted) {
-      // Identity comes from the actual encrypted download, never mutable shared
-      // snapshot metadata or a package timestamp. A known published identity must
-      // match before activation; without one, missing hashing leaves it unknown.
-      let gitBlobSha = "";
-      try { gitBlobSha = await globalThis.PortfolioPackageClient?.gitBlobSha?.(input) || ""; } catch (_) {}
-      if (expectedPackageSha && gitBlobSha !== expectedPackageSha) throw new Error("The downloaded package does not match the published copy from your last team check. Check team updates and try again. Your current workspace has been kept.");
-      if (/^[a-f0-9]{40}$/.test(gitBlobSha)) draft.loadedPackageInfo = { version: 1, gitBlobSha, loadedAt: new Date().toISOString() };
+      if (deliveryIdentity) draft.loadedPackageInfo = { version: 2, ...deliveryIdentity, loadedAt: new Date().toISOString() };
+      else {
+        // Legacy identity comes from the encrypted bytes, never a mutable snapshot.
+        let gitBlobSha = "";
+        try { gitBlobSha = await globalThis.PortfolioPackageClient?.gitBlobSha?.(input) || ""; } catch (_) {}
+        if (expectedPackageSha && gitBlobSha !== expectedPackageSha) throw new Error("The downloaded package does not match the published copy from your last team check. Check team updates and try again. Your current workspace has been kept.");
+        if (/^[a-f0-9]{40}$/.test(gitBlobSha)) draft.loadedPackageInfo = { version: 1, gitBlobSha, loadedAt: new Date().toISOString() };
+      }
     }
     const result = await commitPackageDraft(draft, expectedCurrent, stagedImages);
     globalThis.PortfolioMasterUI?.markImported(draft.masterLocalBaseline || [], key);

@@ -421,6 +421,8 @@ for (const corrupt of [
   (value) => { value.products[0].laneId = "constructor"; },
   (value) => { value.masterSync = []; },
   (value) => { value.publication = { status: "current", requestedRevision: 1, publishedRevision: 2 }; },
+  (value) => { value.publication = { status: "current", requestedRevision: 3, publishedRevision: 3, provider: "sharepoint", kind: "publication", generation: 2, candidateId: "12345678-1234-4234-8234-123456789abc", sha256: "bad", bytes: 48, storageRevision: 3, publishedAt: "2026-10-17T00:00:00.000Z" }; },
+  (value) => { value.publication = { status: "current", requestedRevision: 3, publishedRevision: 3, provider: "sharepoint", kind: "publication", generation: 0, candidateId: "12345678-1234-4234-8234-123456789abc", sha256: "a".repeat(64), bytes: 48, storageRevision: 3, publishedAt: "2026-10-17T00:00:00.000Z" }; },
   (value) => { value.packageInfo = { version: 1, updatedAt: "not-a-date", comments: "" }; },
 ]) {
   const h = lifecycleHarness(); await h.session.connect({ key });
