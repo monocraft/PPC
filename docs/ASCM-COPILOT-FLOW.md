@@ -29,6 +29,41 @@ checking remains On and `PPC_ASCM_FLOW_ENABLED` is absent. The main flow is Off
 with no runs. No worker invocation, report import, publication or email move is
 proven by these setup steps. This is protected configuration, not activation.
 
+## Temporary manual bootstrap checkpoint
+
+The same flow `5bb99050-adca-f111-a05c-000d3a3191e3` now holds a saved,
+unpublished temporary **Request / Button** bootstrap draft. The reviewed hourly
+production version is preserved in server history at **Today 12:59 AM,
+October 18, 2026**. No credential was read, copied or changed. The draft remains
+Off/unrun, confirmed in fresh Overview with owner-only sharing and no runs. Its
+description identifies this temporary manual state and final Designer checker is
+zero errors/zero warnings.
+
+The isolated prefix is credential → Bootstrap_queue → Bootstrap_seed_ready →
+Bootstrap_normal → Bootstrap_stop(Cancelled). Queue runs only after credential
+success; later prefix nodes handle all four preceding completion states. The
+original report initializer depends only on the stop, so the unconditional
+Cancelled termination prevents report/import/Archive execution during bootstrap.
+Seed uses only actual existing master readback, before/after metadata, version
+4.0 and pinned identity before raw confirmation; there is **no seed write**.
+Normal uses a fresh root queue and its exact candidate. Its copied publication
+action uses a constant Normal_baseline_verified rather than a report variable.
+
+Native Copy retained embedded WDL references. All 13 affected fields across 11
+actions were repaired through the UI; the saved normal scope exactly matches
+reviewed canonical SHA256
+`26c4af0ef86d119dfd815dc03922050e32d4abe18f4a85a21ad82237cb4317a9`.
+Independent final review found no Important issue. Local
+`native-bootstrap-final-preservation-proof.json` confirms unchanged seed,
+original each-report and root-auth paths plus root isolation. No Publish, Test,
+worker/backend call, grant or flag change occurred; activation/capacity answers
+and seed/normal runtime/phase/source cutover are still pending.
+
+**Before any production report test or schedule:** remove every Bootstrap prefix
+node, restore hourly interval 1 / concurrency runs 1, and restore the original
+report initializer's dependency on the existing credential action. The production
+sequence below is the restoration target, not the current manual trigger.
+
 ## Native action sequence
 
 1. Use the existing environment/flow and **Copilot Studio** plan. Normal mode,
@@ -104,13 +139,14 @@ model prompts or external mail. Only actual Microsoft authentication failures
 use `/api/ascm/connection`; clear them after real successful service actions.
 Network/DLP failures are not logouts.
 
-The complete main happy path and service-specific auth reporting are now saved
+The complete production happy path and service-specific auth reporting remain saved
 and independently reviewed. The two Compose inputs (Outlook_connection_state, SharePoint_connection_state)
 and three connection-callback bodies are actual whole-field expressions, not
 interpolated text. The final Designer Flow checker has zero errors and zero
 warnings. Overview separately shows zero errors and one warning: "This flow has
 never been published." This is the expected unpublished draft state.
-Saved recurrence is interval 1 / Hour with runtime concurrency runs 1. The main
+The preserved production recurrence is interval 1 / Hour with runtime concurrency
+runs 1; the current temporary bootstrap trigger is Request / Button. The main
 flow remains Off, no runs, owner-only; saved completeness is not runtime proof.
 
 Only actual service actions can report Outlook/SharePoint availability or loss;
@@ -167,8 +203,10 @@ local evidence directory. This is metadata proof for the small fixture, not
 
 ## Required seed and source cutover
 
-The saved main flow cannot bootstrap delivery: its candidate guard intentionally
-rejects the seed filename `master_ppc.pkg`. Keep the main Off throughout this
+The production report path cannot bootstrap delivery: its candidate guard
+intentionally rejects the seed filename `master_ppc.pkg`. The current temporary
+manual prefix isolates that report path in the same Off flow; it does not bypass
+the operator phase and trusted producer steps. Keep the flow Off throughout this
 bounded operational sequence, detailed in local
 `.superpowers/sdd/2026-10-17-copilot-ascm-worker/native-cutover-readiness.md`:
 
