@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { createPackageDeliveryClient } from '../package-delivery-client.mjs';
 import { createSupabasePublisher, PINNED_SHAREPOINT_SEED, stageVerifiedSeedArchive } from '../publish-supabase-master.mjs';
 import { readFile } from 'node:fs/promises';
@@ -25,7 +27,7 @@ const manifestSha = 'a'.repeat(64);
 const id = '11111111-1111-4111-8111-111111111111';
 const date = '2026-10-18T00:00:00.000Z';
 
-function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = false, sameRevision = false, corruptArchive = false, loseUploadReply = false, loseReserveReply = false, acceptedFfsDate = null } = {}) {
+function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = false, sameRevision = false, corruptArchive = false, loseUploadReply = false, loseReserveReply = false, acceptedFfsDate = null, archiveResponse = null } = {}) {
   let current = seed ? null : { candidateId: id, kind: 'seed', generation: 1, expectedGeneration: 0, storageRevision: sameRevision ? revision : 1,
     sourceSha, manifestSha256: manifestSha, ownerImagesCommit: null, sha256: sha256(seedBytes), bytes: seedBytes.length,
     objectKey: `packages/${id}.pkg`, createdAt: date, expiresAt: '2026-10-19T00:00:00.000Z', status: 'published' };
@@ -47,7 +49,7 @@ function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = fal
     }
     if (url === `https://fixture.supabase.co/storage/v1/object/sign/ppc-package-delivery/${current?.objectKey}?token=read`) {
       calls.push('archive'); assert.equal(options.credentials, 'omit'); assert.equal(options.headers['X-PPC-Publisher-Secret'], undefined);
-      assert.equal(options.headers.Authorization, undefined); const bytes = store.slice(); if (corruptArchive) bytes[40] ^= 1; return new Response(bytes);
+      assert.equal(options.headers.Authorization, undefined); const bytes = store.slice(); if (corruptArchive) bytes[40] ^= 1; return archiveResponse ? archiveResponse(options) : new Response(bytes);
     }
     if (url === PINNED_SHAREPOINT_SEED.url) { calls.push('seed-read'); assert.equal(options.headers['X-PPC-Publisher-Secret'], undefined); return new Response(seedBytes.slice()); }
     if (ownerCandidate && url === `https://api.github.com/repos/monocraft/PPC/contents/public/data/master_ppc.pkg?ref=${owner}`)
@@ -63,6 +65,52 @@ function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = fal
     setQueued(value) { queued = value; }, failFinalize(value = true) { finalizeFails = value; }, setCurrent(value, bytes = seedBytes) { current = value; store = bytes; }, setPublication(value) { publication = value; },
     async pendingOutput() { return unpacked(uploaded); } };
 }
+async function withGzipArchive(bytes, verify) {
+  const compressed = gzipSync(bytes), requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ method: request.method, publisher: request.headers['x-ppc-publisher-secret'], authorization: request.headers.authorization });
+    response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip', 'Content-Length': String(compressed.length) });
+    response.end(compressed);
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/archive`;
+    await verify(options => fetch(url, options), compressed.length);
+    assert.deepEqual(requests, [{ method: 'GET', publisher: undefined, authorization: undefined }]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+}
+
+// Fetch decodes gzip but retains its compressed Content-Length. An encrypted
+// archive can expand on the wire while its decoded bytes exactly match the pin.
+await withGzipArchive(seedBytes, async (archiveResponse, wireBytes) => {
+  assert(wireBytes > seedBytes.length, 'incompressible encrypted fixture has gzip overhead');
+  const h = fixture({ archiveResponse });
+  await assert.doesNotReject(async () => {
+    const result = await h.publisher.publish(); assert.equal(result.status, 'pending');
+    const output = await h.pendingOutput();
+    assert.equal(output.manifest.categories[0].board.products[0].ffsDate, '2026-12-10');
+    assert.deepEqual(output.entries.get('attachments/extra.bin'), Uint8Array.of(17, 19, 21, 23, 0, 25));
+    assert.equal(h.queued.kind, 'publication'); assert.equal(h.queued.status, 'ready');
+  }, 'gzip wire overhead must not reject an exact valid decoded archive');
+});
+
+await withGzipArchive(Buffer.alloc(seedBytes.length + 1, 37), async (archiveResponse, wireBytes) => {
+  assert(wireBytes < seedBytes.length, 'compressed fixture hides a decoded response above the bound');
+  const h = fixture({ archiveResponse });
+  await assert.rejects(h.publisher.publish(), error => error.code === 'RESPONSE_TOO_LARGE', 'decoded bytes must remain bounded independently of compressed Content-Length');
+  assert(!h.calls.includes('reserve')); assert(!h.calls.includes('upload'));
+});
+
+for (const [encoding, declared] of [[undefined, String(seedBytes.length + 1)], ['identity', String(seedBytes.length + 1)], ['gzip', 'not-a-number'], ['br', '-1']]) {
+  const h = fixture({ archiveResponse: () => new Response(seedBytes.slice(), { headers: {
+    'Content-Length': declared, ...(encoding ? { 'Content-Encoding': encoding } : {}) } }) });
+  await assert.rejects(h.publisher.publish(), error => error.code === 'RESPONSE_TOO_LARGE', 'identity length ceilings and numeric declarations remain enforced');
+  assert(!h.calls.includes('reserve')); assert(!h.calls.includes('upload'));
+}
+
 {
   const workflow = await readFile(new URL('../../.github/workflows/publish-master.yml', import.meta.url), 'utf8');
   const steps = [...workflow.matchAll(/^ {6}- name: ([^\r\n]+)\r?\n {8}if: \$\{\{ ([^\r\n]+) \}\}\r?\n {8}run: (node scripts\/publish-supabase-master\.mjs(?: --[a-z-]+)?)$/gm)]

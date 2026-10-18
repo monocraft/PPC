@@ -47,7 +47,9 @@ export function normalizePublisherEndpoint(value) {
 
 async function readBytes(response, maximum) {
   const declared = response.headers.get('content-length');
-  if (declared && (!/^\d+$/.test(declared) || Number(declared) > maximum)) throw failure('RESPONSE_TOO_LARGE');
+  const encoding = response.headers.get('content-encoding');
+  // Fetch exposes decoded bytes; an encoded Content-Length measures wire bytes.
+  if (declared && (!/^\d+$/.test(declared) || (!encoding || encoding.trim().toLowerCase() === 'identity') && Number(declared) > maximum)) throw failure('RESPONSE_TOO_LARGE');
   const reader = response.body?.getReader();
   if (!reader) {
     const bytes = new Uint8Array(await response.arrayBuffer());
