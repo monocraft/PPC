@@ -443,9 +443,12 @@ def _load(root, recover):
 
 
 def load_journal(root: Path) -> dict:
-    root = secure_root(root)
-    with _lock(root, "journal.lock"):
-        return _load(root, True)
+    try:
+        root = secure_root(root)
+        with _lock(root, "journal.lock"):
+            return _load(root, True)
+    except OSError:
+        raise WorkerError("JOURNAL_LOAD_FAILED") from None
 
 
 def _replace_cipher(root, name, ciphertext):
@@ -465,8 +468,8 @@ def _replace_cipher(root, name, ciphertext):
 
 def save_journal(root: Path, state: dict) -> None:
     ciphertext = _encode(state)
-    root = secure_root(root)
     try:
+        root = secure_root(root)
         with _lock(root, "journal.lock"):
             try:
                 _load(root, False)

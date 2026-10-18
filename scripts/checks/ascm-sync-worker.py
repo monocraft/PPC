@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
 
 sys.dont_write_bytecode = True
 SOURCE = Path(__file__).resolve().parents[1] / "ascm-sync-worker.py"
@@ -56,6 +58,32 @@ class NativeFoundations(unittest.TestCase):
         self.assertEqual(set(outer), {"version", "ownerSid", "payload"})
         self.assertEqual(outer["version"], 1)
         self.assertEqual(outer["ownerSid"], w.current_sid())
+
+    def test_public_journal_maps_root_creation_failures_to_safe_codes(self):
+        # Catches root preparation outside the public safe-error boundary.
+        private_path = "synthetic-private-root-must-not-appear"
+        payload = "synthetic-payload-must-not-appear"
+        for api, code in ((w.load_journal, "JOURNAL_LOAD_FAILED"),
+                          (w.save_journal, "JOURNAL_SAVE_FAILED")):
+            for error in (PermissionError(13, "synthetic creation failure", private_path),
+                          OSError(28, "synthetic disk failure", private_path)):
+                with self.subTest(api=api.__name__, error=type(error).__name__):
+                    output = StringIO()
+                    with mock.patch.object(Path, "mkdir", side_effect=error), redirect_stdout(output), redirect_stderr(output):
+                        with self.assertRaises(Exception) as caught:
+                            if api is w.save_journal:
+                                api(self.root, {"opaque": payload})
+                            else:
+                                api(self.root)
+                    self.assertIsInstance(caught.exception, w.WorkerError)
+                    self.assertEqual(caught.exception.code, code)
+                    self.assertEqual(str(caught.exception), code)
+                    self.assertTrue(caught.exception.__suppress_context__)
+                    self.assertIsNone(caught.exception.__cause__)
+                    for secret in (private_path, payload, str(self.root)):
+                        self.assertNotIn(secret, str(caught.exception))
+                        self.assertNotIn(secret, output.getvalue())
+                    self.assertEqual(output.getvalue(), "")
 
     def test_current_and_previous_recovery_and_known_loss(self):
         w.save_journal(self.root, {"sequence": 1})
