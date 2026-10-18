@@ -245,7 +245,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .toolbar-actions { display: flex; align-items: center; gap: 7px; }
 .toolbar-actions > button { white-space: nowrap; }
 .ascm-supervisor-indicator { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 6px; min-height: 30px; padding-inline: 3px; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; }
-.ascm-supervisor-indicator[hidden], .ascm-supervisor-row[hidden], .ascm-supervisor-label[hidden], .ascm-supervisor-reconnect[hidden], .ascm-reconnect-handoff[hidden] { display: none !important; }
+.ascm-supervisor-indicator[hidden], .ascm-supervisor-row[hidden], .ascm-supervisor-header[hidden], .ascm-supervisor-label[hidden], .ascm-supervisor-reconnect[hidden], .ascm-reconnect-handoff[hidden] { display: none !important; }
 .ascm-supervisor-clock { position: relative; display: inline-block; flex: 0 0 auto; width: 17px; height: 17px; border: 1.3px solid currentColor; border-radius: 50%; }
 .ascm-supervisor-clock::before, .ascm-supervisor-clock::after { content: ""; position: absolute; left: 6.6px; width: 1.3px; background: currentColor; border-radius: 1px; transform-origin: 50% 100%; }
 .ascm-supervisor-clock::before { top: 2.2px; height: 5.2px; }
@@ -253,6 +253,11 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .ascm-supervisor-row { align-items: flex-start; padding: 7px 0 9px; border-top: 1px solid var(--color-border); }
 .ascm-supervisor-portrait { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; color: var(--color-text-secondary); }
 .ascm-supervisor-face { width: 30px; height: 30px; }
+.ascm-supervisor-header { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 29px; min-width: 29px; height: 29px; min-height: 29px; margin-left: 3px; padding: 0; border: 0; border-radius: 50%; background: transparent; }
+.ascm-supervisor-header .ascm-supervisor-portrait { flex-basis: 100%; width: 100%; height: 100%; }
+.ascm-supervisor-header .ascm-supervisor-face { width: 100%; height: 100%; }
+@media (max-width: 900px) { .ascm-supervisor-header { width: 25px; min-width: 25px; height: 25px; min-height: 25px; } }
+@media (max-width: 580px) { .ascm-supervisor-header { width: 23px; min-width: 23px; height: 23px; min-height: 23px; } }
 .ascm-supervisor-person { flex: 1; min-height: 30px; }
 .ascm-supervisor-reconnect { position: relative; display: inline-flex; align-items: center; justify-content: center; justify-self: start; width: 30px; height: 30px; padding: 4px; color: var(--color-text-secondary); }
 .ascm-reconnect-key { width: 19px; height: 19px; }

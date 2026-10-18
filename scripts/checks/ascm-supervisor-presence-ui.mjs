@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import vm from 'node:vm';
 import '../../public/js/master-presence.js';
 
 const presence = globalThis.PortfolioMasterPresence;
@@ -97,6 +98,80 @@ class Element {
   contains(node) { return this === node || this.children.some(child => child.contains(node)); }
   set innerHTML(_) { assert.fail('Status rendering must use inert DOM nodes'); }
 }
+class HeaderElement extends Element {
+  constructor(tag, ownerDocument) { super(tag, ownerDocument); this.dataset = {}; this.style = {}; this.classList.add = name => this.classList.toggle(name, true); }
+  setAttribute(name, value) { super.setAttribute(name, value); if (name === 'class') this.className = String(value); }
+  get firstChild() { return this.children[0] || null; }
+  get nextSibling() { return this.parentNode?.children[this.parentNode.children.indexOf(this) + 1] || null; }
+  insertBefore(node, before) { node.remove(); const index = before ? this.children.indexOf(before) : this.children.length; assert(index >= 0); this.children.splice(index, 0, node); node.parentNode = this; }
+  replaceWith(node) { this.parentNode.insertBefore(node, this); this.remove(); }
+  matches(selector) { return selector === 'button' ? this.tagName === 'BUTTON' : selector === ':focus-visible' ? this.keyboardFocus === true : selector === '[data-opens-roster]' ? Boolean(this.dataset.opensRoster) : selector.startsWith('.') && this.classList.contains(selector.slice(1)); }
+  querySelectorAll(selector) { return this.children.flatMap(child => [child, ...child.querySelectorAll('*')]).filter(child => selector === '*' || child.matches(selector)); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+}
+async function headerFixture() {
+  const source = await readFile(new URL('../../public/js/master-presence.js', import.meta.url), 'utf8');
+  const documentObject = { visibilityState: 'visible', activeElement: null, addEventListener() {}, createElement: tag => new HeaderElement(tag, documentObject), createElementNS: (_, tag) => new HeaderElement(tag, documentObject) };
+  const brand = documentObject.createElement('div'), indicator = documentObject.createElement('span'); brand.className = 'brand-block';
+  documentObject.querySelector = selector => selector === '.brand-block' ? brand : null;
+  documentObject.getElementById = id => id === 'ascmSupervisorIndicator' ? indicator : null;
+  let reply = { sessions: [{ sessionId: 'owner-tab-1234', displayName: 'Alex' }, { sessionId: 'teammate-tab-5678', displayName: 'Sam' }], pokeSupported: true, ascmSupervisor: active() }, mode = 'service', calls = 0;
+  const pokes = [], session = { getState: () => ({ configured: true, hasKey: true, accessVersion: 1, mode, pending: [], snapshot: {}, editorProfile: { sessionId: 'owner-tab-1234' } }), presence: async () => { calls += 1; if (reply instanceof Error) throw reply; return reply; } };
+  const sandbox = { document: documentObject, AbortController, Date: class extends Date { static now() { return start; } }, addEventListener() {}, matchMedia: () => ({ matches: false }), setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {} };
+  vm.createContext(sandbox); vm.runInContext(source, sandbox);
+  const app = sandbox.PortfolioMasterPresence.initialize({ sessionProvider: () => session, onPoke: async user => { pokes.push(user.sessionId); return { status: 'queued' }; } });
+  await app.refresh();
+  return { app, brand, indicator, documentObject, pokes, get calls() { return calls; }, set reply(value) { reply = value; }, set mode(value) { mode = value; } };
+}
+
+test('enabled supervisor is visible beside header people before opening the dialog without becoming a human or poke target', async () => {
+  const f = await headerFixture();
+  try {
+    const shell = f.brand.querySelector('.master-presence'), stack = shell.querySelector('.master-presence-avatars'), popover = shell.querySelector('.master-presence-popover');
+    const bot = shell.querySelector('.ascm-supervisor-header');
+    assert(bot, 'the main header exposes the supervisor face without opening the people dialog');
+    assert.equal(bot.hidden, false);
+    assert.equal(popover.hidden, true);
+    assert.equal(bot.parentNode, shell);
+    assert.equal(stack.nextSibling, bot, 'bot sits immediately beside visible people');
+    assert(bot.querySelector('.ascm-supervisor-face'));
+    assert.equal(bot.tagName, 'BUTTON');
+    assert.equal(bot.getAttribute('aria-haspopup'), 'dialog');
+    assert.equal(bot.getAttribute('aria-controls'), popover.id);
+    assert.equal(bot.getAttribute('aria-expanded'), 'false');
+    assert.equal(bot.getAttribute('aria-label'), 'ASCM supervisor. View connection status');
+    assert.equal(bot.dataset.sessionId, undefined);
+    assert.equal(bot.matches('.presence-header-person'), false, 'bot is excluded from human neighbor registration');
+    assert.equal(bot.querySelector('.master-presence-avatar'), null);
+    assert.equal(stack.children.length, 2);
+    assert.equal(f.app.controller.getState().onlineCount, 2);
+    assert.equal(shell.querySelector('.master-presence-trigger').title, '2 connected sessions');
+    assert.equal(f.calls, 1, 'rendering the header face adds no request');
+    const teammate = stack.children.find(node => node.dataset.sessionId === 'teammate-tab-5678');
+    teammate.click(); await Promise.resolve(); await Promise.resolve();
+    assert.deepEqual(f.pokes, ['teammate-tab-5678'], 'human poke remains available');
+    bot.keyboardFocus = true; bot.focus(); bot.click(); await f.app.refresh();
+    assert.equal(popover.hidden, false);
+    assert.equal(bot.getAttribute('aria-expanded'), 'true');
+    assert.equal(f.documentObject.activeElement, shell.querySelector('.master-presence-close'));
+    assert.deepEqual(f.pokes, ['teammate-tab-5678'], 'supervisor activation opens status instead of sending a poke');
+    shell.querySelector('.master-presence-close').click();
+    assert.equal(popover.hidden, true);
+    assert.equal(bot.getAttribute('aria-expanded'), 'false');
+    assert.equal(f.documentObject.activeElement, bot, 'keyboard close returns to the supervisor control');
+    for (const status of [{ enabled: true, working: false }, active({ expiresAt: new Date(start - 1000).toISOString() }), active({ reconnectRequired: ['outlook'] })]) {
+      f.reply = { sessions: [{ sessionId: 'owner-tab-1234', displayName: 'Alex' }], ascmSupervisor: status }; await f.app.refresh();
+      assert.equal(bot.hidden, false, 'enabled idle expired and reconnect states retain the face');
+      assert.equal(f.app.controller.getState().onlineCount, 1);
+    }
+    for (const reply of [{ sessions: [], ascmSupervisor: { enabled: false } }, { sessions: [] }, new Error('offline')]) {
+      f.reply = reply; await f.app.refresh(); assert.equal(bot.hidden, true, 'disabled unsupported and disconnected states hide the face');
+    }
+    f.reply = { sessions: [], ascmSupervisor: active() }; await f.app.refresh(); assert.equal(bot.hidden, false);
+    f.mode = 'github'; await f.app.refresh(); assert.equal(bot.hidden, true, 'recent editors never expose service supervisor status');
+  } finally { f.app.destroy(); }
+});
+
 function viewFixture() {
   let time = start, sequence = 0;
   const timers = new Map(), indicator = new Element('span'), rosterContainer = new Element();
@@ -252,6 +327,8 @@ test('reconnect focus survives lost-state updates and closes safely on Escape, r
 });
 
 if (process.argv.includes('--preview')) {
+  const previewPort = Number(process.env.PPC_PREVIEW_PORT || 4199);
+  assert(Number.isSafeInteger(previewPort) && previewPort >= 1024 && previewPort <= 65535, 'PPC_PREVIEW_PORT must be an unprivileged TCP port');
   const index = await readFile(new URL('../../public/index.html', import.meta.url), 'utf8');
   const toolbar = index.match(/<header class="topbar">[\s\S]*?<\/header>/)?.[0];
   assert(toolbar);
@@ -261,16 +338,16 @@ if (process.argv.includes('--preview')) {
     const url = new URL(request.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
       const mode = ['idle', 'disabled', 'expired', 'unknown', 'reconnect'].includes(url.searchParams.get('state')) ? url.searchParams.get('state') : 'active';
-      const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASCM reconnect · local preview</title><link rel="stylesheet" href="css/fonts.css"><link rel="stylesheet" href="css/styles.css"><link rel="stylesheet" href="css/presence-expressions.css"><script>
+      const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASCM header face · local preview</title><link rel="stylesheet" href="css/fonts.css"><link rel="stylesheet" href="css/styles.css"><link rel="stylesheet" href="css/presence-expressions.css"><script>
 const fixtureMode=${JSON.stringify(mode)};
 const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!['idle','reconnect'].includes(fixtureMode),productCount:['idle','reconnect','unknown'].includes(fixtureMode)?null:12,expiresAt:['idle','reconnect'].includes(fixtureMode)?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[]}})})};
 globalThis.PortfolioMasterUI={getSession:()=>fixtureSession};
-</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Open Users to see the supervisor's own face. A lost connection adds the key alert beside it; healthy status keeps the face without a name or key. Open Copilot Studio opens the owner's actual flow in a new tab; flow access requires the owner's Microsoft account.</section></div></main></body></html>`;
+</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">The supervisor's face is visible beside the people in the main header. Select it to open the existing connection details. A lost connection adds the key alert in those details; healthy status keeps the face without a name or key. Open Copilot Studio opens the owner's actual flow in a new tab; flow access requires the owner's Microsoft account.</section></div></main></body></html>`;
       response.setHeader('Content-Type', 'text/html'); response.end(body); return;
     }
     if (!routes.has(url.pathname)) { response.writeHead(404); response.end(); return; }
     try { const bytes = await readFile(new URL(`../../public${url.pathname}`, import.meta.url)); response.setHeader('Content-Type', url.pathname.endsWith('.js') ? 'text/javascript' : url.pathname.endsWith('.css') ? 'text/css' : 'font/ttf'); response.end(bytes); }
     catch { response.writeHead(404); response.end(); }
   });
-  server.listen(4199, '127.0.0.1', () => console.log(`Local ASCM reconnect preview: http://127.0.0.1:4199/?state=reconnect (PID ${process.pid})`));
+  server.listen(previewPort, '127.0.0.1', () => console.log(`Local ASCM header preview: http://127.0.0.1:${previewPort}/?state=idle (PID ${process.pid})`));
 }

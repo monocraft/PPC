@@ -26,7 +26,7 @@
     return { enabled: true, working: true, productCount: Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500 ? value.productCount : null, expiresAt: value.expiresAt, reconnectRequired };
   }
 
-  function createAscmSupervisorView({ documentObject = document, indicator, rosterContainer, focusFallback, now = Date.now,
+  function createAscmSupervisorView({ documentObject = document, indicator, rosterContainer, headerControl, focusFallback, now = Date.now,
     setTimeoutImpl = (callback, delay) => root.setTimeout(callback, delay), clearTimeoutImpl = (id) => root.clearTimeout(id) } = {}) {
     const make = (tag, className, text) => { const node = documentObject.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node; };
     const clock = () => { const node = make("span", "ascm-supervisor-clock"); node.setAttribute("aria-hidden", "true"); return node; };
@@ -39,17 +39,21 @@
     for (const [name, value] of Object.entries({ class: "ascm-reconnect-key", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) key.setAttribute(name, value);
     const bow = documentObject.createElementNS(svgNamespace, "circle"); bow.setAttribute("cx", "7"); bow.setAttribute("cy", "12"); bow.setAttribute("r", "4");
     const teeth = documentObject.createElementNS(svgNamespace, "path"); teeth.setAttribute("d", "M11 12h10m-3 0v3m-3-3v2"); key.append(bow, teeth); reconnect.append(key);
-    const portrait = make("span", "ascm-supervisor-portrait"), face = documentObject.createElementNS(svgNamespace, "svg");
-    portrait.setAttribute("role", "img"); portrait.setAttribute("aria-label", "ASCM supervisor");
-    // Static bot portrait shares the existing faces' line weights, without human identity or interaction hooks.
-    for (const [name, value] of Object.entries({ class: "ascm-supervisor-face", viewBox: "0 0 32 32", fill: "none", stroke: "currentColor", "stroke-width": "2.1", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) face.setAttribute(name, value);
-    for (const [tag, attributes] of [
-      ["rect", { x: "5", y: "9", width: "22", height: "18", rx: "6" }],
-      ["path", { d: "M16 9V5M14 4h4M5 15H3v6h2M27 15h2v6h-2", "stroke-width": "1.6" }],
-      ["path", { d: "M11.5 15v2.5M20.5 15v2.5", "stroke-width": "2.25" }],
-      ["path", { d: "M12.5 21.5Q16 24 19.5 21.5", "stroke-width": "1.55" }],
-    ]) { const feature = documentObject.createElementNS(svgNamespace, tag); for (const [name, value] of Object.entries(attributes)) feature.setAttribute(name, value); face.append(feature); }
-    portrait.append(face);
+    function createPortrait() {
+      const portrait = make("span", "ascm-supervisor-portrait"), face = documentObject.createElementNS(svgNamespace, "svg");
+      portrait.setAttribute("role", "img"); portrait.setAttribute("aria-label", "ASCM supervisor");
+      // Static bot portrait shares the existing faces' line weights, without human identity or interaction hooks.
+      for (const [name, value] of Object.entries({ class: "ascm-supervisor-face", viewBox: "0 0 32 32", fill: "none", stroke: "currentColor", "stroke-width": "2.1", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) face.setAttribute(name, value);
+      for (const [tag, attributes] of [
+        ["rect", { x: "5", y: "9", width: "22", height: "18", rx: "6" }],
+        ["path", { d: "M16 9V5M14 4h4M5 15H3v6h2M27 15h2v6h-2", "stroke-width": "1.6" }],
+        ["path", { d: "M11.5 15v2.5M20.5 15v2.5", "stroke-width": "2.25" }],
+        ["path", { d: "M12.5 21.5Q16 24 19.5 21.5", "stroke-width": "1.55" }],
+      ]) { const feature = documentObject.createElementNS(svgNamespace, tag); for (const [name, value] of Object.entries(attributes)) feature.setAttribute(name, value); face.append(feature); }
+      portrait.append(face); return portrait;
+    }
+    const portrait = createPortrait();
+    if (headerControl) { const headerPortrait = createPortrait(); headerPortrait.setAttribute("aria-hidden", "true"); headerControl.append(headerPortrait); }
     handoff.id = "ascmReconnectHandoff"; handoff.hidden = true;
     const link = make("a", "ascm-reconnect-link", "Open Copilot Studio"); link.href = "https://copilotstudio.microsoft.com/environments/Default-ca7981a2-785a-463d-b82a-3db87dfc3ce6/flows/5bb99050-adca-f111-a05c-000d3a3191e3/overview"; link.target = "_blank"; link.rel = "noopener noreferrer";
     handoff.append(make("p", "", "The flow owner must reconnect Office 365 Outlook or SharePoint in Copilot Studio → Manage connection references."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
@@ -89,6 +93,7 @@
       }
       label.textContent = text; label.hidden = !working;
       row.hidden = !supervisor; reconnect.hidden = !needsReconnect;
+      if (headerControl) headerControl.hidden = !supervisor;
       if (working) timer = setTimeoutImpl(() => { timer = null; render(latest); }, Math.max(1, Date.parse(supervisor.expiresAt) - now()));
     }
     render(null);
@@ -263,14 +268,16 @@
     const githubConnect = make("button", "quiet-button", "Connect GitHub"); githubConnect.type = "button"; githubConnect.hidden = true; githubConnect.addEventListener("click", () => root.PortfolioMasterUI?.connectGitHub());
     const play = make("button", "presence-play", "Make a face"); play.type = "button"; play.title = "A little goof for your own face, just on this screen";
     const supervisorRows = make("div", "ascm-supervisor-roster");
-    popover.append(heading, connection, rows, supervisorRows, play, nameForm, githubConnect); shell.append(trigger, popover); brand.append(shell);
-    const supervisorView = createAscmSupervisorView({ indicator: document.getElementById("ascmSupervisorIndicator"), rosterContainer: supervisorRows, focusFallback: close });
+    const supervisorHeader = make("button", "ascm-supervisor-header"); supervisorHeader.type = "button"; supervisorHeader.title = "ASCM supervisor";
+    supervisorHeader.setAttribute("aria-label", "ASCM supervisor. View connection status"); supervisorHeader.setAttribute("aria-haspopup", "dialog"); supervisorHeader.setAttribute("aria-expanded", "false"); supervisorHeader.setAttribute("aria-controls", popover.id);
+    popover.append(heading, connection, rows, supervisorRows, play, nameForm, githubConnect); shell.append(supervisorHeader, trigger, popover); brand.append(shell);
+    const supervisorView = createAscmSupervisorView({ indicator: document.getElementById("ascmSupervisorIndicator"), rosterContainer: supervisorRows, headerControl: supervisorHeader, focusFallback: close });
     // Expression updates are entirely local. They never send an additional presence request.
     const listeners = new root.AbortController(), signal = listeners.signal;
-    let open = false, disposed = false, debounceTimer = null, playTimer = null, gazeFrame = null, reactionFrame = null, playfulUntil = 0;
+    let open = false, disposed = false, debounceTimer = null, playTimer = null, gazeFrame = null, reactionFrame = null, playfulUntil = 0, rosterOpener = trigger;
     let lastInputAt = Date.now(), activeView = root.PortfolioSearchAdapter?.getActiveView?.() || "products", latestState;
     if (activeView === "split") activeView = "roadmap";
-    const stack = make("span", "master-presence-avatars"), stackCache = new Map(), rowCache = new Map(); shell.insertBefore(stack, trigger);
+    const stack = make("span", "master-presence-avatars"), stackCache = new Map(), rowCache = new Map(); shell.insertBefore(stack, supervisorHeader);
     const overflow = make("span", "master-presence-avatar master-presence-overflow"); overflow.setAttribute("aria-hidden", "true"); trigger.append(overflow);
     const pendingPokes = new Set();
     const socialStatus = make("span", "visually-hidden"); socialStatus.setAttribute("role", "status"); socialStatus.setAttribute("aria-live", "polite"); shell.append(socialStatus);
@@ -285,10 +292,10 @@
     }) : null;
     function setOpen(value, { restoreFocus = true } = {}) {
       const opener = document.activeElement;
-      open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value));
+      open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value)); supervisorHeader.setAttribute("aria-expanded", String(value));
       for (const control of stack.querySelectorAll("[data-opens-roster]")) control.setAttribute("aria-expanded", String(value));
-      if (value) { renderLocal(); controller.heartbeat(); if (shell.contains(opener) && opener.matches(":focus-visible")) close.focus({ preventScroll: true }); }
-      else { supervisorView.closeReconnect({ restoreFocus: false }); if (restoreFocus) trigger.focus({ preventScroll: true }); }
+      if (value) { rosterOpener = opener === supervisorHeader ? supervisorHeader : trigger; renderLocal(); controller.heartbeat(); if (shell.contains(opener) && opener.matches(":focus-visible")) close.focus({ preventScroll: true }); }
+      else { supervisorView.closeReconnect({ restoreFocus: false }); if (restoreFocus) (rosterOpener.hidden ? trigger : rosterOpener).focus({ preventScroll: true }); }
       neighbors?.refresh();
     }
     function contextFor(user, state) {
@@ -350,6 +357,7 @@
       if (disposed) return;
       latestState = state;
       supervisorView.render(state);
+      if (supervisorHeader.hidden && document.activeElement === supervisorHeader) trigger.focus({ preventScroll: true });
       title.textContent = state.mode === "github" ? "Recent editors" : "Connected now";
       close.setAttribute("aria-label", state.mode === "github" ? "Close recent editors" : "Close connected sessions");
       nameForm.hidden = state.mode === "github"; nameForm.style.display = state.mode === "github" ? "none" : "";
@@ -429,7 +437,7 @@
     function renderLocal() { if (latestState) render(latestState); }
     function inputActivity() { const wasIdle = Date.now() - lastInputAt > 60000; lastInputAt = Date.now(); if (wasIdle) renderLocal(); }
     shell.addEventListener("pointerdown", () => neighbors?.cancel(), { capture: true, signal });
-    trigger.addEventListener("click", () => setOpen(!open), { signal }); close.addEventListener("click", () => setOpen(false), { signal });
+    trigger.addEventListener("click", () => setOpen(!open), { signal }); supervisorHeader.addEventListener("click", () => setOpen(!open), { signal }); close.addEventListener("click", () => setOpen(false), { signal });
     document.addEventListener("pointerdown", (event) => { inputActivity(); if (open && !shell.contains(event.target)) setOpen(false, { restoreFocus: false }); }, { signal });
     document.addEventListener("keydown", (event) => { inputActivity(); if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!supervisorView.closeReconnect()) setOpen(false); } }, { capture: true, signal });
     document.addEventListener("pointermove", inputActivity, { passive: true, signal });
