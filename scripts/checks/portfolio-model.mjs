@@ -230,6 +230,7 @@ function bootHarness({ saved = null, prior = null, legacy = null, database = nul
     document: { querySelector: () => shell, getElementById: id => ({ workspaceOpeningStatus: status, workspaceOpeningMessage: message, workspaceOpeningRetry: retry })[id] },
     window: { dispatchEvent: event => events.push(event.type) }, CustomEvent: class { constructor(type) { this.type = type; } },
     showWorkspaceNotice: (...args) => notices.push(args), showWorkspaceRecovery() {}, PortfolioNotifications: { resolve() {} },
+    PortfolioWorkspaceUI: {}, // This model harness starts after the workspace UI has registered.
     ensurePortfolioSchema: value => ({ ...value, version: 4 }),
     createDefaultPortfolio: () => startupPortfolio(defaultFirst, defaultFirst),
     categoryDefinition: id => ({ id }), ensureBoardSchema: value => structuredClone(value), migrateLegacyProductImages() {},
