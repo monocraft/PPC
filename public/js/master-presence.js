@@ -39,19 +39,30 @@
     for (const [name, value] of Object.entries({ class: "ascm-reconnect-key", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) key.setAttribute(name, value);
     const bow = documentObject.createElementNS(svgNamespace, "circle"); bow.setAttribute("cx", "7"); bow.setAttribute("cy", "12"); bow.setAttribute("r", "4");
     const teeth = documentObject.createElementNS(svgNamespace, "path"); teeth.setAttribute("d", "M11 12h10m-3 0v3m-3-3v2"); key.append(bow, teeth); reconnect.append(key);
+    const portrait = make("span", "ascm-supervisor-portrait"), face = documentObject.createElementNS(svgNamespace, "svg");
+    portrait.setAttribute("role", "img"); portrait.setAttribute("aria-label", "ASCM supervisor");
+    // Static bot portrait shares the existing faces' line weights, without human identity or interaction hooks.
+    for (const [name, value] of Object.entries({ class: "ascm-supervisor-face", viewBox: "0 0 32 32", fill: "none", stroke: "currentColor", "stroke-width": "2.1", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) face.setAttribute(name, value);
+    for (const [tag, attributes] of [
+      ["rect", { x: "5", y: "9", width: "22", height: "18", rx: "6" }],
+      ["path", { d: "M16 9V5M14 4h4M5 15H3v6h2M27 15h2v6h-2", "stroke-width": "1.6" }],
+      ["path", { d: "M11.5 15v2.5M20.5 15v2.5", "stroke-width": "2.25" }],
+      ["path", { d: "M12.5 21.5Q16 24 19.5 21.5", "stroke-width": "1.55" }],
+    ]) { const feature = documentObject.createElementNS(svgNamespace, tag); for (const [name, value] of Object.entries(attributes)) feature.setAttribute(name, value); face.append(feature); }
+    portrait.append(face);
     handoff.id = "ascmReconnectHandoff"; handoff.hidden = true;
     const link = make("a", "ascm-reconnect-link", "Open ChatGPT"); link.href = "https://chatgpt.com/"; link.target = "_blank"; link.rel = "noopener noreferrer";
     handoff.append(make("p", "", "Open ChatGPT → Settings → Plugins → Outlook or SharePoint → Reconnect."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
-    person.append(reconnect, handoff); row.append(person); rosterContainer?.append(row);
+    person.append(reconnect, handoff); row.append(portrait, person); rosterContainer?.append(row);
     let timer = null, latest = null, disposed = false;
     function closeReconnect({ restoreFocus = true } = {}) {
       if (handoff.hidden) return false;
       handoff.hidden = true; reconnect.setAttribute("aria-expanded", "false");
-      if (restoreFocus && !row.hidden && !disposed) reconnect.focus({ preventScroll: true });
+      if (restoreFocus && !row.hidden && !reconnect.hidden && !disposed) reconnect.focus({ preventScroll: true });
       return true;
     }
     function toggleReconnect() {
-      if (disposed || row.hidden) return;
+      if (disposed || row.hidden || reconnect.hidden) return;
       if (closeReconnect()) return;
       handoff.hidden = false; reconnect.setAttribute("aria-expanded", "true");
     }
@@ -77,7 +88,7 @@
         indicator.classList.toggle("is-paused", documentObject.visibilityState === "hidden");
       }
       label.textContent = text; label.hidden = !working;
-      row.hidden = !needsReconnect; reconnect.hidden = !needsReconnect;
+      row.hidden = !supervisor; reconnect.hidden = !needsReconnect;
       if (working) timer = setTimeoutImpl(() => { timer = null; render(latest); }, Math.max(1, Date.parse(supervisor.expiresAt) - now()));
     }
     render(null);

@@ -107,17 +107,31 @@ function viewFixture() {
   return { view, indicator, rosterContainer, focusFallback, documentObject, timers, advance(ms) { time += ms; for (const [id, timer] of [...timers]) if (timer.at <= time) { timers.delete(id); timer.fn(); } } };
 }
 
-test('actual work stays in the toolbar while a healthy supervisor adds no Users row', () => {
+test('enabled supervisor has its own noninteractive portrait and a blank name while actual work stays in the toolbar', () => {
   const f = viewFixture();
   const state = { connected: true, unavailable: false, mode: 'service', ascmSupervisor: active() };
   f.view.render(state);
   assert.equal(f.indicator.hidden, false);
   assert.equal(f.indicator.querySelector('.ascm-supervisor-label').textContent, 'Updating ASCM · 12 products');
   assert.equal(f.indicator.classList.contains('is-working'), true);
-  assert.equal(f.rosterContainer.children[0].hidden, true);
+  const row = f.rosterContainer.children[0], portrait = row.querySelector('.ascm-supervisor-portrait'), person = row.querySelector('.ascm-supervisor-person');
+  assert.equal(row.hidden, false);
+  assert(portrait, 'enabled supervisor has a dedicated face outside the human roster');
+  assert.equal(row.children[0], portrait, 'portrait occupies the left column before the name position');
+  assert.equal(row.children[1], person);
+  assert.equal(portrait.tagName, 'SPAN');
+  assert.equal(portrait.getAttribute('role'), 'img');
+  assert.equal(portrait.getAttribute('aria-label'), 'ASCM supervisor');
+  assert.equal(portrait.listeners.size, 0, 'supervisor portrait is not a poke or a human action');
+  assert.equal(portrait.children[0].tagName, 'SVG');
+  assert.equal(portrait.children[0].namespaceURI, 'http://www.w3.org/2000/svg');
+  assert.equal(portrait.className.includes('master-presence-avatar'), false);
+  assert.equal(person.querySelector('.ascm-supervisor-reconnect').hidden, true);
   for (const reconnectRequired of [undefined, [], ['unsupported'], 'outlook', false]) {
     f.view.render({ ...state, ascmSupervisor: active({ reconnectRequired }) });
-    assert.equal(f.rosterContainer.children[0].hidden, true, 'healthy or malformed connection state adds no empty row or separator');
+    assert.equal(row.hidden, false, 'enabled supervisor retains its identity without fabricating a connection warning');
+    assert.equal(row.querySelector('.ascm-supervisor-portrait'), portrait);
+    assert.equal(person.querySelector('.ascm-supervisor-reconnect').hidden, true);
   }
   f.view.render({ ...state, ascmSupervisor: active({ productCount: 1 }) });
   assert.equal(f.indicator.title, 'Updating ASCM · 1 product');
@@ -127,9 +141,13 @@ test('actual work stays in the toolbar while a healthy supervisor adds no Users 
   assert.equal(f.indicator.classList.contains('is-working'), false);
   assert.equal(f.indicator.title, 'ASCM supervisor');
   assert.equal(f.indicator.querySelector('.ascm-supervisor-label').hidden, true);
-  assert.equal(f.rosterContainer.children[0].hidden, true);
+  assert.equal(row.hidden, false);
   assert.equal(f.timers.size, 0);
   assert(!f.rosterContainer.children[0].className.includes('avatar'));
+  for (const statePatch of [{ ascmSupervisor: null }, { ascmSupervisor: { enabled: false } }, { connected: false }, { unavailable: true }, { mode: 'github' }]) {
+    f.view.render({ ...state, ...statePatch });
+    assert.equal(row.hidden, true, 'unsupported or unavailable state hides the complete supervisor identity');
+  }
 });
 
 test('DOM animation stops on disconnect visibility pause or disposal and never leaks a timer', () => {
@@ -166,6 +184,7 @@ test('only reported connection loss exposes a nontext key action and honest hand
   const action = f.rosterContainer.querySelector('.ascm-supervisor-reconnect');
   assert(action, 'reported connection loss offers recovery');
   const hint = f.rosterContainer.querySelector('.ascm-reconnect-handoff');
+  const portrait = f.rosterContainer.querySelector('.ascm-supervisor-portrait');
   assert.equal(f.rosterContainer.children[0].hidden, false);
   const visibleText = node => node.hidden ? '' : node.textContent + node.children.map(visibleText).join('');
   assert.equal(visibleText(f.rosterContainer), '', 'collapsed recovery displays no supervisor, work status or action text');
@@ -195,8 +214,12 @@ test('only reported connection loss exposes a nontext key action and honest hand
   await controllerFixture.controller.heartbeat(); f.view.render(controllerFixture.controller.getState());
   assert.equal(action, f.rosterContainer.querySelector('.ascm-supervisor-reconnect'));
   assert.equal(action.hidden, true, 'a real healthy response removes the recovery action');
-  assert.equal(f.rosterContainer.children[0].hidden, true, 'healthy state leaves no empty row or separator');
+  assert.equal(f.rosterContainer.children[0].hidden, false, 'recovery keeps the configured supervisor face visible');
+  assert.equal(f.rosterContainer.querySelector('.ascm-supervisor-portrait'), portrait);
+  assert.equal(f.rosterContainer.querySelector('.ascm-supervisor-person').children[0], action, 'key remains in the name position beside the portrait');
   assert.equal(hint.hidden, true);
+  action.click();
+  assert.equal(hint.hidden, true, 'a stale key activation cannot reopen recovery after the warning cleared');
 });
 
 test('reconnect focus survives lost-state updates and closes safely on Escape, recovery, unavailable status and disposal', () => {
@@ -216,7 +239,8 @@ test('reconnect focus survives lost-state updates and closes safely on Escape, r
   action.click(); hint.querySelector('.ascm-reconnect-link').focus();
   f.view.render({ ...state, ascmSupervisor: active() });
   assert.equal(hint.hidden, true);
-  assert.equal(f.rosterContainer.children[0].hidden, true);
+  assert.equal(f.rosterContainer.children[0].hidden, false);
+  assert.equal(action.hidden, true);
   assert.equal(f.documentObject.activeElement, f.focusFallback);
   f.view.render(state); action.click(); hint.querySelector('.ascm-reconnect-link').focus();
   f.view.render({ ...state, connected: false });
@@ -241,7 +265,7 @@ if (process.argv.includes('--preview')) {
 const fixtureMode=${JSON.stringify(mode)};
 const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!['idle','reconnect'].includes(fixtureMode),productCount:['idle','reconnect','unknown'].includes(fixtureMode)?null:12,expiresAt:['idle','reconnect'].includes(fixtureMode)?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[]}})})};
 globalThis.PortfolioMasterUI={getSession:()=>fixtureSession};
-</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Open Users to try the key alert for a lost Microsoft connection. Healthy status has no key alert or supervisor row. Open ChatGPT opens the real website in a new tab; no sign-in is required to try this preview.</section></div></main></body></html>`;
+</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Open Users to see the supervisor's own face. A lost connection adds the key alert beside it; healthy status keeps the face without a name or key. Open ChatGPT opens the real website in a new tab; no sign-in is required to try this preview.</section></div></main></body></html>`;
       response.setHeader('Content-Type', 'text/html'); response.end(body); return;
     }
     if (!routes.has(url.pathname)) { response.writeHead(404); response.end(); return; }
