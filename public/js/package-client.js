@@ -155,7 +155,14 @@
     if (!staticSource && response.status === 401) throw new Error("That package key could not unlock the shared data. Check the key and try again.");
     if (response.status === 429) throw new Error("Too many attempts. Wait a minute, then try again.");
     if (!response.ok) throw new Error("The shared package is unavailable. Try again later or contact the portfolio owner.");
-    const serviceIdentity = !staticSource && isDeliveryService(url) ? responseIdentity(response) : null;
+    let serviceIdentity = null;
+    if (!staticSource && isDeliveryService(url)) {
+      try { serviceIdentity = responseIdentity(response); }
+      catch (error) {
+        try { await response.body?.cancel(); } catch (_) {}
+        throw error;
+      }
+    }
     let bytes;
     try { bytes = await readLimitedResponse(response, onProgress, signal); }
     catch (error) {

@@ -23,6 +23,17 @@ for (const removed of Object.keys(headers)) {
   await assert.rejects(client.downloadLatest({ endpoint, key, fetchImpl: async () => new Response(bytes, { headers: Object.fromEntries(Object.entries(headers).filter(([name]) => name !== removed)) }), onIdentity: () => { called = true; } }), /identity|incomplete|length|digest/i, `stale_or_missing_identity: ${removed}`);
   assert.equal(called, false);
 }
+let rejectedStreamCancelled = false, rejectedIdentityDelivered = false;
+const rejectedStream = new ReadableStream({ cancel() { rejectedStreamCancelled = true; } });
+await assert.rejects(client.downloadLatest({ endpoint, key,
+  fetchImpl: async () => new Response(rejectedStream, { headers: { 'Content-Length': String(bytes.length) } }),
+  onIdentity: () => { rejectedIdentityDelivered = true; },
+}), /identity is incomplete/);
+assert.equal(rejectedStreamCancelled, true, 'stale_or_missing_identity: early rejection stops ciphertext transfer');
+assert.equal(rejectedIdentityDelivered, false, 'stale_or_missing_identity: rejected headers never activate import identity');
+await assert.rejects(client.downloadLatest({ endpoint, key,
+  fetchImpl: async () => new Response(new ReadableStream({ cancel() { throw new Error('private cancellation detail'); } }), { headers: { 'Content-Length': String(bytes.length) } }),
+}), error => /identity is incomplete/.test(error.message) && !/private cancellation detail/.test(error.message), 'cancellation failure must not mask the original identity error');
 for (const overrides of [{ 'X-PPC-Package-SHA256': '0'.repeat(64) }, { 'X-PPC-Package-Generation': '0' }, { 'X-PPC-Package-Revision': '-1' }, { 'X-PPC-Package-Candidate-Id': 'bad' }, { 'Content-Length': String(bytes.length + 1) }]) {
   let called = false;
   await assert.rejects(client.downloadLatest({ endpoint, key, fetchImpl: async () => new Response(bytes, { headers: { ...headers, ...overrides } }), onIdentity: () => { called = true; } }), /identity|incomplete|length|digest/i);
