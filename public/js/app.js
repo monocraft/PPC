@@ -9757,8 +9757,8 @@ async function initializeWorkspace() {
   const openingStatus = document.getElementById("workspaceOpeningStatus");
   const openingMessage = document.getElementById("workspaceOpeningMessage");
   const openingRetry = document.getElementById("workspaceOpeningRetry");
-  if (openingStatus) openingStatus.classList.remove("hidden");
-  if (openingMessage) openingMessage.textContent = "Preparing your workspace…";
+  if (openingStatus) openingStatus.classList.add("hidden");
+  if (openingMessage) openingMessage.textContent = "";
   if (openingRetry) { openingRetry.hidden = true; openingRetry.onclick = () => { void startWorkspace(); }; }
   const pendingStart = pendingLegacyImageBlobs.length;
   try {
@@ -9817,6 +9817,7 @@ async function initializeWorkspace() {
       ? "The saved portfolio data is damaged. Your saved copy and images have not been replaced. Export the saved data, then review a complete backup to restore it."
       : error.message || "The saved workspace could not open. Your saved data has not been replaced. Retry opening it.";
     if (openingMessage) openingMessage.textContent = message;
+    if (openingStatus) openingStatus.classList.remove("hidden");
     if (openingRetry) openingRetry.hidden = false;
     globalThis.PortfolioNotifications?.publish?.({ id: "workspace-open-failure", severity: "error", title: "The workspace could not open", message, dismissible: false, actions: [{ label: "Retry opening", onClick: startWorkspace }] });
     await showWorkspaceRecovery();

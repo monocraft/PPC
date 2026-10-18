@@ -142,11 +142,11 @@ function harness({ saved = null, recoveryFails = false, activationFails = false 
     shell: dom.document.querySelector(".app-shell"), status: dom.document.getElementById("workspaceOpeningStatus") };
 }
 
-function concealed(subject, phase) {
+function concealed(subject, phase, { recoveryVisible = false } = {}) {
   assert.equal(subject.visible(subject.shell), false, `${phase}: internal workspace is visually concealed`);
   assert.equal(subject.shell.inert, true, `${phase}: internal workspace cannot receive input`);
   assert.equal(subject.shell.getAttribute("aria-busy"), "true", `${phase}: workspace announces its pending state`);
-  assert.equal(subject.visible(subject.status), true, `${phase}: opening or recovery status remains available`);
+  assert.equal(subject.visible(subject.status), recoveryVisible, `${phase}: only an actual startup failure shows the recovery panel`);
 }
 
 // Removing the initial HTML gate or releasing it before asynchronous startup
@@ -219,7 +219,7 @@ for (const scenario of [
   const ready = subject.start(); subject.mountUI();
   subject.fonts.resolve(); subject.storage.resolve(scenario.saved);
   await assert.rejects(ready, /JSON|Synthetic|Expected property|Unexpected token/);
-  concealed(subject, scenario.label);
+  concealed(subject, scenario.label, { recoveryVisible: true });
   assert.equal(subject.visible(subject.document.getElementById("workspaceOpeningRetry")), true, "failed startup leaves retry available outside the workspace");
   assert.equal(subject.visible(subject.document.getElementById("workspaceRecoveryControls")), !scenario.recoveryFails);
   assert.equal(subject.context.workspaceOpening, true);
@@ -227,4 +227,24 @@ for (const scenario of [
   assert.deepEqual(subject.events, []);
 }
 
-console.log("Workspace startup checks passed: concealed initial HTML, pending fonts/storage, repeated empty welcome reloads, populated local restore, damaged data, unavailable recovery storage and activation failures; no browser or backend access.");
+{
+  const subject = harness({ saved: "{ synthetic damaged data" });
+  const failed = subject.start(); subject.mountUI();
+  subject.fonts.resolve(); subject.storage.resolve(subject.saved);
+  await assert.rejects(failed);
+  concealed(subject, "failed startup before retry", { recoveryVisible: true });
+  const retryRead = deferred();
+  subject.context.workspaceStorage.read = () => retryRead.promise;
+  const retried = subject.start();
+  await tick();
+  concealed(subject, "retry waiting for storage");
+  assert.equal(subject.document.getElementById("workspaceOpeningMessage").textContent, "", "retry clears the prior failure message while preparing silently");
+  retryRead.resolve(JSON.stringify(fixture()));
+  await retried;
+  assert.equal(subject.visible(subject.status), false);
+  assert.equal(subject.visible(subject.document.getElementById("workspaceEmpty")), true);
+  assert.deepEqual(subject.events, ["ready"]);
+  assert.equal(subject.writes.length, 0, "retrying startup does not replace the repaired fixture");
+}
+
+console.log("Workspace startup checks passed: silent initial HTML and pending fonts/storage, repeated empty welcome reloads, populated local restore, visible recovery for damaged data/unavailable storage/activation failures, and silent successful retry; no browser or backend access.");
