@@ -89,7 +89,7 @@ function acceptedResponse(state,input,fingerprint,alreadySaved){
 }
 
 /** Server-to-server source acceptance; no URL fetch, mail identity or patches. */
-export function createAscmSharePointApi({env={},database,now=()=>new Date().toISOString(),dispatchPublication=async()=>false,validateManifest,validateReadableManifest}={}){
+export function createAscmSharePointApi({env={},database,now=()=>new Date().toISOString(),validateManifest,validateReadableManifest}={}){
   const secret=env.PPC_ASCM_IMPORT_SECRET||'',enabled=typeof secret==='string'&&secret.length>=32&&secret.length<=512&&!/[\s\x00-\x1f]/.test(secret);
   const reportStatus=async payload=>{try{return await database('ascm_status',payload);}catch{return null;}};
   return async function handle(request){
@@ -152,7 +152,6 @@ export function createAscmSharePointApi({env={},database,now=()=>new Date().toIS
       // Fresh independent read binds the exact observation to its original
       // native receipt and current normal publication, including exact replay.
       const accepted=await database('ascm_sharepoint_read',identity),result=acceptedResponse(accepted,input,fingerprint,alreadySaved);
-      if(result.status!=='published')await dispatchPublication().catch(()=>false);
       return respond(result.status==='published'?200:202,result);
     }catch(error){
       const safe=error instanceof SourceError?error:error instanceof AscmReviewError?problem(409,'ASCM_REVIEW_REQUIRED','The report needs owner review. No report changes were saved.'):unavailable();

@@ -33,16 +33,20 @@ try {
   assert.equal((await call(handle,body,{headers:{'content-length':String(3*1024*1024+1)}})).status,413);
   assert.equal((await call(handle,{...body,workbookBase64:Buffer.alloc(2*1024*1024+1).toString('base64')})).status,413);
   assert.equal((await call(handle,{...body,source:{...body.source,bytes:1},before:{...body.before,bytes:1},after:{...body.after,bytes:1}})).status,400);
-  const first=await call(handle,body);assert.equal(first.status,202,JSON.stringify(first));noArchive(first);assert.equal(first.data.storageRevision,2);assert.equal(first.data.outcome,'accepted');assert.equal(dispatches,1);
+  const first=await call(handle,body);assert.equal(first.status,202,JSON.stringify(first));noArchive(first);assert.equal(first.data.storageRevision,2);assert.equal(first.data.outcome,'accepted');assert.equal(dispatches,0,'pending source acceptance leaves GitHub publication dispatch to the fenced worker');
   const exactId='ascm-sp-'+createHash('sha256').update(JSON.stringify(['ppc-ascm-sharepoint-v1',sourceMetadata.hostname,sourceMetadata.sitePath,sourceMetadata.driveId,sourceMetadata.listId,908,sourceMetadata.itemUniqueId,'2.0'])).digest('hex');assert.equal(first.data.requestId,exactId);
   assert.equal(Object.keys(first.data).length,10);assert.equal(JSON.stringify((await state()).manifest).includes('sharepoint'),false,'source provenance remains private');
-  const replay=await call(handle,{...body,source:{...body.source,lastModifiedAt:'2026-10-08T07:44:51Z'}});assert.equal(replay.data.alreadySaved,true);assert.equal(replay.data.storageRevision,2);
+  const replayBody={...body,source:{...body.source,lastModifiedAt:'2026-10-08T07:44:51Z'}};
+  for(let i=0;i<3;i++){const replay=await call(handle,replayBody);assert.equal(replay.status,202);assert.equal(replay.data.alreadySaved,true);assert.equal(replay.data.storageRevision,2);}
+  assert.equal(dispatches,0,'repeated pending exact-source replay cannot bypass worker dispatch fences');
   const altered=await bodyFor({extra:'<!--different ZIP bytes-->'});assert.equal((await call(handle,altered)).data.code,'ASCM_REPLAY_MISMATCH');
   const corruptBytes=Buffer.from('inert-not-xlsx'),corruptSource={...body.source,bytes:corruptBytes.length};
   assert.equal((await call(handle,{...body,source:corruptSource,before:observation(corruptSource),after:observation(corruptSource),workbookBase64:corruptBytes.toString('base64')})).data.code,'ASCM_REPLAY_MISMATCH','an already observed version with altered raw bytes is always a replay mismatch before semantic work');
-  const before=await state(), nativeReceipts=(await db.query('select * from ppc_private.master_receipts')).rows, dispatchBefore=dispatches;
+  const before=await state(), nativeReceipts=(await db.query('select * from ppc_private.master_receipts')).rows;
   const equivalent=await bodyFor({shift:4,exported:'2026-09-30T07:12:00'},{versionLabel:'10.0',eTag:'"synthetic-10"'});
-  const eq=await call(handle,equivalent);assert.equal(eq.status,202,JSON.stringify(eq));assert.equal(eq.data.outcome,'equivalent');assert.equal(eq.data.acceptedRequestId,exactId);assert.deepEqual(eq.data.summary,{savedFields:0,savedProducts:0});assert.deepEqual(await state(),before);assert.deepEqual((await db.query('select * from ppc_private.master_receipts')).rows,nativeReceipts);assert.equal(dispatches,dispatchBefore+1,'pending equivalent work may recover uncovered publication');
+  for(let i=0;i<3;i++){const eq=await call(handle,equivalent);assert.equal(eq.status,202,JSON.stringify(eq));assert.equal(eq.data.outcome,'equivalent');assert.equal(eq.data.acceptedRequestId,exactId);assert.deepEqual(eq.data.summary,{savedFields:0,savedProducts:0});assert.equal(eq.data.alreadySaved,i>0);}
+  assert.deepEqual(await state(),before);assert.deepEqual((await db.query('select * from ppc_private.master_receipts')).rows,nativeReceipts);
+  assert.equal(dispatches,0,'pending equivalent receipts cannot dispatch GitHub publication outside worker control');
   for(const options of [{exported:null},{exported:'not-a-date'},{exported:'2026-10-01T03:53:45'},{rows:[['Headset','A1AAA','HyperX Cloud III BLK GAM HS','2026-01-15','2029-12-31','bad','','F1','Cloud III']]},{rows:[['Headset','A1AAA','HyperX Cloud III BLK GAM HS','2026-01-15','2029-12-31','N','','F1','Cloud III'],['Headset','A1AAA','HyperX Cloud III BLK GAM HS','2026-01-15','2029-12-31','N','','F1','Cloud III']]}]){
     const bad=await call(handle,await bodyFor(options,{versionLabel:'11.0'}));assert.ok([400,409].includes(bad.status),JSON.stringify(bad));noArchive(bad);assert.deepEqual(await state(),before);
   }
@@ -54,7 +58,7 @@ try {
   const publication={deliveryPhase:'sharepoint',provider:'sharepoint',kind:'publication',candidateId:'11111111-2222-4333-8444-555555555555',generation:1,sha256:'b'.repeat(64),bytes:36,storageRevision:3,publishedRevision:3,publishedAt:now()};
   for(const patch of [{kind:'seed'},{provider:'github'},{storageRevision:1},{publishedAt:null}])assert.equal((await call(handler({},async(op,p)=>{const r=await database(op,p);return op==='ascm_sharepoint_read'?{...r,publication:{...publication,...patch}}:r;}),body)).status,202);
   const publishedHandle=handler({},async(op,p)=>{const r=await database(op,p);return op==='ascm_sharepoint_read'?{...r,publication}:r;});
-  const coveredDispatches=dispatches,published=await call(publishedHandle,equivalent);assert.equal(published.status,200,JSON.stringify(published));noArchive(published);assert.equal(dispatches,coveredDispatches,'covered equivalent replay never redispatches');
+  const published=await call(publishedHandle,equivalent);assert.equal(published.status,200,JSON.stringify(published));noArchive(published);assert.equal(dispatches,0,'covered equivalent replay never dispatches');
   let reads=0;assert.equal((await call(handler({},async(op,p)=>{const r=await database(op,p);if(op==='ascm_sharepoint_read'&&++reads>1)return {...r,receipt:null};return r;}),body)).status,503,'fresh independent linked native receipt required');
   const parsed=await globalThis.ASCMImporter.parseAscmWorkbook(Buffer.from(body.workbookBase64,'base64'),{strictDates:true});
   const fingerprint=await ascmBusinessFingerprint(parsed,'2026-09-30');

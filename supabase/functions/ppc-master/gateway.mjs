@@ -421,7 +421,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
   }
 
   const ascmApi = createAscmApi({ env, database, now, dispatchPublication, validateManifest, validateReadableManifest: requireReadableManifest });
-  const ascmSharePointApi = createAscmSharePointApi({ env, database, now, dispatchPublication, validateManifest, validateReadableManifest: requireReadableManifest });
+  const ascmSharePointApi = createAscmSharePointApi({ env, database, now, validateManifest, validateReadableManifest: requireReadableManifest });
   return async function handle(request) {
     const origin = request.headers.get('origin') || '';
     const headers = {
