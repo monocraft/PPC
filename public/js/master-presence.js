@@ -51,8 +51,8 @@
     ]) { const feature = documentObject.createElementNS(svgNamespace, tag); for (const [name, value] of Object.entries(attributes)) feature.setAttribute(name, value); face.append(feature); }
     portrait.append(face);
     handoff.id = "ascmReconnectHandoff"; handoff.hidden = true;
-    const link = make("a", "ascm-reconnect-link", "Open ChatGPT"); link.href = "https://chatgpt.com/"; link.target = "_blank"; link.rel = "noopener noreferrer";
-    handoff.append(make("p", "", "Open ChatGPT → Settings → Plugins → Outlook or SharePoint → Reconnect."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
+    const link = make("a", "ascm-reconnect-link", "Open Copilot Studio"); link.href = "https://copilotstudio.microsoft.com/environments/Default-ca7981a2-785a-463d-b82a-3db87dfc3ce6/flows/5bb99050-adca-f111-a05c-000d3a3191e3/overview"; link.target = "_blank"; link.rel = "noopener noreferrer";
+    handoff.append(make("p", "", "The flow owner must reconnect Office 365 Outlook or SharePoint in Copilot Studio → Manage connection references."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
     person.append(reconnect, handoff); row.append(portrait, person); rosterContainer?.append(row);
     let timer = null, latest = null, disposed = false;
     function closeReconnect({ restoreFocus = true } = {}) {

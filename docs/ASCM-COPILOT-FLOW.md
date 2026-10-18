@@ -20,6 +20,13 @@ uses only that worker secret in `X-PPC-ASCM-Flow-Secret`; import, publisher,
 reader/package and service-role credentials stay inside their existing backend.
 Credential entry and the new worker grant are reviewed activation steps.
 
+On October 17, 2026, the reviewed worker from commit `518b6a7` was deployed
+through the owner's existing Supabase dashboard. Its downloaded source matched
+all 17 staged files, allowing only CRLF/LF normalization. Platform JWT checking
+remains On; the new worker secret and enable flag have not been configured.
+There was no worker invocation, report import, publication or email move during
+this deployment. This is a protected deployment checkpoint, not activation.
+
 ## Native action sequence
 
 1. Use the existing environment/flow and **Copilot Studio** plan. Normal mode,

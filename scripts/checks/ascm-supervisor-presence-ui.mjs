@@ -198,12 +198,12 @@ test('only reported connection loss exposes a nontext key action and honest hand
   assert.equal(hint.hidden, false);
   assert.equal(action.getAttribute('aria-expanded'), 'true');
   assert.equal(action.getAttribute('aria-controls'), hint.id);
-  assert.match(hint.children[0].textContent, /Open ChatGPT → Settings → Plugins → Outlook or SharePoint → Reconnect/);
+  assert.equal(hint.children[0].textContent, 'The flow owner must reconnect Office 365 Outlook or SharePoint in Copilot Studio → Manage connection references.');
   assert.equal(hint.children[1].textContent, 'Complete Microsoft sign-in, then return here.');
   assert.equal(hint.children[2].textContent, 'Status updates after the next successful supervisor check.');
   const link = hint.querySelector('.ascm-reconnect-link');
-  assert.equal(link.textContent, 'Open ChatGPT');
-  assert.equal(link.href, 'https://chatgpt.com/');
+  assert.equal(link.textContent, 'Open Copilot Studio');
+  assert.equal(link.href, 'https://copilotstudio.microsoft.com/environments/Default-ca7981a2-785a-463d-b82a-3db87dfc3ce6/flows/5bb99050-adca-f111-a05c-000d3a3191e3/overview');
   assert.equal(link.target, '_blank');
   assert.equal(link.rel, 'noopener noreferrer');
   link.click();
@@ -265,7 +265,7 @@ if (process.argv.includes('--preview')) {
 const fixtureMode=${JSON.stringify(mode)};
 const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!['idle','reconnect'].includes(fixtureMode),productCount:['idle','reconnect','unknown'].includes(fixtureMode)?null:12,expiresAt:['idle','reconnect'].includes(fixtureMode)?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[]}})})};
 globalThis.PortfolioMasterUI={getSession:()=>fixtureSession};
-</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Open Users to see the supervisor's own face. A lost connection adds the key alert beside it; healthy status keeps the face without a name or key. Open ChatGPT opens the real website in a new tab; no sign-in is required to try this preview.</section></div></main></body></html>`;
+</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Open Users to see the supervisor's own face. A lost connection adds the key alert beside it; healthy status keeps the face without a name or key. Open Copilot Studio opens the owner's actual flow in a new tab; flow access requires the owner's Microsoft account.</section></div></main></body></html>`;
       response.setHeader('Content-Type', 'text/html'); response.end(body); return;
     }
     if (!routes.has(url.pathname)) { response.writeHead(404); response.end(); return; }
