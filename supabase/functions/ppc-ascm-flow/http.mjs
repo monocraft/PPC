@@ -106,8 +106,8 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, getPackageDeli
   return async request => {
     if (!config) return deny(404, 'NOT_FOUND');
     if (request.headers.has('origin')) return deny(403, 'ORIGIN_DENIED');
-    const url = new URL(request.url), prefix = '/functions/v1/ppc-ascm-flow';
-    const path = url.pathname.startsWith(prefix + '/') ? url.pathname.slice(prefix.length) : url.pathname;
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/(?:functions\/v1\/)?ppc-ascm-flow(?=\/api\/)/, '');
     const binary = new RegExp(`^/api/ascm/publication/(${UUID})/(bytes|confirm)$`).exec(path);
     if (!['/api/ascm/import', '/api/ascm/publication/queued', '/api/ascm/connection'].includes(path) && !binary) return deny(404, 'NOT_FOUND');
     if (url.search || url.hash) return deny(400, 'INVALID_REQUEST');

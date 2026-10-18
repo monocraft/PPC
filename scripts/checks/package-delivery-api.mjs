@@ -39,6 +39,44 @@ function harness({ config = {}, current = null, cleanup = null, uploadState = 's
   return { core, handler, calls, objects, state, storage };
 }
 const control = (op, body = {}, secret = env.PPC_PUBLISHER_SECRET, origin) => new Request('https://service.invalid/api/package/' + op, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PPC-Publisher-Secret': secret, ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify(body) });
+for (const mount of ['', '/ppc-package', '/functions/v1/ppc-package']) {
+  test(`package routes accept the exact ${mount || 'direct'} mount without changing auth, methods or binary content`, async () => {
+    const url = path => 'https://service.invalid' + mount + '/api/package/' + path;
+    const headers = { 'Content-Type': 'application/json', 'X-PPC-Publisher-Secret': env.PPC_PUBLISHER_SECRET };
+    const current = harness();
+    const response = await current.handler(new Request(url('current'), { method: 'POST', headers, body: '{}' }));
+    assert.equal(response.status, 200); assert.equal((await response.json()).phase, 'sharepoint');
+    assert.deepEqual(current.calls, [['current', {}]]); assert.deepEqual(current.objects, []);
+    for (const [method, secret, status] of [['GET', env.PPC_PUBLISHER_SECRET, 405], ['POST', 'bad', 401]]) {
+      const rejected = harness();
+      const request = new Request(url('current'), { method, headers: { ...headers, 'X-PPC-Publisher-Secret': secret }, ...(method === 'POST' ? { body: '{}' } : {}) });
+      assert.equal((await rejected.handler(request)).status, status); assert.deepEqual(rejected.calls, []); assert.deepEqual(rejected.objects, []);
+    }
+    const upload = harness();
+    const uploaded = await upload.handler(new Request(url(`candidates/${candidate.candidateId}/bytes`), { method: 'PUT', headers: {
+      'Content-Type': 'application/octet-stream', 'Content-Length': String(bytes.length), 'X-PPC-Candidate-Generation': '2', 'X-PPC-Publisher-Secret': env.PPC_PUBLISHER_SECRET }, body: bytes }));
+    assert.equal(uploaded.status, 200); assert.equal(upload.objects.filter(value => value[0] === 'write').length, 1);
+    const read = harness({ current: { ...candidate, status: 'published' } });
+    const reader = origin => new Request(url('latest'), { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ key }) });
+    assert.equal((await read.handler(reader('https://attacker.invalid'))).status, 403); assert.deepEqual(read.objects, []);
+    const opened = await read.handler(reader('https://monocraft.github.io'));
+    assert.equal(opened.status, 200); assert.equal(opened.headers.get('Access-Control-Allow-Origin'), 'https://monocraft.github.io');
+    assert.deepEqual(Buffer.from(await opened.arrayBuffer()), bytes);
+  });
+}
+
+test('package namespace lookalikes, sibling mounts and doubled prefixes never reach persistence or Storage', async () => {
+  for (const path of ['/other/api/package/current', '/ppc-package-extra/api/package/current', '/functions/v1/ppc-package-extra/api/package/current',
+    '/ppc-ascm-flow/api/package/current', '/functions/v1/ppc-ascm-flow/api/package/current', '/ppc-package/ppc-package/api/package/current',
+    '/functions/v1/ppc-package/ppc-package/api/package/current', '/ppc-package/functions/v1/ppc-package/api/package/current',
+    '/%70pc-package/api/package/current', '/ppc-package%2fapi/package/current']) {
+    const h = harness(); const request = new Request('https://service.invalid' + path, { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-PPC-Publisher-Secret': env.PPC_PUBLISHER_SECRET }, body: '{}' });
+    Object.defineProperty(request, 'body', { get() { throw Error('Rejected namespace must not read the body'); } });
+    assert.equal((await h.handler(request)).status, 404, path); assert.deepEqual(h.calls, []); assert.deepEqual(h.objects, []);
+  }
+});
+
 test('unauthorized_no_storage and default-off refuse before persistence or object access', async () => {
   for (const config of [{}, { PPC_PACKAGE_DELIVERY_ENABLED: '' }]) {
     const h = harness({ config }); const response = await h.handler(control('current', {}, 'bad'));

@@ -93,6 +93,41 @@ const chunked = (length, { truncate = 0, corrupt = false, cancel } = {}) => { le
     if (!offset && !corrupt) chunk.set(Buffer.from('PPCPKG01')); offset += size; c.enqueue(chunk); }, cancel }); };
 function raw(length, stream = chunked(length), extra = {}) { return new Request(`${base}/api/ascm/publication/${id}/confirm`, {
   method: 'POST', headers: { ...binaryHeaders, 'Content-Length': String(length), ...extra }, body: stream, duplex: 'half' }); }
+for (const mount of ['', '/ppc-ascm-flow', '/functions/v1/ppc-ascm-flow']) {
+  test(`native worker accepts the exact ${mount || 'direct'} mount with fixed metadata and raw routes`, async () => {
+    const root = 'https://syntheticproject.supabase.co' + mount;
+    const h = harness();
+    const queued = await h.handler(new Request(root + '/api/ascm/publication/queued', { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET }, body: '{}' }));
+    assert.equal(queued.status, 200); assert.deepEqual(await queued.json(), { candidate: publicCandidate, binaryPath: `/api/ascm/publication/${id}/bytes`, archiveAllowed: false });
+    const opened = await h.handler(new Request(root + `/api/ascm/publication/${id}/bytes`, { headers: {
+      'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET, 'X-PPC-Package-Generation': '2' } }));
+    assert.equal(opened.status, 200); assert.deepEqual(Buffer.from(await opened.arrayBuffer()), bytes);
+    const confirmed = await h.handler(new Request(root + `/api/ascm/publication/${id}/confirm`, { method: 'POST',
+      headers: { ...binaryHeaders, 'Content-Length': '100' }, body: chunked(100), duplex: 'half' }));
+    assert.equal(confirmed.status, 200); assert.equal((await confirmed.json()).archiveAllowed, false);
+    for (const [method, extra, status] of [['GET', {}, 405], ['POST', { 'X-PPC-ASCM-Flow-Secret': 'bad' }, 401], ['POST', { Origin: 'null' }, 403]]) {
+      const held = harness(); const request = new Request(root + '/api/ascm/publication/queued', { method, headers: {
+        'Content-Type': 'application/json', 'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET, ...extra }, ...(method === 'POST' ? { body: '{}' } : {}) });
+      Object.defineProperty(request, 'body', { get() { throw Error('Rejected request must not read the body'); } });
+      assert.equal((await held.handler(request)).status, status); assert.deepEqual(held.calls, []);
+    }
+  });
+}
+
+test('native worker namespace lookalikes, sibling mounts and doubled prefixes read no body or dependencies', async () => {
+  for (const path of ['/other/api/ascm/publication/queued', '/ppc-ascm-flow-extra/api/ascm/publication/queued',
+    '/functions/v1/ppc-ascm-flow-extra/api/ascm/publication/queued', '/ppc-package/api/ascm/publication/queued',
+    '/functions/v1/ppc-package/api/ascm/publication/queued', '/ppc-ascm-flow/ppc-ascm-flow/api/ascm/publication/queued',
+    '/functions/v1/ppc-ascm-flow/ppc-ascm-flow/api/ascm/publication/queued', '/ppc-ascm-flow/functions/v1/ppc-ascm-flow/api/ascm/publication/queued',
+    '/%70pc-ascm-flow/api/ascm/publication/queued', '/ppc-ascm-flow%2fapi/ascm/publication/queued']) {
+    const h = harness(); const request = new Request('https://syntheticproject.supabase.co' + path, { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET }, body: '{}' });
+    Object.defineProperty(request, 'body', { get() { throw Error('Rejected namespace must not read the body'); } });
+    assert.equal((await h.handler(request)).status, 404, path); assert.deepEqual(h.calls, []);
+  }
+});
+
 test('raw confirmation incrementally accepts actual generated 45 MiB and full 64 MiB, historical retries need no queued lookup', async () => {
   for (const size of [45 * 1024 * 1024, 64 * 1024 * 1024]) {
     const h = harness(); const verifier = createHash('sha256'); const reader = chunked(size).getReader(); for (;;) { const p = await reader.read(); if (p.done) break; verifier.update(p.value); }

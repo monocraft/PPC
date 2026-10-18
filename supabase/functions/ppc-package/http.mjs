@@ -19,7 +19,7 @@ export function createPackageDeliveryHttpHandler({ env = {}, core } = {}) {
       if (!configured) throw new PackageDeliveryError(404, 'NOT_FOUND');
       const origin = request.headers.get('origin');
       if (origin && !origins.has(origin)) throw new PackageDeliveryError(403, 'ORIGIN_DENIED');
-      const path = new URL(request.url).pathname.replace(/^\/functions\/v1\/ppc-package/, '');
+      const path = new URL(request.url).pathname.replace(/^\/(?:functions\/v1\/)?ppc-package(?=\/api\/)/, '');
       const latest = path === '/api/package/latest';
       if (origin && latest) {
         headers['Access-Control-Allow-Origin'] = origin; headers['Access-Control-Expose-Headers'] = ID_HEADERS;
