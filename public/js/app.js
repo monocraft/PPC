@@ -9735,7 +9735,7 @@ async function restoreWorkspaceRecovery(plan) {
       catch (_) { rollbackFailed = true; error.message += " The backup remains saved because the previous record could not be restored. Retry opening to inspect the saved backup; export the original recovery data before closing. The original record also remains in this device's recovery archive."; }
     }
     const shell = document.querySelector(".app-shell");
-    if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); }
+    if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); shell.setAttribute("data-workspace-opening", ""); }
     document.getElementById("workspaceOpeningStatus")?.classList.remove("hidden");
     document.getElementById("workspaceOpeningRetry").hidden = false;
     await showWorkspaceRecovery();
@@ -9753,7 +9753,7 @@ async function initializeWorkspace() {
   const recoveryControls = document.getElementById("workspaceRecoveryControls");
   if (recoveryControls) recoveryControls.hidden = true;
   const shell = document.querySelector(".app-shell");
-  if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); }
+  if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); shell.setAttribute("data-workspace-opening", ""); }
   const openingStatus = document.getElementById("workspaceOpeningStatus");
   const openingMessage = document.getElementById("workspaceOpeningMessage");
   const openingRetry = document.getElementById("workspaceOpeningRetry");
@@ -9802,13 +9802,17 @@ async function initializeWorkspace() {
     syncControls(); renderInspector(); setView(openingView);
     initializeWorkspaceFeatures();
     globalThis.PortfolioNotifications?.resolve("workspace-open-failure");
-    if (shell) { shell.inert = false; shell.removeAttribute("aria-busy"); }
+    // Storage can resolve before the later workspace UI script has classified
+    // the loaded portfolio. Its ready event publishes that state synchronously.
+    if (!globalThis.PortfolioWorkspaceUI) await new Promise(resolve => window.addEventListener("portfolio:ui-ready", resolve, { once: true }));
+    if (shell) { shell.inert = false; shell.removeAttribute("aria-busy"); shell.removeAttribute("data-workspace-opening"); }
     if (openingStatus) openingStatus.classList.add("hidden");
     window.dispatchEvent(new CustomEvent("portfolio:workspace-ready"));
     return portfolio;
   } catch (error) {
     pendingLegacyImageBlobs.splice(pendingStart);
     workspaceOpening = true;
+    if (shell) { shell.inert = true; shell.setAttribute("aria-busy", "true"); shell.setAttribute("data-workspace-opening", ""); }
     const message = error.name === "SyntaxError"
       ? "The saved portfolio data is damaged. Your saved copy and images have not been replaced. Export the saved data, then review a complete backup to restore it."
       : error.message || "The saved workspace could not open. Your saved data has not been replaced. Retry opening it.";

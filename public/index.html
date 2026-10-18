@@ -6,6 +6,10 @@
   <meta name="theme-color" content="#1A1B1C">
   <meta name="description" content="A compact product portfolio workspace with synchronized product cards, shared roadmap timelines, and safe ASCM updates.">
   <title>Product Portfolio</title>
+  <style id="workspaceBootStyles">
+    html { background: #1A1B1C; color-scheme: dark; }
+    .app-shell[data-workspace-opening] { opacity: 0; pointer-events: none; }
+  </style>
   <link rel="preload" href="assets/fonts/Jost-Variable.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/styles.css">
@@ -31,7 +35,7 @@
   <link rel="stylesheet" href="css/category-layout.css">
 </head>
 <body>
-  <aside id="workspaceOpeningStatus" class="workspace-opening-status hidden" role="status" aria-live="polite">
+  <aside id="workspaceOpeningStatus" class="workspace-opening-status" role="status" aria-live="polite">
     <p id="workspaceOpeningMessage">Opening the saved portfolio…</p>
     <button id="workspaceOpeningRetry" type="button" hidden>Retry opening</button>
     <section id="workspaceRecoveryControls" class="workspace-recovery-controls" hidden aria-labelledby="workspaceRecoveryTitle">
@@ -50,7 +54,7 @@
       <p id="workspaceRecoveryStatus" role="status" aria-live="polite"></p>
     </section>
   </aside>
-  <main class="app-shell">
+  <main class="app-shell" data-workspace-opening inert aria-busy="true">
     <div class="workspace-main">
       <header class="topbar">
         <div class="brand-block">
