@@ -108,7 +108,8 @@ sequence below is the restoration target, not the current manual trigger.
    Reconcile collisions or uncertain responses through actual final identity,
    version and byte readback, holding the report if they cannot be confirmed.
    The bounded occupied-target fixture also proved refusal without changing the
-   existing final bytes. Package-scale transport remains a separate gate.
+   existing final bytes. Native 45 MiB/full 64 MiB binary transfer is now proven;
+   worker download/raw confirmation remains a separate gate.
 7. SharePoint-hosted REST v2 `/drives/...` returns the actual Graph-compatible
    item ID, parent drive/folder, size and latest version ID. Native connector
    ItemId/file Id/ETag are different identifiers. Read actual current bytes with
@@ -184,9 +185,10 @@ Failed as expected for this guard test. Independent final SharePoint raw readbac
 remained the original 1,024 bytes with the same SHA256 and unchanged modified
 time, `2026-10-18T06:36:49Z`. The local proof is
 `.superpowers/sdd/2026-10-17-copilot-ascm-worker/native-collision-proof.json`.
-Thus small-byte preservation and occupied-target refusal are proven. No
-approximately 45 MB/64 MiB transfer, worker call, real report or automatic
-publication/Archive cycle has passed at this checkpoint.
+Thus small-byte preservation and occupied-target refusal were proven at that
+checkpoint. The later native scale checkpoint below adds 45 MiB/full 64 MiB
+binary evidence; worker download/raw confirmation, a real report and automatic
+publication/Archive remain unproved.
 
 ## Bounded REST metadata checkpoint
 
@@ -200,6 +202,40 @@ size, a nonempty eTag, file facet and latest version `1.0`. The fixture is Off.
 The saved source/readback proof is `native-rest-metadata-proof.json` in the same
 local evidence directory. This is metadata proof for the small fixture, not
 45 MB/64 MiB transfer, seed/normal publication, a real report or Archive.
+
+## Native package-scale binary checkpoint (October 18, 2026)
+
+The existing manual fixture `645c61b1-baca-f111-a05c-000d3a3191e3` now accepts
+one file input, decoding only its contentBytes to binary. Known synthetic files
+repeat bytes 0..255. Actual designer tests passed through native chunked Create
+file → empty-body MoveTo(flags 0) → actual native readback → fixture-only full
+base64 equality. Independent existing SharePoint connector/raw downloads also
+matched every source byte/hash:
+
+- **45 MiB / 47,185,920 bytes**, run `08584092930198467849090085198CU03`,
+  Succeeded in **7 seconds**; SHA256
+  `bd6fb4d447314779757d48f9ffec392c1ca5eaaef80c5f07ae9b6827b2427033`.
+- **64 MiB / 67,108,864 bytes**, run `08584092927841270305914077317CU08`,
+  Succeeded in **11 seconds**; SHA256
+  `281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6`.
+
+The exact reviewed fixture source SHA256 is
+`57cce108ec499c8a3bbe5ba2e0caf544104aea549820c2d675d60b8e72aa0359`.
+Local native-scale-45mib-proof.json/native-scale-64mib-proof.json record the
+runtime results and independent matches. Fresh Overview confirms Off and the
+persisted description accurately scopes the 45/64 MiB proof. Its checker shows
+zero errors/one expected warning, “This flow is off”; saved/viewed screenshot is
+`ascm-native-scale-passed-off.png`. This proves
+only the native SharePoint binary leg, not worker download/raw confirmation,
+seed/normal publication, browser cutover or a real end-to-end report cycle.
+Production package transport remains raw binary; the full base64 comparison was
+only a controlled synthetic-fixture assertion.
+
+One exact Outlook Inbox query using the native filter and strict
+receivedDateTime > `2026-10-18T03:42:00Z` returned an empty array with no nextLink.
+There is no currently eligible report from that bounded query. Preserve the
+cutoff and do not substitute historical mail. Main remains Off/unpublished/no
+runs; worker activation consent and existing capacity confirmation are pending.
 
 ## Required seed and source cutover
 
@@ -225,9 +261,9 @@ bounded operational sequence, detailed in local
    receipts, old versions, complete assets and newer team changes throughout.
 
 Producer/seed/cutover execution is still pending. Keep the worker flag absent
-and platform JWT On until the reviewed activation handoff. Package-scale native
-transport, a real eligible report cycle, capacity/policy/history-concealment
-checks and first scheduled run remain separate gates.
+and platform JWT On until the reviewed activation handoff. Package-scale worker
+download/raw confirmation, a real eligible report cycle, capacity/policy/history
+concealment checks and the first scheduled run remain separate gates.
 
 ## Verification and activation
 
@@ -243,8 +279,9 @@ binary Create file → server-side
 sequence uses
 [move flags](https://learn.microsoft.com/en-us/previous-versions/office/sharepoint-visio/jj244909%28v%3Doffice.15%29)
 0, with actual final SharePoint readback. Preserve old package versions. Small
-fixture occupied-target refusal is proven; approximately 45 MB / 64 MiB transfer
-remains a separate gate.
+fixture occupied-target refusal and actual native 45 MiB/full 64 MiB binary
+transfer are proven. Worker download/raw confirmation at scale remains a
+separate gate.
 
 Unpublished drafts cannot run under current documented flow rules. Publishing an
 hourly trigger can start scheduled/billable work. A separately authorized bounded
@@ -254,9 +291,10 @@ connector actions still execute.
 
 Activation requires confirmed existing environment credits or approved PAYG and
 spending limit, DLP/endpoint acceptance, secure worker configuration, producer and
-source cutover, protected date/cutoff decisions, package-scale transfer, one real
-monthly report with accepted save/normal publication/exact Archive, then the first
-genuine scheduled cloud run. Maker access or SSO success does not prove capacity.
+source cutover, protected date/cutoff decisions, package-scale worker download and
+raw confirmation, one real monthly report with accepted save/normal publication/
+exact Archive, then the first genuine scheduled cloud run. Maker access or SSO
+success does not prove capacity.
 No credit purchase or billing setup is authorized by source preparation.
 
 Primary references: [flows](https://learn.microsoft.com/en-us/microsoft-copilot-studio/flows-overview),
