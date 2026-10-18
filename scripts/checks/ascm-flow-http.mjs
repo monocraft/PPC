@@ -16,6 +16,15 @@ const digest = b => createHash('sha256').update(b).digest('hex');
 const workbook = Buffer.from('PK fixture workbook');
 const report = { sender: 'linny.chen@hp.com', subject: 'ASCM Report Accessories HyperX Release Notification October 2026',
   receivedAt: '2026-09-30T09:01:09Z', messageId: 'exact-mail', fileName: 'ASCM Report_HyperX_2026-09-30.xlsx', workbookBase64: workbook.toString('base64') };
+const approvedSource = '5382371536c4a64c5550c4447fe21e363454068b27022064fdcaf333175e5ffb';
+const approval = { sourceSha256: approvedSource, expiresAt: '2026-10-18T01:00:00Z' };
+const historicalEnv = { PPC_ASCM_START_AFTER: '2026-10-01T00:00:00Z', PPC_ASCM_APPROVED_REPORT: JSON.stringify(approval) };
+const invalidPolicies = [undefined, '', '{', 'null', '[]', '{}', JSON.stringify({ sourceSha256: approvedSource }),
+  JSON.stringify({ expiresAt: approval.expiresAt }), JSON.stringify({ ...approval, extra: true }),
+  JSON.stringify({ ...approval, sourceSha256: 1 }), JSON.stringify({ ...approval, sourceSha256: 'bad' }),
+  JSON.stringify({ ...approval, sourceSha256: approvedSource.toUpperCase() }), JSON.stringify({ ...approval, expiresAt: 1 }),
+  JSON.stringify({ ...approval, expiresAt: '2026-10-18' }), JSON.stringify({ ...approval, expiresAt: '2026-02-30T01:00:00Z' }),
+  JSON.stringify({ ...approval, expiresAt: '2026-10-16T01:00:00Z' }), JSON.stringify(approval).padEnd(513, ' ')];
 const id = '11111111-2222-4333-8444-555555555555';
 const bytes = Buffer.concat([Buffer.from('PPCPKG01'), Buffer.alloc(100, 7)]);
 const candidate = { candidateId: id, kind: 'publication', generation: 2, expectedGeneration: 1, storageRevision: 7, sourceSha: 'a'.repeat(40),
@@ -34,7 +43,7 @@ function harness(options = {}) {
     publicState: async () => { calls.push('public'); return { ...candidate, provider: 'sharepoint', publishedAt: candidate.createdAt, ...options.publication }; },
     openQueuedPublication: async input => { calls.push(['open', input]); return new Response(bytes); },
     confirmPublication: async input => { calls.push(['confirm', input]); return { status: 'already_published', publication: { provider: 'sharepoint', kind: 'publication', ...publicCandidate, ...input.verified, publishedAt: candidate.createdAt }, private: 'secret' }; } };
-  const handler = createAscmFlowHttpHandler({ env: { ...env, ...options.env }, now,
+  const handler = createAscmFlowHttpHandler({ env: { ...env, ...options.env }, now: options.now || now,
     invokeAscm: async request => { calls.push('import'); assert.equal(request.headers.get('X-PPC-ASCM-Secret'), env.PPC_ASCM_IMPORT_SECRET);
       assert.equal(request.headers.has('X-PPC-ASCM-Flow-Secret'), false); assert.deepEqual(await request.json(), report);
       return Response.json(options.receipt || receipt, { status: options.status || 200 }); },
@@ -60,6 +69,78 @@ test('mail cutoff/envelope, extra fields, JSON and workbook limits fail before d
     const h = harness(); const r = await h.handler(req('/api/ascm/import', value)); assert(r.status >= 400); assert.equal((await r.json()).archiveAllowed, false); assert.deepEqual(h.calls, []);
   }
   const h = harness(); const r = await h.handler(req('/api/ascm/import', {}, { headers: { 'Content-Length': String(3 * 1024 * 1024 + 1) } })); assert.equal(r.status, 413); assert.deepEqual(h.calls, []);
+});
+test('only an exact unexpired approved source crosses the historical cutoff with the original payload and receipt identity', async () => {
+  for (const policy of [JSON.stringify(approval), JSON.stringify(approval).padEnd(512, ' ')]) {
+    const h = harness({ env: { ...historicalEnv, PPC_ASCM_APPROVED_REPORT: policy } });
+    const response = await h.handler(req('/api/ascm/import', report));
+    assert.equal(response.status, 200); const body = await response.json();
+    assert.equal(body.requestId, 'ascm-' + digest(workbook)); assert.equal(body.sourceMessageId, 'exact-mail');
+    assert.equal(body.archiveAllowed, true); assert.deepEqual(h.calls, ['delivery', 'metadata', 'import', 'public']);
+  }
+});
+test('approved historical source binds all five exact strings even when case or timestamp variants remain envelope-valid', async () => {
+  for (const change of [{ messageId: 'other-mail' }, { sender: 'Linny.Chen@hp.com' },
+    { subject: 'ASCM Report Accessories HyperX Release Notification OCTOBER 2026' },
+    { receivedAt: '2026-09-30T09:01:10Z' }, { fileName: 'ASCM Report_HyperX_2026-09-29.xlsx' }]) {
+    const h = harness({ env: historicalEnv }); const response = await h.handler(req('/api/ascm/import', { ...report, ...change }));
+    assert.equal(response.status, 400); assert.deepEqual(await response.json(), { code: 'ASCM_SOURCE_REJECTED', archiveAllowed: false });
+    assert.deepEqual(h.calls, []);
+  }
+});
+test('invalid or absent optional policy refuses historical mail without disclosure and preserves ordinary mail', async () => {
+  for (const policy of invalidPolicies) {
+    const historical = harness({ env: { ...historicalEnv, PPC_ASCM_APPROVED_REPORT: policy } });
+    const response = await historical.handler(req('/api/ascm/import', report));
+    assert.equal(response.status, 400); assert.deepEqual(await response.json(), { code: 'ASCM_SOURCE_REJECTED', archiveAllowed: false });
+    assert.deepEqual(historical.calls, []);
+    const ordinary = harness({ env: { PPC_ASCM_APPROVED_REPORT: policy } });
+    const accepted = await ordinary.handler(req('/api/ascm/import', report));
+    assert.equal(accepted.status, 200); assert.equal((await accepted.json()).archiveAllowed, true);
+  }
+});
+test('a warm handler rechecks expiry for fresh imports and receipt replays including the exact expiry instant', async () => {
+  let clock = '2026-10-18T00:59:59.999Z';
+  const h = harness({ env: historicalEnv, now: () => clock });
+  assert.equal((await h.handler(req('/api/ascm/import', report))).status, 200);
+  const completedCalls = h.calls.slice();
+  for (const time of [approval.expiresAt, '2026-10-18T01:00:00.001Z']) {
+    clock = time; const response = await h.handler(req('/api/ascm/import', report));
+    assert.equal(response.status, 400); assert.deepEqual(await response.json(), { code: 'ASCM_SOURCE_REJECTED', archiveAllowed: false });
+    assert.deepEqual(h.calls, completedCalls);
+  }
+});
+test('historical approval does not bypass future time, envelope, workbook, auth or origin refusals', async () => {
+  const future = { ...report, receivedAt: '2026-10-18T00:00:00Z' };
+  const invalidEnvelope = { ...report, sender: 'attacker@hp.com' };
+  const fingerprint = value => digest(JSON.stringify([value.messageId, value.sender, value.subject, value.receivedAt, value.fileName]));
+  for (const [value, extraEnv, clock, status, code] of [
+    [future, { PPC_ASCM_START_AFTER: '2026-10-19T00:00:00Z', PPC_ASCM_APPROVED_REPORT: JSON.stringify({ ...approval, sourceSha256: fingerprint(future) }) }, now, 400, 'ASCM_SOURCE_REJECTED'],
+    [invalidEnvelope, { PPC_ASCM_APPROVED_REPORT: JSON.stringify({ ...approval, sourceSha256: fingerprint(invalidEnvelope) }) }, now, 400, 'ASCM_SOURCE_REJECTED'],
+    [report, {}, () => 'invalid-clock', 400, 'ASCM_SOURCE_REJECTED'],
+    [{ ...report, extra: true }, {}, now, 400, 'INVALID_REQUEST'],
+    [{ ...report, workbookBase64: 'AB==' }, {}, now, 400, 'ASCM_INVALID_WORKBOOK'],
+    [{ ...report, workbookBase64: Buffer.alloc(2 * 1024 * 1024 + 1).toString('base64') }, {}, now, 413, 'REQUEST_TOO_LARGE'],
+  ]) {
+    const h = harness({ env: { ...historicalEnv, ...extraEnv }, now: clock }); const response = await h.handler(req('/api/ascm/import', value));
+    assert.equal(response.status, status); assert.deepEqual(await response.json(), { code, archiveAllowed: false }); assert.deepEqual(h.calls, []);
+  }
+  for (const [headers, status] of [[{ 'X-PPC-ASCM-Flow-Secret': 'bad' }, 401], [{ Origin: 'null' }, 403]]) {
+    const h = harness({ env: historicalEnv }); const request = req('/api/ascm/import', report, { headers });
+    Object.defineProperty(request, 'body', { get() { throw Error('Rejected request must not read the body'); } });
+    const response = await h.handler(request); assert.equal(response.status, status); assert.equal((await response.json()).archiveAllowed, false); assert.deepEqual(h.calls, []);
+  }
+});
+test('historical approval grants no new receipt, review or independent normal publication authority', async () => {
+  for (const options of [{ publication: { kind: 'seed' } }, { publication: { storageRevision: 6 } }, { publication: { provider: 'github' } },
+    { status: 202, receipt: { ...receipt, archiveAllowed: false, status: 'publication_pending' } },
+    { status: 409, receipt: { code: 'ASCM_REVIEW_REQUIRED' } }, { receipt: { ...receipt, requestId: 'ascm-' + 'f'.repeat(64) } }]) {
+    const h = harness({ ...options, env: historicalEnv }); const response = await h.handler(req('/api/ascm/import', report));
+    const body = await response.json(); assert.equal(body.archiveAllowed, false); assert(h.calls.includes('import'));
+    if (options.status === 409) { assert.equal(response.status, 409); assert.equal(body.code, 'ASCM_REVIEW_REQUIRED'); }
+    else if (options.receipt?.requestId && options.receipt.requestId !== receipt.requestId) { assert.equal(response.status, 503); assert.equal(body.code, 'ASCM_FLOW_UNAVAILABLE'); }
+    else { assert.equal(response.status, 202); assert.equal(body.status, 'publication_pending'); }
+  }
 });
 test('native receipt is whitelisted and Archive binds digest/message plus independent normal publication', async () => {
   const h = harness(); const r = await h.handler(req('/api/ascm/import', report)); const value = await r.json();
@@ -93,6 +174,18 @@ const chunked = (length, { truncate = 0, corrupt = false, cancel } = {}) => { le
     if (!offset && !corrupt) chunk.set(Buffer.from('PPCPKG01')); offset += size; c.enqueue(chunk); }, cancel }); };
 function raw(length, stream = chunked(length), extra = {}) { return new Request(`${base}/api/ascm/publication/${id}/confirm`, {
   method: 'POST', headers: { ...binaryHeaders, 'Content-Length': String(length), ...extra }, body: stream, duplex: 'half' }); }
+test('invalid historical policy leaves queue, raw read and confirmation operations unchanged', async () => {
+  for (const policy of ['{', JSON.stringify({ ...approval, expiresAt: '2026-10-16T01:00:00Z' }), JSON.stringify(approval).padEnd(513, ' ')]) {
+    const h = harness({ env: { PPC_ASCM_APPROVED_REPORT: policy } });
+    const queued = await h.handler(req('/api/ascm/publication/queued')); assert.equal(queued.status, 200);
+    assert.deepEqual(await queued.json(), { candidate: publicCandidate, binaryPath: `/api/ascm/publication/${id}/bytes`, archiveAllowed: false });
+    const opened = await h.handler(new Request(`${base}/api/ascm/publication/${id}/bytes`, { headers: {
+      'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET, 'X-PPC-Package-Generation': '2' } }));
+    assert.equal(opened.status, 200); assert.deepEqual(Buffer.from(await opened.arrayBuffer()), bytes);
+    const confirmed = await h.handler(raw(100)); assert.equal(confirmed.status, 200); assert.equal((await confirmed.json()).archiveAllowed, false);
+    assert(!h.calls.includes('import'));
+  }
+});
 for (const mount of ['', '/ppc-ascm-flow', '/functions/v1/ppc-ascm-flow']) {
   test(`native worker accepts the exact ${mount || 'direct'} mount with fixed metadata and raw routes`, async () => {
     const root = 'https://syntheticproject.supabase.co' + mount;

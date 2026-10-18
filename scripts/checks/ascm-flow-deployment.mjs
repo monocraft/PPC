@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 let prepareAscmFlowDeployment;
@@ -102,6 +103,19 @@ try {
   const config = JSON.parse(stagedBytes.get('deno.json'));
   assert.deepEqual(Object.keys(config.imports || {}), [], 'no OAuth/SDK dependency configuration is necessary');
   assert(!config.lock, 'this local-only source closure requires no dependency lockfile');
+
+  const entrypoint = stagedBytes.get('index.ts').toString('utf8');
+  const entryImport = "import { createAscmFlowApplication } from './bootstrap.mjs';";
+  assert.deepEqual(entrypoint.split(/\r?\n/).filter(line => /^\s*import\s/.test(line)), [entryImport]);
+  const policy = JSON.stringify({ sourceSha256: 'b'.repeat(64), expiresAt: '2026-10-19T00:00:00Z' });
+  const reads = []; const served = []; const handlers = [];
+  runInNewContext(entrypoint.replace(entryImport, ''), {
+    Deno: { env: { get(name) { reads.push(name); return name === 'PPC_ASCM_APPROVED_REPORT' ? policy : ''; } }, serve(handler) { served.push(handler); } },
+    createAscmFlowApplication({ env }) { assert.equal(env.PPC_ASCM_APPROVED_REPORT, policy, 'the actual Deno entrypoint must forward the optional approval');
+      const handler = () => {}; handlers.push(handler); return handler; },
+  });
+  assert.equal(reads.filter(name => name === 'PPC_ASCM_APPROVED_REPORT').length, 1, 'the native allowlist must read the optional approval');
+  assert.equal(handlers.length, 1); assert.deepEqual(served, handlers, 'the native entrypoint must serve the configured application');
 
   const { createAscmFlowApplication } = await import(pathToFileURL(resolve(directory, 'bootstrap.mjs')).href);
   let networkCalls = 0;

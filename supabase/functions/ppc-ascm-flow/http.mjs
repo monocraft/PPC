@@ -18,6 +18,13 @@ const problem = (status = 503, code = 'ASCM_FLOW_UNAVAILABLE') => Object.assign(
 const reply = (status, value, extra = {}) => new Response(JSON.stringify(value), { status, headers: {
   'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', ...extra } });
 const deny = (status, code) => reply(status, { code, archiveAllowed: false });
+function approvedReportPolicy(raw) {
+  if (typeof raw !== 'string' || raw.length > 512) return null;
+  let value; try { value = JSON.parse(raw); } catch { return null; }
+  if (!strict(value, ['sourceSha256', 'expiresAt']) || typeof value.sourceSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sourceSha256)) return null;
+  const expiresAt = parseAscmInstant(value.expiresAt);
+  return expiresAt === null ? null : { sourceSha256: value.sourceSha256, expiresAt };
+}
 function configuration(env) {
   let credential; try { credential = JSON.parse(env.SUPABASE_SECRET_KEYS || '{}')?.default || env.SUPABASE_SERVICE_ROLE_KEY; } catch { return null; }
   const cutoff = parseAscmInstant(env.PPC_ASCM_START_AFTER);
@@ -27,7 +34,7 @@ function configuration(env) {
     || [env.PPC_ASCM_IMPORT_SECRET, env.PPC_PUBLISHER_SECRET, credential].includes(env.PPC_ASCM_FLOW_SECRET)
     || !/^[a-f0-9]{64}$/.test(env.PPC_PACKAGE_KEY_HASH || '') || cutoff === null
     || !text(env.PPC_PACKAGE_SP_DRIVE_ID) || !text(env.PPC_PACKAGE_SP_FOLDER_ID)) return null;
-  return { cutoff, worker: hash(env.PPC_ASCM_FLOW_SECRET) };
+  return { cutoff, worker: hash(env.PPC_ASCM_FLOW_SECRET), approvedReport: approvedReportPolicy(env.PPC_ASCM_APPROVED_REPORT) };
 }
 
 // The reader is always cancelled at the boundary. Only small JSON is retained;
@@ -59,11 +66,13 @@ async function consume(source, maximum, { signal, raw = false } = {}) {
     })()]);
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); void reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
-function reportInput(value, cutoff, now) {
+function reportInput(value, cutoff, now, approvedReport) {
   if (!strict(value, MAIL_FIELDS) || MAIL_FIELDS.slice(0, 5).some(k => !text(value[k], k === 'messageId' ? 1024 : 320))) throw problem(400, 'INVALID_REQUEST');
   try { validateAscmEnvelope(value); } catch { throw problem(400, 'ASCM_SOURCE_REJECTED'); }
   const received = parseAscmInstant(value.receivedAt), current = new Date(now()).getTime();
-  if (!Number.isFinite(current) || received <= cutoff || received > current) throw problem(400, 'ASCM_SOURCE_REJECTED');
+  if (!Number.isFinite(current) || received > current) throw problem(400, 'ASCM_SOURCE_REJECTED');
+  if (received <= cutoff && (!approvedReport || current >= approvedReport.expiresAt
+    || hash(JSON.stringify([value.messageId, value.sender, value.subject, value.receivedAt, value.fileName])).toString('hex') !== approvedReport.sourceSha256)) throw problem(400, 'ASCM_SOURCE_REJECTED');
   const encoded = value.workbookBase64;
   if (typeof encoded !== 'string' || !encoded || encoded.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw problem(400, 'ASCM_INVALID_WORKBOOK');
   if (encoded.length > 4 * Math.ceil(WORKBOOK_LIMIT / 3)) throw problem(413, 'REQUEST_TOO_LARGE');
@@ -146,7 +155,7 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, getPackageDeli
         const metadata = await getPackageDelivery().getQueuedPublicationMetadata(); const candidate = safeCandidate(metadata?.candidate, env);
         return reply(200, { candidate, ...(candidate ? { binaryPath: `/api/ascm/publication/${candidate.candidateId}/bytes` } : {}), archiveAllowed: false });
       }
-      const requestId = reportInput(value, config.cutoff, now), delivery = getPackageDelivery();
+      const requestId = reportInput(value, config.cutoff, now, config.approvedReport), delivery = getPackageDelivery();
       const metadata = await delivery.getQueuedPublicationMetadata();
       if (!['seeding', 'sharepoint'].includes(metadata?.phase)) throw problem(409, 'PACKAGE_PHASE');
       const response = await invokeAscm(new Request(env.SUPABASE_URL + '/functions/v1/ppc-master/api/master/ascm', { method: 'POST',
