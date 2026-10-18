@@ -56,7 +56,7 @@ Task 1 establishes the contract/migration first. Then lane A owns Task 2, lane B
 
 ### Task 3 (lane B): Actions producer using current cache archive
 
-**Files:** create `scripts/package-delivery-client.mjs`, `scripts/checks/sharepoint-publisher.mjs`; modify `scripts/publish-supabase-master.mjs`, `.github/workflows/publish-master.yml`, `scripts/checks/{supabase-publisher.mjs,owner-image-publisher.mjs}`.
+**Files:** create `scripts/package-delivery-client.mjs`, `scripts/checks/sharepoint-publisher.mjs`; modify `scripts/publish-supabase-master.mjs`, `.github/workflows/publish-master.yml`. Run `scripts/checks/{supabase-publisher.mjs,owner-image-publisher.mjs}` unchanged for legacy coverage; modify them only if a demonstrated expectation or reusable fixture needs updating. New SharePoint cases belong in the dedicated check.
 
 **Interfaces:** `createPackageDeliveryClient({endpoint,publisherSecret,fetchImpl}) -> {readCurrent,reserve,upload,finalize}` consumes Task 2 contracts; endpoint is fixed same-project `ppc-package/api/package`. Extend `createSupabasePublisher` with `publicationMode:'github'|'sharepoint'` and injectable delivery client. Every reservation/retry binds `ownerImagesCommit` to the requested existing imagesCommit or null. Workflow mode defaults `github`; explicit `--seed-delivery-cache` pins seed URL/hash/size. Publisher secret authenticates only this origin; signed READ omits it and package key. `sourceSha` retains the original trusted seed identity from existing export.
 
