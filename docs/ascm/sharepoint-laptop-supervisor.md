@@ -1,0 +1,109 @@
+# SharePoint laptop supervisor: operator guide
+
+**Activation and end-to-end verification are still pending.** This guide describes the approved setup and the prepared worker. The checked-in [intake blueprint](standard-sync-intake-flow.json) and [command blueprint](standard-sync-command-flow.json) are **not production-ready Power Automate flows**: they remain Off, contain `BindingRequired` actions and unbound values, and explicitly disallow activation. Local tests, an existing handoff folder, a configured task, or an ASCM face in PPC do not establish an operating supervisor.
+
+The supervisor uses the existing Standard SharePoint connection and a same-user Windows task. With the owner's laptop awake, their Windows account logged in and OneDrive for Business connected, it can continue with Codex closed. It does not run while the laptop is off or the owner is logged out. It leaves every email untouched.
+
+## Fixed operating scope
+
+| Role | Fixed authority |
+| --- | --- |
+| Monthly workbook source | `https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info`, library **ASCM-Accessories Commercial**. The reviewed worker pins the source provider, hostname, site path, drive ID and list ID. |
+| Private transport | Owner's personal SharePoint site `https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com`, `/Documents/PPC ASCM`, mapped to `C:\Users\nguyentu\OneDrive - HP Inc\PPC ASCM`. Separate `intake`, `commands` and `results` directories; cloud cursors are under `intake/cursors`, attempt records under `results/attempts`. |
+| Final encrypted package | `https://hp.sharepoint.com/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC`. The private setup binding records the verified drive and folder IDs for exactly this destination. |
+| Normal package producer | `monocraft/PPC`, `publish-master.yml`, `main`. The worker cannot select a workflow, ref or producer input. |
+| Background task | **PPC ASCM SharePoint Worker** |
+
+The private handoff is transport, not the authoritative final package folder. Preserve its verified owner access and existing corporate administration access. Do not share it or substitute another sync root, library, destination or connection.
+
+Intake runs hourly with concurrency one. It discovers only the current and previous two calendar-month folders, within finite page/item limits, and selects published major versions of `ASCM Report_HyperX_YYYY-MM-DD.xlsx`. It holds on ambiguity, drafts, exhausted limits or a mismatch between the filename day and the strict parser's Exported day. Folder dates and copied-file timestamps do not establish report freshness. The known current report remains observed when its folder ages out of the discovery window.
+
+The approved startup floor is September 30, 2026. Recorded preparation evidence identifies `ASCM Report_HyperX_2026-09-30.xlsx`, published version `2.0`, 250,232 bytes. A real source read had equal before/after item identity, file eTag, version and size. That bounded source proof is not acceptance or publication of this report. Use the **file** eTag; the list-row eTag is different.
+
+The owner's six-calendar-month rule excludes stale sources from current-source recommendations. It does not silently change accepted product facts or add a new importer cutoff.
+
+## Commands and the scheduled task
+
+The [worker](../../scripts/ascm-sync-worker.py) accepts exactly one action: `status`, `setup` or `run`. There are no command-line options for secrets, roots, URLs, HTTP methods, destinations or workflows. `status` is local and read-only; it does not query services or repair state. `setup` changes protected local configuration and the scheduled task. `run` performs one bounded operational pass and can make the fixed authorized service calls.
+
+Use the pinned current-user Microsoft Store Python **3.11.9** runtime. For this reviewed checkout, run these in PowerShell:
+
+```powershell
+$ascmPython = 'C:\Users\nguyentu\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe'
+$ascmWorker = 'C:\Users\nguyentu\.codex\worktrees\ascm-cloud-supervisor\Product Portfolio\scripts\ascm-sync-worker.py'
+& $ascmPython -I -B $ascmWorker status
+```
+
+After the setup prerequisites below are satisfied, replace `status` with `setup` to configure, or with `run` for one deliberate active pass. These are separate invocations. Do not repeatedly run the active command to obtain status. If the checkout moves, stop and revalidate the reviewed worker path and private binding before setup; a copied script is not a path override.
+
+Setup pins the task's executable to the sibling `pythonw.exe`. Its arguments are exactly `-I -B "<absolute reviewed worker path>" run`, and its working directory is that worker's `scripts` directory. The principal is the exact current Windows SID, with `InteractiveToken` and `LeastPrivilege`. Triggers are owner logon and an indefinitely repeated five-minute interval. The task ignores overlapping starts, has an eight-minute execution limit, and does not catch up missed starts. It does not need an account password, elevation or a PowerShell policy change.
+
+Setup registers a new task disabled, reads and verifies it, enables it, reads and verifies it again, then marks protected configuration verified. A pre-existing task at that name must match the reviewed definition; a different task is refused. Re-running setup for the same matching task revalidates it and prompts for the new credential. Failed readback leaves configuration unverified and attempts to disable the task. A successful `SETUP_COMPLETE` is local setup evidence, not remote-service or publication evidence.
+
+## Setup sequence
+
+Carry out this sequence within the approved activation work. Keep both replacement flows Off until their actual executable definitions and bindings have been verified. **Do not run setup against the current unbound blueprints.**
+
+1. Verify the reviewed backend, required migrations and narrow source/publication routes are deployed, and the fixed normal package producer is configured for this work. Provision the narrow producer-dispatch credential through its approved secure configuration path. The worker does not borrow a publisher, package, service-role or Microsoft credential.
+2. Verify the actual existing OneDrive for Business root and the personal-site `/Documents/PPC ASCM` mapping. Verify effective access on the actual handoff folder, including inherited access: ordinary shared access must be absent and corporate administration preserved. An empty library-root permission response, folder name, local directory or sync icon is insufficient. Verify local sync inclusion and the actual Cloud Files placeholder/hydration path for `intake`, `commands` and `results` without accepting symlink/junction escapes.
+3. Finish executable **SharePoint intake** and **SharePoint publication command** flows using the existing Embedded Standard SharePoint connection. Verify their saved/imported definitions and read them back after persistence. Intake needs the real source discovery, published-version and metadata/content mappings; command needs the actual private `commands` folder event, concurrency one, create-only staging/promotion, durable attempt reconciliation and fresh final readback. Results must not trigger commands. Neither flow may contain Outlook, Archive, PPC HTTP actions, placeholders or `BindingRequired` actions. Static blueprint checks do not prove designer acceptance or runtime behavior.
+4. Prepare the owner-private local configuration directory obtained from the Windows **LocalAppData known folder** plus `PPC\ASCM` (normally `C:\Users\nguyentu\AppData\Local\PPC\ASCM`). It is outside OneDrive. The reviewed activation process must provision its protected owner-only ACL, the actual `setup-binding.json`, and the two actual persisted flow-export JSON files. Setup does not manufacture missing evidence or infer it from flags.
+5. Review the binding contract below against actual evidence. Export bytes must match their recorded SHA256 values. Do not set `bindingVerified`, `imported`, `persisted` or `syncIncluded` to true merely to pass setup. The current artifacts cannot supply these proofs.
+6. In the owner's interactive local terminal, invoke the pinned command ending in `setup`. After binding and task-collision checks pass, the **owner enters and confirms a new narrow worker credential in the masked prompt**. Enter the same credential through the approved secure backend secret path for `PPC_ASCM_FLOW_SECRET`. Never send the value through chat or paste it into a command, environment variable, task XML, log, exported flow or synced file. Do not extract an old protected credential. A local credential write does not prove the backend has the same value.
+7. Check the returned safe setup code and local `status`; read back the actual task definition. Verify the replacement flow identities against the private binding, then enable only the reviewed replacement flows for the bounded activation proof. Prove the genuine source acceptance, normal publication, scheduled cycle with Codex closed and ordinary recovery described below before calling the supervisor activated.
+
+`setup-binding.json` is a case-sensitive closed object. Its top-level `proof` object contains exactly `mapping`, `access` and `flows`. The binding is a reviewed local evidence boundary; it is not a new Microsoft attestation. Its required fields are:
+
+| Field | Required evidence |
+| --- | --- |
+| `schemaVersion`, `ownerSid` | Integer `1` and the actual current token SID, never a service/SYSTEM account. |
+| `oneDriveBusinessRoot`, `handoffRoot`, `privateDocumentsListId` | Existing canonical business root; exactly its `PPC ASCM` child; actual personal Documents library UUID. |
+| `source` | Exactly the worker's `SOURCE_AUTHORITY`: `provider`, `hostname`, `sitePath`, `driveId`, `listId`. |
+| `destination` | Exactly `site`, `serverRelativeFolder`, `driveId`, `folderId`, with the fixed destination above and verified real IDs. |
+| `runtime` | Exactly `python`, `pythonw`, `worker`, matching the pinned installed runtime and absolute reviewed script. |
+| `proof.mapping` | Exactly `personalSite`, `remoteRoot`, `syncIncluded`, using the personal site above, `/Documents/PPC ASCM`, and verified `true`. |
+| `proof.access` | Exactly `ownerSid`, `ordinarySharedAccess:false`, `corporateAdministrationPreserved:true`, `observedAt` containing the actual UTC observation instant. |
+| `proof.flows` | Exactly `intake` and `command`; each has `flowId`, `definitionFile`, `definitionSha256`, `bindingVerified`, `imported`, `persisted`. IDs and `.json` filenames are UUID-based; SHA256 is the actual lowercase 64-hex digest; the three flags require actual completed evidence. |
+
+Each flow export is a separate owner-private file inside the local configuration directory. It must contain the actual persisted `properties.definition` and exactly one Embedded Standard SharePoint connection reference, the fixed applicable source/destination identities and the private site/root mapping. Hashing a blueprint or editing its readiness flags does not turn it into a usable export. Preserve the private activation evidence, actual flow IDs, mappings and export hashes locally; do not copy raw operational identities or workbook data into public logs.
+
+## Protected state and completion evidence
+
+The local configuration directory holds CurrentUser-DPAPI `worker-secret.dpapi`, `worker-config.dpapi`, `journal.dpapi`, `journal.previous.dpapi` and `initialized.dpapi`, with owner-only ACLs. The binding and flow exports remain owner-private local evidence. Journal replacement is atomic and retains a previous valid recovery copy. Path, ACL, SID, DPAPI or malformed-state failure holds the worker before operational requests. Keep opaque operation IDs and safe diagnostic codes when reporting a problem; do not decrypt or print protected payloads for troubleshooting.
+
+The private handoff carries immutable UUID-named workbook/package bytes and manifests. Intake writes workbook bytes before the manifest; its cloud SHA256 field is literal `null`. Windows hashes the same checked, contained workbook bytes and freezes them with source metadata in the protected journal before import. The backend independently hashes submitted bytes. Command execution reads actual private ciphertext; final verification reads actual remote final bytes into a different fresh private return file. Local upload copies and sync completion icons are not remote readback.
+
+A report is complete only when all of the following agree:
+
+1. The exact source item/version/raw hash has an immutable native accepted receipt, or an equivalent-source receipt linked to that original accepted receipt. An accepted import may return HTTP `202` / `publication_pending`; that is pending work.
+2. The normal encrypted producer output is published to the fixed SharePoint folder, with matching candidate, generation, storage revision, byte count and SHA256. Final remote item identity/version/eTag/size are stable around the real remote content read. Windows independently hashes the fresh returned bytes and sends those raw bytes to confirmation.
+3. Confirmation returns matching `published` or `already_published`, then a **fresh exact-source replay** returns HTTP `200` / `published` with qualifying normal SharePoint publication covering the linked accepted revision. All replacement responses retain `archiveAllowed:false`.
+
+An equivalent newer major version with the same primary business content records provenance without a native commit, revision advance or accepted ASCM clock reset. A zero saved-field count alone does not prove this outcome. An older candidate may publish first; the current source still needs fresh receipt coverage before completion.
+
+The worker's fixed routes are `POST /api/ascm/sharepoint/import`, metadata-only `GET /api/ascm/publication/queued`, `POST /api/ascm/publication/prepare`, candidate-bound `GET /api/ascm/publication/<candidateId>/bytes` and `POST /api/ascm/publication/<candidateId>/confirm`, plus `POST /api/ascm/connection` for actual SharePoint outcomes. The origin and routes are fixed in reviewed source; they are not manual health-check commands. The legacy POST queue route is not an idle read.
+
+Activation also requires an actual natural scheduled cycle with Codex closed, ordinary accepted publication demand recovering a lost first dispatch, equivalent-version clock preservation and verified normal encrypted package opening in PPC while preserving package contents and active drafts. A prior source-read or transport proof does not satisfy these gates.
+
+## Routine operation and recovery
+
+Use `status` for local diagnostics. `configured` means protected configuration passed local validation; `LOCAL_STATUS` and its reported source phase do not prove current remote connectivity, task enablement or final publication. `unconfigured` / `WORKER_NOT_CONFIGURED` means setup is absent. `held` includes a fixed diagnostic code requiring investigation. `run` reports the pass phase, call count and safe code; a waiting pass is ordinary when sync, a producer or cloud result is outstanding.
+
+Each active pass is limited to eight minutes and six total PPC attempts, including retries and connection reporting. Each request is limited to 120 seconds and the pass's remaining time. Only replay-safe requests can have up to two transient retries within that total; bounded `Retry-After` is honored for 408/429/502/503/504. Unknown external writes remain pending for exact-identity reconciliation.
+
+With no durable work, the worker may attempt **one metadata-only control read per 60 minutes, at most 24 in a rolling 24 hours**. It persists the charge before the network attempt; failure consumes the slot. Five-minute Windows ticks do not mean five-minute backend reads. Idle has no retry, package/portfolio download, dispatch or catch-up burst. Restart and missed ticks do not reset the cap; clock rollback holds until time catches up. The separate cloud intake recurrence is hourly. Do not create another monitor or retry loop.
+
+For an observed SharePoint authentication failure, open [Microsoft Connections](https://make.powerautomate.com/environments/Default-ca7981a2-785a-463d-b82a-3db87dfc3ce6/connections), repair the SharePoint connection used by the two replacement flows, finish normal Microsoft sign-in, then return to PPC. The prepared replacement UI adds **Open Connections** to the existing key alert; that link change is not yet live. Use the direct link until the reviewed UI is deployed. Opening the link clears nothing. Only an actual successful supported SharePoint operation clears reconnect-required. Worker credential errors, policy 403, missing results and sync delay are different diagnostics; do not relabel them as a Microsoft logout or request another Graph authentication path.
+
+For sync delay, restore OneDrive and allow the existing bounded passes to reconcile the same immutable operation. For `CLOCK_ROLLBACK`, restore correct system time and retain the journal. For ACL, DPAPI, path, journal, task-definition or unknown-write errors, stop safely and retain the evidence for the reviewed recovery path. Do not reset the journal, fabricate a result, rename an attempt or create another publication to force progress. PPC's updating count reflects actual import work, and the clock reflects accepted-update age; neither the face nor a green clock certifies autonomous operation.
+
+Local manifest scans hold at more than 256 JSON manifests (`HANDOFF_SCAN_LIMIT`); retained pre-submission history holds at 64 entries (`PRESUBMISSION_HISTORY_FULL`). Neither condition authorizes automatic deletion. Reviewed cleanup needs positive owned terminal proof and a retention policy. An expired candidate can refresh only when durable evidence proves no publication was submitted; orphan ciphertext and provenance stay retained. Submitted, unknown or legacy attempts cannot reset from expiry or absence. Delivery demand is saved before a candidate download so a lost download does not create fresh idle demand.
+
+## Safe stop and resume
+
+1. Disable **PPC ASCM SharePoint Worker** in Windows Task Scheduler, then verify it is disabled. The equivalent native command is `schtasks.exe /Change /TN "PPC ASCM SharePoint Worker" /DISABLE`; read back with `schtasks.exe /Query /TN "PPC ASCM SharePoint Worker" /XML`. There is no worker `stop` CLI action.
+2. Turn Off the two **replacement** flow IDs recorded under `proof.flows.intake` and `proof.flows.command`; verify their persisted Off state. Leave the old supervisor flow Off. Do not substitute an older flow or change the package producer as a generic stop step.
+3. Disabling schedules prevents new starts but does not prove an in-flight cloud write stopped. Retain the active operation/attempt and determine its outcome through positive exact-identity remote reconciliation before any new publication. A timeout, missing result, 404 or absent local file does not authorize repeating a create/promotion.
+4. Preserve protected configuration and both journals, initialization markers, pending/uncertain writes, private handoff bytes/manifests/cursors/attempts, source workbooks, accepted facts, encrypted packages/assets/pricing, keys, immutable native/private/publication receipts and active drafts. No cleanup or rollback of accepted data is part of Stop. Only positively terminal temporary objects may be removed under an explicitly reviewed retention policy.
+
+Resume only after the cause is resolved and the same runtime, owner, mappings, task and persisted flow identities are revalidated. Re-enable the reviewed components and continue from the retained journal; reconcile uncertain mutations before creating new work. Do not fall back to stale GitHub/seed packages or overwrite current data. Reverting application code is separate from accepted-data recovery.
