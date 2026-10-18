@@ -469,6 +469,488 @@ class DurableSharePointPhases(unittest.TestCase):
                     self.assertEqual(w.load_journal(local_root), state)
 
 
+def control(action="idle", **changes):
+    value = {"version": 1, "action": action, "requestedRevision": 84, "publishedRevision": 84,
+             "generation": 3, "prepareKey": None, "retryAt": None, "intent": None,
+             "candidate": None, "binaryPath": None, "holdCode": None, "archiveAllowed": False}
+    if action != "idle":
+        value["intent"] = {"kind": "ordinary", "ownerImagesCommit": None}
+        value["publishedRevision"] = 83
+    if action == "deliver":
+        value.update(candidate=candidate(), binaryPath=f"/api/ascm/publication/{CANDIDATE}/bytes")
+    if action in ("prepare", "recover", "backoff"):
+        value["prepareKey"] = "a"*64
+    if action == "backoff": value["retryAt"] = "2026-10-18T12:15:00.000Z"
+    value.update(changes)
+    return value
+
+
+def http_response(value, status=200, headers=None):
+    return {"status": status, "headers": headers or {}, "body": value if type(value) is bytes else json.dumps(value).encode()}
+
+
+@unittest.skipUnless(os.name == "nt", "Windows-native pass integration requires Windows")
+class WorkerPasses(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="ppc-worker-engine-"); self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name); self.root = self.base/"private"; self.handoff = self.base/"PPC ASCM"
+        for part in ("intake", "commands", "results"): (self.handoff/part).mkdir(parents=True, exist_ok=True)
+        self.now = NOW+timedelta(minutes=3); self.elapsed = 0; self.requests = []; self.responses = []
+        self.services = {"configuration": {"handoffRoot": str(self.handoff), "destination": DESTINATION},
+                         "credential": "synthetic-narrow-credential-SENTINEL", "clock": lambda: self.now,
+                         "monotonic": lambda: self.elapsed, "sleep": self.sleep, "transport": self.transport}
+
+    def sleep(self, seconds):
+        self.elapsed += seconds; self.now += timedelta(seconds=seconds)
+
+    def transport(self, method, route, *, headers, body, timeout, maximum):
+        self.requests.append((method, route, headers, body, timeout, maximum))
+        self.assertLessEqual(timeout, 120)
+        self.assertLessEqual(timeout, 480-self.elapsed)
+        if not self.responses: self.fail("Unexpected PPC request: "+route)
+        reply = self.responses.pop(0)
+        if callable(reply): return reply(self.requests[-1])
+        if isinstance(reply, Exception): raise reply
+        return reply
+
+    def run_pass(self):
+        return w.run_pass(self.root, services=self.services)
+
+    def stage_source(self):
+        folder = self.handoff/"intake"; (folder/WORKBOOK).write_bytes(BOOK)
+        (folder/(ATTEMPT+".json")).write_bytes(json.dumps(intake()).encode())
+
+    def stage_result(self, value=None, raw=PACKAGE):
+        state = w.load_journal(self.root); cmd = state["publication"]["command"]
+        value = result() if value is None else value
+        value.update(operationId=cmd["operationId"], attemptId=cmd["attemptId"], createdAt=self.now.isoformat().replace("+00:00", "Z"))
+        folder = self.handoff/"results"
+        if value["readbackFile"] is not None: (folder/value["readbackFile"]).write_bytes(raw)
+        (folder/(OP+".json")).write_bytes(json.dumps(value).encode())
+
+    def confirmation(self):
+        return {"status": "published", "archiveAllowed": False, "publication": {
+            "provider": "sharepoint", "kind": "publication", "candidateId": CANDIDATE,
+            "generation": 3, "storageRevision": 84, "sha256": hashlib.sha256(PACKAGE).hexdigest(),
+            "bytes": len(PACKAGE), "publishedAt": self.now.isoformat().replace("+00:00", "Z")}}
+
+    def test_idle_failure_is_charged_before_network_and_never_retried_or_downloaded(self):
+        def unavailable(_):
+            self.assertEqual(w.load_journal(self.root)["idleAttempts"], ["2026-10-18T12:03:00Z"])
+            return http_response({"code": "UNAVAILABLE"}, 503, {"retry-after": "1"})
+        self.responses = [unavailable]
+        first = self.run_pass(); self.assertEqual(first["calls"], 1)
+        second = self.run_pass(); self.assertEqual(second["calls"], 0)
+        self.assertEqual(second["code"], "IDLE_BUDGET_HELD")
+        self.assertEqual([(r[0], r[1]) for r in self.requests], [("GET", "/api/ascm/publication/queued")])
+
+    def test_clock_rollback_holds_and_forward_jump_never_catches_up(self):
+        self.responses = [http_response(control())]; self.run_pass()
+        self.now -= timedelta(hours=1)
+        self.assertEqual(self.run_pass()["code"], "CLOCK_ROLLBACK")
+        self.now += timedelta(days=3)
+        self.responses = [http_response(control())]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(len(self.requests), 2)
+
+    def test_source_freezes_before_lost_import_reply_and_restart_replays_exact_bytes(self):
+        self.stage_source()
+        def lost(request):
+            frozen = w.load_journal(self.root)["source"]
+            self.assertEqual(frozen["phase"], "frozen"); self.assertEqual(base64.b64decode(frozen["rawBase64"]), BOOK)
+            self.assertEqual(json.loads(request[3])["workbookBase64"], base64.b64encode(BOOK).decode())
+            raise TimeoutError("private transport SENTINEL")
+        self.responses = [lost]
+        self.run_pass(); self.assertEqual(w.load_journal(self.root)["source"]["phase"], "frozen")
+        self.now += timedelta(minutes=5)
+        self.responses = [http_response(receipt(), 202), http_response(control("backoff")), http_response({"reported": True, "archiveAllowed": False})]
+        output = self.run_pass(); self.assertLessEqual(output["calls"], 3)
+        self.assertEqual(w.load_journal(self.root)["source"]["receipt"]["storageRevision"], 84)
+        self.assertEqual(self.requests[0][3], self.requests[1][3])
+
+    def test_publication_is_manifest_last_and_missing_result_never_reissues_unknown_write(self):
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+        output = self.run_pass(); self.assertEqual(output["code"], "COMMAND_WAIT")
+        state = w.load_journal(self.root); cmd = state["publication"]["command"]
+        folder = self.handoff/"commands"
+        self.assertEqual((folder/cmd["ciphertextFile"]).read_bytes(), PACKAGE)
+        self.assertEqual(json.loads((folder/(cmd["attemptId"]+".json")).read_bytes()), cmd)
+        original = {p.name: p.read_bytes() for p in folder.iterdir()}
+        self.now += timedelta(hours=2)
+        self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(original, {p.name: p.read_bytes() for p in folder.iterdir()})
+        self.stage_result(result("unknown")); self.run_pass()
+        self.assertEqual(w.load_journal(self.root)["publication"]["phase"], "write_unknown")
+        self.assertEqual(len(self.requests), 2)
+
+    def test_remote_return_raw_confirmation_then_fresh_source_receipt_completes(self):
+        self.stage_source(); self.responses = [http_response(receipt(), 202), http_response(control("deliver")), http_response(PACKAGE), http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass(); self.now += timedelta(minutes=5); self.stage_result()
+        self.responses = [http_response(self.confirmation()), http_response(receipt("published")), http_response(control()), http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass()
+        state = w.load_journal(self.root)
+        self.assertEqual(state["source"]["phase"], "complete")
+        self.assertIsNone(state["source"]["rawBase64"])
+        confirms = [r for r in self.requests if r[1].endswith("/confirm")]
+        self.assertEqual(len(confirms), 1); self.assertEqual(confirms[0][3], PACKAGE)
+        self.assertEqual(confirms[0][2]["X-PPC-SP-Item-Id"], "synthetic-remote-item")
+
+    def test_ordinary_recovery_prepare_and_server_backoff_survive_restart(self):
+        prepared = {"version": 1, "status": "dispatch_uncertain", "prepareKey": "a"*64,
+                    "retryAt": "2026-10-18T12:18:00.000Z", "holdCode": None, "archiveAllowed": False}
+        self.responses = [http_response(control("recover")), http_response(prepared)]
+        self.run_pass()
+        self.assertEqual(json.loads(self.requests[1][3]), {"prepareKey": "a"*64})
+        self.now += timedelta(minutes=5)
+        self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(w.load_journal(self.root)["pending"]["retryAt"], prepared["retryAt"])
+
+    def test_foreign_control_and_wrong_source_receipt_never_advance(self):
+        self.responses = [http_response(control("deliver", binaryPath="https://foreign.invalid/bytes"))]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertIsNone(w.load_journal(self.root)["publication"])
+        self.now += timedelta(hours=1); self.stage_source()
+        wrong = receipt("published"); wrong["source"]["rawSha256"] = "a"*64
+        self.responses = [http_response(wrong)]
+        self.run_pass(); self.assertEqual(w.load_journal(self.root)["source"]["phase"], "frozen")
+
+    def test_pass_file_lock_covers_transport_and_logs_remain_safe(self):
+        def observe(_):
+            with self.assertRaises(w.WorkerError) as caught:
+                with w.worker_lock(self.root): pass
+            self.assertEqual(caught.exception.code, "LOCK_BUSY")
+            raise OSError("synthetic-narrow-credential-SENTINEL "+str(self.root))
+        self.responses = [observe]
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(output): value = self.run_pass()
+        self.assertEqual(output.getvalue(), "")
+        self.assertNotIn("SENTINEL", json.dumps(value)); self.assertNotIn(str(self.root), json.dumps(value))
+
+    def test_new_transport_ids_for_completed_same_source_do_not_manufacture_active_work(self):
+        self.stage_source(); self.responses = [http_response(receipt("published")), http_response(control()), http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass(); before = w.load_journal(self.root)["source"]
+        duplicate = intake(); duplicate.update(operationId=CANDIDATE, attemptId=OP, workbookFile=OP+".xlsx")
+        (self.handoff/"intake"/duplicate["workbookFile"]).write_bytes(BOOK)
+        (self.handoff/"intake"/(OP+".json")).write_bytes(json.dumps(duplicate).encode())
+        self.now += timedelta(minutes=5)
+        self.responses = [http_response(control())]
+        output = self.run_pass()
+        self.assertEqual(output["calls"], 1)
+        self.assertEqual(self.requests[-1][1], "/api/ascm/publication/queued")
+        self.assertEqual(w.load_journal(self.root)["source"], before)
+        self.assertEqual(self.run_pass()["calls"], 0)
+
+    def test_changed_raw_under_completed_same_source_holds_before_network(self):
+        self.stage_source(); self.responses = [http_response(receipt("published")), http_response(control()), http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass()
+        duplicate = intake(); duplicate.update(operationId=CANDIDATE, attemptId=OP, workbookFile=OP+".xlsx")
+        (self.handoff/"intake"/duplicate["workbookFile"]).write_bytes(b"x"*len(BOOK))
+        (self.handoff/"intake"/(OP+".json")).write_bytes(json.dumps(duplicate).encode())
+        self.now += timedelta(minutes=5)
+        output = self.run_pass(); self.assertEqual(output["calls"], 0); self.assertEqual(output["code"], "SOURCE_REPLAY_MISMATCH")
+
+    def test_lost_confirmation_reuses_exact_fresh_return_without_new_command(self):
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]; self.run_pass()
+        command_files = {p.name: p.read_bytes() for p in (self.handoff/"commands").iterdir()}
+        self.now += timedelta(minutes=5); self.stage_result()
+        self.responses = [TimeoutError("synthetic lost raw confirmation")]; self.run_pass()
+        self.assertEqual(w.load_journal(self.root)["publication"]["phase"], "remote_verified")
+        self.now += timedelta(minutes=5)
+        self.responses = [http_response(self.confirmation()), http_response(control()), http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass()
+        self.assertEqual(command_files, {p.name: p.read_bytes() for p in (self.handoff/"commands").iterdir()})
+        confirms = [r for r in self.requests if r[1].endswith("/confirm")]
+        self.assertEqual(len(confirms), 2); self.assertEqual(confirms[0][3], confirms[1][3])
+
+    def test_older_candidate_drain_reads_control_and_continues_newer_demand(self):
+        self.responses = [http_response(control("deliver", requestedRevision=85)), http_response(PACKAGE)]; self.run_pass()
+        self.now += timedelta(minutes=5); self.stage_result()
+        prepared = {"version": 1, "status": "dispatch_requested", "prepareKey": "a"*64, "retryAt": "2026-10-18T12:23:00.000Z", "holdCode": None, "archiveAllowed": False}
+        self.responses = [http_response(self.confirmation()), http_response(control("prepare", requestedRevision=85, publishedRevision=84)), http_response(prepared), http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass()
+        self.assertEqual([r[1] for r in self.requests[-4:]], [f"/api/ascm/publication/{CANDIDATE}/confirm", "/api/ascm/publication/queued", "/api/ascm/publication/prepare", "/api/ascm/connection"])
+        self.assertIsNotNone(w.load_journal(self.root)["pending"])
+
+    def test_active_retries_are_bounded_and_request_timeout_uses_remaining_time(self):
+        self.stage_source()
+        self.responses = [http_response({"code": "BUSY"}, 503, {"retry-after": "2"})]*3
+        output = self.run_pass(); self.assertEqual(output["calls"], 3); self.assertEqual(self.elapsed, 4)
+        self.now += timedelta(minutes=5)
+        # A slow request consumes nearly the whole pass; the next timeout is its remainder.
+        self.elapsed = 0
+        def slow(_): self.elapsed += 470; return http_response(receipt(), 202)
+        self.responses = [slow, http_response(control("backoff")), http_response({"reported": True, "archiveAllowed": False})]
+        output = self.run_pass(); self.assertLessEqual(output["calls"], 3)
+        self.assertEqual(self.requests[-2][4], 10)
+
+    def test_pass_refuses_late_reply_after_eight_minutes_without_more_calls(self):
+        self.stage_source()
+        def late(_): self.elapsed += 481; return http_response(receipt("published"))
+        self.responses = [late]
+        output = self.run_pass()
+        self.assertEqual(output["calls"], 1); self.assertEqual(output["code"], "PASS_BUDGET_HELD")
+        self.assertEqual(w.load_journal(self.root)["source"]["phase"], "frozen")
+
+    def test_command_ciphertext_crash_resumes_same_attempt_before_manifest(self):
+        def crash(phase):
+            if phase == "ciphertext_written": raise w.WorkerError("SYNTHETIC_CRASH")
+        self.services["fault"] = crash
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+        self.run_pass(); saved = w.load_journal(self.root)["publication"]["command"]
+        self.assertFalse((self.handoff/"commands"/(saved["attemptId"]+".json")).exists())
+        self.services.pop("fault"); self.now += timedelta(minutes=5)
+        self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(json.loads((self.handoff/"commands"/(saved["attemptId"]+".json")).read_bytes()), saved)
+
+    def test_expired_positive_pre_submission_phase_returns_to_authoritative_control(self):
+        def crash(phase):
+            if phase == "ciphertext_written": raise w.WorkerError("SYNTHETIC_CRASH")
+        self.services["fault"] = crash; self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+        self.run_pass(); old = w.load_journal(self.root)["publication"]["command"]
+        self.services.pop("fault"); self.now += timedelta(hours=2)
+        self.responses = [http_response(control("backoff", retryAt="2026-10-18T14:18:00.000Z"))]
+        output = self.run_pass()
+        self.assertEqual(output["calls"], 1); self.assertEqual(output["code"], "PRODUCER_WAIT")
+        self.assertIsNotNone(w.load_journal(self.root)["pending"])
+        self.assertFalse((self.handoff/"commands"/(old["attemptId"]+".json")).exists())
+        self.assertEqual(w.load_journal(self.root)["engine"]["preSubmissionHistory"][0]["command"], old)
+        self.assertEqual((self.handoff/"commands"/old["ciphertextFile"]).read_bytes(), PACKAGE)
+
+    def test_expiry_never_resets_legacy_unknown_submission_or_positive_manifest(self):
+        for phase in ("legacy", "manifest_exists"):
+            with self.subTest(phase=phase):
+                self.root = self.base/phase
+                self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+                self.now = NOW+timedelta(minutes=3); self.run_pass()
+                state = w.load_journal(self.root); cmd = state["publication"]["command"]
+                if phase == "legacy":
+                    state["engine"]["commandSubmission"] = None
+                    (self.handoff/"commands"/(cmd["attemptId"]+".json")).unlink()
+                else: state["engine"]["commandSubmission"]["phase"] = "staging"
+                w.save_journal(self.root, state); self.now += timedelta(hours=2)
+                output = self.run_pass()
+                self.assertEqual(output["calls"], 0)
+                self.assertEqual(w.load_journal(self.root)["publication"]["command"], cmd)
+                self.assertEqual(w.load_journal(self.root)["engine"]["preSubmissionHistory"], [])
+
+    def test_command_intent_crash_never_recreates_a_possibly_synced_manifest(self):
+        def crash(phase):
+            if phase == "command_submission_intent": raise w.WorkerError("SYNTHETIC_CRASH")
+        self.services["fault"] = crash
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+        self.run_pass(); saved = w.load_journal(self.root)["publication"]["command"]
+        self.assertFalse((self.handoff/"commands"/(saved["attemptId"]+".json")).exists())
+
+        self.services.pop("fault"); self.now += timedelta(hours=2)
+        self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertFalse((self.handoff/"commands"/(saved["attemptId"]+".json")).exists())
+        self.assertEqual(w.load_journal(self.root)["engine"]["preSubmissionHistory"], [])
+
+    def test_total_six_calls_includes_retries_and_deferred_provider_reporting(self):
+        self.stage_source()
+        transient = http_response({"code": "BUSY"}, 503, {"retry-after": "1"})
+        self.responses = [transient, transient, http_response(receipt(), 202), transient, transient, http_response(control("deliver"))]
+        output = self.run_pass()
+        self.assertEqual(output["calls"], 6); self.assertEqual(output["code"], "PASS_BUDGET_HELD")
+        self.assertIsNone(w.load_journal(self.root)["publication"])
+        self.assertEqual(w.load_journal(self.root)["engine"]["providerSignal"], "available")
+
+    def test_genuine_deliver_survives_lost_download_reply_inside_idle_hour(self):
+        self.responses = [http_response(control("deliver")), TimeoutError("synthetic lost ciphertext response")]
+        self.run_pass(); self.now += timedelta(minutes=5)
+        self.responses = [http_response(control("backoff"))]
+        output = self.run_pass()
+        self.assertEqual(output["calls"], 1); self.assertEqual(output["code"], "PRODUCER_WAIT")
+        self.assertIsNotNone(w.load_journal(self.root)["pending"])
+
+    def test_actual_transport_failure_persists_active_backoff(self):
+        self.stage_source()
+        self.services["transport"] = w._https
+        with mock.patch.object(w.http.client, "HTTPSConnection") as connection:
+            connection.return_value.request.side_effect = OSError("synthetic socket secret-SENTINEL")
+            output = self.run_pass()
+        self.assertEqual(output["calls"], 1)
+        self.assertEqual(w.load_journal(self.root)["engine"]["retryAt"], "2026-10-18T12:08:00Z")
+        self.now += timedelta(minutes=1)
+        self.assertEqual(self.run_pass()["calls"], 0)
+
+    def test_equivalent_source_keeps_original_acceptance_link_and_no_new_candidate(self):
+        self.stage_source()
+        equivalent = receipt("published", "equivalent"); equivalent["acceptedRequestId"] = "ascm-sp-"+"a"*64; equivalent["storageRevision"] = 82
+        self.responses = [http_response(equivalent), http_response(control()), http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass(); state = w.load_journal(self.root)
+        self.assertEqual(state["source"]["phase"], "complete")
+        self.assertEqual(state["source"]["receipt"]["storageRevision"], 82)
+        self.assertEqual(state["source"]["receipt"]["acceptedRequestId"], "ascm-sp-"+"a"*64)
+        self.assertIsNone(state["publication"])
+
+    def test_stale_prepare_rereads_control_without_repeating_dispatch(self):
+        self.responses = [http_response(control("prepare")), http_response({"code": "PREPARE_STALE", "archiveAllowed": False}, 409)]
+        self.assertEqual(self.run_pass()["code"], "PREPARE_STALE")
+        self.now += timedelta(minutes=5)
+        self.responses = [http_response(control())]
+        self.run_pass(); self.assertIsNone(w.load_journal(self.root)["pending"])
+        self.assertEqual([r[0] for r in self.requests], ["GET", "POST", "GET"])
+
+    def test_only_observed_sharepoint_auth_result_reports_reconnect(self):
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]; self.run_pass()
+        self.now += timedelta(minutes=5)
+        held = result("held"); held["code"] = "POLICY_FORBIDDEN"; self.stage_result(held)
+        self.assertEqual(self.run_pass()["calls"], 0)
+        held["code"] = "SHAREPOINT_AUTH_REQUIRED"; self.stage_result(held)
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(json.loads(self.requests[-1][3]), {"service": "sharepoint", "state": "reconnect_required"})
+
+
+@unittest.skipUnless(os.name == "nt", "Windows-native setup storage requires Windows")
+class WorkerSetup(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="ppc-worker-setup-"); self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name); self.root = w.secure_root(self.base/"private")
+        self.sync = self.base/"business"; self.sync.mkdir()
+        self.handoff = self.sync/"PPC ASCM"; self.handoff.mkdir()
+        for name in ("intake", "commands", "results"): (self.handoff/name).mkdir()
+        runtime = w.runtime_paths()
+        self.binding = {"schemaVersion": 1, "ownerSid": w.current_sid(), "oneDriveBusinessRoot": str(self.sync), "handoffRoot": str(self.handoff),
+                        "privateDocumentsListId": OP, "source": deepcopy(w.SOURCE_AUTHORITY),
+                        "destination": {"driveId": "b!AAAAAAAAAAAAAAA", "folderId": "01ABCDEFGH", "site": "https://hp.sharepoint.com/teams/PCGamingCategory", "serverRelativeFolder": "/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC"},
+                        "runtime": runtime,
+                        "proof": {"mapping": {"personalSite": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com", "remoteRoot": "/Documents/PPC ASCM", "syncIncluded": True},
+                                  "access": {"ownerSid": w.current_sid(), "ordinarySharedAccess": False, "corporateAdministrationPreserved": True, "observedAt": "2026-10-18T12:00:00Z"},
+                                  "flows": {"intake": {"flowId": OP, "definitionFile": OP+".json", "definitionSha256": "a"*64, "bindingVerified": True, "imported": True, "persisted": True},
+                                            "command": {"flowId": ATTEMPT, "definitionFile": ATTEMPT+".json", "definitionSha256": "b"*64, "bindingVerified": True, "imported": True, "persisted": True}}}}
+        self.scheduler_calls = []; self.prompts = []; self.enabled = False; self.task = None
+        self.services = {"prompt": self.prompt, "scheduler": self.scheduler, "clock": lambda: NOW}
+
+    def write_binding(self):
+        for kind, flow in self.binding["proof"]["flows"].items():
+            definition = {"properties": {"definition": {"actions": {"Fixed_boundary": {"type": "Compose", "inputs": {
+                "source": self.binding["source"], "destination": self.binding["destination"], "personalSite": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com", "remoteRoot": "/Documents/PPC ASCM"}}}},
+                "connectionReferences": {"shared_sharepointonline": {"source": "Embedded", "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline", "connectionName": "shared-sharepoint-opaque"}}}}
+            raw = json.dumps(definition).encode(); file = self.root/flow["definitionFile"]
+            file.write_bytes(raw); w._set_owner_acl(file, w.current_sid()); flow["definitionSha256"] = hashlib.sha256(raw).hexdigest()
+        path = self.root/"setup-binding.json"; path.write_bytes(json.dumps(self.binding).encode()); w._set_owner_acl(path, w.current_sid())
+
+    def prompt(self):
+        self.prompts.append("masked")
+        return "synthetic-narrow-worker-secret-SENTINEL-1234567890"
+
+    def scheduler(self, action, xml=None):
+        self.scheduler_calls.append((action, xml))
+        if action == "query": return self.task
+        if action == "create_disabled": self.task = xml; return None
+        if action == "enable":
+            self.enabled = True
+            import xml.etree.ElementTree as ET
+            tree = ET.fromstring(self.task); tree.find("{*}Settings/{*}Enabled").text = "true"; self.task = ET.tostring(tree, encoding="unicode")
+        if action == "disable": self.enabled = False
+
+    def test_unverified_binding_holds_before_prompt_task_or_protected_writes(self):
+        self.binding["proof"]["flows"]["command"]["bindingVerified"] = False; self.write_binding()
+        before = {p.name for p in self.root.iterdir()}
+        result = w.setup(self.root, services=self.services)
+        self.assertEqual(result["code"], "SETUP_BINDING_REQUIRED")
+        self.assertEqual(self.prompts, []); self.assertEqual(self.scheduler_calls, [])
+        self.assertEqual(before, {p.name for p in self.root.iterdir()})
+
+    def test_setup_protects_secret_and_only_marks_ready_after_task_readback(self):
+        self.write_binding(); output = StringIO()
+        with redirect_stdout(output), redirect_stderr(output): result = w.setup(self.root, services=self.services)
+        self.assertEqual(result["code"], "SETUP_COMPLETE"); self.assertTrue(self.enabled)
+        self.assertEqual([entry[0] for entry in self.scheduler_calls], ["query", "create_disabled", "query", "enable", "query"])
+        self.assertEqual(w._decode(self.root, "worker-secret.dpapi")["credential"], "synthetic-narrow-worker-secret-SENTINEL-1234567890")
+        for name in ("worker-secret.dpapi", "worker-config.dpapi"):
+            self.assertNotIn(b"SENTINEL", (self.root/name).read_bytes())
+            self.assertTrue(w.verify_owner_acl(self.root/name, w.current_sid()))
+        self.assertNotIn("SENTINEL", output.getvalue()+json.dumps(result)+json.dumps(self.scheduler_calls))
+
+    def test_setup_refuses_foreign_mapping_and_placeholder_before_prompt(self):
+        for field in ("ownerSid", "handoffRoot", "destination", "privacy"):
+            with self.subTest(field=field):
+                original = deepcopy(self.binding)
+                if field == "ownerSid": self.binding[field] = "S-1-12-1-1-2-3-4"
+                elif field == "handoffRoot": self.binding[field] = str(self.base/"escape")
+                elif field == "destination": self.binding[field]["driveId"] = "__BIND_VERIFIED_FIXED_PPC_DRIVE_ID__"
+                else: self.binding["proof"]["access"]["ordinarySharedAccess"] = True
+                self.write_binding(); result = w.setup(self.root, services=self.services)
+                self.assertNotEqual(result["code"], "SETUP_COMPLETE"); self.assertEqual(self.prompts, []); self.assertEqual(self.scheduler_calls, [])
+                self.binding = original
+
+    def test_task_readback_rejects_extra_actions_wrong_owner_privilege_and_recurrence(self):
+        valid = w.task_xml(self.binding["runtime"], w.current_sid(), NOW, enabled=False)
+        w.verify_task(valid, self.binding["runtime"], w.current_sid(), enabled=False)
+        for old, new in (("InteractiveToken", "Password"), ("LeastPrivilege", "HighestAvailable"), ("IgnoreNew", "Parallel"), ("PT5M", "PT1M"),
+                         (w.current_sid(), "S-1-12-1-1-2-3-4"), (" run", " run --endpoint evil")):
+            with self.subTest(new=new), self.assertRaises(w.WorkerError):
+                w.verify_task(valid.replace(old, new), self.binding["runtime"], w.current_sid(), enabled=False)
+
+        for xml in (valid.replace("</TimeTrigger>", "<EndBoundary>2026-10-18T12:01:00Z</EndBoundary></TimeTrigger>"),
+                    valid.replace("</Exec>", "</Exec><Exec><Command>cmd.exe</Command></Exec>"),
+                    valid.replace("</Principal>", "<GroupId>S-1-5-32-544</GroupId></Principal>")):
+            with self.assertRaises(w.WorkerError): w.verify_task(xml, self.binding["runtime"], w.current_sid(), enabled=False)
+
+    def test_mismatched_installed_task_never_creates_or_prompts(self):
+        self.write_binding(); self.task = '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><Actions /></Task>'
+        result = w.setup(self.root, services=self.services)
+        self.assertEqual(result["code"], "TASK_DEFINITION_INVALID"); self.assertEqual(self.prompts, [])
+        self.assertEqual([entry[0] for entry in self.scheduler_calls], ["query"])
+
+    def test_status_is_local_only_and_never_initializes_or_repairs(self):
+        absent = self.base/"absent"
+        with mock.patch.object(w, "secure_root", side_effect=AssertionError("status mutated")), mock.patch.object(w, "_https", side_effect=AssertionError("status network")):
+            self.assertEqual(w.status(absent), {"status": "unconfigured", "code": "WORKER_NOT_CONFIGURED"})
+        self.assertFalse(absent.exists())
+
+    def test_unbound_blueprint_cannot_be_promoted_by_true_attestation_flags(self):
+        self.write_binding()
+        flow = self.binding["proof"]["flows"]["command"]
+        raw = (SOURCE.parents[0]/".."/"docs"/"ascm"/"standard-sync-command-flow.json").resolve().read_bytes()
+        file = self.root/flow["definitionFile"]; file.write_bytes(raw); w._set_owner_acl(file, w.current_sid())
+        flow["definitionSha256"] = hashlib.sha256(raw).hexdigest()
+        path = self.root/"setup-binding.json"; path.write_bytes(json.dumps(self.binding).encode()); w._set_owner_acl(path, w.current_sid())
+        self.assertEqual(w.setup(self.root, services=self.services)["code"], "SETUP_BINDING_REQUIRED")
+        self.assertEqual(self.prompts, []); self.assertEqual(self.scheduler_calls, [])
+
+    def test_failed_final_task_readback_leaves_config_unverified_and_disables_task(self):
+        self.write_binding(); original = self.scheduler
+        def drift(action, xml=None):
+            value = original(action, xml)
+            if action == "query" and self.enabled: return value.replace("IgnoreNew", "Parallel")
+            return value
+        self.services["scheduler"] = drift
+        result = w.setup(self.root, services=self.services)
+        self.assertEqual(result["code"], "TASK_DEFINITION_INVALID"); self.assertFalse(self.enabled)
+        self.assertFalse(w._decode(self.root, "worker-config.dpapi")["taskVerified"])
+
+    def test_cli_status_uses_only_temporary_fixture_and_rejects_secret_arguments(self):
+        output = StringIO()
+        with mock.patch.object(w, "default_root", return_value=self.base/"absent"), redirect_stdout(output):
+            self.assertEqual(w.main(["status"]), 0)
+        self.assertEqual(json.loads(output.getvalue()), {"status": "unconfigured", "code": "WORKER_NOT_CONFIGURED"})
+        output = StringIO()
+        with redirect_stdout(output): self.assertEqual(w.main(["run", "synthetic-secret-SENTINEL"]), 2)
+        self.assertNotIn("SENTINEL", output.getvalue())
+
+    def test_cli_native_root_failure_stays_a_fixed_safe_diagnostic(self):
+        output = StringIO()
+        with mock.patch.object(w, "default_root", side_effect=OSError("private-root-SENTINEL")), redirect_stdout(output), redirect_stderr(output):
+            self.assertEqual(w.main(["status"]), 2)
+        self.assertEqual(json.loads(output.getvalue()), {"status": "held", "code": "WORKER_UNAVAILABLE"})
+
+    def test_scheduler_boundary_decodes_native_utf16_xml_without_running_tasks(self):
+        # Native schtasks can emit UTF16LE XML without BOM, independently of the CSV encoding.
+        xml = w.task_xml(self.binding["runtime"], w.current_sid(), NOW, enabled=False)
+        replies = [subprocess.CompletedProcess([], 0, ('"\\'+w.TASK_NAME+'","N/A","Ready"\r\n').encode("mbcs"), b""),
+                   subprocess.CompletedProcess([], 0, xml.encode("utf-16-le"), b"")]
+        with mock.patch.object(w.subprocess, "run", side_effect=replies) as process:
+            actual = w._scheduler("query")
+        self.assertEqual(actual, xml)
+        for call in process.call_args_list:
+            self.assertFalse(call.kwargs["shell"])
+            self.assertNotIn("/Create", call.args[0]); self.assertNotIn("/RP", call.args[0])
+
+
 @unittest.skipUnless(os.name == "nt", "Windows-native security unsupported on this platform")
 class NativeFoundations(unittest.TestCase):
     def setUp(self):
@@ -676,12 +1158,14 @@ except w.WorkerError as e: print(e.code);sys.exit(23)
             w.save_journal(self.root, {7: "would change dictionary on reload"})
         self.assertEqual(w.load_journal(self.root), {"sequence": 1})
 
-    def test_cli_status_is_safe_and_run_is_unavailable(self):
-        result = subprocess.run([sys.executable, str(SOURCE), "status"], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(json.loads(result.stdout), {"status": "unconfigured", "code": "WORKER_NOT_CONFIGURED"})
-        result = subprocess.run([sys.executable, str(SOURCE), "run"], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
+    def test_cli_status_is_safe_and_unconfigured_run_cannot_make_network_calls(self):
+        output = StringIO()
+        with mock.patch.object(w, "default_root", return_value=self.root), mock.patch.object(w, "_https", side_effect=AssertionError("unconfigured network")), redirect_stdout(output):
+            self.assertEqual(w.main(["status"]), 0)
+            self.assertEqual(w.main(["run"]), 2)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(json.loads(lines[0]), {"status": "unconfigured", "code": "WORKER_NOT_CONFIGURED"})
+        self.assertEqual(json.loads(lines[1]), {"phase": "held", "calls": 0, "code": "WORKER_NOT_CONFIGURED"})
 
     def test_import_does_not_act_or_print(self):
         child = '''import importlib.util,sys

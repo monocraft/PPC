@@ -7,7 +7,7 @@ from copy import deepcopy
 from contextlib import contextmanager, ExitStack
 import ctypes
 from ctypes import wintypes as W
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import hashlib
 import json
@@ -19,6 +19,15 @@ import re
 import sys
 import uuid
 import warnings
+import time
+import http.client
+from email.utils import parsedate_to_datetime
+import subprocess
+import tempfile
+import csv
+from io import StringIO
+import getpass
+import xml.etree.ElementTree as ET
 
 MAX_JSON = 3_145_728
 MAX_CIPHER = MAX_JSON + 65_536
@@ -74,6 +83,7 @@ def _native():
         (k, "CloseHandle", [W.HANDLE], W.BOOL),
         (k, "LocalFree", [W.HLOCAL], W.HLOCAL),
         (k, "GetCurrentProcess", [], W.HANDLE),
+        (k, "GetSystemDirectoryW", [W.LPWSTR, W.UINT], W.UINT),
         (k, "CreateFileW", [W.LPCWSTR, W.DWORD, W.DWORD, W.LPVOID, W.DWORD, W.DWORD, W.HANDLE], W.HANDLE),
         (k, "GetFinalPathNameByHandleW", [W.HANDLE, W.LPWSTR, W.DWORD, W.DWORD], W.DWORD),
         (k, "GetFileInformationByHandleEx", [W.HANDLE, ctypes.c_int, W.LPVOID, W.DWORD], W.BOOL),
@@ -695,7 +705,8 @@ def read_handoff(root: Path, manifest_file: str, expected: dict, now: datetime):
 
 
 def _new_state():
-    return {"version": 1, "source": None, "publication": None, "pending": None, "idleAttempts": [], "maxWallTime": None}
+    return {"version": 1, "source": None, "publication": None, "pending": None, "idleAttempts": [], "maxWallTime": None,
+            "engine": {"retryAt": None, "providerSignal": None, "commandSubmission": None, "preSubmissionHistory": [], "deliveryDemand": None}}
 
 
 def _request_id(source):
@@ -756,8 +767,35 @@ def _confirmation(value, candidate, now):
 
 def _state_shape(state, now):
     """Reject malformed protected business state before indexing nested records."""
+    # Upgrade only the reviewed pre-engine shape; never reset its accepted work.
+    if type(state) is dict and set(state) == set(_new_state()) - {"engine"}:
+        state["engine"] = {"retryAt": None, "providerSignal": None, "commandSubmission": None, "preSubmissionHistory": [], "deliveryDemand": None}
     _require(_exact(state, _new_state()) and type(state["version"]) is int and state["version"] == 1
              and type(state["idleAttempts"]) is list and len(state["idleAttempts"]) <= 24, "WORKER_STATE_INVALID")
+    _require(_exact(state["engine"], {"retryAt", "providerSignal", "commandSubmission", "preSubmissionHistory", "deliveryDemand"})
+             and state["engine"]["providerSignal"] in (None, "available", "reconnect_required"), "WORKER_STATE_INVALID")
+    if state["engine"]["retryAt"] is not None: _instant(state["engine"]["retryAt"])
+    demand = state["engine"]["deliveryDemand"]
+    if demand is not None:
+        _require(_exact(demand, {"candidateId", "generation", "observedAt"}) and _match(demand["candidateId"], UUID_PATTERN)
+                 and _integer(demand["generation"]) and _instant(demand["observedAt"]) <= now, "WORKER_STATE_INVALID")
+    history = state["engine"]["preSubmissionHistory"]
+    _require(type(history) is list and len(history) <= 64, "WORKER_STATE_INVALID")
+    for entry in history:
+        _require(_exact(entry, {"candidate", "command", "expiredAt"}) and type(entry["candidate"]) is dict, "WORKER_STATE_INVALID")
+        c = entry["candidate"]; _candidate(c, {k: c.get(k) for k in ("driveId", "folderId")}, now, unexpired=False)
+        _require(_instant(entry["expiredAt"]) <= now, "WORKER_STATE_INVALID")
+        cmd = entry["command"]
+        if cmd is not None:
+            _handoff_header(cmd, {"kind": "publication"}, now)
+            _require(cmd["candidate"] == c, "WORKER_STATE_INVALID")
+            for key in ("ciphertextFile", "stageFile"): _basename(cmd[key], ".pkg")
+    submission = state["engine"]["commandSubmission"]
+    if submission is not None:
+        _require(_exact(submission, {"attemptId", "phase"}) and _match(submission["attemptId"], UUID_PATTERN)
+                 and submission["phase"] in ("staging", "submitted") and type(state["publication"]) is dict
+                 and type(state["publication"].get("command")) is dict
+                 and submission["attemptId"] == state["publication"]["command"].get("attemptId"), "WORKER_STATE_INVALID")
     for stamp in state["idleAttempts"]:
         _instant(stamp)
     if state["pending"] is not None:
@@ -820,95 +858,97 @@ def _state_shape(state, now):
             _confirmation(publication["confirmation"], c, now)
 
 
-def transition_journal(root: Path, event: str, value, expected: dict, now: datetime) -> dict:
-    """Serialize one local transition and save before returning any next-step data.
-
-    This helper owns worker_lock; callers must not nest another worker_lock.
-    It performs no network/file publication. The later engine must reload and
-    reverify checked byte objects before transport or raw confirmation.
-    """
+def _transition_locked(root, state, event, value, expected, now):
+    """Caller holds worker_lock for this entire durable session."""
     now = _now(now)
     _require(type(expected) is dict, "JOURNAL_CONTEXT_INVALID")
+    _state_shape(state, now)
+    _require(state["maxWallTime"] is None or now >= _instant(state["maxWallTime"]), "CLOCK_ROLLBACK")
+    source, publication = state["source"], state["publication"]
+    if event == "source":
+        handoff = validate_handoff(value, {**expected, "kind": "sharepoint_intake"}, now)
+        raw_sha = _workbook_bytes(expected["raw"], handoff["source"]["bytes"])
+        same_attempt = source is not None and all(source["handoff"][key] == handoff[key] for key in ("operationId", "attemptId"))
+        if same_attempt:
+            _require(source["handoff"] == handoff and source["rawSha256"] == raw_sha, "SOURCE_REPLAY_MISMATCH")
+        elif source is None or source["phase"] == "complete":
+            state["source"] = {"handoff": handoff, "rawBase64": base64.b64encode(expected["raw"]).decode("ascii"),
+                               "rawSha256": raw_sha, "requestId": _request_id(handoff["source"]), "frozenAt": _stamp(now),
+                               "receipt": None, "replyAt": None, "phase": "frozen"}
+        else:
+            raise WorkerError("SOURCE_ALREADY_ACTIVE")
+    elif event == "source_reply":
+        _require(source is not None, "SOURCE_NOT_ACTIVE")
+        reply = _source_reply(value, source, now)
+        _require(source["phase"] != "complete" or value["statusCode"] == 200, "SOURCE_ALREADY_COMPLETE")
+        source.update({"receipt": reply, "replyAt": _stamp(now), "phase": "complete" if value["statusCode"] == 200 else "pending"})
+        if value["statusCode"] == 200:
+            source["rawBase64"] = None
+    elif event == "candidate":
+        _candidate(value, expected.get("destination"), now)
+        _raw_identity(expected.get("raw"), value["sha256"], value["bytes"], package=True)
+        if publication is not None and publication["phase"] != "confirmed":
+            _require(publication["candidate"] == value, "PUBLICATION_ALREADY_ACTIVE")
+        else:
+            state["publication"] = {"candidate": deepcopy(value), "verifiedAt": _stamp(now), "command": None,
+                                    "phase": "candidate_verified", "remoteProof": None, "confirmation": None}
+            state["engine"]["commandSubmission"] = None
+    elif event == "command":
+        _require(publication is not None, "PUBLICATION_NOT_ACTIVE")
+        prior = publication["command"]
+        if prior is not None:
+            _require(value == prior, "COMMAND_REPLAY_MISMATCH")
+        context = {**expected, "kind": "publication", "candidate": publication["candidate"]}
+        handoff = validate_handoff(value, context, now)
+        _require(publication["phase"] in ("candidate_verified", "command_prepared"), "COMMAND_ALREADY_MUTATING")
+        publication.update({"command": handoff, "phase": "command_prepared"})
+    elif event == "result":
+        _require(publication is not None and publication["command"] is not None
+                 and publication["phase"] in ("command_prepared", "write_unknown", "command_held", "remote_verified"), "COMMAND_NOT_ACTIVE")
+        cmd, c = publication["command"], publication["candidate"]
+        context = {**expected, "kind": "publication_result", "operationId": cmd["operationId"], "attemptId": cmd["attemptId"],
+                   "notBefore": cmd["createdAt"], "candidate": c, "destination": {key: c[key] for key in ("driveId", "folderId")},
+                   "forbiddenFiles": [cmd["ciphertextFile"], cmd["stageFile"]]}
+        checked = validate_handoff(value, context, now)
+        if checked["status"] == "verified":
+            proof = {"result": checked, "sha256": c["sha256"], "bytes": c["bytes"], "verifiedAt": _stamp(now)}
+            if publication["remoteProof"] is not None:
+                _require(publication["remoteProof"]["result"] == checked, "RESULT_REPLAY_MISMATCH")
+            publication.update({"remoteProof": proof, "phase": "remote_verified"})
+        elif publication["remoteProof"] is None:
+            publication["phase"] = "write_unknown" if checked["status"] == "unknown" else "command_held"
+    elif event == "confirmation":
+        _require(publication is not None and publication["phase"] in ("remote_verified", "confirmed"), "REMOTE_PROOF_REQUIRED")
+        _confirmation(value, publication["candidate"], now)
+        publication.update({"confirmation": deepcopy(value), "phase": "confirmed"})
+    elif event == "pending":
+        _pending(value)
+        state["pending"] = deepcopy(value)
+    elif event == "idle_charge":
+        _require(value is None and state["pending"] is None and (source is None or source["phase"] == "complete")
+                 and (publication is None or publication["phase"] == "confirmed"), "DURABLE_WORK_ACTIVE")
+        attempts = [_instant(stamp) for stamp in state["idleAttempts"]]
+        _require(all(stamp <= now for stamp in attempts), "CLOCK_ROLLBACK")
+        attempts = [stamp for stamp in attempts if now - stamp < timedelta(hours=24)]
+        _require(len(attempts) < 24 and (not attempts or now - max(attempts) >= timedelta(hours=1)), "IDLE_BUDGET_HELD")
+        state["idleAttempts"] = [_stamp(stamp) for stamp in attempts] + [_stamp(now)]
+    else:
+        raise WorkerError("JOURNAL_EVENT_INVALID")
+    state["maxWallTime"] = _stamp(now)
+    save_journal(root, state)
+    return deepcopy(state)
+
+
+
+def transition_journal(root: Path, event: str, value, expected: dict, now: datetime) -> dict:
+    """Serialize a standalone local transition; run_pass uses the locked helper."""
     with worker_lock(root):
         try:
             state = load_journal(root)
         except JournalMissing:
             _require(event in ("source", "candidate", "pending", "idle_charge"), "JOURNAL_NOT_INITIALIZED")
             state = _new_state()
-        _state_shape(state, now)
-        _require(state["maxWallTime"] is None or now >= _instant(state["maxWallTime"]), "CLOCK_ROLLBACK")
-        source, publication = state["source"], state["publication"]
-        if event == "source":
-            handoff = validate_handoff(value, {**expected, "kind": "sharepoint_intake"}, now)
-            raw_sha = _workbook_bytes(expected["raw"], handoff["source"]["bytes"])
-            same_attempt = source is not None and all(source["handoff"][key] == handoff[key] for key in ("operationId", "attemptId"))
-            if same_attempt:
-                _require(source["handoff"] == handoff and source["rawSha256"] == raw_sha, "SOURCE_REPLAY_MISMATCH")
-            elif source is None or source["phase"] == "complete":
-                state["source"] = {"handoff": handoff, "rawBase64": base64.b64encode(expected["raw"]).decode("ascii"),
-                                   "rawSha256": raw_sha, "requestId": _request_id(handoff["source"]), "frozenAt": _stamp(now),
-                                   "receipt": None, "replyAt": None, "phase": "frozen"}
-            else:
-                raise WorkerError("SOURCE_ALREADY_ACTIVE")
-        elif event == "source_reply":
-            _require(source is not None, "SOURCE_NOT_ACTIVE")
-            reply = _source_reply(value, source, now)
-            _require(source["phase"] != "complete" or value["statusCode"] == 200, "SOURCE_ALREADY_COMPLETE")
-            source.update({"receipt": reply, "replyAt": _stamp(now), "phase": "complete" if value["statusCode"] == 200 else "pending"})
-            if value["statusCode"] == 200:
-                source["rawBase64"] = None
-        elif event == "candidate":
-            _candidate(value, expected.get("destination"), now)
-            _raw_identity(expected.get("raw"), value["sha256"], value["bytes"], package=True)
-            if publication is not None and publication["phase"] != "confirmed":
-                _require(publication["candidate"] == value, "PUBLICATION_ALREADY_ACTIVE")
-            else:
-                state["publication"] = {"candidate": deepcopy(value), "verifiedAt": _stamp(now), "command": None,
-                                        "phase": "candidate_verified", "remoteProof": None, "confirmation": None}
-        elif event == "command":
-            _require(publication is not None, "PUBLICATION_NOT_ACTIVE")
-            prior = publication["command"]
-            if prior is not None:
-                _require(value == prior, "COMMAND_REPLAY_MISMATCH")
-            context = {**expected, "kind": "publication", "candidate": publication["candidate"]}
-            handoff = validate_handoff(value, context, now)
-            _require(publication["phase"] in ("candidate_verified", "command_prepared"), "COMMAND_ALREADY_MUTATING")
-            publication.update({"command": handoff, "phase": "command_prepared"})
-        elif event == "result":
-            _require(publication is not None and publication["command"] is not None
-                     and publication["phase"] in ("command_prepared", "write_unknown", "command_held", "remote_verified"), "COMMAND_NOT_ACTIVE")
-            cmd, c = publication["command"], publication["candidate"]
-            context = {**expected, "kind": "publication_result", "operationId": cmd["operationId"], "attemptId": cmd["attemptId"],
-                       "notBefore": cmd["createdAt"], "candidate": c, "destination": {key: c[key] for key in ("driveId", "folderId")},
-                       "forbiddenFiles": [cmd["ciphertextFile"], cmd["stageFile"]]}
-            checked = validate_handoff(value, context, now)
-            if checked["status"] == "verified":
-                proof = {"result": checked, "sha256": c["sha256"], "bytes": c["bytes"], "verifiedAt": _stamp(now)}
-                if publication["remoteProof"] is not None:
-                    _require(publication["remoteProof"]["result"] == checked, "RESULT_REPLAY_MISMATCH")
-                publication.update({"remoteProof": proof, "phase": "remote_verified"})
-            elif publication["remoteProof"] is None:
-                publication["phase"] = "write_unknown" if checked["status"] == "unknown" else "command_held"
-        elif event == "confirmation":
-            _require(publication is not None and publication["phase"] in ("remote_verified", "confirmed"), "REMOTE_PROOF_REQUIRED")
-            _confirmation(value, publication["candidate"], now)
-            publication.update({"confirmation": deepcopy(value), "phase": "confirmed"})
-        elif event == "pending":
-            _pending(value)
-            state["pending"] = deepcopy(value)
-        elif event == "idle_charge":
-            _require(value is None and state["pending"] is None and (source is None or source["phase"] == "complete")
-                     and (publication is None or publication["phase"] == "confirmed"), "DURABLE_WORK_ACTIVE")
-            attempts = [_instant(stamp) for stamp in state["idleAttempts"]]
-            _require(all(stamp <= now for stamp in attempts), "CLOCK_ROLLBACK")
-            attempts = [stamp for stamp in attempts if now - stamp < timedelta(hours=24)]
-            _require(len(attempts) < 24 and (not attempts or now - max(attempts) >= timedelta(hours=1)), "IDLE_BUDGET_HELD")
-            state["idleAttempts"] = [_stamp(stamp) for stamp in attempts] + [_stamp(now)]
-        else:
-            raise WorkerError("JOURNAL_EVENT_INVALID")
-        state["maxWallTime"] = _stamp(now)
-        save_journal(root, state)
-        return deepcopy(state)
+        return _transition_locked(root, state, event, value, expected, now)
 
 
 def prepare_command(root: Path, command: dict, expected: dict, now: datetime) -> dict:
@@ -923,13 +963,653 @@ def prepare_command(root: Path, command: dict, expected: dict, now: datetime) ->
     return {"manifestFile": frozen["attemptId"] + ".json", "manifestBytes": raw}
 
 
+PPC_HOST = "abzzcswajjzbordmwuuh.supabase.co"
+PPC_MOUNT = "/functions/v1/ppc-ascm-flow"
+CONTROL_ROUTE = "/api/ascm/publication/queued"
+SOURCE_ROUTE = "/api/ascm/sharepoint/import"
+PREPARE_ROUTE = "/api/ascm/publication/prepare"
+CONNECTION_ROUTE = "/api/ascm/connection"
+HOLD_CODES = {"PHASE_NOT_READY", "CURRENT_MISSING", "STATE_INVALID", "OWNER_INTENT_UNKNOWN", "PUBLISHER_NOT_CONFIGURED", "PREPARE_ATTEMPTS_EXHAUSTED"}
+
+
+def validate_control(value, destination, now):
+    fields = {"version", "action", "requestedRevision", "publishedRevision", "generation", "prepareKey", "retryAt", "intent", "candidate", "binaryPath", "holdCode", "archiveAllowed"}
+    _require(_exact(value, fields) and type(value["version"]) is int and value["version"] == 1 and value["archiveAllowed"] is False
+             and value["action"] in ("idle", "deliver", "prepare", "recover", "backoff", "held")
+             and _integer(value["requestedRevision"]) and _integer(value["publishedRevision"], 0, value["requestedRevision"])
+             and _integer(value["generation"], 0)
+             and (value["prepareKey"] is None or _match(value["prepareKey"], r"[a-f0-9]{64}"))
+             and (value["holdCode"] is None or value["holdCode"] in HOLD_CODES), "CONTROL_INVALID")
+    if value["retryAt"] is not None: _instant(value["retryAt"])
+    intent = value["intent"]
+    if intent is not None:
+        _pending({"prepareKey": "a"*64, "intent": intent, "retryAt": None, "producerRunIds": []})
+    action = value["action"]
+    if action == "idle":
+        _require(value["requestedRevision"] == value["publishedRevision"] and all(value[k] is None for k in ("prepareKey", "retryAt", "intent", "candidate", "binaryPath", "holdCode")), "CONTROL_INVALID")
+    elif action == "held":
+        _require(value["holdCode"] in HOLD_CODES - {"PREPARE_ATTEMPTS_EXHAUSTED"}
+                 and all(value[k] is None for k in ("prepareKey", "retryAt", "intent", "candidate", "binaryPath")), "CONTROL_INVALID")
+    elif action == "deliver":
+        _candidate(value["candidate"], destination, now)
+        _require(intent is not None and value["candidate"]["storageRevision"] <= value["requestedRevision"]
+                 and value["binaryPath"] == f'/api/ascm/publication/{value["candidate"]["candidateId"]}/bytes'
+                 and all(value[k] is None for k in ("prepareKey", "retryAt", "holdCode")), "CONTROL_INVALID")
+    else:
+        _require(intent is not None and _match(value["prepareKey"], r"[a-f0-9]{64}") and value["candidate"] is None and value["binaryPath"] is None
+                 and ((value["retryAt"] is not None and value["holdCode"] in (None, "PREPARE_ATTEMPTS_EXHAUSTED")) if action == "backoff"
+                      else (value["retryAt"] is None and value["holdCode"] is None)), "CONTROL_INVALID")
+    return deepcopy(value)
+
+
+def validate_preparation(value):
+    _require(_exact(value, {"version", "status", "prepareKey", "retryAt", "holdCode", "archiveAllowed"})
+             and type(value["version"]) is int and value["version"] == 1 and value["archiveAllowed"] is False
+             and value["status"] in ("dispatch_requested", "dispatch_rejected", "dispatch_uncertain", "busy", "backoff", "not_needed", "held")
+             and (value["holdCode"] is None or value["holdCode"] in HOLD_CODES)
+             and (value["holdCode"] != "PREPARE_ATTEMPTS_EXHAUSTED" or value["status"] == "backoff"), "PREPARE_INVALID")
+    if value["status"] in ("dispatch_requested", "dispatch_rejected", "dispatch_uncertain", "busy", "backoff"):
+        _require(_match(value["prepareKey"], r"[a-f0-9]{64}") and value["retryAt"] is not None
+                 and value["holdCode"] in (None, "PREPARE_ATTEMPTS_EXHAUSTED"), "PREPARE_INVALID")
+        _instant(value["retryAt"])
+    else:
+        _require(value["prepareKey"] is None and value["retryAt"] is None
+                 and (value["holdCode"] is not None if value["status"] == "held" else value["holdCode"] is None), "PREPARE_INVALID")
+    return deepcopy(value)
+
+
+def _route(method, route, headers, body):
+    binary = re.fullmatch(r"/api/ascm/publication/("+UUID_PATTERN+r")/(bytes|confirm)", route)
+    valid = (method, route) in (("GET", CONTROL_ROUTE), ("POST", SOURCE_ROUTE), ("POST", PREPARE_ROUTE), ("POST", CONNECTION_ROUTE))
+    _require(valid or binary is not None and method == ("GET" if binary[2] == "bytes" else "POST"), "HTTP_ROUTE_INVALID")
+    allowed = {"X-PPC-ASCM-Flow-Secret"}
+    if binary:
+        allowed.add("X-PPC-Package-Generation")
+        _require(_match(headers.get("X-PPC-Package-Generation"), r"[1-9][0-9]*"), "HTTP_HEADERS_INVALID")
+        if binary[2] == "confirm": allowed |= {"X-PPC-SP-"+part for part in ("Drive-Id", "Folder-Id", "Item-Id", "Version-Id", "File-Name")}
+    _require(set(headers) <= allowed | {"Content-Type"} and all(_text(v, 512) for v in headers.values()), "HTTP_HEADERS_INVALID")
+    _require(body is None if method == "GET" else type(body) is bytes, "HTTP_BODY_INVALID")
+
+
+def _https(method, route, *, headers, body, timeout, maximum):
+    """Fixed TLS origin; http.client never follows redirects or uses proxy settings."""
+    _route(method, route, headers, body)
+    connection = http.client.HTTPSConnection(PPC_HOST, timeout=timeout)
+    started = time.monotonic()
+    try:
+        connection.request(method, PPC_MOUNT+route, body=body, headers=headers)
+        remaining = timeout-(time.monotonic()-started)
+        _require(remaining > 0, "HTTP_TIMEOUT")
+        if connection.sock is not None: connection.sock.settimeout(remaining)
+        response = connection.getresponse()
+        chunks, size = [], 0
+        while True:
+            remaining = timeout-(time.monotonic()-started)
+            _require(remaining > 0, "HTTP_TIMEOUT")
+            if connection.sock is not None: connection.sock.settimeout(remaining)
+            chunk = response.read(min(65536, maximum+1-size))
+            if not chunk: break
+            chunks.append(chunk); size += len(chunk)
+            _require(size <= maximum, "HTTP_RESPONSE_OVERSIZE")
+        return {"status": response.status, "headers": {k.lower(): v for k, v in response.getheaders()}, "body": b"".join(chunks)}
+    except (OSError, http.client.HTTPException):
+        raise WorkerError("HTTP_UNCERTAIN") from None
+    finally:
+        connection.close()
+
+
+def _json_bytes(value):
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+
+def _manifest_files(folder):
+    with _root_handles(folder):
+        files = sorted(path.name for path in Path(folder).iterdir() if path.name.endswith(".json"))
+        _require(len(files) <= 256, "HANDOFF_SCAN_LIMIT")
+        for name in files: _basename(name, ".json")
+        return files
+
+
+def _write_once(folder, name, raw):
+    """Publish a complete immutable object; never overwrite or recreate an uncertain name."""
+    _relative(name)
+    with _root_handles(folder):
+        target = Path(folder)/name
+        if os.path.lexists(target):
+            _require(read_checked(folder, name, max(MAX_HANDOFF, len(raw))) == raw, "HANDOFF_REPLAY_MISMATCH")
+            return
+        # A same-directory complete temporary is renamed create-only. Windows
+        # os.rename refuses an existing destination; no replace/overwrite used.
+        temporary = Path(folder)/(str(uuid.uuid4())+".tmp")
+        with temporary.open("xb") as stream:
+            stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+        try:
+            os.rename(temporary, target)
+        except FileExistsError:
+            _require(read_checked(folder, name, max(MAX_HANDOFF, len(raw))) == raw, "HANDOFF_REPLAY_MISMATCH")
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+class _Pass:
+    def __init__(self, root, state, config, credential, services):
+        self.root, self.state, self.config, self.credential = root, state, config, credential
+        self.clock = services.get("clock", lambda: datetime.now(timezone.utc))
+        self.monotonic = services.get("monotonic", time.monotonic)
+        self.sleep = services.get("sleep", time.sleep)
+        self.transport = services.get("transport", _https)
+        self.fault = services.get("fault", lambda phase: None)
+        self.started = self.monotonic(); self.calls = 0
+        self.handoff = Path(config["handoffRoot"]); self.destination = config["destination"]
+        self.was_active = False
+
+    def now(self):
+        value = _now(self.clock())
+        _require(self.state["maxWallTime"] is None or value >= _instant(self.state["maxWallTime"]), "CLOCK_ROLLBACK")
+        return value
+
+    def save(self):
+        self.state["maxWallTime"] = _stamp(self.now()); _state_shape(self.state, self.now()); save_journal(self.root, self.state)
+
+    def event(self, event, value, expected=None):
+        self.state = _transition_locked(self.root, self.state, event, value, expected or {}, self.now())
+
+    def defer(self, seconds=300):
+        self.state["engine"]["retryAt"] = _stamp(self.now()+timedelta(seconds=seconds)); self.save()
+
+    def call(self, method, route, *, value=None, raw=None, headers=None, idle=False, replay=True, maximum=MAX_HANDOFF):
+        body = raw if raw is not None else _json_bytes(value) if value is not None else None
+        request_headers = {"X-PPC-ASCM-Flow-Secret": self.credential, **(headers or {})}
+        if body is not None: request_headers["Content-Type"] = "application/octet-stream" if raw is not None else "application/json"
+        _route(method, route, request_headers, body)
+        for attempt in range(3):
+            remaining = 480-(self.monotonic()-self.started)
+            _require(self.calls < 6 and remaining > 0, "PASS_BUDGET_HELD")
+            # Record the observed wall maximum before every external attempt;
+            # even a lost reply/restart cannot roll the local clock backward.
+            self.save(); self.calls += 1
+            try:
+                response = self.transport(method, route, headers=request_headers, body=body, timeout=min(120, remaining), maximum=maximum)
+            except WorkerError as error:
+                if error.code in ("HTTP_UNCERTAIN", "HTTP_TIMEOUT") and not idle: self.defer()
+                raise
+            except (OSError, TimeoutError, http.client.HTTPException):
+                if not idle: self.defer()
+                raise WorkerError("HTTP_UNCERTAIN") from None
+            _require(_exact(response, {"status", "headers", "body"}) and type(response["status"]) is int
+                     and type(response["headers"]) is dict and type(response["body"]) is bytes and len(response["body"]) <= maximum, "HTTP_RESPONSE_INVALID")
+            _require(self.monotonic()-self.started <= 480, "PASS_BUDGET_HELD")
+            status = response["status"]
+            if status in (408, 429, 502, 503, 504):
+                retry = response["headers"].get("retry-after", "5")
+                try:
+                    delay = float(retry) if re.fullmatch(r"[0-9]+", retry) else (parsedate_to_datetime(retry)-self.now()).total_seconds()
+                except (ValueError, TypeError, OverflowError): delay = 5
+                delay = max(1, min(900, delay))
+                if not idle and replay and attempt < 2 and self.calls < 6 and delay < 480-(self.monotonic()-self.started):
+                    self.sleep(delay); continue
+                if not idle: self.defer(delay)
+                raise WorkerError("HTTP_BACKOFF")
+            return response
+        raise WorkerError("HTTP_BACKOFF")
+
+    def json_call(self, method, route, **kwargs):
+        response = self.call(method, route, **kwargs)
+        value = strict_json(response["body"])
+        return response["status"], value
+
+    def finish(self, phase, code, *, report=True):
+        signal = self.state["engine"]["providerSignal"]
+        if report and self.was_active and signal is not None and self.calls < 6 and self.monotonic()-self.started < 480:
+            status, result = self.json_call("POST", CONNECTION_ROUTE, value={"service": "sharepoint", "state": signal}, replay=False)
+            _require(status == 200 and _exact(result, {"reported", "archiveAllowed"}) and type(result["reported"]) is bool and result["archiveAllowed"] is False, "CONNECTION_REPLY_INVALID")
+            if result["reported"]: self.state["engine"]["providerSignal"] = None; self.save()
+        return {"phase": phase, "calls": self.calls, "code": code}
+
+    def discover(self):
+        source = self.state["source"]
+        if source is not None and source["phase"] != "complete": return
+        found = []
+        for name in _manifest_files(self.handoff/"intake"):
+            manifest, raw = read_handoff(self.handoff/"intake", name, {"kind": "sharepoint_intake"}, self.now())
+            if source is not None and _request_id(manifest["source"]) == source["requestId"]:
+                _require(source["rawSha256"] == hashlib.sha256(raw).hexdigest(), "SOURCE_REPLAY_MISMATCH")
+                # Different cloud observation UUIDs do not create business work.
+                continue
+            if source is not None:
+                baseline = source["handoff"]["source"]
+                if manifest["source"]["fileName"] < baseline["fileName"]: continue
+                if manifest["source"]["fileName"] == baseline["fileName"]:
+                    _require(manifest["source"]["itemUniqueId"] == baseline["itemUniqueId"], "SOURCE_AMBIGUOUS")
+                    if int(manifest["source"]["versionLabel"][:-2]) < int(baseline["versionLabel"][:-2]): continue
+            if source is not None and all(source["handoff"][k] == manifest[k] for k in ("operationId", "attemptId")):
+                _require(source["handoff"] == manifest and source["rawSha256"] == hashlib.sha256(raw).hexdigest(), "SOURCE_REPLAY_MISMATCH")
+                continue
+            found.append((manifest, raw))
+        if found:
+            # Cloud and backend own eligibility. Choose its latest handed-off
+            # observation without silently resolving distinct same-day items.
+            latest = max(entry[0]["source"]["fileName"] for entry in found)
+            selected = [entry for entry in found if entry[0]["source"]["fileName"] == latest]
+            _require(len({entry[0]["source"]["itemUniqueId"] for entry in selected}) == 1, "SOURCE_AMBIGUOUS")
+            manifest, raw = max(selected, key=lambda entry: int(entry[0]["source"]["versionLabel"][:-2]))
+            self.event("source", manifest, {"raw": raw}); self.state["engine"]["providerSignal"] = "available"; self.save()
+            self.fault("source_frozen")
+
+    def replay_source(self):
+        source = self.state["source"]
+        if source is None or source["phase"] == "complete": return
+        handoff = source["handoff"]
+        raw = base64.b64decode(source["rawBase64"], validate=True)
+        _raw_identity(raw, source["rawSha256"], handoff["source"]["bytes"])
+        requested = _stamp(self.now())
+        status, body = self.json_call("POST", SOURCE_ROUTE, value={"schemaVersion": 1, "source": handoff["source"], "before": handoff["before"], "after": handoff["after"], "workbookBase64": source["rawBase64"]})
+        _require(status in (200, 202), "SOURCE_HELD")
+        self.event("source_reply", {"statusCode": status, "body": body, "requestedAt": requested})
+        self.fault("source_reply_saved")
+
+    def command_result(self):
+        publication = self.state["publication"]
+        if publication is None or publication["phase"] in ("candidate_verified", "confirmed"): return False
+        c, cmd = publication["candidate"], publication["command"]
+        expected = {"kind": "publication_result", "operationId": cmd["operationId"], "attemptId": cmd["attemptId"], "notBefore": cmd["createdAt"],
+                    "candidate": c, "destination": self.destination, "forbiddenFiles": [cmd["ciphertextFile"], cmd["stageFile"]]}
+        matches = []
+        for name in _manifest_files(self.handoff/"results"):
+            value = strict_json(read_checked(self.handoff/"results", name, MAX_HANDOFF))
+            if value.get("operationId") != cmd["operationId"] or value.get("attemptId") != cmd["attemptId"]: continue
+            result, raw = read_handoff(self.handoff/"results", name, expected, self.now()); matches.append((result, raw))
+        if not matches: return False
+        verified = [entry for entry in matches if entry[0]["status"] == "verified"]
+        if verified:
+            _require(all(entry[0] == verified[0][0] for entry in verified), "RESULT_REPLAY_MISMATCH")
+            value, raw = verified[0]
+        else: value, raw = matches[-1]
+        self.event("result", value, {"raw": raw})
+        if value["status"] != "verified":
+            if value["code"] == "SHAREPOINT_AUTH_REQUIRED":
+                self.state["engine"]["providerSignal"] = "reconnect_required"; self.save()
+            return False
+        self.state["engine"]["providerSignal"] = "available"; self.save(); self.fault("remote_verified")
+        # Re-read the actual fresh return on every confirmation attempt; saved
+        # proof labels never replace checked bytes, including after a restart.
+        raw = read_checked(self.handoff/"results", value["readbackFile"], MAX_PACKAGE)
+        _raw_identity(raw, c["sha256"], c["bytes"], package=True)
+        headers = {"X-PPC-Package-Generation": str(c["generation"])}
+        for field, header in (("driveId", "Drive-Id"), ("folderId", "Folder-Id"), ("itemId", "Item-Id"), ("versionId", "Version-Id"), ("fileName", "File-Name")):
+            headers["X-PPC-SP-"+header] = value["item"][field]
+        status, body = self.json_call("POST", f'/api/ascm/publication/{c["candidateId"]}/confirm', raw=raw, headers=headers)
+        _require(status == 200, "CONFIRMATION_HELD")
+        self.event("confirmation", body); self.fault("confirmation_saved")
+        return True
+
+    def deliver(self, candidate):
+        headers = {"X-PPC-Package-Generation": str(candidate["generation"])}
+        response = self.call("GET", f'/api/ascm/publication/{candidate["candidateId"]}/bytes', headers=headers, maximum=MAX_PACKAGE)
+        _require(response["status"] == 200, "CANDIDATE_HELD")
+        raw = response["body"]; self.event("candidate", candidate, {"destination": self.destination, "raw": raw})
+        self.fault("candidate_verified")
+        self.publish_command(raw)
+
+    def publish_command(self, raw):
+        publication = self.state["publication"]
+        c = publication["candidate"]
+        if publication["command"] is None:
+            cmd = {"schemaVersion": 1, "kind": "publication", "operationId": str(uuid.uuid4()), "attemptId": str(uuid.uuid4()), "createdAt": _stamp(self.now()),
+                   "candidate": c, "ciphertextFile": str(uuid.uuid4())+".pkg", "stageFile": str(uuid.uuid4())+".pkg"}
+            self.event("command", cmd, {"destination": self.destination, "raw": raw})
+        cmd = self.state["publication"]["command"]
+        submission = self.state["engine"]["commandSubmission"]
+        if submission is None:
+            self.state["engine"]["commandSubmission"] = {"attemptId": cmd["attemptId"], "phase": "staging"}; self.save()
+        elif submission["phase"] == "submitted":
+            return
+        self.fault("command_saved")
+        _write_once(self.handoff/"commands", cmd["ciphertextFile"], raw)
+        self.fault("ciphertext_written")
+        self.state["engine"]["commandSubmission"]["phase"] = "submitted"; self.save()
+        self.fault("command_submission_intent")
+        _write_once(self.handoff/"commands", cmd["attemptId"]+".json", _json_bytes(cmd))
+        self.fault("manifest_written")
+
+    def execute(self):
+        self.now(); _state_shape(self.state, self.now())
+        retry = self.state["engine"]["retryAt"]
+        if retry is not None and _instant(retry) > self.now(): return self.finish("waiting", "WORKER_BACKOFF", report=False)
+        self.state["engine"]["retryAt"] = None
+        self.discover()
+        source, publication, pending = (self.state[k] for k in ("source", "publication", "pending"))
+        self.was_active = (self.state["engine"]["deliveryDemand"] is not None or source is not None and source["phase"] != "complete" or publication is not None and publication["phase"] != "confirmed" or pending is not None)
+        submission = self.state["engine"]["commandSubmission"]
+        expired_presubmit = publication is not None and _instant(publication["candidate"]["expiresAt"]) <= self.now() and (
+            publication["phase"] == "candidate_verified" and publication["command"] is None
+            or publication["phase"] == "command_prepared" and submission is not None and submission["phase"] == "staging"
+            and not _exists(self.handoff/"commands", publication["command"]["attemptId"]+".json"))
+        if pending is not None and pending["retryAt"] is not None and _instant(pending["retryAt"]) > self.now():
+            return self.finish("waiting", "PRODUCER_WAIT")
+        if not expired_presubmit and publication is not None and publication["phase"] not in ("candidate_verified", "confirmed"):
+            submission = self.state["engine"]["commandSubmission"]
+            if submission is not None and submission["phase"] == "staging":
+                cmd = publication["command"]
+                raw = read_checked(self.handoff/"commands", cmd["ciphertextFile"], MAX_PACKAGE)
+                _raw_identity(raw, publication["candidate"]["sha256"], publication["candidate"]["bytes"], package=True)
+                self.publish_command(raw)
+                return self.finish("waiting", "COMMAND_WAIT", report=False)
+            if not self.command_result(): return self.finish("waiting", "COMMAND_WAIT", report=self.state["engine"]["providerSignal"] == "reconnect_required")
+            self.replay_source()
+        else:
+            self.replay_source()
+        publication = self.state["publication"]
+        if not expired_presubmit and publication is not None and publication["phase"] == "candidate_verified":
+            # A crash before the immutable command is recoverable through the
+            # exact candidate GET; no cloud mutation was yet submitted.
+            self.deliver(publication["candidate"])
+            return self.finish("waiting", "COMMAND_WAIT")
+        if not self.was_active:
+            self.event("idle_charge", None)
+        status, body = self.json_call("GET", CONTROL_ROUTE, idle=not self.was_active)
+        _require(status == 200, "CONTROL_HELD")
+        control = validate_control(body, self.destination, self.now())
+        action = control["action"]
+        if expired_presubmit and action != "held":
+            # Eligibility comes from our positive durable pre-submit phase,
+            # never from lease lapse/404/absence alone. Retain provenance and
+            # orphan ciphertext; fresh server control decides continuation.
+            history = self.state["engine"]["preSubmissionHistory"]
+            _require(len(history) < 64, "PRESUBMISSION_HISTORY_FULL")
+            history.append({"candidate": deepcopy(publication["candidate"]), "command": deepcopy(publication["command"]), "expiredAt": _stamp(self.now())})
+            self.state["publication"] = None; self.state["engine"]["commandSubmission"] = None; self.save()
+        if action == "idle":
+            self.state["pending"] = None; self.state["engine"]["deliveryDemand"] = None; self.save()
+            return self.finish("complete" if self.state["source"] is not None and self.state["source"]["phase"] == "complete" else "idle", "IDLE")
+        if action == "held": return self.finish("held", control["holdCode"])
+        self.was_active = True
+        if action == "deliver":
+            self.state["pending"] = None
+            self.state["engine"]["deliveryDemand"] = {"candidateId": control["candidate"]["candidateId"], "generation": control["candidate"]["generation"], "observedAt": _stamp(self.now())}
+            self.save(); self.deliver(control["candidate"])
+            return self.finish("waiting", "COMMAND_WAIT")
+        self.state["engine"]["deliveryDemand"] = None
+        self.event("pending", {"prepareKey": control["prepareKey"], "intent": control["intent"], "retryAt": control["retryAt"], "producerRunIds": []})
+        if action == "backoff": return self.finish("waiting", "PRODUCER_WAIT")
+        status, body = self.json_call("POST", PREPARE_ROUTE, value={"prepareKey": control["prepareKey"]}, replay=False)
+        if status == 409 and body.get("code") == "PREPARE_STALE":
+            self.defer(1); return self.finish("waiting", "PREPARE_STALE", report=False)
+        _require(status == 200, "PREPARE_HELD")
+        prepared = validate_preparation(body)
+        if prepared["prepareKey"] is not None:
+            _require(prepared["prepareKey"] == control["prepareKey"], "PREPARE_INVALID")
+            self.event("pending", {"prepareKey": prepared["prepareKey"], "intent": control["intent"], "retryAt": prepared["retryAt"], "producerRunIds": []})
+        else:
+            # not_needed/held is not completion. Next pass re-reads authority.
+            self.defer(300)
+        return self.finish("waiting", "PRODUCER_WAIT")
+
+
+def run_pass(root: Path, *, services: dict | None = None) -> dict:
+    """One bounded session. Injection is programmatic test-only, never a CLI option."""
+    services = services or {}; session = None
+    try:
+        if "configuration" in services:
+            config, credential = services["configuration"], services["credential"]
+        else:
+            config, credential = _runtime(root)
+        with worker_lock(root):
+            try: state = load_journal(root)
+            except JournalMissing: state = _new_state()
+            session = _Pass(root, state, config, credential, services)
+            return session.execute()
+    except WorkerError as error:
+        return {"phase": "held", "calls": session.calls if session else 0, "code": error.code}
+    except (OSError, ValueError, TypeError, KeyError, http.client.HTTPException):
+        return {"phase": "held", "calls": session.calls if session else 0, "code": "WORKER_UNAVAILABLE"}
+
+
+TASK_NAME = "PPC ASCM SharePoint Worker"
+TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
+PERSONAL_SITE = "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com"
+DESTINATION_SITE = "https://hp.sharepoint.com/teams/PCGamingCategory"
+DESTINATION_FOLDER = "/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC"
+
+
+def runtime_paths():
+    _require(os.name == "nt" and sys.version_info[:2] == (3, 11), "RUNTIME_UNSUPPORTED")
+    alias = Path.home()/"AppData"/"Local"/"Microsoft"/"WindowsApps"/"PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0"
+    return {"python": str(alias/"python.exe"), "pythonw": str(alias/"pythonw.exe"), "worker": str(Path(__file__).resolve())}
+
+
+def default_root():
+    _native()
+    buffer = ctypes.create_unicode_buffer(32768)
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    if shell.SHGetFolderPathW(None, 0x001C, None, 0, buffer): raise WorkerError("LOCAL_ROOT_UNAVAILABLE")
+    return Path(buffer.value)/"PPC"/"ASCM"
+
+
+def _private_root(root):
+    root = Path(root)
+    _require(root.is_dir(), "WORKER_NOT_CONFIGURED")
+    with _root_handles(root):
+        _require(verify_owner_acl(root, current_sid()), "ACL_NOT_PRIVATE")
+    return root
+
+
+def _validate_binding(value, root):
+    """Validate a reviewed local attestation, never infer remote access from sync icons."""
+    code = "SETUP_BINDING_REQUIRED"
+    fields = {"schemaVersion", "ownerSid", "oneDriveBusinessRoot", "handoffRoot", "privateDocumentsListId", "source", "destination", "runtime", "proof"}
+    _require(_exact(value, fields) and type(value["schemaVersion"]) is int and value["schemaVersion"] == 1
+             and value["ownerSid"] == current_sid() and value["source"] == SOURCE_AUTHORITY
+             and _match(value["privateDocumentsListId"], UUID_PATTERN), code)
+    _require(value["ownerSid"] not in ("S-1-5-18", "S-1-5-19", "S-1-5-20"), "TASK_OWNER_INVALID")
+    destination = value["destination"]
+    _require(_exact(destination, {"site", "serverRelativeFolder", "driveId", "folderId"})
+             and destination["site"] == DESTINATION_SITE and destination["serverRelativeFolder"] == DESTINATION_FOLDER
+             and all(_text(destination[k]) and not re.search(r"__|placeholder|synthetic|unverified", destination[k], re.I) for k in ("driveId", "folderId")), code)
+    runtime = value["runtime"]
+    _require(runtime == runtime_paths(), "RUNTIME_PATH_INVALID")
+    # The reviewed worker path is fixed, including spaces, never caller code.
+    with checked_file(Path(runtime["worker"]).parent, Path(runtime["worker"]).name): pass
+    business, handoff = _canonical(value["oneDriveBusinessRoot"]), _canonical(value["handoffRoot"])
+    _require(handoff == _canonical(Path(business)/"PPC ASCM"), code)
+    for path in (business, handoff, *(str(Path(handoff)/part) for part in ("intake", "commands", "results"))):
+        with _root_handles(path): pass
+    proof = value["proof"]
+    _require(_exact(proof, {"mapping", "access", "flows"})
+             and _exact(proof["mapping"], {"personalSite", "remoteRoot", "syncIncluded"})
+             and proof["mapping"] == {"personalSite": PERSONAL_SITE, "remoteRoot": "/Documents/PPC ASCM", "syncIncluded": True}, code)
+    access = proof["access"]
+    _require(_exact(access, {"ownerSid", "ordinarySharedAccess", "corporateAdministrationPreserved", "observedAt"})
+             and access["ownerSid"] == current_sid() and access["ordinarySharedAccess"] is False
+             and access["corporateAdministrationPreserved"] is True, code)
+    _instant(access["observedAt"])
+    _require(_exact(proof["flows"], {"intake", "command"}), code)
+    for kind, flow in proof["flows"].items():
+        _require(_exact(flow, {"flowId", "definitionFile", "definitionSha256", "bindingVerified", "imported", "persisted"})
+                 and _match(flow["flowId"], UUID_PATTERN) and _match(flow["definitionSha256"], r"[a-f0-9]{64}")
+                 and all(flow[k] is True for k in ("bindingVerified", "imported", "persisted")), code)
+        _basename(flow["definitionFile"], ".json")
+        _require(verify_owner_acl(Path(root)/flow["definitionFile"], current_sid()), "ACL_NOT_PRIVATE")
+        raw = read_checked(root, flow["definitionFile"], MAX_JSON)
+        _require(hashlib.sha256(raw).hexdigest() == flow["definitionSha256"], code)
+        exported = strict_json(raw)
+        props = exported.get("properties")
+        _require(type(props) is dict and type(props.get("definition")) is dict and type(props.get("connectionReferences")) is dict
+                 and len(props["connectionReferences"]) == 1, code)
+        for reference in props["connectionReferences"].values():
+            _require(type(reference) is dict and reference.get("source") == "Embedded"
+                     and reference.get("id") == "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+                     and _text(reference.get("connectionName")), code)
+        serialized = _json_bytes(exported).decode("utf-8")
+        _require("BindingRequired" not in serialized and "__BIND_" not in serialized and "shared_office365" not in serialized
+                 and "__VERIFIED_" not in serialized, code)
+        tokens = (SOURCE_AUTHORITY["sitePath"], SOURCE_AUTHORITY["driveId"], SOURCE_AUTHORITY["listId"]) if kind == "intake" else (DESTINATION_SITE, destination["driveId"], destination["folderId"])
+        _require(all(token in serialized for token in (*tokens, PERSONAL_SITE, "/Documents/PPC ASCM")), code)
+    return deepcopy(value)
+
+
+def _runtime(root):
+    root = _private_root(root)
+    config = _decode(root, "worker-config.dpapi")
+    _require(_exact(config, {"binding", "taskVerified"}) and config["taskVerified"] is True, "TASK_NOT_VERIFIED")
+    binding = _validate_binding(config["binding"], root)
+    secret = _decode(root, "worker-secret.dpapi")
+    _require(_exact(secret, {"credential"}) and _match(secret["credential"], r"[!-~]{32,512}"), "CREDENTIAL_INVALID")
+    return {"handoffRoot": binding["handoffRoot"], "destination": {k: binding["destination"][k] for k in ("driveId", "folderId")}}, secret["credential"]
+
+
+def task_xml(runtime, sid, now, *, enabled=False):
+    _require(_match(sid, r"S-1-(?:[0-9]+-)*[0-9]+") and sid not in ("S-1-5-18", "S-1-5-19", "S-1-5-20"), "TASK_OWNER_INVALID")
+    ET.register_namespace("", TASK_NS)
+    root = ET.Element("{"+TASK_NS+"}Task", {"version": "1.4"})
+    def sub(parent, tag, value=None, **attrs):
+        node = ET.SubElement(parent, "{"+TASK_NS+"}"+tag, attrs)
+        if value is not None: node.text = value
+        return node
+    triggers = sub(root, "Triggers")
+    logon = sub(triggers, "LogonTrigger"); sub(logon, "Enabled", "true"); sub(logon, "UserId", sid)
+    timer = sub(triggers, "TimeTrigger"); repetition = sub(timer, "Repetition")
+    sub(repetition, "Interval", "PT5M"); sub(repetition, "StopAtDurationEnd", "false")
+    sub(timer, "StartBoundary", _stamp(now)); sub(timer, "Enabled", "true")
+    principal = sub(sub(root, "Principals"), "Principal", id="Owner")
+    sub(principal, "UserId", sid); sub(principal, "LogonType", "InteractiveToken"); sub(principal, "RunLevel", "LeastPrivilege")
+    settings = sub(root, "Settings")
+    for key, text in (("MultipleInstancesPolicy", "IgnoreNew"), ("DisallowStartIfOnBatteries", "false"), ("StopIfGoingOnBatteries", "false"),
+                      ("StartWhenAvailable", "false"), ("RunOnlyIfNetworkAvailable", "false"), ("Enabled", "true" if enabled else "false"), ("ExecutionTimeLimit", "PT8M")):
+        sub(settings, key, text)
+    action = sub(sub(root, "Actions", Context="Owner"), "Exec")
+    sub(action, "Command", runtime["pythonw"])
+    sub(action, "Arguments", '-I -B "'+runtime["worker"]+'" run')
+    sub(action, "WorkingDirectory", str(Path(runtime["worker"]).parent))
+    return ET.tostring(root, encoding="unicode")
+
+
+def verify_task(xml, runtime, sid, *, enabled):
+    code = "TASK_DEFINITION_INVALID"
+    _require(type(xml) is str and len(xml) <= 131072 and "<!" not in xml, code)
+    try: tree = ET.fromstring(xml)
+    except ET.ParseError: raise WorkerError(code) from None
+    def nodes(path): return tree.findall(path.replace("/", "/{*}") if path.startswith("{*}") else "{*}"+path.replace("/", "/{*}"))
+    def one(path):
+        values = nodes(path); _require(len(values) == 1, code); return values[0]
+    def text(path, expected): _require(one(path).text == expected, code)
+    _require(tree.tag == "{"+TASK_NS+"}Task", code)
+    _require(len(list(one("Actions"))) == 1 and len(list(one("Principals"))) == 1 and len(list(one("Triggers"))) == 2, code)
+    _require(one("Actions").get("Context") == "Owner" and one("Principals/Principal").get("id") == "Owner", code)
+    for path, fields in (("Principals/Principal", {"UserId", "LogonType", "RunLevel"}),
+                         ("Triggers/LogonTrigger", {"Enabled", "UserId"}),
+                         ("Triggers/TimeTrigger", {"Repetition", "StartBoundary", "Enabled"}),
+                         ("Triggers/TimeTrigger/Repetition", {"Interval", "StopAtDurationEnd"}),
+                         ("Actions/Exec", {"Command", "Arguments", "WorkingDirectory"})):
+        children = list(one(path))
+        _require(len(children) == len(fields) and {child.tag.rsplit("}", 1)[-1] for child in children} == fields, code)
+    for path, expected in (("Principals/Principal/UserId", sid), ("Principals/Principal/LogonType", "InteractiveToken"), ("Principals/Principal/RunLevel", "LeastPrivilege"),
+                           ("Triggers/LogonTrigger/UserId", sid), ("Triggers/LogonTrigger/Enabled", "true"), ("Triggers/TimeTrigger/Enabled", "true"),
+                           ("Triggers/TimeTrigger/Repetition/Interval", "PT5M"), ("Triggers/TimeTrigger/Repetition/StopAtDurationEnd", "false"),
+                           ("Settings/MultipleInstancesPolicy", "IgnoreNew"), ("Settings/Enabled", "true" if enabled else "false"),
+                           ("Settings/ExecutionTimeLimit", "PT8M"), ("Settings/StartWhenAvailable", "false"),
+                           ("Settings/DisallowStartIfOnBatteries", "false"), ("Settings/StopIfGoingOnBatteries", "false"), ("Settings/RunOnlyIfNetworkAvailable", "false"),
+                           ("Actions/Exec/Command", runtime["pythonw"]), ("Actions/Exec/Arguments", '-I -B "'+runtime["worker"]+'" run'),
+                           ("Actions/Exec/WorkingDirectory", str(Path(runtime["worker"]).parent))): text(path, expected)
+    _instant(one("Triggers/TimeTrigger/StartBoundary").text)
+    _require(one("Triggers/TimeTrigger/Repetition").find("{*}Duration") is None, code)
+
+
+def _scheduler(action, xml=None):
+    """Setup-only native boundary. No shell, password, elevation or policy change."""
+    buffer = ctypes.create_unicode_buffer(32768)
+    if not _native()[0].GetSystemDirectoryW(buffer, len(buffer)): raise WorkerError("SCHEDULER_UNAVAILABLE")
+    executable = str(Path(buffer.value)/"schtasks.exe")
+    def invoke(args):
+        result = subprocess.run([executable, *args], shell=False, capture_output=True, timeout=30, creationflags=0x08000000)
+        _require(result.returncode == 0 and len(result.stdout) <= 1_048_576, "SCHEDULER_UNAVAILABLE")
+        encoding = "utf-16" if result.stdout.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-16-le" if b"\x00" in result.stdout[:64] else "mbcs"
+        return result.stdout.decode(encoding, errors="strict")
+    if action == "query":
+        rows = csv.reader(StringIO(invoke(["/Query", "/FO", "CSV", "/NH"])))
+        if not any(row and row[0] == "\\"+TASK_NAME for row in rows): return None
+        raw = invoke(["/Query", "/TN", TASK_NAME, "/XML"])
+        return raw
+    if action in ("enable", "disable"):
+        invoke(["/Change", "/TN", TASK_NAME, "/ENABLE" if action == "enable" else "/DISABLE"]); return None
+    _require(action == "create_disabled" and type(xml) is str, "SCHEDULER_ACTION_INVALID")
+    # This temporary contains task paths/owner only; never credentials.
+    with tempfile.TemporaryDirectory(prefix="ppc-ascm-task-") as directory:
+        file = Path(directory)/"task.xml"; file.write_text(xml, encoding="utf-16")
+        invoke(["/Create", "/TN", TASK_NAME, "/XML", str(file)])
+
+
+def _masked_credential():
+    _require(sys.stdin is not None and sys.stdin.isatty(), "MASKED_INPUT_REQUIRED")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        try:
+            first = getpass.getpass("New narrow PPC ASCM worker credential: ")
+            second = getpass.getpass("Confirm new worker credential: ")
+        except (EOFError, getpass.GetPassWarning): raise WorkerError("MASKED_INPUT_REQUIRED") from None
+    _require(first == second, "CREDENTIAL_MISMATCH")
+    return first
+
+
+def setup(root: Path, *, services: dict | None = None) -> dict:
+    services = services or {}; scheduler = services.get("scheduler", _scheduler); changed = False
+    try:
+        root = _private_root(root)
+        _require(verify_owner_acl(root/"setup-binding.json", current_sid()), "ACL_NOT_PRIVATE")
+        binding = _validate_binding(strict_json(read_checked(root, "setup-binding.json", MAX_HANDOFF)), root)
+        with worker_lock(root):
+            existing = scheduler("query")
+            if existing is not None:
+                # An existing task may be enabled or deliberately stopped.
+                try: verify_task(existing, binding["runtime"], current_sid(), enabled=True)
+                except WorkerError: verify_task(existing, binding["runtime"], current_sid(), enabled=False)
+            credential = services.get("prompt", _masked_credential)()
+            _require(_match(credential, r"[!-~]{32,512}"), "CREDENTIAL_INVALID")
+            _replace_cipher(root, "worker-config.dpapi", _encode({"binding": binding, "taskVerified": False}))
+            _replace_cipher(root, "worker-secret.dpapi", _encode({"credential": credential}))
+            now = services.get("clock", lambda: datetime.now(timezone.utc))()
+            if existing is None: scheduler("create_disabled", task_xml(binding["runtime"], current_sid(), now, enabled=False))
+            else: scheduler("disable")
+            changed = True
+            verify_task(scheduler("query"), binding["runtime"], current_sid(), enabled=False)
+            scheduler("enable")
+            verify_task(scheduler("query"), binding["runtime"], current_sid(), enabled=True)
+            _replace_cipher(root, "worker-config.dpapi", _encode({"binding": binding, "taskVerified": True}))
+        return {"status": "configured", "code": "SETUP_COMPLETE"}
+    except (WorkerError, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+        if changed:
+            try: scheduler("disable")
+            except (WorkerError, OSError, subprocess.SubprocessError): pass
+        return {"status": "held", "code": error.code if isinstance(error, WorkerError) else "SETUP_UNAVAILABLE"}
+
+
+def status(root: Path) -> dict:
+    """Local read only; never creates directories, repairs state or queries services."""
+    try:
+        if not Path(root).is_dir() or not _exists(Path(root), "worker-config.dpapi"):
+            return {"status": "unconfigured", "code": "WORKER_NOT_CONFIGURED"}
+        _runtime(root)
+        phase = "idle"
+        if _exists(Path(root), "journal.dpapi"):
+            state = _decode(Path(root), "journal.dpapi"); _state_shape(state, datetime.now(timezone.utc))
+            if state["source"] is not None: phase = state["source"]["phase"]
+        return {"status": "configured", "phase": phase, "code": "LOCAL_STATUS"}
+    except (WorkerError, OSError, ValueError, TypeError, KeyError) as error:
+        return {"status": "held", "code": error.code if isinstance(error, WorkerError) else "LOCAL_STATUS_UNAVAILABLE"}
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
-    if args != ["status"]:
+    if len(args) != 1 or args[0] not in ("setup", "run", "status"):
         print(json.dumps({"code": "COMMAND_UNAVAILABLE"}))
         return 2
-    print(json.dumps({"status": "unconfigured", "code": "WORKER_NOT_CONFIGURED"}))
-    return 0
+    try:
+        root = default_root()
+        value = status(root) if args[0] == "status" else setup(root) if args[0] == "setup" else run_pass(root)
+    except WorkerError as error: value = {"status": "held", "code": error.code}
+    except (OSError, ValueError, TypeError): value = {"status": "held", "code": "WORKER_UNAVAILABLE"}
+    print(json.dumps(value))
+    return 0 if value.get("phase") != "held" and value.get("status") != "held" else 2
 
 
 if __name__ == "__main__":
