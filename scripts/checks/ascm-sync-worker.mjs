@@ -20,6 +20,7 @@ if (process.platform !== 'win32') {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
-  assert.equal(result.status, 0, 'Windows-native worker foundation checks failed');
+  assert.equal(result.status, 0, 'Worker handoff, durable phase and Windows-native foundation checks failed');
+  assert.doesNotMatch(result.stderr, /skipped=|\.\.\. skipped /, 'Windows release checks must not silently skip native evidence');
   console.log('LIMITATION: No Cloud Files placeholder was hydrated or fabricated; native Cloud-tagged reads and UNC share reads need authorized integration evidence.');
 }
