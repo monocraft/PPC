@@ -4,3 +4,9 @@ project_id = "PPCDB"
 verify_jwt = false
 entrypoint = "./functions/ppc-master/index.ts"
 
+# OAuth discovery is public; the function verifies its exact owner/client JWT.
+# With its default environment the entire MCP resource remains disabled.
+[functions.ppc-ascm-mcp]
+verify_jwt = false
+entrypoint = "./functions/ppc-ascm-mcp/index.ts"
+

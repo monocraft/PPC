@@ -49,10 +49,19 @@ jobs:
           PPC_SHAREPOINT_CLIENT_ID: ${{ vars.PPC_SHAREPOINT_CLIENT_ID }}
           PPC_SHAREPOINT_TENANT_ID: ${{ vars.PPC_SHAREPOINT_TENANT_ID }}
           PPC_SHAREPOINT_HOSTS: ${{ vars.PPC_SHAREPOINT_HOSTS }}
+          PPC_ASCM_CONNECT_ENABLED: ${{ vars.PPC_ASCM_CONNECT_ENABLED }}
+          PPC_ASCM_AUTH_URL: ${{ vars.PPC_ASCM_AUTH_URL }}
+          PPC_ASCM_PUBLISHABLE_KEY: ${{ vars.PPC_ASCM_PUBLISHABLE_KEY }}
+          PPC_ASCM_MCP_CLIENT_ID: ${{ vars.PPC_ASCM_MCP_CLIENT_ID }}
+          PPC_ASCM_REDIRECT_URI: ${{ vars.PPC_ASCM_REDIRECT_URI }}
           PPC_SITE_VERSION: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           mkdir -p _site/css _site/js _site/data
           cp public/index.html _site/
+          cp public/ascm-connect.html _site/
+          cp public/css/ascm-connect.css _site/css/
+          cp public/js/ascm-connect.js public/js/ascm-connect-config.js _site/js/
+          node scripts/configure-ascm-connect.mjs
           cp public/css/interface-system.css _site/css/
           cp public/css/workspace-settings.css public/css/category-layout.css _site/css/
           cp public/js/category-layout.js _site/js/

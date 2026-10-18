@@ -12,7 +12,7 @@ if (!modulePath) {
   const { PGlite } = await import(pathToFileURL(resolve(modulePath)).href);
   const postgres = new PGlite();
   try {
-    await postgres.exec('create role anon; create role authenticated; create role service_role bypassrls;');
+    await postgres.exec('create role anon; create role authenticated; create role service_role bypassrls; create role supabase_auth_admin;');
     for (const filename of (await readdir(resolve('supabase/migrations'))).filter(name => name.endsWith('.sql')).sort()) {
       await postgres.exec(await readFile(resolve('supabase/migrations', filename), 'utf8'));
     }

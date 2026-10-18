@@ -85,9 +85,14 @@ function acceptedResponse(state, requestId, fingerprint, alreadySaved) {
 export function createAscmApi({ env = {}, database, now = () => new Date().toISOString(), dispatchPublication = async () => false, validateManifest, validateReadableManifest } = {}) {
   const secret = env.PPC_ASCM_IMPORT_SECRET || '';
   const enabled = typeof secret === 'string' && secret.length >= 32 && secret.length <= 512 && !/[\s\u0000-\u001f]/.test(secret);
+  const statusEnabled = env.PPC_ASCM_STATUS_ENABLED === 'true';
+  const reportStatus = async payload => {
+    try { return await database('ascm_status', payload); } catch { return null; }
+  };
   return async function handle(request) {
     const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
     const respond = (status, value) => new Response(JSON.stringify(value), { status, headers });
+    let leaseId = '', leaseStarted = false;
     try {
       if (!enabled) throw problem(404, 'NOT_FOUND', 'This master action is unavailable.');
       if (request.headers.get('origin')) throw problem(403, 'ASCM_SERVER_ONLY', 'Use the configured cloud supervisor.');
@@ -119,6 +124,12 @@ export function createAscmApi({ env = {}, database, now = () => new Date().toISO
         if (!result.archiveAllowed) await dispatchPublication().catch(() => false);
         return respond(result.archiveAllowed ? 200 : 202, result);
       }
+      if (statusEnabled) {
+        try {
+          leaseId = globalThis.crypto.randomUUID();
+          leaseStarted = (await reportStatus({ phase: 'begin', leaseId }))?.status === 'started';
+        } catch { /* Activity is optional; the import still owns all safety gates. */ }
+      }
       let dataset;
       try {
         dataset = await globalThis.ASCMImporter.parseAscmWorkbook(bytes, { strictDates: true, limits: { maxFileBytes: MAX_FILE,
@@ -130,6 +141,7 @@ export function createAscmApi({ env = {}, database, now = () => new Date().toISO
         importedAt: now(), requestId, datePolicy: configuredDatePolicy(env.PPC_ASCM_DATE_POLICY) });
       validateManifest(plan.manifest);
       validateReadableManifest(plan.manifest);
+      if (leaseStarted) await reportStatus({ phase: 'plan', leaseId, productCount: plan.savedProducts });
       const committed = await database('commit', { ...identity, expectedRevision: state.storageRevision, manifest: plan.manifest,
         fingerprint, changed: plan.changed, savedFields: plan.savedFields, savedProducts: plan.savedProducts });
       if (committed.status === 'raced') throw problem(409, 'ASCM_RETRY_REQUIRED', 'The master changed during import. Keep the email for a later attempt.');
@@ -147,6 +159,8 @@ export function createAscmApi({ env = {}, database, now = () => new Date().toISO
         ? problem(409, 'ASCM_REVIEW_REQUIRED', 'The report needs owner review. No report changes were saved.') : unavailable();
       if (safe.status === 429) headers['Retry-After'] = '60';
       return respond(safe.status, { code: safe.code, error: safe.message, archiveAllowed: false });
+    } finally {
+      if (leaseStarted) await reportStatus({ phase: 'end', leaseId });
     }
   };
 }

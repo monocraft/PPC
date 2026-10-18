@@ -16,6 +16,71 @@
   const activityText = (user) => user.activity === "idle" && !user.editing ? `Taking a breather${user.categoryName ? ` · ${user.categoryName}` : ""}` : user.activity === "roadmap" && !user.editing ? `Exploring the roadmap${user.categoryName ? ` · ${user.categoryName}` : ""}` : `${user.editing ? "Editing" : user.activity === "focused" ? "Focused on" : "Viewing"} ${user.productName || user.categoryName || "the portfolio"}${user.productName && user.categoryName ? ` · ${user.categoryName}` : ""}`;
   const connectionSummary = (state) => !state.configured ? "Team sharing is not connected" : state.mode === "github" ? state.connected ? `${state.users.length} recent ${state.users.length === 1 ? "editor" : "editors"}` : "No recent editors" : state.unavailable ? "Shared connection unavailable" : state.connected ? sessionSummary(state.onlineCount) : state.hasKey ? "Connecting…" : "Not connected";
 
+  function normalizeAscmSupervisor(value, time = Date.now()) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || value.enabled !== true) return null;
+    const reconnectRequired = Array.isArray(value.reconnectRequired) ? ["outlook", "sharepoint"].filter((provider) => value.reconnectRequired.includes(provider)) : [];
+    const idle = { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired };
+    const expiry = typeof value.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.expiresAt) ? Date.parse(value.expiresAt) : NaN;
+    // Server leases are 120 seconds. Allow five seconds of clock skew, never an indefinite busy badge.
+    if (value.working !== true || !Number.isFinite(expiry) || expiry <= time || expiry - time > 125000 || new Date(expiry).toISOString() !== value.expiresAt) return idle;
+    return { enabled: true, working: true, productCount: Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500 ? value.productCount : null, expiresAt: value.expiresAt, reconnectRequired };
+  }
+
+  function createAscmSupervisorView({ documentObject = document, indicator, rosterContainer, focusFallback, now = Date.now,
+    setTimeoutImpl = (callback, delay) => root.setTimeout(callback, delay), clearTimeoutImpl = (id) => root.clearTimeout(id) } = {}) {
+    const make = (tag, className, text) => { const node = documentObject.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node; };
+    const clock = () => { const node = make("span", "ascm-supervisor-clock"); node.setAttribute("aria-hidden", "true"); return node; };
+    const label = make("span", "ascm-supervisor-label");
+    if (indicator) indicator.replaceChildren(clock(), label);
+    const row = make("div", "master-presence-row ascm-supervisor-row"), portrait = make("span", "ascm-supervisor-portrait"), person = make("div", "master-presence-person ascm-supervisor-person");
+    const activity = make("span", "master-presence-activity ascm-supervisor-activity");
+    const reconnect = make("button", "quiet-button ascm-supervisor-reconnect", "Reconnect Microsoft"), handoff = make("div", "ascm-reconnect-handoff");
+    reconnect.type = "button"; reconnect.setAttribute("aria-expanded", "false"); reconnect.setAttribute("aria-controls", "ascmReconnectHandoff");
+    handoff.id = "ascmReconnectHandoff"; handoff.hidden = true;
+    const link = make("a", "ascm-reconnect-link", "Open ChatGPT"); link.href = "https://chatgpt.com/"; link.target = "_blank"; link.rel = "noopener noreferrer";
+    handoff.append(make("p", "", "Open ChatGPT → Settings → Plugins → Outlook or SharePoint → Reconnect."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
+    portrait.append(clock()); person.append(make("strong", "", "ASCM supervisor"), activity, reconnect, handoff); row.append(portrait, person); rosterContainer?.append(row);
+    let timer = null, latest = null, disposed = false;
+    function closeReconnect({ restoreFocus = true } = {}) {
+      if (handoff.hidden) return false;
+      handoff.hidden = true; reconnect.setAttribute("aria-expanded", "false");
+      if (restoreFocus && !row.hidden && !disposed) reconnect.focus({ preventScroll: true });
+      return true;
+    }
+    function toggleReconnect() {
+      if (disposed || row.hidden) return;
+      if (closeReconnect()) return;
+      handoff.hidden = false; reconnect.setAttribute("aria-expanded", "true");
+    }
+    reconnect.addEventListener("click", toggleReconnect);
+    function render(state) {
+      if (disposed) return;
+      latest = state;
+      if (timer !== null) clearTimeoutImpl(timer); timer = null;
+      const supervisor = state?.connected && !state.unavailable && state.mode !== "github" ? normalizeAscmSupervisor(state.ascmSupervisor, now()) : null;
+      if (!supervisor) {
+        const restoreFocus = row.contains(documentObject.activeElement);
+        closeReconnect({ restoreFocus: false });
+        if (restoreFocus) focusFallback?.focus({ preventScroll: true });
+      }
+      const working = supervisor?.working === true;
+      const text = working ? `Updating ASCM${supervisor.productCount === null ? "" : ` · ${supervisor.productCount} ${supervisor.productCount === 1 ? "product" : "products"}`}` : "";
+      if (indicator) {
+        indicator.hidden = !supervisor;
+        indicator.title = text || "ASCM supervisor";
+        indicator.setAttribute("aria-label", text || "ASCM supervisor");
+        indicator.classList.toggle("is-working", working);
+        indicator.classList.toggle("is-paused", documentObject.visibilityState === "hidden");
+      }
+      label.textContent = text; label.hidden = !working;
+      row.hidden = !supervisor; reconnect.hidden = !supervisor; row.classList.toggle("is-working", working); row.classList.toggle("is-paused", documentObject.visibilityState === "hidden");
+      activity.textContent = text; activity.hidden = !working;
+      if (working) timer = setTimeoutImpl(() => { timer = null; render(latest); }, Math.max(1, Date.parse(supervisor.expiresAt) - now()));
+    }
+    render(null);
+    return Object.freeze({ render, closeReconnect, destroy() { render(null); disposed = true; reconnect.removeEventListener("click", toggleReconnect); row.remove(); } });
+  }
+
   function normalizeRecentEditors(snapshot, identity) {
     const seen = new Set(), users = [];
     for (const editor of snapshot?.recentEditors || []) {
@@ -51,10 +116,10 @@
   function createController({ sessionProvider, getSelectedProductId = () => "", getSelectedCategoryId = () => "", getActivity = () => "browsing", onChange = () => {}, onPokeReceived = () => {}, receivePokes = true, now = Date.now, sessionId = sessionProvider?.()?.getState?.()?.editorProfile?.sessionId || root.crypto?.randomUUID?.() || `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, displayName = "" } = {}) {
     let users = [], mode = "service", configured = false, connected = false, unavailable = false, hasKey = false, hasGitHubToken = false, inFlight = null;
     let generation = 0, observedSession = null, observedAccessVersion, observedHasKey = false;
-    let pokeSupported = false, allowPokes = receivePokes !== false, pokeSequence = 0;
+    let pokeSupported = false, allowPokes = receivePokes !== false, pokeSequence = 0, ascmSupervisor = null;
     const ackPokeIds = new Set(), seenPokes = new Map(), pokeCooldowns = new Map(), pokeAttempts = new Map();
     let name = String(displayName).trim().slice(0, 60);
-    function state() { return { users: users.map((user) => ({ ...user })), mode, onlineCount: mode === "github" ? 0 : users.length, configured, connected, unavailable, hasKey, hasGitHubToken, sessionId, displayName: name, pokeSupported, receivePokes: allowPokes }; }
+    function state() { return { users: users.map((user) => ({ ...user })), mode, onlineCount: mode === "github" ? 0 : users.length, configured, connected, unavailable, hasKey, hasGitHubToken, sessionId, displayName: name, pokeSupported, receivePokes: allowPokes, ascmSupervisor: connected && !unavailable && mode !== "github" ? normalizeAscmSupervisor(ascmSupervisor, now()) : null }; }
     function pokeError(message, code) { const error = new Error(message); error.code = code; return error; }
     function receiveInbox(response) {
       const time = now();
@@ -83,7 +148,7 @@
       if (session !== observedSession || available !== observedHasKey || sessionState?.accessVersion !== observedAccessVersion) {
         generation += 1;
         observedSession = session; observedHasKey = available; observedAccessVersion = sessionState?.accessVersion;
-        users = []; connected = false; unavailable = false; pokeSupported = false; ackPokeIds.clear(); seenPokes.clear(); pokeCooldowns.clear(); pokeAttempts.clear();
+        users = []; connected = false; unavailable = false; pokeSupported = false; ascmSupervisor = null; ackPokeIds.clear(); seenPokes.clear(); pokeCooldowns.clear(); pokeAttempts.clear();
       }
       hasKey = available;
       return { session, sessionState, generation };
@@ -92,14 +157,15 @@
       const { session, sessionState } = observeAccess();
       if (mode === "github") {
         generation += 1;
+        ascmSupervisor = null;
         users = leave ? [] : normalizeRecentEditors(sessionState?.snapshot, sessionState?.identity);
         connected = Boolean(!leave && hasKey && sessionState?.snapshot); unavailable = false;
         onChange(state()); return state();
       }
       if (!hasKey) {
-        hasKey = false; connected = false; unavailable = false; users = []; onChange(state()); return state();
+        hasKey = false; connected = false; unavailable = false; users = []; ascmSupervisor = null; onChange(state()); return state();
       }
-      if (leave) { generation += 1; users = []; connected = false; unavailable = false; onChange(state()); }
+      if (leave) { generation += 1; users = []; connected = false; unavailable = false; ascmSupervisor = null; onChange(state()); }
       if (inFlight?.generation === generation && !leave) return state();
       const operation = { generation, session }; operation.done = new Promise((resolve) => { operation.finish = resolve; }); inFlight = operation;
       let pokeResult = null, pokeFailure = null;
@@ -116,6 +182,7 @@
           const previous = new Map(users.map((user) => [user.sessionId, user]));
           users = normalizeRoster(response, sessionId).map((user) => ({ ...user, editingSince: user.editing ? previous.get(user.sessionId)?.editing && previous.get(user.sessionId)?.productId === user.productId ? previous.get(user.sessionId).editingSince ?? now() : now() : null }));
           connected = true; unavailable = false; pokeSupported = response.capabilities?.pokes === true;
+          ascmSupervisor = normalizeAscmSupervisor(response.ascmSupervisor, now());
           for (const id of acknowledgments) ackPokeIds.delete(id);
           if (pokeSupported) receiveInbox(response);
           if (poke) {
@@ -127,11 +194,12 @@
             pokeAttempts.delete(poke.targetSessionId);
           }
         }
+        if (!response || leave) ascmSupervisor = null;
         if (leave) { users = []; connected = false; }
       } catch (error) {
         if (poke) pokeFailure = error;
         const current = observeAccess();
-        if (current.generation === operation.generation && current.session === operation.session && hasKey) { connected = false; unavailable = true; }
+        if (current.generation === operation.generation && current.session === operation.session && hasKey) { connected = false; unavailable = true; ascmSupervisor = null; }
       } finally { if (inFlight === operation) inFlight = null; try { onChange(state()); } finally { operation.finish(); } }
       if (pokeFailure) throw pokeFailure;
       if (poke) return pokeResult;
@@ -180,7 +248,9 @@
     const nameSave = make("button", "quiet-button", "Apply"); nameSave.type = "submit"; nameForm.append(nameLabel, nameSave);
     const githubConnect = make("button", "quiet-button", "Connect GitHub"); githubConnect.type = "button"; githubConnect.hidden = true; githubConnect.addEventListener("click", () => root.PortfolioMasterUI?.connectGitHub());
     const play = make("button", "presence-play", "Make a face"); play.type = "button"; play.title = "A little goof for your own face, just on this screen";
-    popover.append(heading, connection, rows, play, nameForm, githubConnect); shell.append(trigger, popover); brand.append(shell);
+    const supervisorRows = make("div", "ascm-supervisor-roster");
+    popover.append(heading, connection, rows, supervisorRows, play, nameForm, githubConnect); shell.append(trigger, popover); brand.append(shell);
+    const supervisorView = createAscmSupervisorView({ indicator: document.getElementById("ascmSupervisorIndicator"), rosterContainer: supervisorRows, focusFallback: close });
     // Expression updates are entirely local. They never send an additional presence request.
     const listeners = new root.AbortController(), signal = listeners.signal;
     let open = false, disposed = false, debounceTimer = null, playTimer = null, gazeFrame = null, reactionFrame = null, playfulUntil = 0;
@@ -204,7 +274,7 @@
       open = value; popover.hidden = !value; trigger.setAttribute("aria-expanded", String(value));
       for (const control of stack.querySelectorAll("[data-opens-roster]")) control.setAttribute("aria-expanded", String(value));
       if (value) { renderLocal(); controller.heartbeat(); if (shell.contains(opener) && opener.matches(":focus-visible")) close.focus({ preventScroll: true }); }
-      else if (restoreFocus) trigger.focus({ preventScroll: true });
+      else { supervisorView.closeReconnect({ restoreFocus: false }); if (restoreFocus) trigger.focus({ preventScroll: true }); }
       neighbors?.refresh();
     }
     function contextFor(user, state) {
@@ -265,6 +335,7 @@
     function render(state) {
       if (disposed) return;
       latestState = state;
+      supervisorView.render(state);
       title.textContent = state.mode === "github" ? "Recent editors" : "Connected now";
       close.setAttribute("aria-label", state.mode === "github" ? "Close recent editors" : "Close connected sessions");
       nameForm.hidden = state.mode === "github"; nameForm.style.display = state.mode === "github" ? "none" : "";
@@ -346,7 +417,7 @@
     shell.addEventListener("pointerdown", () => neighbors?.cancel(), { capture: true, signal });
     trigger.addEventListener("click", () => setOpen(!open), { signal }); close.addEventListener("click", () => setOpen(false), { signal });
     document.addEventListener("pointerdown", (event) => { inputActivity(); if (open && !shell.contains(event.target)) setOpen(false, { restoreFocus: false }); }, { signal });
-    document.addEventListener("keydown", (event) => { inputActivity(); if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); } }, { capture: true, signal });
+    document.addEventListener("keydown", (event) => { inputActivity(); if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!supervisorView.closeReconnect()) setOpen(false); } }, { capture: true, signal });
     document.addEventListener("pointermove", inputActivity, { passive: true, signal });
     document.addEventListener("wheel", inputActivity, { passive: true, signal });
     shell.addEventListener("pointermove", (event) => {
@@ -361,15 +432,15 @@
     play.addEventListener("click", () => { playfulUntil = Date.now() + 3200; renderLocal(); root.clearTimeout(playTimer); playTimer = root.setTimeout(renderLocal, 3250); }, { signal });
     nameForm.addEventListener("submit", (event) => { event.preventDefault(); const value = nameInput.value.trim().slice(0, 60); nameInput.value = value; try { if (value) root.localStorage.setItem(displayNameKey, value); else root.localStorage.removeItem(displayNameKey); } catch {} controller.setDisplayName(value); }, { signal });
     root.addEventListener("portfolio:render", (event) => { activeView = event.detail?.activeView || activeView; renderLocal(); soon(); }, { signal }); root.addEventListener("portfolio:master-status", soon, { signal });
-    document.addEventListener("visibilitychange", () => { shell.classList.toggle("is-paused", document.visibilityState === "hidden" || !latestState?.connected || latestState?.unavailable || latestState?.mode === "github"); if (document.visibilityState !== "hidden") controller.heartbeat(); }, { signal });
+    document.addEventListener("visibilitychange", () => { shell.classList.toggle("is-paused", document.visibilityState === "hidden" || !latestState?.connected || latestState?.unavailable || latestState?.mode === "github"); supervisorView.render(controller.getState()); if (document.visibilityState !== "hidden") controller.heartbeat(); }, { signal });
     root.addEventListener("pagehide", () => controller.leave(), { signal });
     root.addEventListener("resize", renderLocal, { passive: true, signal });
     const timer = root.setInterval(() => controller.heartbeat(), 20000);
     const expressionTimer = root.setInterval(renderLocal, 10000);
     render(controller.getState()); soon();
-    active = Object.freeze({ controller, refresh: () => controller.heartbeat(), playNeighborScene: (kind) => { neighbors?.cancel(); return neighbors?.play(kind) || false; }, close: () => setOpen(false), destroy() { disposed = true; listeners.abort(); observer?.disconnect(); neighbors?.destroy(); reactions?.destroy(); bump?.destroy(); root.clearInterval(timer); root.clearInterval(expressionTimer); root.clearTimeout(debounceTimer); root.clearTimeout(playTimer); if (gazeFrame !== null) root.cancelAnimationFrame(gazeFrame); if (reactionFrame !== null) root.cancelAnimationFrame(reactionFrame); controller.leave(); shell.remove(); active = null; } });
+    active = Object.freeze({ controller, refresh: () => controller.heartbeat(), playNeighborScene: (kind) => { neighbors?.cancel(); return neighbors?.play(kind) || false; }, close: () => setOpen(false), destroy() { disposed = true; supervisorView.destroy(); listeners.abort(); observer?.disconnect(); neighbors?.destroy(); reactions?.destroy(); bump?.destroy(); root.clearInterval(timer); root.clearInterval(expressionTimer); root.clearTimeout(debounceTimer); root.clearTimeout(playTimer); if (gazeFrame !== null) root.cancelAnimationFrame(gazeFrame); if (reactionFrame !== null) root.cancelAnimationFrame(reactionFrame); controller.leave(); shell.remove(); active = null; } });
     return active;
   }
-  root.PortfolioMasterPresence = Object.freeze({ anonymousName, avatarText, avatarTone, sessionSummary, connectionSummary, activityText, normalizeRoster, normalizeRecentEditors, createController, initialize, close() { active?.close(); }, leave() { return active?.controller.leave(); } });
+  root.PortfolioMasterPresence = Object.freeze({ anonymousName, avatarText, avatarTone, sessionSummary, connectionSummary, activityText, normalizeRoster, normalizeRecentEditors, normalizeAscmSupervisor, createAscmSupervisorView, createController, initialize, close() { active?.close(); }, leave() { return active?.controller.leave(); } });
   if (typeof document !== "undefined" && root.PortfolioMasterUI) initialize();
 })(globalThis);

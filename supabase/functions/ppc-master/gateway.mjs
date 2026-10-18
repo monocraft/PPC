@@ -139,6 +139,22 @@ function safePublication(value) {
   };
 }
 
+function safeAscmSupervisor(value, currentTime) {
+  if (!record(value) || value.enabled !== true || typeof value.working !== 'boolean'
+    || !(value.productCount === null || Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500)) return null;
+  const services = ['outlook', 'sharepoint'];
+  const provided = value.reconnectRequired;
+  const reconnectRequired = Array.isArray(provided) && provided.length <= 2 && provided.every(service => services.includes(service))
+    && new Set(provided).size === provided.length ? services.filter(service => provided.includes(service)) : [];
+  if (!value.working) return value.productCount === null && value.expiresAt === null
+    ? { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired } : null;
+  if (typeof value.expiresAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.expiresAt)) return null;
+  const expires = Date.parse(value.expiresAt), nowAt = Date.parse(currentTime);
+  if (!Number.isFinite(expires) || !Number.isFinite(nowAt) || new Date(expires).toISOString() !== value.expiresAt || expires > nowAt + 121000) return null;
+  if (expires <= nowAt) return { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired };
+  return { enabled: true, working: true, productCount: value.productCount, expiresAt: value.expiresAt, reconnectRequired };
+}
+
 function requireState(state) {
   if (!record(state?.manifest) || !Number.isSafeInteger(Number(state.storageRevision)) || Number(state.storageRevision) < 1) throw unavailable();
   return state;
@@ -189,11 +205,27 @@ function defaultRpc(env, fetchImpl) {
     let response;
     try {
       response = await fetchImpl(`${base}/rest/v1/rpc/ppc_master_${operation}`, {
-        method: 'POST', headers, body: JSON.stringify({ payload }), redirect: 'error', signal: AbortSignal.timeout(15000),
+        method: 'POST', headers, body: JSON.stringify({ payload }), redirect: 'error', signal: AbortSignal.timeout(['ascm_status', 'ascm_connection'].includes(operation) ? 2000 : 15000),
       });
       if (!response.ok) { await response.body?.cancel().catch(() => {}); throw unavailable(); }
-      return await boundedJson(response, MAX_RPC_BYTES);
+      return await boundedJson(response, operation === 'ascm_connection' ? 16 * 1024 : MAX_RPC_BYTES);
     } catch { throw unavailable(); }
+  };
+}
+
+/** Private diagnostics only. Call after an actual authenticated connector result. */
+export function createAscmConnectionReporter({ env = {}, fetchImpl = globalThis.fetch } = {}) {
+  const enabled = env.PPC_ASCM_STATUS_ENABLED === 'true';
+  let database;
+  return async payload => {
+    if (!enabled) return { reported: false };
+    try {
+      if (!record(payload) || Object.keys(payload).length !== 2 || Object.keys(payload).some(key => !['service', 'state'].includes(key))
+        || !['outlook', 'sharepoint'].includes(payload.service) || !['available', 'reconnect_required'].includes(payload.state)) return { reported: false };
+      database ||= defaultRpc(env, fetchImpl);
+      const result = await database('ascm_connection', { service: payload.service, state: payload.state });
+      return { reported: result?.reported === true };
+    } catch { return { reported: false }; }
   };
 }
 
@@ -336,6 +368,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     const result = await database('presence', {
       sessionId, displayName: String(body.displayName || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60),
       categoryId, productId, editing: body.editing === true, leave: body.leave === true,
+      ...(env.PPC_ASCM_STATUS_ENABLED === 'true' ? { includeAscmSupervisor: true } : {}),
       ...(body.activity !== undefined ? { activity: body.editing === true ? 'editing' : body.activity === 'editing' ? 'browsing' : body.activity } : {}),
       ...(body.receivePokes !== undefined ? { receivePokes: body.receivePokes } : {}),
       ...(body.poke !== undefined ? { poke: { id: body.poke.id, targetSessionId: body.poke.targetSessionId } } : {}),
@@ -347,7 +380,9 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       const currentCategoryId = product?.categoryId ?? (categories.has(entry.categoryId) ? entry.categoryId : '');
       return { ...entry, categoryId: currentCategoryId, categoryName: categories.get(currentCategoryId) || '', productName: product?.productName || '' };
     });
-    return { ...result, users: sessions, sessions };
+    const { ascmSupervisor: rawSupervisor, ...presenceResult } = result;
+    const ascmSupervisor = env.PPC_ASCM_STATUS_ENABLED === 'true' ? safeAscmSupervisor(rawSupervisor, now()) : null;
+    return { ...presenceResult, users: sessions, sessions, ...(ascmSupervisor ? { ascmSupervisor } : {}) };
   }
 
   async function publisherOperation(operation, body) {

@@ -458,7 +458,7 @@ if (process.env.PPC_TEST_PGLITE_MODULE) {
   const { PGlite } = await import(pathToFileURL(resolve(process.env.PPC_TEST_PGLITE_MODULE)).href);
   const postgres = new PGlite();
   try {
-    await postgres.exec('create role anon; create role authenticated; create role service_role bypassrls;');
+    await postgres.exec('create role anon; create role authenticated; create role service_role bypassrls; create role supabase_auth_admin;');
     const migrations = resolve('supabase/migrations');
     for (const filename of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) {
       await postgres.exec(await readFile(resolve(migrations, filename), 'utf8'));
