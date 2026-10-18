@@ -702,6 +702,80 @@ class WorkerPasses(unittest.TestCase):
         self.assertEqual(self.run_pass()["calls"], 0)
         self.assertEqual(json.loads((self.handoff/"commands"/(saved["attemptId"]+".json")).read_bytes()), saved)
 
+    def test_first_durable_command_save_atomically_records_positive_staging(self):
+        # A crash immediately after the command transaction must not create a legacy unknown attempt.
+        transition = w._transition_locked
+        def crash_after_command(*args, **kwargs):
+            state = transition(*args, **kwargs)
+            if args[2] == "command": raise w.WorkerError("SYNTHETIC_CRASH")
+            return state
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+        with mock.patch.object(w, "_transition_locked", side_effect=crash_after_command): self.run_pass()
+        state = w.load_journal(self.root); saved = state["publication"]["command"]
+        self.assertEqual(state["engine"]["commandSubmission"], {"attemptId": saved["attemptId"], "phase": "staging"})
+        self.assertEqual(list((self.handoff/"commands").iterdir()), [])
+        self.now += timedelta(minutes=5); self.responses = [http_response(PACKAGE)]
+        output = self.run_pass(); self.assertEqual(output["calls"], 1)
+        self.assertEqual(w.load_journal(self.root)["publication"]["command"], saved)
+        self.assertEqual(json.loads((self.handoff/"commands"/(saved["attemptId"]+".json")).read_bytes()), saved)
+
+    def test_command_saved_crash_before_ciphertext_downloads_same_candidate_and_attempt(self):
+        # Positive staging permits a replay-safe byte read, never a fresh mutation identity.
+        def crash(phase):
+            if phase == "command_saved": raise w.WorkerError("SYNTHETIC_CRASH")
+        self.services["fault"] = crash; self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+        self.run_pass(); saved = w.load_journal(self.root)["publication"]["command"]
+        self.assertEqual(list((self.handoff/"commands").iterdir()), [])
+        self.services.pop("fault"); self.now += timedelta(minutes=5); self.responses = [http_response(PACKAGE)]
+        output = self.run_pass()
+        self.assertEqual(output["calls"], 1); self.assertEqual(output["code"], "COMMAND_WAIT")
+        self.assertEqual(self.requests[-1][0:2], ("GET", f"/api/ascm/publication/{CANDIDATE}/bytes"))
+        self.assertEqual(self.requests[-1][2]["X-PPC-Package-Generation"], "3")
+        self.assertEqual(w.load_journal(self.root)["publication"]["command"], saved)
+        self.assertEqual((self.handoff/"commands"/saved["ciphertextFile"]).read_bytes(), PACKAGE)
+        self.assertEqual(json.loads((self.handoff/"commands"/(saved["attemptId"]+".json")).read_bytes()), saved)
+
+    def test_slow_pre_attempt_save_consumes_charge_and_uses_actual_remaining_deadline(self):
+        # Native persistence time must be removed from the timeout before any transport effect.
+        state = w.transition_journal(self.root, "idle_charge", None, {}, self.now)
+        native_save = w.save_journal
+        def slow_save(root, payload):
+            native_save(root, payload); self.elapsed += 2
+        for elapsed, timeout in ((479, None), (470, 8)):
+            with self.subTest(elapsed=elapsed):
+                self.elapsed = 0
+                session = w._Pass(self.root, deepcopy(state), self.services["configuration"], self.services["credential"], self.services)
+                self.elapsed = session.started + elapsed; self.responses = [http_response(control())]
+                before = len(self.requests)
+                with mock.patch.object(w, "save_journal", side_effect=slow_save):
+                    if timeout is None:
+                        with self.assertRaises(w.WorkerError) as caught: session.call("GET", w.CONTROL_ROUTE, idle=True)
+                        self.assertEqual(caught.exception.code, "PASS_BUDGET_HELD")
+                        self.assertEqual(len(self.requests), before)
+                    else:
+                        session.call("GET", w.CONTROL_ROUTE, idle=True)
+                        self.assertEqual(self.requests[-1][4], timeout)
+                self.assertEqual(session.calls, 1)
+                self.assertEqual(w.load_journal(self.root)["idleAttempts"], ["2026-10-18T12:03:00Z"])
+                self.elapsed = 0
+
+    def test_slow_submission_intent_save_cannot_publish_manifest_after_deadline(self):
+        # Saving submitted intent can exhaust the pass; the command manifest must remain absent.
+        native_save = w.save_journal
+        def slow_save(root, payload):
+            native_save(root, payload)
+            submission = payload["engine"]["commandSubmission"]
+            if submission is not None and submission["phase"] == "submitted": self.elapsed += 2
+        def nearly_expired(phase):
+            if phase == "ciphertext_written": self.elapsed = 479
+        self.services["fault"] = nearly_expired; self.responses = [http_response(control("deliver")), http_response(PACKAGE)]
+        with mock.patch.object(w, "save_journal", side_effect=slow_save): output = self.run_pass()
+        self.assertEqual(output["code"], "PASS_BUDGET_HELD")
+        state = w.load_journal(self.root); cmd = state["publication"]["command"]
+        self.assertEqual(state["engine"]["commandSubmission"]["phase"], "submitted")
+        self.assertFalse((self.handoff/"commands"/(cmd["attemptId"]+".json")).exists())
+        self.assertEqual((self.handoff/"commands"/cmd["ciphertextFile"]).read_bytes(), PACKAGE)
+
     def test_expired_positive_pre_submission_phase_returns_to_authoritative_control(self):
         def crash(phase):
             if phase == "ciphertext_written": raise w.WorkerError("SYNTHETIC_CRASH")

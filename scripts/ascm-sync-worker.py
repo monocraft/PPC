@@ -858,7 +858,7 @@ def _state_shape(state, now):
             _confirmation(publication["confirmation"], c, now)
 
 
-def _transition_locked(root, state, event, value, expected, now):
+def _transition_locked(root, state, event, value, expected, now, *, stage_command=False):
     """Caller holds worker_lock for this entire durable session."""
     now = _now(now)
     _require(type(expected) is dict, "JOURNAL_CONTEXT_INVALID")
@@ -902,6 +902,10 @@ def _transition_locked(root, state, event, value, expected, now):
         handoff = validate_handoff(value, context, now)
         _require(publication["phase"] in ("candidate_verified", "command_prepared"), "COMMAND_ALREADY_MUTATING")
         publication.update({"command": handoff, "phase": "command_prepared"})
+        if prior is None and stage_command:
+            # The engine's first command save is the positive pre-submit fact.
+            # Older marker-less commands remain unknown rather than upgraded.
+            state["engine"]["commandSubmission"] = {"attemptId": handoff["attemptId"], "phase": "staging"}
     elif event == "result":
         _require(publication is not None and publication["command"] is not None
                  and publication["phase"] in ("command_prepared", "write_unknown", "command_held", "remote_verified"), "COMMAND_NOT_ACTIVE")
@@ -1070,8 +1074,9 @@ def _manifest_files(folder):
         return files
 
 
-def _write_once(folder, name, raw):
+def _write_once(folder, name, raw, *, before_publish=None):
     """Publish a complete immutable object; never overwrite or recreate an uncertain name."""
+    if before_publish is not None: before_publish()
     _relative(name)
     with _root_handles(folder):
         target = Path(folder)/name
@@ -1081,9 +1086,11 @@ def _write_once(folder, name, raw):
         # A same-directory complete temporary is renamed create-only. Windows
         # os.rename refuses an existing destination; no replace/overwrite used.
         temporary = Path(folder)/(str(uuid.uuid4())+".tmp")
+        if before_publish is not None: before_publish()
         with temporary.open("xb") as stream:
             stream.write(raw); stream.flush(); os.fsync(stream.fileno())
         try:
+            if before_publish is not None: before_publish()
             os.rename(temporary, target)
         except FileExistsError:
             _require(read_checked(folder, name, max(MAX_HANDOFF, len(raw))) == raw, "HANDOFF_REPLAY_MISMATCH")
@@ -1112,7 +1119,12 @@ class _Pass:
         self.state["maxWallTime"] = _stamp(self.now()); _state_shape(self.state, self.now()); save_journal(self.root, self.state)
 
     def event(self, event, value, expected=None):
-        self.state = _transition_locked(self.root, self.state, event, value, expected or {}, self.now())
+        self.state = _transition_locked(self.root, self.state, event, value, expected or {}, self.now(), stage_command=event == "command")
+
+    def time_left(self):
+        remaining = 480-(self.monotonic()-self.started)
+        _require(remaining > 0, "PASS_BUDGET_HELD")
+        return remaining
 
     def defer(self, seconds=300):
         self.state["engine"]["retryAt"] = _stamp(self.now()+timedelta(seconds=seconds)); self.save()
@@ -1128,6 +1140,8 @@ class _Pass:
             # Record the observed wall maximum before every external attempt;
             # even a lost reply/restart cannot roll the local clock backward.
             self.save(); self.calls += 1
+            # Native DPAPI/ACL/flush/replace time belongs to the same deadline.
+            remaining = self.time_left()
             try:
                 response = self.transport(method, route, headers=request_headers, body=body, timeout=min(120, remaining), maximum=maximum)
             except WorkerError as error:
@@ -1260,16 +1274,17 @@ class _Pass:
             self.event("command", cmd, {"destination": self.destination, "raw": raw})
         cmd = self.state["publication"]["command"]
         submission = self.state["engine"]["commandSubmission"]
-        if submission is None:
-            self.state["engine"]["commandSubmission"] = {"attemptId": cmd["attemptId"], "phase": "staging"}; self.save()
-        elif submission["phase"] == "submitted":
+        _require(submission is not None, "COMMAND_SUBMISSION_UNKNOWN")
+        if submission["phase"] == "submitted":
             return
         self.fault("command_saved")
-        _write_once(self.handoff/"commands", cmd["ciphertextFile"], raw)
+        _write_once(self.handoff/"commands", cmd["ciphertextFile"], raw, before_publish=self.time_left)
         self.fault("ciphertext_written")
+        self.time_left()
         self.state["engine"]["commandSubmission"]["phase"] = "submitted"; self.save()
+        self.time_left()
         self.fault("command_submission_intent")
-        _write_once(self.handoff/"commands", cmd["attemptId"]+".json", _json_bytes(cmd))
+        _write_once(self.handoff/"commands", cmd["attemptId"]+".json", _json_bytes(cmd), before_publish=self.time_left)
         self.fault("manifest_written")
 
     def execute(self):
@@ -1291,7 +1306,14 @@ class _Pass:
             submission = self.state["engine"]["commandSubmission"]
             if submission is not None and submission["phase"] == "staging":
                 cmd = publication["command"]
-                raw = read_checked(self.handoff/"commands", cmd["ciphertextFile"], MAX_PACKAGE)
+                try:
+                    raw = read_checked(self.handoff/"commands", cmd["ciphertextFile"], MAX_PACKAGE)
+                except WorkerError as error:
+                    if error.code != "FILE_MISSING": raise
+                    # Positive durable staging, not absence, permits this
+                    # replay-safe exact GET. deliver retains the same command.
+                    self.deliver(publication["candidate"])
+                    return self.finish("waiting", "COMMAND_WAIT", report=False)
                 _raw_identity(raw, publication["candidate"]["sha256"], publication["candidate"]["bytes"], package=True)
                 self.publish_command(raw)
                 return self.finish("waiting", "COMMAND_WAIT", report=False)
