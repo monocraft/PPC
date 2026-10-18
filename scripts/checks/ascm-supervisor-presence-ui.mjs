@@ -100,22 +100,25 @@ class Element {
 function viewFixture() {
   let time = start, sequence = 0;
   const timers = new Map(), indicator = new Element('span'), rosterContainer = new Element();
-  const documentObject = { visibilityState: 'visible', activeElement: null, createElement: tag => new Element(tag, documentObject) };
+  const documentObject = { visibilityState: 'visible', activeElement: null, createElement: tag => new Element(tag, documentObject), createElementNS: (namespace, tag) => { const node = new Element(tag, documentObject); node.namespaceURI = namespace; return node; } };
   const focusFallback = new Element('button', documentObject);
   const view = presence.createAscmSupervisorView({ documentObject, indicator, rosterContainer, focusFallback, now: () => time,
     setTimeoutImpl: (fn, delay) => { const id = ++sequence; timers.set(id, { fn, at: time + delay }); return id; }, clearTimeoutImpl: id => timers.delete(id) });
   return { view, indicator, rosterContainer, focusFallback, documentObject, timers, advance(ms) { time += ms; for (const [id, timer] of [...timers]) if (timer.at <= time) { timers.delete(id); timer.fn(); } } };
 }
 
-test('native clock and non-human roster row show only minimal active copy and quiet idle identity', () => {
+test('actual work stays in the toolbar while a healthy supervisor adds no Users row', () => {
   const f = viewFixture();
   const state = { connected: true, unavailable: false, mode: 'service', ascmSupervisor: active() };
   f.view.render(state);
   assert.equal(f.indicator.hidden, false);
   assert.equal(f.indicator.querySelector('.ascm-supervisor-label').textContent, 'Updating ASCM · 12 products');
   assert.equal(f.indicator.classList.contains('is-working'), true);
-  assert.equal(f.rosterContainer.children[0].querySelector('.ascm-supervisor-person').children[0].textContent, 'ASCM supervisor');
-  assert.equal(f.rosterContainer.children[0].querySelector('.ascm-supervisor-person').children[1].textContent, 'Updating ASCM · 12 products');
+  assert.equal(f.rosterContainer.children[0].hidden, true);
+  for (const reconnectRequired of [undefined, [], ['unsupported'], 'outlook', false]) {
+    f.view.render({ ...state, ascmSupervisor: active({ reconnectRequired }) });
+    assert.equal(f.rosterContainer.children[0].hidden, true, 'healthy or malformed connection state adds no empty row or separator');
+  }
   f.view.render({ ...state, ascmSupervisor: active({ productCount: 1 }) });
   assert.equal(f.indicator.title, 'Updating ASCM · 1 product');
   f.view.render({ ...state, ascmSupervisor: active({ productCount: null }) });
@@ -124,7 +127,7 @@ test('native clock and non-human roster row show only minimal active copy and qu
   assert.equal(f.indicator.classList.contains('is-working'), false);
   assert.equal(f.indicator.title, 'ASCM supervisor');
   assert.equal(f.indicator.querySelector('.ascm-supervisor-label').hidden, true);
-  assert.equal(f.rosterContainer.children[0].querySelector('.ascm-supervisor-person').children[1].hidden, true);
+  assert.equal(f.rosterContainer.children[0].hidden, true);
   assert.equal(f.timers.size, 0);
   assert(!f.rosterContainer.children[0].className.includes('avatar'));
 });
@@ -155,15 +158,21 @@ test('only reported supported reconnect flags survive snapshots and lease expiry
   assert.deepEqual(f.controller.getState().ascmSupervisor.reconnectRequired, []);
 });
 
-test('manual reconnect reveals an honest fixed ChatGPT handoff without clearing flags or adding requests', async () => {
+test('only reported connection loss exposes a nontext key action and honest handoff without requests or flag clearing', async () => {
   const controllerFixture = setup(), f = viewFixture();
   controllerFixture.reply = { sessions: [], ascmSupervisor: { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired: ['outlook'] } };
   await controllerFixture.controller.heartbeat();
   f.view.render(controllerFixture.controller.getState());
   const action = f.rosterContainer.querySelector('.ascm-supervisor-reconnect');
-  assert(action, 'configured supervisor offers manual recovery');
+  assert(action, 'reported connection loss offers recovery');
   const hint = f.rosterContainer.querySelector('.ascm-reconnect-handoff');
-  assert.equal(action.textContent, 'Reconnect Microsoft');
+  assert.equal(f.rosterContainer.children[0].hidden, false);
+  const visibleText = node => node.hidden ? '' : node.textContent + node.children.map(visibleText).join('');
+  assert.equal(visibleText(f.rosterContainer), '', 'collapsed recovery displays no supervisor, work status or action text');
+  assert.equal(action.getAttribute('aria-label'), 'Reconnect Microsoft');
+  assert.equal(action.children[0].tagName, 'SVG');
+  assert.equal(action.children[0].namespaceURI, 'http://www.w3.org/2000/svg');
+  assert.equal(action.children[0].getAttribute('aria-hidden'), 'true');
   assert.equal(action.getAttribute('aria-expanded'), 'false');
   assert.equal(hint.hidden, true);
   action.click();
@@ -185,16 +194,18 @@ test('manual reconnect reveals an honest fixed ChatGPT handoff without clearing 
   controllerFixture.reply = { sessions: [], ascmSupervisor: { enabled: true, working: false, productCount: null, expiresAt: null } };
   await controllerFixture.controller.heartbeat(); f.view.render(controllerFixture.controller.getState());
   assert.equal(action, f.rosterContainer.querySelector('.ascm-supervisor-reconnect'));
-  assert.equal(action.hidden, false, 'manual recovery remains available when a failed cloud job could not report a flag');
+  assert.equal(action.hidden, true, 'a real healthy response removes the recovery action');
+  assert.equal(f.rosterContainer.children[0].hidden, true, 'healthy state leaves no empty row or separator');
+  assert.equal(hint.hidden, true);
 });
 
-test('reconnect focus survives ordinary updates and closes safely on Escape, unavailable status and disposal', () => {
-  const f = viewFixture(), state = { connected: true, mode: 'service', ascmSupervisor: active() };
+test('reconnect focus survives lost-state updates and closes safely on Escape, recovery, unavailable status and disposal', () => {
+  const f = viewFixture(), state = { connected: true, mode: 'service', ascmSupervisor: active({ reconnectRequired: ['outlook'] }) };
   f.view.render(state);
   const action = f.rosterContainer.querySelector('.ascm-supervisor-reconnect'), hint = f.rosterContainer.querySelector('.ascm-reconnect-handoff');
   assert(action, 'reconnect action exists');
   action.click(); hint.querySelector('.ascm-reconnect-link').focus();
-  f.view.render({ ...state, ascmSupervisor: active({ productCount: 1 }) });
+  f.view.render({ ...state, ascmSupervisor: active({ productCount: 1, reconnectRequired: ['outlook'] }) });
   assert.equal(hint.hidden, false);
   assert.equal(f.documentObject.activeElement, hint.querySelector('.ascm-reconnect-link'));
   assert.equal(f.indicator.title, 'Updating ASCM · 1 product');
@@ -203,6 +214,11 @@ test('reconnect focus survives ordinary updates and closes safely on Escape, una
   assert.equal(f.documentObject.activeElement, action);
   assert.equal(f.view.closeReconnect(), false, 'outer Users Escape can proceed after the hint closes');
   action.click(); hint.querySelector('.ascm-reconnect-link').focus();
+  f.view.render({ ...state, ascmSupervisor: active() });
+  assert.equal(hint.hidden, true);
+  assert.equal(f.rosterContainer.children[0].hidden, true);
+  assert.equal(f.documentObject.activeElement, f.focusFallback);
+  f.view.render(state); action.click(); hint.querySelector('.ascm-reconnect-link').focus();
   f.view.render({ ...state, connected: false });
   assert.equal(hint.hidden, true);
   assert.equal(f.documentObject.activeElement, f.focusFallback);
@@ -225,7 +241,7 @@ if (process.argv.includes('--preview')) {
 const fixtureMode=${JSON.stringify(mode)};
 const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!['idle','reconnect'].includes(fixtureMode),productCount:['idle','reconnect','unknown'].includes(fixtureMode)?null:12,expiresAt:['idle','reconnect'].includes(fixtureMode)?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[]}})})};
 globalThis.PortfolioMasterUI={getSession:()=>fixtureSession};
-</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Open Users, then choose Reconnect Microsoft to try the handoff. Open ChatGPT opens the real ChatGPT website in a new tab. No sign-in is required to try this preview.</section></div></main></body></html>`;
+</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Open Users to try the key alert for a lost Microsoft connection. Healthy status has no key alert or supervisor row. Open ChatGPT opens the real website in a new tab; no sign-in is required to try this preview.</section></div></main></body></html>`;
       response.setHeader('Content-Type', 'text/html'); response.end(body); return;
     }
     if (!routes.has(url.pathname)) { response.writeHead(404); response.end(); return; }

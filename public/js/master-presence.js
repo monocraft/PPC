@@ -32,14 +32,17 @@
     const clock = () => { const node = make("span", "ascm-supervisor-clock"); node.setAttribute("aria-hidden", "true"); return node; };
     const label = make("span", "ascm-supervisor-label");
     if (indicator) indicator.replaceChildren(clock(), label);
-    const row = make("div", "master-presence-row ascm-supervisor-row"), portrait = make("span", "ascm-supervisor-portrait"), person = make("div", "master-presence-person ascm-supervisor-person");
-    const activity = make("span", "master-presence-activity ascm-supervisor-activity");
-    const reconnect = make("button", "quiet-button ascm-supervisor-reconnect", "Reconnect Microsoft"), handoff = make("div", "ascm-reconnect-handoff");
-    reconnect.type = "button"; reconnect.setAttribute("aria-expanded", "false"); reconnect.setAttribute("aria-controls", "ascmReconnectHandoff");
+    const row = make("div", "master-presence-row ascm-supervisor-row"), person = make("div", "master-presence-person ascm-supervisor-person");
+    const reconnect = make("button", "icon-button ascm-supervisor-reconnect"), handoff = make("div", "ascm-reconnect-handoff");
+    reconnect.type = "button"; reconnect.title = "Reconnect Microsoft"; reconnect.setAttribute("aria-label", "Reconnect Microsoft"); reconnect.setAttribute("aria-expanded", "false"); reconnect.setAttribute("aria-controls", "ascmReconnectHandoff");
+    const svgNamespace = "http://www.w3.org/2000/svg", key = documentObject.createElementNS(svgNamespace, "svg");
+    for (const [name, value] of Object.entries({ class: "ascm-reconnect-key", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) key.setAttribute(name, value);
+    const bow = documentObject.createElementNS(svgNamespace, "circle"); bow.setAttribute("cx", "7"); bow.setAttribute("cy", "12"); bow.setAttribute("r", "4");
+    const teeth = documentObject.createElementNS(svgNamespace, "path"); teeth.setAttribute("d", "M11 12h10m-3 0v3m-3-3v2"); key.append(bow, teeth); reconnect.append(key);
     handoff.id = "ascmReconnectHandoff"; handoff.hidden = true;
     const link = make("a", "ascm-reconnect-link", "Open ChatGPT"); link.href = "https://chatgpt.com/"; link.target = "_blank"; link.rel = "noopener noreferrer";
     handoff.append(make("p", "", "Open ChatGPT → Settings → Plugins → Outlook or SharePoint → Reconnect."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
-    portrait.append(clock()); person.append(make("strong", "", "ASCM supervisor"), activity, reconnect, handoff); row.append(portrait, person); rosterContainer?.append(row);
+    person.append(reconnect, handoff); row.append(person); rosterContainer?.append(row);
     let timer = null, latest = null, disposed = false;
     function closeReconnect({ restoreFocus = true } = {}) {
       if (handoff.hidden) return false;
@@ -58,7 +61,8 @@
       latest = state;
       if (timer !== null) clearTimeoutImpl(timer); timer = null;
       const supervisor = state?.connected && !state.unavailable && state.mode !== "github" ? normalizeAscmSupervisor(state.ascmSupervisor, now()) : null;
-      if (!supervisor) {
+      const needsReconnect = Boolean(supervisor?.reconnectRequired.length);
+      if (!needsReconnect) {
         const restoreFocus = row.contains(documentObject.activeElement);
         closeReconnect({ restoreFocus: false });
         if (restoreFocus) focusFallback?.focus({ preventScroll: true });
@@ -73,8 +77,7 @@
         indicator.classList.toggle("is-paused", documentObject.visibilityState === "hidden");
       }
       label.textContent = text; label.hidden = !working;
-      row.hidden = !supervisor; reconnect.hidden = !supervisor; row.classList.toggle("is-working", working); row.classList.toggle("is-paused", documentObject.visibilityState === "hidden");
-      activity.textContent = text; activity.hidden = !working;
+      row.hidden = !needsReconnect; reconnect.hidden = !needsReconnect;
       if (working) timer = setTimeoutImpl(() => { timer = null; render(latest); }, Math.max(1, Date.parse(supervisor.expiresAt) - now()));
     }
     render(null);
