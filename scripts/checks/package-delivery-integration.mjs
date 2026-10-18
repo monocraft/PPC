@@ -7,6 +7,7 @@ import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { createPackageDelivery } from '../../supabase/functions/ppc-package/core.mjs';
 import { createAscmMcpApplication } from '../../supabase/functions/ppc-ascm-mcp/bootstrap.mjs';
+import { createAscmFlowApplication } from '../../supabase/functions/ppc-ascm-flow/bootstrap.mjs';
 import { createMasterGateway, sha256 } from '../../supabase/functions/ppc-master/gateway.mjs';
 import { harness, portfolioFixture, packageBytes } from './package-workspace.mjs';
 
@@ -91,6 +92,36 @@ const transport = async (url, options) => {
 };
 const app = createAscmMcpApplication({ createMcpHandler, McpServer, z, env, now, fetchImpl: transport,
   gatewayFactory: options => createMasterGateway({ ...options, rpc: master }), packageDeliveryFactory: () => delivery });
+const flowEnv = { ...env, PPC_ASCM_FLOW_ENABLED: 'true', PPC_ASCM_FLOW_SECRET: 'native-flow-'.padEnd(48, 'w') };
+const flow = createAscmFlowApplication({ env: flowEnv, now, fetchImpl: async () => { throw Error('Native worker must not fetch external artifact/JWKS URLs'); },
+  gatewayFactory: options => createMasterGateway({ ...options, rpc: master }), packageDeliveryFactory: () => delivery });
+async function flowCall(path, body = {}, { raw = false, headers = {}, status = 200, method = 'POST' } = {}) {
+  const response = await flow(new Request(base + '/functions/v1/ppc-ascm-flow' + path, { method,
+    headers: { 'X-PPC-ASCM-Flow-Secret': flowEnv.PPC_ASCM_FLOW_SECRET, 'Content-Type': raw ? 'application/octet-stream' : 'application/json', ...headers },
+    ...(method === 'GET' ? {} : { body: raw ? chunked(body) : JSON.stringify(body), ...(raw ? { duplex: 'half' } : {}) }) }));
+  assert.equal(response.status, status); return response;
+}
+const flowImport = async (report, status = 200) => (await flowCall('/api/ascm/import', report, { status })).json();
+async function nativePublish(candidate, bytes) {
+  const queued = await (await flowCall('/api/ascm/publication/queued')).json();
+  assert.equal(queued.candidate.candidateId, candidate.candidateId); assert.equal(queued.archiveAllowed, false);
+  assert(!JSON.stringify(queued).includes('storage/')); assert.equal(queued.downloadUrl, undefined);
+  const download = await flowCall(queued.binaryPath, null, { method: 'GET', headers: { 'X-PPC-Package-Generation': String(candidate.generation) } });
+  const transferred = new Uint8Array(await download.arrayBuffer()); assert.equal(digest(transferred), digest(bytes));
+  // This map is the isolated native SharePoint fixture; readback is a separate
+  // actual item-content read rather than a direct candidate-download token.
+  const sharepoint = new Map([[queued.candidate.fileName, transferred.slice()]]);
+  const readback = sharepoint.get(queued.candidate.fileName).slice();
+  const headers = { 'Content-Length': String(bytes.length), 'X-PPC-Package-Generation': String(candidate.generation),
+    'X-PPC-SP-Drive-Id': 'fixture-drive', 'X-PPC-SP-Folder-Id': 'fixture-folder', 'X-PPC-SP-Item-Id': `native-${candidate.candidateId}`,
+    'X-PPC-SP-Version-Id': '1.0', 'X-PPC-SP-File-Name': queued.candidate.fileName };
+  const corrupt = readback.slice(); corrupt[corrupt.length - 1] ^= 1;
+  assert.equal((await (await flowCall(`/api/ascm/publication/${candidate.candidateId}/confirm`, corrupt, { raw: true, headers, status: 409 })).json()).archiveAllowed, false);
+  assert.notEqual((await database('current', {})).current.candidateId, candidate.candidateId, 'Changed readback cannot create a publication receipt');
+  const confirmed = await (await flowCall(`/api/ascm/publication/${candidate.candidateId}/confirm`, readback, { raw: true, headers })).json();
+  assert.equal(confirmed.status, 'published'); assert.equal(confirmed.archiveAllowed, false);
+  return { headers, readback };
+}
 async function callTool(name, args = {}, { credential = bearer, error = false, status = 200 } = {}) {
   const response = await app(new Request(resource, { method: 'POST', headers: { Authorization: `Bearer ${credential}`,
     'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-06-18' },
@@ -170,19 +201,24 @@ try {
   const report = { sender: 'linny.chen@hp.com', subject: 'ASCM Report Accessories HyperX Release Notification October 2026',
     receivedAt: '2026-09-30T09:01:09Z', messageId: 'integration-exact-message', fileName: 'ASCM Report_HyperX_2026-09-30.xlsx',
     workbook: { download_url: reportUrl, file_id: 'file-workbook' } };
-  const accepted = await callTool('import_ascm_report', report);
+  const { workbook: artifact, ...mailEnvelope } = report;
+  const nativeReport = { ...mailEnvelope, workbookBase64: Buffer.from(workbook).toString('base64') };
+  const accepted = await flowImport(nativeReport, 202);
   assert.equal(accepted.archiveAllowed, false); assert.equal(accepted.status, 'publication_pending');
   assert.equal(accepted.sourceMessageId, report.messageId);
   const state = await master('read', {});
   assert.equal(state.manifest.categories[0].board.products[0].price, 99);
   assert.equal((await master('ack', { storageRevision: state.storageRevision, githubSha: 'f'.repeat(40) })).status, 'delivery_managed');
   assert.equal((await callTool('import_ascm_report', report)).archiveAllowed, false, 'Old Git ack cannot unlock Archive');
+  assert.equal((await flowImport(nativeReport, 202)).archiveAllowed, false, 'Seed/Git publication cannot grant native Archive');
   const bytes = await codec.encrypt(packageBytes(state.manifest), key);
   const candidate = await stage(bytes);
-  await publish(candidate, bytes);
-  const replay = await callTool('import_ascm_report', report);
+  const nativeConfirmed = await nativePublish(candidate, bytes);
+  const replay = await flowImport(nativeReport);
   assert.equal(replay.archiveAllowed, true); assert.equal(replay.alreadySaved, true);
   assert.equal(replay.requestId, accepted.requestId); assert.equal(replay.sourceMessageId, report.messageId);
+  assert.equal(replay.requestId, 'ascm-' + digest(workbook));
+  assert.equal((await callTool('import_ascm_report', report)).archiveAllowed, true, 'Existing OAuth MCP import remains compatible');
 
   let identity;
   const downloaded = await reader.downloadLatest({ endpoint, key, onIdentity: value => { identity = value; }, fetchImpl: async (url, options) => {
@@ -204,7 +240,7 @@ try {
   assert.equal(imageCandidate.storageRevision, candidate.storageRevision);
   assert.equal(imageCandidate.generation, candidate.generation + 1);
   await publish(imageCandidate, imageBytes);
-  const oldReplay = await callTool('confirm_sharepoint_publication', confirmedInputs.get(candidate.candidateId));
+  const oldReplay = await (await flowCall(`/api/ascm/publication/${candidate.candidateId}/confirm`, nativeConfirmed.readback, { raw: true, headers: nativeConfirmed.headers })).json();
   assert.equal(oldReplay.status, 'already_published', 'A historical exact confirmation remains retryable after current advances');
   assert.equal(oldReplay.publication.candidateId, candidate.candidateId);
   const seedReplay = await callTool('confirm_sharepoint_publication', confirmedInputs.get(seedCandidate.candidateId));
@@ -237,5 +273,5 @@ try {
   assert(!objects.has(late.objectKey));
   assert.equal((await database('current', {})).current.candidateId, imageCandidate.candidateId);
   assert(objects.size <= 2, 'Current plus at most one extra object');
-  console.log('Package delivery integration passed: signed OAuth → real XLSX/SQL receipt → encrypted stream → SharePoint byte readback/CAS → browser integrity/transaction/images → exact-message Archive gate; no external services.');
+  console.log('Package delivery integration passed: native worker + signed OAuth → real XLSX/SQL receipt → exact queued encrypted stream → native SharePoint byte readback/CAS and immutable historical retry → browser integrity/transaction/images → exact-message digest-bound Archive gate; no external services.');
 } finally { await db.close(); }
