@@ -105,6 +105,21 @@ db.publish(2); db.advance();
 const published = await call(handle);
 assert.equal(published.status, 200); assert.equal(published.data.archiveAllowed, true);
 assert.equal(published.data.storageRevision, 2, 'archive gate uses receipt revision, not current unrelated revision');
+// In either cutover phase, legacy Git acknowledgements and historical seed
+// receipts cannot satisfy Archive. A native import receipt remains mandatory.
+for (const phase of ['seeding', 'sharepoint']) {
+  const originalDatabase = db.database;
+  let publication = { deliveryPhase: phase, publishedRevision: 99, githubSha: 'a'.repeat(40) };
+  const phased = handler({ database: async (operation, payload) => {
+    const result = await originalDatabase(operation, payload);
+    return operation === 'read' ? { ...result, publication } : result;
+  } });
+  assert.equal((await call(phased)).data.archiveAllowed, false, 'legacy_ack_cannot_archive');
+  publication = { ...publication, provider: 'sharepoint', kind: 'seed', candidateId: '11111111-2222-4333-8444-555555555555', generation: 1, sha256: 'b'.repeat(64), bytes: 36, storageRevision: 2, publishedAt: now() };
+  assert.equal((await call(phased)).data.archiveAllowed, false, 'seed receipt cannot archive');
+  publication.kind = 'publication'; assert.equal((await call(phased)).data.archiveAllowed, true, 'qualifying normal SharePoint receipt permits native import Archive');
+  publication.sha256 = ''; assert.equal((await call(phased)).data.archiveAllowed, false, 'missing digest holds Archive');
+}
 assert.equal((await call(handle, { ...body, subject: 'ASCM Report Accessories HyperX Release Notification September 2026' })).status, 409, 'same bytes cannot replay as a different publication');
 
 db = fixture(); db.race();

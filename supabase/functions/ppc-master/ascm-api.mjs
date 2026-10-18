@@ -2,6 +2,7 @@ import './shared/ascm-import.js';
 import './shared/master-model.js';
 import { planAscmImport, AscmReviewError } from './ascm-plan.mjs';
 import { validateAscmEnvelope } from './ascm-mail-policy.mjs';
+import { qualifiesSharePointPublication } from './package-delivery-contract.mjs';
 
 const SESSION = 'ascm-supervisor';
 const MAX_FILE = 2 * 1024 * 1024;
@@ -75,7 +76,10 @@ function acceptedResponse(state, requestId, fingerprint, alreadySaved) {
       !Number.isSafeInteger(receipt.savedFields) || receipt.savedFields < 0 || !Number.isSafeInteger(receipt.savedProducts) || receipt.savedProducts < 0 ||
       !Number.isSafeInteger(state.storageRevision) || state.storageRevision < receipt.storageRevision) throw unavailable();
   const published = state.publication?.publishedRevision;
-  const archiveAllowed = Number.isSafeInteger(published) && published >= receipt.storageRevision;
+  const phase = state.publication?.deliveryPhase;
+  const archiveAllowed = ['seeding', 'sharepoint'].includes(phase)
+    ? Number.isSafeInteger(published) && published >= receipt.storageRevision && qualifiesSharePointPublication(state.publication, receipt.storageRevision)
+    : phase === undefined || phase === 'legacy' ? Number.isSafeInteger(published) && published >= receipt.storageRevision : false;
   return { requestId, storageRevision: receipt.storageRevision, alreadySaved, archiveAllowed,
     status: archiveAllowed ? 'published' : 'publication_pending',
     summary: { savedFields: receipt.savedFields, savedProducts: receipt.savedProducts } };

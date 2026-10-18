@@ -1,4 +1,6 @@
 import { parseAscmInstant, validateAscmEnvelope } from '../ppc-master/ascm-mail-policy.mjs';
+import { createCiphertextVerifier } from '../ppc-package/hash.mjs';
+import { MAX_PACKAGE_BYTES } from '../ppc-master/package-delivery-contract.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const DOWNLOAD_ORIGIN = 'https://sdmntprcentralusdr.oaiusercontent.com';
@@ -113,7 +115,7 @@ function safeReceipt(value, status, requestId, sourceMessageId) {
 }
 
 /** OAuth and attachment boundaries only; the existing ASCM API owns all master writes. */
-export function createAscmMcpCore({ env = {}, fetchImpl = globalThis.fetch, invokeAscm, invokeConnection,
+export function createAscmMcpCore({ env = {}, fetchImpl = globalThis.fetch, invokeAscm, invokeConnection, getPackageDelivery,
   now = () => new Date(), cryptoImpl = globalThis.crypto } = {}) {
   const time = () => {
     const value = new Date(now()).getTime();
@@ -238,5 +240,67 @@ export function createAscmMcpCore({ env = {}, fetchImpl = globalThis.fetch, invo
       return safeReceipt(value, response.status, requestId, envelope.messageId);
     } catch { throw unavailable(); }
   }
-  return Object.freeze({ enabled: Boolean(config), authenticate, getProfile, importReport, reportConnection });
+  function packageDelivery() {
+    if (env.PPC_PACKAGE_DELIVERY_ENABLED !== 'true' || typeof getPackageDelivery !== 'function') throw unavailable();
+    return getPackageDelivery();
+  }
+  async function getQueuedPublication(accessToken, input = {}) {
+    await authenticate(accessToken);
+    if (!record(input) || Object.keys(input).length) throw invalidArguments();
+    try { return await packageDelivery().getQueuedPublication(); } catch { throw unavailable(); }
+  }
+  function readbackArguments(input) {
+    try {
+      if (!record(input) || Object.keys(input).length !== 4 || Object.keys(input).some(key => !['candidateId', 'generation', 'item', 'readback'].includes(key))
+        || !UUID.test(input.candidateId || '') || !Number.isSafeInteger(input.generation) || input.generation < 1) throw invalidArguments();
+      const item = input.item, readback = input.readback;
+      if (!record(item) || Object.keys(item).length !== 5 || Object.keys(item).some(key => !['driveId', 'folderId', 'itemId', 'versionId', 'fileName'].includes(key))
+        || Object.values(item).some(value => !text(value, 512))
+        || !record(readback) || Object.keys(readback).some(key => !['download_url', 'file_id', 'mime_type', 'file_name'].includes(key))
+        || !text(readback.file_id, 1024) || /^(?:https?:|data:|file:)/i.test(readback.file_id)
+        || !text(readback.download_url, 16 * 1024) || readback.mime_type !== undefined && readback.mime_type !== 'application/octet-stream'
+        || readback.file_name !== undefined && readback.file_name !== item.fileName) throw invalidArguments();
+      // Reuse the exact raw-file origin/path boundary of the attachment tool.
+      const value = readback.download_url;
+      const rawPath = /^https:\/\/sdmntprcentralusdr\.oaiusercontent\.com(\/[^?#]*)\?/.exec(value)?.[1];
+      const url = new URL(value);
+      if (!/^\/files\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/raw$/i.test(rawPath || '')
+        || value.includes('\\') || value.includes('#') || url.origin !== DOWNLOAD_ORIGIN || url.username || url.password || url.pathname !== rawPath
+        || url.searchParams.getAll('sig').length !== 1 || !url.searchParams.get('sig')?.trim()
+        || url.searchParams.getAll('se').length !== 1 || !Number.isFinite(Date.parse(url.searchParams.get('se'))) || Date.parse(url.searchParams.get('se')) <= time()) throw invalidArguments();
+      return { item, downloadUrl: value };
+    } catch { throw invalidArguments(); }
+  }
+  async function verifyReadback(target) {
+    const controller = new AbortController(); let reader, timer;
+    const timeout = new Promise((resolve, reject) => {
+      timer = setTimeout(() => { controller.abort(); reader?.cancel().catch(() => {}); reject(unavailable()); }, 120_000);
+    });
+    try {
+      return await Promise.race([timeout, (async () => {
+        const response = await fetchImpl(target, { method: 'GET', headers: { Accept: 'application/octet-stream' },
+          redirect: 'error', credentials: 'omit', cache: 'no-store', signal: controller.signal });
+        const declared = response.headers.get('content-length');
+        if (!response.ok || response.redirected || !response.body
+          || declared !== null && (!/^\d+$/.test(declared) || Number(declared) < 36 || Number(declared) > MAX_PACKAGE_BYTES)) {
+          await response.body?.cancel().catch(() => {}); throw unavailable();
+        }
+        reader = response.body.getReader(); const verifier = createCiphertextVerifier();
+        for (;;) { const part = await reader.read(); if (controller.signal.aborted) throw unavailable(); if (part.done) break; verifier.update(part.value); }
+        const actual = verifier.finish(); if (declared !== null && actual.bytes !== Number(declared)) throw unavailable();
+        return { sha256: actual.sha256, bytes: actual.bytes };
+      })()]);
+    } finally { clearTimeout(timer); controller.abort(); if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock(); } }
+  }
+  async function confirmSharePointPublication(accessToken, input) {
+    await authenticate(accessToken); const delivery = packageDelivery();
+    const { item, downloadUrl } = readbackArguments(input);
+    try {
+      const verified = await verifyReadback(downloadUrl);
+      // The authenticated worker supplies SharePoint provenance. A signed raw
+      // artifact authenticates byte transport, not the claimed Microsoft origin.
+      return await delivery.confirmPublication({ candidateId: input.candidateId, generation: input.generation, item, verified });
+    } catch { throw unavailable(); }
+  }
+  return Object.freeze({ enabled: Boolean(config), authenticate, getProfile, importReport, reportConnection, getQueuedPublication, confirmSharePointPublication });
 }

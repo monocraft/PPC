@@ -2,6 +2,7 @@ import './shared/package-codec.js';
 import './shared/master-model.js';
 import './shared/product-merge.js';
 import { createAscmApi } from './ascm-api.mjs';
+import { qualifiesSharePointPublication } from './package-delivery-contract.mjs';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -130,6 +131,15 @@ export function validateManifest(manifest) {
 
 function safePublication(value) {
   const requestedRevision = Number(value?.requestedRevision || 0), publishedRevision = Number(value?.publishedRevision || 0);
+  if (['seeding', 'sharepoint'].includes(value?.deliveryPhase)) {
+    const valid = value?.provider === 'sharepoint' && ['seed', 'publication'].includes(value.kind)
+      && qualifiesSharePointPublication({ ...value, kind: 'publication' }, Math.max(1, Number(value.storageRevision)));
+    return { requestedRevision, publishedRevision, deliveryPhase: value.deliveryPhase,
+      status: valid && value.kind === 'publication' && publishedRevision >= requestedRevision && value.storageRevision >= requestedRevision ? 'current' : 'pending',
+      error: value?.status === 'error' ? 'The encrypted package update is waiting to retry.' : '',
+      ...(valid ? { provider: 'sharepoint', kind: value.kind, candidateId: value.candidateId, generation: value.generation,
+        sha256: value.sha256, bytes: value.bytes, storageRevision: value.storageRevision, publishedAt: value.publishedAt } : {}) };
+  }
   return {
     requestedRevision, publishedRevision,
     status: publishedRevision >= requestedRevision ? 'current' : value?.status === 'error' ? 'error' : 'pending',
@@ -400,7 +410,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     if (operation === 'export') {
       const state = requireState(await database('read', {}));
       return { manifest: state.manifest, storageRevision: Number(state.storageRevision), revision: Number(state.storageRevision),
-        sourceSha: state.sourceSha, publication: safePublication(state.publication) };
+        sourceSha: state.sourceSha, ...(HASH_PATTERN.test(state.acceptedManifestSha256 || '') ? { acceptedManifestSha256: state.acceptedManifestSha256 } : {}), publication: safePublication(state.publication) };
     }
     const storageRevision = revisionFrom(body);
     if (operation === 'ack' && !SHA_PATTERN.test(String(body.githubSha || ''))) throw problem(400, 'INVALID_REQUEST', 'The published GitHub revision is invalid.');

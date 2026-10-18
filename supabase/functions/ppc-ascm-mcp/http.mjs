@@ -96,6 +96,29 @@ export function createAscmMcpHttpHandler({ core, resource, issuer, createMcpHand
           annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
           _meta: { securitySchemes: [{ type: 'oauth2', scopes: ['email'] }] },
         }, input => tool(() => core.reportConnection(accessToken, input)));
+        register('get_queued_publication', {
+          title: 'Get queued encrypted PPC publication',
+          description: 'Retrieve the sole ready encrypted package and its fixed SharePoint destination. Download the read URL into a real sandbox file before connector upload; a URL is never a file handle. Create only the returned filename in the approved folder without overwriting. If creation is uncertain, fetch that exact path/item and compare its raw bytes before retrying. This does not permit Archive.',
+          inputSchema: z.object({}).strict(),
+          outputSchema: z.object({ candidate: z.object({ candidateId: z.uuid(), generation: z.number().int().min(1), storageRevision: z.number().int().min(1),
+            sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().min(36).max(67108864), expiresAt: z.string().max(64), fileName: z.string().max(256),
+            provider: z.literal('sharepoint'), driveId: z.string().min(1).max(512), folderId: z.string().min(1).max(512) }).strict().nullable(), downloadUrl: z.string().max(16384).optional() }).strict(),
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+          _meta: { securitySchemes: [{ type: 'oauth2', scopes: ['email'] }] },
+        }, input => tool(() => core.getQueuedPublication(accessToken, input)));
+        register('confirm_sharepoint_publication', {
+          title: 'Confirm encrypted PPC SharePoint readback',
+          description: 'After creating the fixed filename in the approved SharePoint folder, fetch its actual raw bytes to a real artifact and submit that readback plus the real connector item/version identifiers. Bytes are streamed and hashed before publication. The authenticated worker supplies SharePoint provenance; the raw artifact URL proves byte transport only. Publication confirmation alone never permits email Archive; submit the original report again and require archiveAllowed:true for its exact sourceMessageId.',
+          inputSchema: z.object({ candidateId: z.uuid(), generation: z.number().int().min(1), item: z.object({
+            driveId: z.string().min(1).max(512), folderId: z.string().min(1).max(512), itemId: z.string().min(1).max(512), versionId: z.string().min(1).max(512), fileName: z.string().min(1).max(256),
+          }).strict(), readback: z.object({ download_url: z.string().min(1).max(16384), file_id: z.string().min(1).max(1024), mime_type: z.string().max(255).optional(), file_name: z.string().max(256).optional() }).strict() }).strict(),
+          outputSchema: z.object({ status: z.enum(['published', 'already_published']), publication: z.object({
+            provider: z.literal('sharepoint'), kind: z.enum(['seed', 'publication']), candidateId: z.uuid(), generation: z.number().int().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            bytes: z.number().int().min(36).max(67108864), storageRevision: z.number().int().min(1), publishedAt: z.string().max(64),
+          }).strict() }).strict(),
+          annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+          _meta: { 'openai/fileParams': ['readback'], securitySchemes: [{ type: 'oauth2', scopes: ['email'] }] },
+        }, input => tool(() => core.confirmSharePointPublication(accessToken, input)));
         server.server.setRequestHandler('tools/list', () => ({ tools: descriptors }));
         return server;
       });

@@ -36,7 +36,7 @@ assert.equal((await result(response)).result.serverInfo.name, 'ppc-ascm-importer
 response = await handler(jsonRequest(rpc('tools/list')));
 assert.equal(response.status, 200);
 const tools = (await result(response)).result.tools;
-assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_profile', 'import_ascm_report', 'report_connection_state']);
+assert.deepEqual(tools.map(tool => tool.name).sort(), ['confirm_sharepoint_publication', 'get_profile', 'get_queued_publication', 'import_ascm_report', 'report_connection_state']);
 assert.equal(tools.find(tool => tool.name === 'get_profile').annotations.readOnlyHint, true);
 assert.equal(tools.find(tool => tool.name === 'import_ascm_report').annotations.readOnlyHint, false);
 const importTool = tools.find(tool => tool.name === 'import_ascm_report');

@@ -10,3 +10,8 @@ entrypoint = "./functions/ppc-master/index.ts"
 verify_jwt = false
 entrypoint = "./functions/ppc-ascm-mcp/index.ts"
 
+# Explicit publisher-secret/reader-key verification; all delivery paths default off.
+[functions.ppc-package]
+verify_jwt = false
+entrypoint = "./functions/ppc-package/index.ts"
+

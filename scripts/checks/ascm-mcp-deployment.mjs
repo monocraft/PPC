@@ -15,21 +15,22 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 try {
   const result = await prepareAscmMcpDeployment({ outputDirectory: directory });
   const manifest = JSON.parse(await readFile(resolve(directory, 'source-manifest.json'), 'utf8'));
-  assert.equal(result.files, 14);
+  assert.equal(result.files, 19);
   assert.equal(manifest.version, 1);
-  assert.equal(manifest.files.length, 14);
-  assert.equal(new Set(manifest.files.map(file => file.path)).size, 14);
+  assert.equal(manifest.files.length, 19);
+  assert.equal(new Set(manifest.files.map(file => file.path)).size, 19);
   for (const file of manifest.files) {
     assert(!file.path.startsWith('/') && !file.path.includes('..'));
     const canonical = await readFile(resolve(projectRoot, file.source), 'utf8');
     const expected = ['bootstrap.mjs', 'core.mjs'].includes(file.path)
-      ? canonical.replaceAll("'../ppc-master/", "'./master/") : canonical;
+      ? canonical.replaceAll("'../ppc-master/", "'./master/").replaceAll("'../ppc-package/", "'./package/")
+      : file.path.startsWith('package/') ? canonical.replaceAll("'../ppc-master/", "'../master/") : canonical;
     const staged = await readFile(resolve(directory, file.path), 'utf8');
     assert.equal(staged, expected, `staged ${file.path} must preserve its canonical source`);
     assert.equal(file.sha256, hash(Buffer.from(staged)));
     assert.equal(file.sourceSha256, hash(Buffer.from(canonical)));
   }
-  assert.deepEqual((await readdir(directory)).sort(), ['bootstrap.mjs', 'core.mjs', 'deno.json', 'deno.lock', 'http.mjs', 'index.ts', 'master', 'source-manifest.json']);
+  assert.deepEqual((await readdir(directory)).sort(), ['bootstrap.mjs', 'core.mjs', 'deno.json', 'deno.lock', 'http.mjs', 'index.ts', 'master', 'package', 'source-manifest.json']);
   const { createAscmMcpApplication } = await import(pathToFileURL(resolve(directory, 'bootstrap.mjs')).href);
   const disabled = createAscmMcpApplication({ createMcpHandler, McpServer, z,
     fetchImpl: () => { throw new Error('No deployment fixture network access.'); } });
