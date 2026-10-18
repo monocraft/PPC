@@ -611,6 +611,14 @@ assert.match(text(updatesPanel), /matches the published copy at the last check/,
 updatesUi.setRefresh(async () => undefined);
 updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
 assert.match(text(updatesPanel), /different published package/, "a changed package SHA detects image-only publication at the same record revision");
+const delivered = { provider: "sharepoint", kind: "publication", generation: 8, candidateId: "12345678-1234-4234-8234-123456789abc", sha256: "a".repeat(64), bytes: 900, storageRevision: 5 };
+updatesUi.adapter.getLoadedPackageInfo = () => ({ version: 2, ...delivered, loadedAt: "2026-10-15T02:00:00.000Z" });
+updatesUi.state.snapshot.publication = { status: "current", ...delivered };
+updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
+assert.match(text(updatesPanel), /matches the published copy at the last check/, "service freshness compares verified generation and digest");
+updatesUi.state.snapshot.publication = { status: "current", ...delivered, generation: 9 };
+updatesUi.document.getElementById("checkTeamUpdates").dispatchEvent({ type: "click" }); await flush();
+assert.match(text(updatesPanel), /different published package/, "new generation detects image-only service publications");
 updatesUi.adapter.getLoadedPackageInfo = () => null; updatesUi.api.updateStatus();
 assert.match(text(updatesPanel), /Package comparison unavailable/);
 updatesUi.setRefresh(async () => { throw new Error("Private source details"); });

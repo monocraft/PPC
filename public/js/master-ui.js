@@ -93,14 +93,17 @@
       const pack = element("section", "portfolio-update-card"); pack.append(element("h3", "", "Complete portfolio package"));
       const loaded = adapter.getLoadedPackageInfo?.(), published = checkedPublication, latestSha = /^[a-f0-9]{40}$/i.test(published?.githubSha || "") ? published.githubSha.toLowerCase() : "";
       const loadedSha = loaded?.version === 1 && /^[a-f0-9]{40}$/i.test(loaded.gitBlobSha || "") ? loaded.gitBlobSha.toLowerCase() : "";
+      const sharePointComparison = published?.provider === "sharepoint";
+      const sharePointKnown = sharePointComparison && loaded?.version === 2 && loaded.provider === "sharepoint" && Number.isSafeInteger(loaded.generation) && /^[a-f0-9]{64}$/.test(loaded.sha256 || "") && Number.isSafeInteger(published.generation) && /^[a-f0-9]{64}$/.test(published.sha256 || "");
+      const samePackage = sharePointComparison ? sharePointKnown && loaded.generation === published.generation && loaded.sha256 === published.sha256 && loaded.candidateId === published.candidateId : loadedSha === latestSha;
       const packageText = !lastCheckedAt || lastCheckError ? "Check team updates to compare the published package."
         : published?.status === "error" ? "At the last check, the published package was delayed. Team records may already be saved."
         : published?.status === "pending" ? "At the last check, a complete package was still being prepared. Team records and the download may differ."
-        : published?.status !== "current" || !latestSha || !loadedSha ? "Package comparison unavailable. The image package loaded here has not been verified against the published copy."
-        : loadedSha === latestSha ? "The package last opened here matches the published copy at the last check."
+        : published?.status !== "current" || (sharePointComparison ? !sharePointKnown : !latestSha || !loadedSha) ? "Package comparison unavailable. The image package loaded here has not been verified against the published copy."
+        : samePackage ? "The package last opened here matches the published copy at the last check."
         : "A different published package was available at the last check, including its images.";
       pack.append(element("p", "portfolio-update-status", packageText));
-      if (loadedSha && loaded.loadedAt) pack.append(element("p", "portfolio-update-note", `Complete package opened ${timeText(loaded.loadedAt)}. Local edits may have been made since then.`));
+      if ((loadedSha || sharePointKnown) && loaded.loadedAt) pack.append(element("p", "portfolio-update-note", `Complete package opened ${timeText(loaded.loadedAt)}. Local edits may have been made since then.`));
       pack.append(element("p", "portfolio-update-note", "Opening a complete package replaces this workspace, including local images and settings. Export a backup of work you want to keep."));
       const publicationBlocked = published?.status === "pending" || published?.status === "error";
       const load = element("button", "secondary-button", "Open complete package"); load.type = "button"; load.disabled = busy || count > 0 || publicationBlocked;

@@ -195,7 +195,7 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .master-presence-avatar.is-editing::after, .master-presence-avatar[data-editing="true"]::after { content: ""; position: absolute; bottom: -1px; right: -1px; width: 8px; height: 8px; border: 2px solid var(--color-shell); border-radius: 50%; background: var(--color-surface-raised); }
 .master-presence-count { margin-left: 7px; color: var(--color-text-secondary); font-size: 10px; white-space: nowrap; }
 .master-presence-offline { opacity: .6; }
-.master-presence-popover { position: absolute; top: calc(100% + 10px); left: 0; z-index: 100; width: min(310px, calc(100vw - 24px)); padding: 16px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); box-shadow: var(--shadow-overlay); }
+.master-presence-popover { position: absolute; top: calc(100% + 10px); left: 0; z-index: 100; width: min(310px, calc(100vw - 24px)); max-height: calc(100dvh - 76px); overflow-y: auto; padding: 16px; border: 1px solid transparent; border-radius: var(--corner-control); background: var(--color-surface); box-shadow: var(--shadow-overlay); }
 .master-presence-popover[hidden] { display: none; }
 .master-presence-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .master-presence-heading h3 { margin: 0; color: var(--color-text); font-size: 13px; }
@@ -244,6 +244,27 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .view-tab.is-active { border-color: transparent; background: var(--color-header); color: var(--color-text);  box-shadow: inset 0 -2px 0 var(--color-accent); }
 .toolbar-actions { display: flex; align-items: center; gap: 7px; }
 .toolbar-actions > button { white-space: nowrap; }
+.ascm-supervisor-indicator { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 6px; min-height: 30px; padding-inline: 3px; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; }
+.ascm-supervisor-indicator[hidden], .ascm-supervisor-row[hidden], .ascm-supervisor-label[hidden], .ascm-supervisor-reconnect[hidden], .ascm-reconnect-handoff[hidden] { display: none !important; }
+.ascm-supervisor-clock { position: relative; display: inline-block; flex: 0 0 auto; width: 17px; height: 17px; border: 1.3px solid currentColor; border-radius: 50%; }
+.ascm-supervisor-clock::before, .ascm-supervisor-clock::after { content: ""; position: absolute; left: 6.6px; width: 1.3px; background: currentColor; border-radius: 1px; transform-origin: 50% 100%; }
+.ascm-supervisor-clock::before { top: 2.2px; height: 5.2px; }
+.ascm-supervisor-clock::after { top: 3.8px; height: 3.6px; transform: rotate(120deg); }
+.ascm-supervisor-row { align-items: flex-start; padding: 7px 0 9px; border-top: 1px solid var(--color-border); }
+.ascm-supervisor-portrait { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; color: var(--color-text-secondary); }
+.ascm-supervisor-face { width: 30px; height: 30px; }
+.ascm-supervisor-person { flex: 1; min-height: 30px; }
+.ascm-supervisor-reconnect { position: relative; display: inline-flex; align-items: center; justify-content: center; justify-self: start; width: 30px; height: 30px; padding: 4px; color: var(--color-text-secondary); }
+.ascm-reconnect-key { width: 19px; height: 19px; }
+.ascm-supervisor-reconnect::after { content: ""; position: absolute; top: 3px; right: 2px; width: 4px; height: 4px; border-radius: 50%; background: var(--color-danger-text); box-shadow: 0 0 0 1.5px var(--color-surface); }
+.ascm-reconnect-handoff { display: grid; gap: 8px; padding: 10px 0 3px; color: var(--color-text-secondary); font-size: 11px; line-height: 1.55; }
+.ascm-reconnect-handoff p { margin: 0; }
+.ascm-reconnect-link { justify-self: start; color: var(--color-text); text-underline-offset: 3px; }
+.ascm-supervisor-indicator.is-working > .ascm-supervisor-clock::before { animation: ascm-supervisor-hand 2.4s linear infinite; }
+.ascm-supervisor-indicator.is-paused .ascm-supervisor-clock::before { animation: none; }
+@keyframes ascm-supervisor-hand { to { transform: rotate(360deg); } }
+@media (max-width: 700px) { .toolbar-actions:has(.ascm-supervisor-indicator:not([hidden])) { flex-wrap: wrap; } .ascm-supervisor-indicator.is-working { flex-basis: 100%; justify-content: flex-end; min-height: 23px; } }
+@media (prefers-reduced-motion: reduce) { .ascm-supervisor-clock::before { animation: none !important; } }
 .shared-data-trigger { border-color: transparent; background: var(--color-surface); }
 .shared-package-settings { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 14px 0; padding: 12px; border: 1px solid transparent; border-radius: var(--corner-control); }
 .shared-package-settings h4 { margin: 0 0 4px; }

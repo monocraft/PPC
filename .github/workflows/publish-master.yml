@@ -11,6 +11,10 @@ on:
         description: Optional immutable same-repository commit containing the encrypted owner image candidate
         type: string
         default: ''
+      seed_delivery_cache:
+        description: Explicitly stage the pinned, already-published package during SharePoint seeding
+        type: boolean
+        default: false
   schedule:
     - cron: '*/5 * * * *'
 
@@ -33,6 +37,7 @@ jobs:
       PPC_PACKAGE_KEY: ${{ secrets.PPC_PACKAGE_KEY }}
       GITHUB_TOKEN: ${{ github.token }}
       PPC_IMAGES_COMMIT: ${{ inputs.images_commit || '' }}
+      PPC_PACKAGE_PUBLICATION_MODE: ${{ vars.PPC_PACKAGE_PUBLICATION_MODE || 'github' }}
     steps:
       - name: Checkout publisher
         uses: actions/checkout@v4
@@ -43,7 +48,11 @@ jobs:
         with:
           node-version: 22
       - name: Initialize shared master when requested
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap && !inputs.seed_delivery_cache }}
         run: node scripts/publish-supabase-master.mjs --bootstrap
+      - name: Stage pinned SharePoint seed when requested
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.seed_delivery_cache && !inputs.bootstrap }}
+        run: node scripts/publish-supabase-master.mjs --seed-delivery-cache
       - name: Publish accepted changes and request Pages deployment
+        if: ${{ !inputs.seed_delivery_cache }}
         run: node scripts/publish-supabase-master.mjs

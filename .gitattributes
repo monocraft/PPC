@@ -1,2 +1,3 @@
 public/data/master_ppc.pkg -text
 public/vendor/msal/*.min.js -text
+public/vendor/supabase-js-2.118.0.js -text

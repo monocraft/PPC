@@ -1,0 +1,39 @@
+name: Import published monthly ASCM reports
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ppc-ascm-supervisor
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: ${{ vars.PPC_ASCM_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PPC_ASCM_ENABLED: ${{ vars.PPC_ASCM_ENABLED }}
+      PPC_ASCM_TENANT_ID: ${{ secrets.PPC_ASCM_TENANT_ID }}
+      PPC_ASCM_CLIENT_ID: ${{ secrets.PPC_ASCM_CLIENT_ID }}
+      PPC_ASCM_CLIENT_SECRET: ${{ secrets.PPC_ASCM_CLIENT_SECRET }}
+      PPC_ASCM_MAILBOX: ${{ secrets.PPC_ASCM_MAILBOX }}
+      PPC_ASCM_API_URL: ${{ secrets.PPC_ASCM_API_URL }}
+      PPC_ASCM_IMPORT_SECRET: ${{ secrets.PPC_ASCM_IMPORT_SECRET }}
+      PPC_ASCM_START_AFTER: ${{ vars.PPC_ASCM_START_AFTER }}
+    steps:
+      - name: Checkout supervisor
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Process bounded Inbox reports
+        run: node server/ascm-supervisor.mjs
