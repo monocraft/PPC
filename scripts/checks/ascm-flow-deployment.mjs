@@ -22,6 +22,8 @@ const expectedSources = [
   ['deno.json', 'supabase/functions/ppc-ascm-flow/deno.json'],
   ['master/gateway.mjs', 'supabase/functions/ppc-master/gateway.mjs'],
   ['master/ascm-api.mjs', 'supabase/functions/ppc-master/ascm-api.mjs'],
+  ['master/ascm-sharepoint-api.mjs', 'supabase/functions/ppc-master/ascm-sharepoint-api.mjs'],
+  ['master/publication-dispatch.mjs', 'supabase/functions/ppc-master/publication-dispatch.mjs'],
   ['master/ascm-mail-policy.mjs', 'supabase/functions/ppc-master/ascm-mail-policy.mjs'],
   ['master/ascm-plan.mjs', 'supabase/functions/ppc-master/ascm-plan.mjs'],
   ['master/package-delivery-contract.mjs', 'supabase/functions/ppc-master/package-delivery-contract.mjs'],
@@ -56,7 +58,7 @@ async function inventory(path, prefix = '') {
 try {
   const result = await prepareAscmFlowDeployment({ outputDirectory: directory });
   assert.equal(result.directory, resolve(directory));
-  assert.equal(result.files, 17);
+  assert.equal(result.files, 19);
   const manifestBytes = await readFile(resolve(directory, 'source-manifest.json'));
   const manifest = JSON.parse(manifestBytes);
   assert.equal(manifest.version, 1);
@@ -146,7 +148,7 @@ try {
   assert.equal(await readFile(unrelatedPath, 'utf8'), 'preserve this unrelated file');
   assert.deepEqual(await readFile(resolve(directory, 'source-manifest.json')), manifestBytes);
 
-  console.log('ASCM native flow deployment staging passed: 17 reviewed files, byte hashes, isolated imports, disabled defaults, no credential/payload copying and deterministic restaging.');
+  console.log('ASCM native flow deployment staging passed: 19 reviewed files, byte hashes, isolated imports, disabled defaults, no credential/payload copying and deterministic restaging.');
 } finally {
   if (previousSecret === undefined) delete process.env.PPC_ASCM_FLOW_SECRET;
   else process.env.PPC_ASCM_FLOW_SECRET = previousSecret;

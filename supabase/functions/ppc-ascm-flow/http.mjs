@@ -3,6 +3,8 @@ import { parseAscmInstant, validateAscmEnvelope } from '../ppc-master/ascm-mail-
 import { ASCM_REVIEW_REASONS } from '../ppc-master/ascm-plan.mjs';
 import { createCiphertextVerifier } from '../ppc-package/hash.mjs';
 import { MAX_PACKAGE_BYTES } from '../ppc-master/package-delivery-contract.mjs';
+import { validatePublicationControl, validatePublicationPreparation } from '../ppc-package/core.mjs';
+import { validateAscmSharePointInput } from '../ppc-master/ascm-sharepoint-api.mjs';
 
 const JSON_LIMIT = 3 * 1024 * 1024, WORKBOOK_LIMIT = 2 * 1024 * 1024;
 const UUID = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
@@ -10,6 +12,7 @@ const MAIL_FIELDS = ['sender', 'subject', 'receivedAt', 'messageId', 'fileName',
 const ITEM_HEADERS = { driveId: 'x-ppc-sp-drive-id', folderId: 'x-ppc-sp-folder-id', itemId: 'x-ppc-sp-item-id', versionId: 'x-ppc-sp-version-id', fileName: 'x-ppc-sp-file-name' };
 const HOLD_CODES = new Set(['ASCM_REVIEW_REQUIRED', 'ASCM_REPLAY_MISMATCH', 'ASCM_RETRY_REQUIRED', 'ASCM_SOURCE_REJECTED',
   'ASCM_INVALID_WORKBOOK', 'ASCM_POLICY_REQUIRED', 'ASCM_TOO_LARGE', 'ASCM_MASTER_TOO_LARGE', 'ASCM_RATE_LIMIT', 'ASCM_UNAVAILABLE']);
+const SOURCE_HOLD_CODES = new Set([...HOLD_CODES, 'ASCM_SOURCE_STALE', 'ASCM_SOURCE_AMBIGUOUS', 'ASCM_FINGERPRINT_VERSION']);
 const record = v => Boolean(v && typeof v === 'object' && !Array.isArray(v));
 const strict = (v, fields) => record(v) && Object.keys(v).length === fields.length && fields.every(k => Object.hasOwn(v, k));
 const text = (v, max = 512) => typeof v === 'string' && v.length > 0 && v.length <= max && v.trim() === v && !/[\u0000-\u001f\u007f]/.test(v);
@@ -33,7 +36,7 @@ function configuration(env) {
     || !/^https:\/\/[a-z0-9]+\.supabase\.co$/.test(env.SUPABASE_URL || '') || !text(credential, 4096)
     || !secret(env.PPC_ASCM_FLOW_SECRET) || !secret(env.PPC_ASCM_IMPORT_SECRET) || !secret(env.PPC_PUBLISHER_SECRET)
     || [env.PPC_ASCM_IMPORT_SECRET, env.PPC_PUBLISHER_SECRET, credential].includes(env.PPC_ASCM_FLOW_SECRET)
-    || !/^[a-f0-9]{64}$/.test(env.PPC_PACKAGE_KEY_HASH || '') || cutoff === null
+    || !/^[a-f0-9]{64}$/.test(env.PPC_PACKAGE_KEY_HASH || '')
     || !text(env.PPC_PACKAGE_SP_DRIVE_ID) || !text(env.PPC_PACKAGE_SP_FOLDER_ID)) return null;
   return { cutoff, worker: hash(env.PPC_ASCM_FLOW_SECRET), approvedReport: approvedReportPolicy(env.PPC_ASCM_APPROVED_REPORT) };
 }
@@ -91,6 +94,23 @@ function safeReceipt(value, status, requestId, sourceMessageId) {
   return { sourceMessageId, requestId, storageRevision: value.storageRevision, alreadySaved: value.alreadySaved,
     archiveAllowed: value.archiveAllowed, status: value.status, summary: { savedFields: value.summary.savedFields, savedProducts: value.summary.savedProducts } };
 }
+function safeSharePointReceipt(value, status, input) {
+  const count = v => Number.isSafeInteger(v) && v >= 0 && v <= 1_000_000;
+  const sourceKeys = ['driveId', 'listId', 'listItemId', 'itemUniqueId', 'versionLabel', 'rawSha256'];
+  if (!record(value) || value.sourceProvider !== 'sharepoint' || value.requestId !== input.requestId
+    || !/^ascm-sp-[a-f0-9]{64}$/.test(value.acceptedRequestId || '') || !strict(value.source, sourceKeys)
+    || sourceKeys.some(k => value.source[k] !== (k === 'rawSha256' ? input.rawSha256 : input.source[k]))
+    || !Number.isSafeInteger(value.storageRevision) || value.storageRevision < 1 || typeof value.alreadySaved !== 'boolean'
+    || !['accepted', 'equivalent'].includes(value.outcome) || value.archiveAllowed !== false
+    || value.outcome === 'accepted' && value.acceptedRequestId !== value.requestId
+    || !record(value.summary) || !count(value.summary.savedFields) || !count(value.summary.savedProducts)
+    || value.outcome === 'equivalent' && (value.summary.savedFields !== 0 || value.summary.savedProducts !== 0)
+    || !(status === 200 && value.status === 'published' || status === 202 && value.status === 'publication_pending')) throw problem();
+  return { sourceProvider: 'sharepoint', requestId: value.requestId, acceptedRequestId: value.acceptedRequestId,
+    source: Object.fromEntries(sourceKeys.map(k => [k, value.source[k]])), storageRevision: value.storageRevision,
+    alreadySaved: value.alreadySaved, outcome: value.outcome, status: value.status, archiveAllowed: false,
+    summary: { savedFields: value.summary.savedFields, savedProducts: value.summary.savedProducts } };
+}
 function generationHeader(request) {
   const v = request.headers.get('x-ppc-package-generation');
   if (!/^[1-9]\d*$/.test(v || '') || !Number.isSafeInteger(Number(v))) throw problem(400, 'INVALID_REQUEST');
@@ -111,7 +131,7 @@ function safePublication(v) {
     || !text(v.publishedAt, 64) || !Number.isFinite(Date.parse(v.publishedAt))) throw problem();
   return Object.fromEntries(['provider', 'kind', 'candidateId', 'generation', 'sha256', 'bytes', 'storageRevision', 'publishedAt'].map(k => [k, v[k]]));
 }
-export function createAscmFlowHttpHandler({ env = {}, invokeAscm, getPackageDelivery, invokeConnection, now = () => new Date().toISOString() } = {}) {
+export function createAscmFlowHttpHandler({ env = {}, invokeAscm, invokeSharePoint, getPackageDelivery, invokeConnection, now = () => new Date().toISOString() } = {}) {
   const config = configuration(env);
   return async request => {
     if (!config) return deny(404, 'NOT_FOUND');
@@ -119,15 +139,21 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, getPackageDeli
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/(?:functions\/v1\/)?ppc-ascm-flow(?=\/api\/)/, '');
     const binary = new RegExp(`^/api/ascm/publication/(${UUID})/(bytes|confirm)$`).exec(path);
-    if (!['/api/ascm/import', '/api/ascm/publication/queued', '/api/ascm/connection'].includes(path) && !binary) return deny(404, 'NOT_FOUND');
+    if (!['/api/ascm/import', '/api/ascm/sharepoint/import', '/api/ascm/publication/queued', '/api/ascm/publication/prepare', '/api/ascm/connection'].includes(path) && !binary) return deny(404, 'NOT_FOUND');
+    if (path === '/api/ascm/import' && config.cutoff === null) return deny(404, 'NOT_FOUND');
     if (url.search || url.hash) return deny(400, 'INVALID_REQUEST');
-    const method = binary?.[2] === 'bytes' ? 'GET' : 'POST';
+    const method = binary?.[2] === 'bytes' || path === '/api/ascm/publication/queued' && request.method === 'GET' ? 'GET' : 'POST';
     if (request.method !== method) return deny(405, 'METHOD_NOT_ALLOWED');
     const supplied = request.headers.get('x-ppc-ascm-flow-secret') || '';
     if (supplied.length > 512 || !timingSafeEqual(hash(supplied), config.worker)) return deny(401, 'UNAUTHORIZED');
     try {
       const allowed = new Set(['x-ppc-ascm-flow-secret', ...(binary ? ['x-ppc-package-generation', ...(binary[2] === 'confirm' ? Object.values(ITEM_HEADERS) : [])] : [])]);
       for (const key of request.headers.keys()) if (key.startsWith('x-ppc-') && !allowed.has(key)) throw problem(400, 'INVALID_REQUEST');
+      if (!binary && method === 'GET') {
+        if (request.headers.has('transfer-encoding') || request.headers.has('content-type')
+          || request.headers.has('content-length') && request.headers.get('content-length') !== '0' || request.body !== null) throw problem(400, 'INVALID_REQUEST');
+        return reply(200, validatePublicationControl(await getPackageDelivery().getPublicationControl(), env, now));
+      }
       if (binary) {
         const input = { candidateId: binary[1], generation: generationHeader(request) };
         if (binary[2] === 'bytes') return await getPackageDelivery().openQueuedPublication(input, { signal: request.signal });
@@ -145,7 +171,23 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, getPackageDeli
         return reply(200, { status: value.status, publication, archiveAllowed: false });
       }
       if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) throw problem(415, 'CONTENT_TYPE');
-      const value = await consume(request, path === '/api/ascm/import' ? JSON_LIMIT : 4096, { signal: request.signal });
+      const value = await consume(request, ['/api/ascm/import', '/api/ascm/sharepoint/import'].includes(path) ? JSON_LIMIT : 4096, { signal: request.signal });
+      if (path === '/api/ascm/sharepoint/import') {
+        const input = await validateAscmSharePointInput(value);
+        const response = await invokeSharePoint(new Request(env.SUPABASE_URL + '/functions/v1/ppc-master/api/master/ascmsharepoint', { method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-PPC-ASCM-Secret': env.PPC_ASCM_IMPORT_SECRET }, body: JSON.stringify(value), signal: request.signal }));
+        const native = await consume(response, 64 * 1024, { signal: request.signal });
+        if (!response.ok) return reply([400, 409, 413, 429, 503].includes(response.status) ? response.status : 503,
+          { sourceProvider: 'sharepoint', requestId: input.requestId, status: 'held', archiveAllowed: false,
+            code: SOURCE_HOLD_CODES.has(native?.code) ? native.code : 'ASCM_IMPORT_NOT_CONFIRMED',
+            ...(response.status === 409 && native?.code === 'ASCM_REVIEW_REQUIRED' && ASCM_REVIEW_REASONS.includes(native?.reviewReason) ? { reviewReason: native.reviewReason } : {}) });
+        const receipt = safeSharePointReceipt(native, response.status, input);
+        if (receipt.status === 'published') {
+          let current; try { current = safePublication(await getPackageDelivery().publicState()); } catch { /* Fresh normal coverage is mandatory. */ }
+          if (current?.provider !== 'sharepoint' || current.kind !== 'publication' || current.storageRevision < receipt.storageRevision) receipt.status = 'publication_pending';
+        }
+        return reply(receipt.status === 'published' ? 200 : 202, receipt);
+      }
       if (path === '/api/ascm/connection') {
         if (!strict(value, ['service', 'state']) || !['outlook', 'sharepoint'].includes(value.service) || !['available', 'reconnect_required'].includes(value.state)) throw problem(400, 'INVALID_REQUEST');
         const reported = env.PPC_ASCM_STATUS_ENABLED === 'true' && typeof invokeConnection === 'function' ? (await invokeConnection(value))?.reported === true : false;
@@ -155,6 +197,10 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, getPackageDeli
         if (!strict(value, [])) throw problem(400, 'INVALID_REQUEST');
         const metadata = await getPackageDelivery().getQueuedPublicationMetadata(); const candidate = safeCandidate(metadata?.candidate, env);
         return reply(200, { candidate, ...(candidate ? { binaryPath: `/api/ascm/publication/${candidate.candidateId}/bytes` } : {}), archiveAllowed: false });
+      }
+      if (path === '/api/ascm/publication/prepare') {
+        if (!strict(value, ['prepareKey']) || !/^[a-f0-9]{64}$/.test(value.prepareKey || '')) throw problem(400, 'INVALID_REQUEST');
+        return reply(200, validatePublicationPreparation(await getPackageDelivery().preparePublication(value)));
       }
       const requestId = reportInput(value, config.cutoff, now, config.approvedReport), delivery = getPackageDelivery();
       const metadata = await delivery.getQueuedPublicationMetadata();

@@ -2,6 +2,8 @@ import './shared/package-codec.js';
 import './shared/master-model.js';
 import './shared/product-merge.js';
 import { createAscmApi } from './ascm-api.mjs';
+import { createPublicationDispatcher } from './publication-dispatch.mjs';
+import { createAscmSharePointApi } from './ascm-sharepoint-api.mjs';
 import { qualifiesSharePointPublication } from './package-delivery-contract.mjs';
 
 const codec = globalThis.PortfolioPackage;
@@ -267,22 +269,8 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     if (!result?.allowed) throw problem(429, 'RATE_LIMIT', 'Too many attempts. Wait a minute and try again. Your local changes are safe.');
   }
 
-  async function dispatchPublication() {
-    const token = String(env.PPC_GITHUB_DISPATCH_TOKEN || '').trim();
-    if (!token) return false;
-    const owner = env.PPC_GITHUB_OWNER || 'monocraft', repo = env.PPC_GITHUB_REPO || 'PPC';
-    const workflow = env.PPC_GITHUB_PUBLISH_WORKFLOW || 'publish-master.yml';
-    if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo) || !/^[A-Za-z0-9_.-]+\.ya?ml$/.test(workflow)) return false;
-    try {
-      const result = await fetchImpl(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches`, {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
-        headers: { 'Content-Type': 'application/json', Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' }, body: JSON.stringify({ ref: 'main' }),
-      });
-      await result.body?.cancel().catch(() => {});
-      return result.ok;
-    } catch { return false; }
-  }
+  const publicationDispatcher = createPublicationDispatcher({ env, fetchImpl });
+  async function dispatchPublication() { return await publicationDispatcher.dispatch() === 'accepted'; }
 
   async function save(body, request) {
     const sessionId = String(body.sessionId || 'shared-editor');
@@ -433,6 +421,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
   }
 
   const ascmApi = createAscmApi({ env, database, now, dispatchPublication, validateManifest, validateReadableManifest: requireReadableManifest });
+  const ascmSharePointApi = createAscmSharePointApi({ env, database, now, dispatchPublication, validateManifest, validateReadableManifest: requireReadableManifest });
   return async function handle(request) {
     const origin = request.headers.get('origin') || '';
     const headers = {
@@ -444,6 +433,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       const path = new URL(request.url).pathname;
       const operation = /\/api\/master\/([a-z]+)\/?$/.exec(path)?.[1];
       if (operation === 'ascm') return await ascmApi(request);
+      if (operation === 'ascmsharepoint') return await ascmSharePointApi(request);
       if (!PUBLIC_OPERATIONS.has(operation) && !PRIVATE_OPERATIONS.has(operation)) throw problem(404, 'NOT_FOUND', 'This master action is unavailable.');
       if (origin && !origins.has(origin)) throw problem(403, 'ORIGIN_DENIED', 'This portfolio address is not allowed to connect.');
       if (origin) headers['Access-Control-Allow-Origin'] = origin;

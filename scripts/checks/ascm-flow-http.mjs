@@ -242,7 +242,7 @@ for (const mount of ['', '/ppc-ascm-flow', '/functions/v1/ppc-ascm-flow']) {
     const confirmed = await h.handler(new Request(root + `/api/ascm/publication/${id}/confirm`, { method: 'POST',
       headers: { ...binaryHeaders, 'Content-Length': '100' }, body: chunked(100), duplex: 'half' }));
     assert.equal(confirmed.status, 200); assert.equal((await confirmed.json()).archiveAllowed, false);
-    for (const [method, extra, status] of [['GET', {}, 405], ['POST', { 'X-PPC-ASCM-Flow-Secret': 'bad' }, 401], ['POST', { Origin: 'null' }, 403]]) {
+    for (const [method, extra, status] of [['PUT', {}, 405], ['POST', { 'X-PPC-ASCM-Flow-Secret': 'bad' }, 401], ['POST', { Origin: 'null' }, 403]]) {
       const held = harness(); const request = new Request(root + '/api/ascm/publication/queued', { method, headers: {
         'Content-Type': 'application/json', 'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET, ...extra }, ...(method === 'POST' ? { body: '{}' } : {}) });
       Object.defineProperty(request, 'body', { get() { throw Error('Rejected request must not read the body'); } });
@@ -297,4 +297,69 @@ test('core metadata never signs or opens, exact queued bytes deny current/histor
   for (const b of [bytes.subarray(0, -1), Buffer.concat([bytes, Buffer.from([8])]), Buffer.alloc(bytes.length)]) { content = b; await assert.rejects(async () => (await core.openQueuedPublication(input)).arrayBuffer()); }
   content = bytes; const abort = new AbortController(); const response = await core.openQueuedPublication(input, { signal: abort.signal }); abort.abort(); await assert.rejects(() => response.arrayBuffer());
   state.queued = { ...candidate, expiresAt: '2026-10-17T00:30:00Z' }; assert.equal((await core.getQueuedPublicationMetadata()).candidate, null); await assert.rejects(() => core.openQueuedPublication(input));
+});
+
+const spSource = { provider: 'sharepoint', hostname: 'hp.sharepoint.com', sitePath: '/teams/IPSG_SCM_and_Product_Requirements_Info',
+  driveId: 'b!Dxcy8q8LE0GivbyM3D6Dq5C5iXHjfxBMsvQrwTpLknS0JFIuvvhlQoilkLMqZkl9', listId: '2e5224b4-f8be-4265-88a5-90b32a66497d',
+  listItemId: 908, itemUniqueId: 'e5cb1d81-7071-40b6-93cb-86ef0b577f52', fileName: 'ASCM Report_HyperX_2026-09-30.xlsx',
+  relativePath: '(09) September 2026/ASCM Report_HyperX_2026-09-30.xlsx', versionLabel: '2.0', eTag: '"fixture-v2"',
+  createdAt: '2026-09-30T09:00:46Z', lastModifiedAt: '2026-10-07T07:44:51Z', bytes: workbook.length };
+const spProof = Object.fromEntries(['listItemId', 'itemUniqueId', 'versionLabel', 'eTag', 'bytes'].map(k => [k, spSource[k]]));
+const spInput = { schemaVersion: 1, source: spSource, before: spProof, after: spProof, workbookBase64: workbook.toString('base64') };
+const spId = 'ascm-sp-' + digest(JSON.stringify(['ppc-ascm-sharepoint-v1', spSource.hostname, spSource.sitePath, spSource.driveId,
+  spSource.listId, spSource.listItemId, spSource.itemUniqueId, spSource.versionLabel]));
+const spReceipt = { sourceProvider: 'sharepoint', requestId: spId, acceptedRequestId: spId,
+  source: { ...Object.fromEntries(['driveId', 'listId', 'listItemId', 'itemUniqueId', 'versionLabel'].map(k => [k, spSource[k]])), rawSha256: digest(workbook) },
+  storageRevision: 7, alreadySaved: true, outcome: 'accepted', status: 'published', archiveAllowed: false, summary: { savedFields: 2, savedProducts: 1 } };
+function sourceHarness(options = {}) {
+  const calls = [];
+  const handler = createAscmFlowHttpHandler({ env: { ...env, PPC_ASCM_START_AFTER: '', PPC_ASCM_APPROVED_REPORT: '{' }, now,
+    invokeAscm: () => assert.fail('SharePoint must not invoke legacy mail route'),
+    invokeSharePoint: async request => { calls.push('source'); assert.equal(new URL(request.url).pathname, '/functions/v1/ppc-master/api/master/ascmsharepoint');
+      assert.equal(request.headers.get('X-PPC-ASCM-Secret'), env.PPC_ASCM_IMPORT_SECRET); assert.equal(request.headers.has('X-PPC-ASCM-Flow-Secret'), false);
+      assert.deepEqual(await request.json(), spInput); return Response.json(options.receipt || spReceipt, { status: options.status || 200 }); },
+    getPackageDelivery: () => ({ publicState: async () => { calls.push('public'); return { ...candidate, provider: 'sharepoint', publishedAt: candidate.createdAt, ...options.publication }; } }) });
+  return { handler, calls };
+}
+test('SharePoint uses separate exact source receipt and fresh normal publication without mail policy or Archive', async () => {
+  for (const outcome of ['accepted', 'equivalent']) {
+    const expected = { ...spReceipt, outcome, ...(outcome === 'equivalent' ? { summary: { savedFields: 0, savedProducts: 0 } } : {}) };
+    const h = sourceHarness({ receipt: { ...expected, private: 'never copy', summary: { ...expected.summary, private: 'never copy' } } });
+    const response = await h.handler(req('/api/ascm/sharepoint/import', spInput));
+    assert.equal(response.status, 200); assert.deepEqual(await response.json(), expected); assert.deepEqual(h.calls, ['source', 'public']);
+  }
+  for (const publication of [{ kind: 'seed' }, { kind: 'legacy_github' }, { storageRevision: 6 }, { provider: 'github' }, { publishedAt: 'invalid' }]) {
+    const h = sourceHarness({ publication }); const response = await h.handler(req('/api/ascm/sharepoint/import', spInput));
+    assert.equal(response.status, 202); assert.deepEqual(await response.json(), { ...spReceipt, status: 'publication_pending' });
+  }
+});
+test('SharePoint input auth, schema, authority, stability and size refusals never construct source gateway', async () => {
+  for (const input of [{ ...spInput, patch: [] }, { ...spInput, source: { ...spSource, hostname: 'other.sharepoint.com' } },
+    { ...spInput, after: { ...spProof, eTag: 'changed' } }, { ...spInput, source: { ...spSource, listItemId: '908' } },
+    { ...spInput, workbookBase64: Buffer.alloc(2 * 1024 * 1024 + 1).toString('base64') }]) {
+    const h = sourceHarness(); const response = await h.handler(req('/api/ascm/sharepoint/import', input));
+    assert(response.status >= 400); assert.equal((await response.json()).archiveAllowed, false); assert.deepEqual(h.calls, []);
+  }
+  for (const options of [{ headers: { Origin: 'null' } }, { headers: { 'X-PPC-ASCM-Flow-Secret': 'wrong' } },
+    { headers: { 'Content-Length': String(3 * 1024 * 1024 + 1) } }, { method: 'PUT' }, { headers: { 'X-PPC-Publisher-Secret': 'wrong' } }]) {
+    const h = sourceHarness(); assert((await h.handler(req('/api/ascm/sharepoint/import', spInput, options))).status >= 400); assert.deepEqual(h.calls, []);
+  }
+});
+test('SharePoint pending and safe holds never fabricate mail fields or grant completion', async () => {
+  const pending = { ...spReceipt, status: 'publication_pending' };
+  const h = sourceHarness({ receipt: pending, status: 202 }); const response = await h.handler(req('/api/ascm/sharepoint/import', spInput));
+  assert.equal(response.status, 202); assert.deepEqual(await response.json(), pending); assert.deepEqual(h.calls, ['source']);
+  const held = sourceHarness({ status: 409, receipt: { code: 'ASCM_REVIEW_REQUIRED', reviewReason: 'DATE_POLICY_REQUIRED', private: 'secret' } });
+  const refused = await held.handler(req('/api/ascm/sharepoint/import', spInput)); assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), { sourceProvider: 'sharepoint', requestId: spId, status: 'held', archiveAllowed: false,
+    code: 'ASCM_REVIEW_REQUIRED', reviewReason: 'DATE_POLICY_REQUIRED' });
+});
+test('SharePoint rejects foreign or malformed native receipts before publication read', async () => {
+  for (const change of [{ requestId: 'ascm-' + digest(workbook) }, { archiveAllowed: true }, { acceptedRequestId: '' },
+    { acceptedRequestId: 'ascm-sp-' + 'd'.repeat(64) },
+    { source: { ...spReceipt.source, rawSha256: 'd'.repeat(64) } }, { outcome: 'equivalent', summary: { savedFields: 1, savedProducts: 0 } },
+    { alreadySaved: 'true' }, { status: 'unknown' }]) {
+    const h = sourceHarness({ receipt: { ...spReceipt, ...change } }); const response = await h.handler(req('/api/ascm/sharepoint/import', spInput));
+    assert.equal(response.status, 503); assert.equal((await response.json()).archiveAllowed, false); assert.deepEqual(h.calls, ['source']);
+  }
 });

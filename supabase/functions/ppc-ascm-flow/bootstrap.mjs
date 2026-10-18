@@ -1,6 +1,7 @@
 import { createMasterGateway, createAscmConnectionReporter } from '../ppc-master/gateway.mjs';
 import { createPackageDelivery } from '../ppc-package/core.mjs';
 import { createAscmFlowHttpHandler } from './http.mjs';
+import { createPublicationDispatcher } from '../ppc-master/publication-dispatch.mjs';
 
 /** Laziness preserves the zero-business-access boundary of all refusals. */
 export function createAscmFlowApplication({ env = {}, fetchImpl = globalThis.fetch, now = () => new Date().toISOString(),
@@ -8,7 +9,8 @@ export function createAscmFlowApplication({ env = {}, fetchImpl = globalThis.fet
   let gateway, delivery, reporter;
   return createAscmFlowHttpHandler({ env, now,
     invokeAscm: request => { gateway ||= gatewayFactory({ env, fetchImpl, now }); return gateway(request); },
-    getPackageDelivery: () => { delivery ||= packageDeliveryFactory({ env, fetchImpl, now }); return delivery; },
+    invokeSharePoint: request => { gateway ||= gatewayFactory({ env, fetchImpl, now }); return gateway(request); },
+    getPackageDelivery: () => { delivery ||= packageDeliveryFactory({ env, fetchImpl, now, publicationDispatcher: createPublicationDispatcher({ env, fetchImpl }) }); return delivery; },
     invokeConnection: input => { reporter ||= connectionReporterFactory({ env, fetchImpl }); return reporter(input); },
   });
 }

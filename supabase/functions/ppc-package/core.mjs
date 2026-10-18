@@ -1,5 +1,5 @@
 import '../ppc-master/shared/package-codec.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { MAX_PACKAGE_BYTES, validateCandidate, validateReceipt } from '../ppc-master/package-delivery-contract.mjs';
 import { verifiedCiphertextStream, verifyCiphertext } from './hash.mjs';
 import { createPackageDeliveryRpc } from './rpc.mjs';
@@ -18,13 +18,91 @@ const identity = value => value && ({ provider: 'sharepoint', kind: value.kind, 
 const safeText = value => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\u0000-\u001f\u007f]/.test(value);
 const sameId = (value, input) => value?.candidateId === input.candidateId && value?.generation === input.generation;
 const filename = candidate => candidate.kind === 'seed' ? 'master_ppc.pkg' : `master-r${candidate.storageRevision}-g${candidate.generation}-${candidate.candidateId}.pkg`;
-export function createPackageDelivery({ env = {}, database, storage, now = () => new Date().toISOString(), fetchImpl = globalThis.fetch } = {}) {
+const PREPARE_KEY = /^[a-f0-9]{64}$/;
+const CONTROL_FIELDS = ['version', 'action', 'requestedRevision', 'publishedRevision', 'generation', 'prepareKey', 'retryAt', 'intent', 'candidate', 'binaryPath', 'holdCode', 'archiveAllowed'];
+const HOLD_CODES = new Set(['PHASE_NOT_READY', 'CURRENT_MISSING', 'STATE_INVALID', 'OWNER_INTENT_UNKNOWN', 'PUBLISHER_NOT_CONFIGURED', 'PREPARE_ATTEMPTS_EXHAUSTED']);
+const instant = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+const integer = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum;
+export function validatePublicationControl(value, env, now) {
+  if (!strict(value, CONTROL_FIELDS) || value.version !== 1 || value.archiveAllowed !== false
+    || !['idle', 'deliver', 'prepare', 'recover', 'backoff', 'held'].includes(value.action)
+    || !integer(value.requestedRevision, 1) || !integer(value.publishedRevision) || value.publishedRevision > value.requestedRevision || !integer(value.generation)
+    || value.prepareKey !== null && !PREPARE_KEY.test(value.prepareKey) || value.retryAt !== null && !instant(value.retryAt)
+    || value.holdCode !== null && !HOLD_CODES.has(value.holdCode)) throw fail();
+  const intent = value.intent;
+  if (intent !== null && (!strict(intent, ['kind', 'ownerImagesCommit'])
+    || !(intent.kind === 'ordinary' && intent.ownerImagesCommit === null || intent.kind === 'owner_images' && /^[a-f0-9]{40}$/.test(intent.ownerImagesCommit)))) throw fail();
+  if (value.action === 'held') {
+    if (!value.holdCode || value.holdCode === 'PREPARE_ATTEMPTS_EXHAUSTED' || [value.prepareKey, value.retryAt, intent, value.candidate, value.binaryPath].some(v => v !== null)) throw fail();
+  } else if (value.action === 'idle') {
+    if (value.requestedRevision !== value.publishedRevision || [value.prepareKey, value.retryAt, intent, value.candidate, value.binaryPath, value.holdCode].some(v => v !== null)) throw fail();
+  } else if (value.action === 'deliver') {
+    const c = value.candidate;
+    if (!intent || value.prepareKey !== null || value.retryAt !== null || value.holdCode !== null
+      || !strict(c, ['candidateId', 'generation', 'storageRevision', 'sha256', 'bytes', 'expiresAt', 'fileName', 'provider', 'driveId', 'folderId'])
+      || !UUID.test(c.candidateId) || !integer(c.generation, 1) || !integer(c.storageRevision, 1) || c.storageRevision > value.requestedRevision
+      || !PREPARE_KEY.test(c.sha256) || !integer(c.bytes, 36) || c.bytes > MAX_PACKAGE_BYTES
+      || !instant(c.expiresAt) || Date.parse(c.expiresAt) <= Date.parse(now()) || !Number.isFinite(Date.parse(now()))
+      || c.fileName !== filename({ ...c, kind: 'publication' }) || c.provider !== 'sharepoint'
+      || !safeText(c.driveId) || !safeText(c.folderId) || c.driveId !== env.PPC_PACKAGE_SP_DRIVE_ID || c.folderId !== env.PPC_PACKAGE_SP_FOLDER_ID
+      || value.binaryPath !== `/api/ascm/publication/${c.candidateId}/bytes`) throw fail();
+  } else if (!intent || !PREPARE_KEY.test(value.prepareKey) || value.candidate !== null || value.binaryPath !== null
+    || (value.action === 'backoff' ? !instant(value.retryAt) || ![null, 'PREPARE_ATTEMPTS_EXHAUSTED'].includes(value.holdCode) : value.retryAt !== null || value.holdCode !== null)) throw fail();
+  return structuredClone(value);
+}
+export function validatePublicationPreparation(value) {
+  if (!strict(value, ['version', 'status', 'prepareKey', 'retryAt', 'holdCode', 'archiveAllowed']) || value.version !== 1 || value.archiveAllowed !== false
+    || !['dispatch_requested', 'dispatch_rejected', 'dispatch_uncertain', 'busy', 'backoff', 'not_needed', 'held'].includes(value.status)
+    || value.prepareKey !== null && !PREPARE_KEY.test(value.prepareKey) || value.retryAt !== null && !instant(value.retryAt)
+    || value.holdCode !== null && !HOLD_CODES.has(value.holdCode)
+    || value.holdCode === 'PREPARE_ATTEMPTS_EXHAUSTED' && value.status !== 'backoff'
+    || (['dispatch_requested', 'dispatch_rejected', 'dispatch_uncertain', 'busy', 'backoff'].includes(value.status)
+      ? !PREPARE_KEY.test(value.prepareKey) || !instant(value.retryAt) || ![null, 'PREPARE_ATTEMPTS_EXHAUSTED'].includes(value.holdCode)
+      : value.prepareKey !== null || value.retryAt !== null || (value.status === 'held' ? !value.holdCode : value.holdCode !== null))) throw fail();
+  return structuredClone(value);
+}
+export function createPackageDelivery({ env = {}, database, storage, now = () => new Date().toISOString(), fetchImpl = globalThis.fetch, publicationDispatcher = null } = {}) {
   const enabled = env.PPC_PACKAGE_DELIVERY_ENABLED === 'true';
   let db = database, objects = storage;
   const requireEnabled = () => { if (!enabled) throw fail(404, 'NOT_FOUND'); };
   const databaseCall = (operation, payload = {}) => { requireEnabled(); db ||= createPackageDeliveryRpc({ env, fetchImpl }); return db(operation, payload); };
   const objectStore = () => { requireEnabled(); objects ||= createPackageDeliveryStorage({ env, fetchImpl }); return objects; };
   const read = () => databaseCall('current');
+  const configuredPublisher = () => publicationDispatcher?.canDispatch({ fixed: true }) === true;
+  const preparation = (status, prepareKey = null, retryAt = null, holdCode = null) => validatePublicationPreparation({ version: 1, status, prepareKey, retryAt, holdCode, archiveAllowed: false });
+  async function getPublicationControl() {
+    const control = validatePublicationControl(await databaseCall('control'), env, now);
+    if (['prepare', 'recover'].includes(control.action) && !configuredPublisher()) return { ...control, action: 'held', prepareKey: null, intent: null, holdCode: 'PUBLISHER_NOT_CONFIGURED' };
+    return control;
+  }
+  async function preparePublication(input) {
+    requireEnabled();
+    if (!strict(input, ['prepareKey']) || !PREPARE_KEY.test(input.prepareKey)) throw fail(400, 'INVALID_REQUEST');
+    if (!configuredPublisher()) return preparation('held', null, null, 'PUBLISHER_NOT_CONFIGURED');
+    const attemptId = randomUUID(), claim = await databaseCall('prepare_claim', { prepareKey: input.prepareKey, attemptId });
+    if (!strict(claim, ['status', 'control', 'attemptId', 'leaseUntil', 'retryAt'])) throw fail();
+    const control = validatePublicationControl(claim.control, env, now);
+    if (!['claimed', 'stale', 'busy', 'backoff', 'not_needed', 'held'].includes(claim.status)
+      || (claim.status === 'claimed' ? claim.attemptId !== attemptId || !instant(claim.leaseUntil) || !instant(claim.retryAt)
+        || Date.parse(claim.leaseUntil) <= Date.parse(now()) || Date.parse(claim.retryAt) <= Date.parse(claim.leaseUntil)
+        : claim.attemptId !== null || claim.leaseUntil !== null || (['busy', 'backoff'].includes(claim.status) ? !instant(claim.retryAt) : claim.retryAt !== null))
+      || claim.status === 'not_needed' && !['idle', 'deliver'].includes(control.action)
+      || claim.status === 'held' && control.action !== 'held'
+      || claim.status === 'backoff' && control.action !== 'backoff') throw fail();
+    if (claim.status === 'stale') throw fail(409, 'PREPARE_STALE');
+    if (claim.status === 'not_needed') return preparation('not_needed');
+    if (claim.status === 'held') return preparation('held', null, null, control.holdCode);
+    if (['busy', 'backoff'].includes(claim.status)) return preparation(claim.status, control.prepareKey, claim.retryAt, control.holdCode);
+    if (!['prepare', 'recover'].includes(control.action) || control.prepareKey !== input.prepareKey || !control.intent) throw fail();
+    let outcome;
+    try { outcome = await publicationDispatcher.dispatch({ fixed: true, imagesCommit: control.intent.ownerImagesCommit || '' }); } catch { outcome = 'uncertain'; }
+    if (!['accepted', 'failed', 'uncertain'].includes(outcome)) outcome = 'uncertain';
+    const result = await databaseCall('prepare_result', { prepareKey: input.prepareKey, attemptId, outcome });
+    if (!strict(result, ['status', 'retryAt'])) throw fail();
+    if (result.status === 'stale' && result.retryAt === null) throw fail(409, 'PREPARE_STALE');
+    if (result.status !== outcome || !instant(result.retryAt) || result.retryAt !== claim.retryAt) throw fail();
+    return preparation({ accepted: 'dispatch_requested', failed: 'dispatch_rejected', uncertain: 'dispatch_uncertain' }[outcome], input.prepareKey, result.retryAt);
+  }
   function policy(state) {
     if (!['seeding', 'sharepoint'].includes(state?.phase) || state.policy?.provider !== 'sharepoint' || state.policy.host !== 'hp.sharepoint.com'
       || !safeText(env.PPC_PACKAGE_SP_DRIVE_ID) || !safeText(env.PPC_PACKAGE_SP_FOLDER_ID)
@@ -210,7 +288,7 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
     } });
   }
   async function publicState() { requireEnabled(); const state = await read(); matchingCurrent(state); return identity(state.publication); }
-  return Object.freeze({ enabled, publisher, upload, getQueuedPublication, getQueuedPublicationMetadata, openQueuedPublication, confirmPublication, reader, publicState });
+  return Object.freeze({ enabled, publisher, upload, getPublicationControl, preparePublication, getQueuedPublication, getQueuedPublicationMetadata, openQueuedPublication, confirmPublication, reader, publicState });
 }
 
 export async function boundedJson(request, maximum = 32 * 1024) {

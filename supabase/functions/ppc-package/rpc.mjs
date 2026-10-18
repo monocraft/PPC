@@ -1,4 +1,4 @@
-const OPERATIONS = new Set(['reserve', 'upload_claim', 'upload_result', 'finalize', 'confirm', 'current', 'cleanup', 'phase']);
+const OPERATIONS = new Set(['reserve', 'upload_claim', 'upload_result', 'finalize', 'confirm', 'current', 'cleanup', 'phase', 'control', 'prepare_claim', 'prepare_result']);
 export function createPackageDeliveryRpc({ env = {}, fetchImpl = globalThis.fetch } = {}) {
   let keys; try { keys = JSON.parse(env.SUPABASE_SECRET_KEYS || '{}'); } catch { throw new Error('Private delivery database is unavailable.'); }
   const credential = keys.default || env.SUPABASE_SERVICE_ROLE_KEY;

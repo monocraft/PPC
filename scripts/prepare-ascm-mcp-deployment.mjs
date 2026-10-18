@@ -6,7 +6,7 @@ import { buildSupabaseMaster } from './build-supabase-master.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const mcpFiles = ['index.ts', 'bootstrap.mjs', 'core.mjs', 'http.mjs', 'deno.json', 'deno.lock'];
-const masterFiles = ['gateway.mjs', 'ascm-api.mjs', 'ascm-mail-policy.mjs', 'ascm-plan.mjs',
+const masterFiles = ['gateway.mjs', 'ascm-api.mjs', 'ascm-sharepoint-api.mjs', 'publication-dispatch.mjs', 'ascm-mail-policy.mjs', 'ascm-plan.mjs',
   'package-delivery-contract.mjs',
   'shared/master-model.js', 'shared/product-merge.js', 'shared/package-codec.js', 'shared/ascm-import.js'];
 const packageFiles = ['core.mjs', 'storage.mjs', 'hash.mjs', 'rpc.mjs'];
