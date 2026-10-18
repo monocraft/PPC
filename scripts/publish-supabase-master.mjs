@@ -117,6 +117,65 @@ async function unpack(bytes, packageKey) {
   } finally { plaintext?.fill(0); }
 }
 
+function trustedMarker(source, exportedValue, endpoint) {
+  const marker = source.manifest.masterSync?.supabasePublication;
+  if (!marker) return null;
+  if (!record(marker) || marker.version !== 1 || marker.source !== endpoint || marker.sourceSha !== exportedValue.sourceSha ||
+    !Number.isSafeInteger(marker.revision) || marker.revision < 0 || source.manifest.masterSync?.supabaseRevision !== marker.revision ||
+    marker.manifestDigest !== hash(canonical(withoutMarker(source.manifest))) || marker.assetDigest !== assetDigest(source.entries)) throw failure('EXTERNAL_PACKAGE_CHANGE');
+  return marker;
+}
+
+function sameReservation(candidate, meta, kind = 'publication') {
+  return candidate?.kind === kind && candidate?.candidateId === meta.candidateId && candidate?.expectedGeneration === meta.expectedGeneration &&
+    candidate?.storageRevision === meta.storageRevision && candidate?.sourceSha === meta.sourceSha &&
+    candidate?.manifestSha256 === meta.manifestSha256 && candidate?.ownerImagesCommit === meta.ownerImagesCommit &&
+    candidate?.sha256 === meta.sha256 && candidate?.bytes === meta.bytes && candidate?.generation === meta.expectedGeneration + 1;
+}
+
+// Called only after seedArchive's fixed URL/hash/size verification in the CLI
+// path. Keeping native marker/trusted-revision staging separate lets synthetic
+// local tests prove the successful historical seed flow without a live fetch.
+export async function stageVerifiedSeedArchive({ target, source, delivery, packageKey, endpoint }) {
+  const acceptedRevision = revisionOf(target?.storageRevision ?? target?.revision);
+  const publishedRevision = revisionOf(target?.publishedRevision ?? target?.publication?.publishedRevision);
+  if (publishedRevision > acceptedRevision || !SHA.test(target?.sourceSha || '') ||
+    !(source?.bytes instanceof Uint8Array) || source.bytes.length < 36 || source.bytes.length > codec.MAX_PACKAGE_BYTES ||
+    source.sha !== blobSha(source.bytes) || !codec.isEncrypted(source.bytes)) throw failure('SEED_IDENTITY_MISMATCH');
+  let unlocked;
+  try {
+    unlocked = await unpack(source.bytes, packageKey);
+    const marker = trustedMarker(unlocked, target, endpoint);
+    if (!marker || marker.revision !== publishedRevision || unlocked.manifest.masterSync?.supabaseRevision !== publishedRevision ||
+      target.publication?.githubSha && target.publication.githubSha !== source.sha) throw failure('SEED_IDENTITY_MISMATCH');
+    const metadata = { candidateId: randomUUID(), expectedGeneration: 0, storageRevision: publishedRevision,
+      sourceSha: target.sourceSha, manifestSha256: null, ownerImagesCommit: null, sha256: hash(source.bytes), bytes: source.bytes.length,
+      trustedGithubSha: source.sha };
+    let reserved;
+    try { reserved = await delivery.seed(metadata); }
+    catch (error) {
+      const latest = await delivery.readCurrent().catch(() => null);
+      if (!sameReservation(latest?.queued, metadata, 'seed')) throw error;
+      reserved = { status: 'existing', candidate: latest.queued };
+    }
+    if (!sameReservation(reserved?.candidate, metadata, 'seed')) throw failure('SEED_RESERVATION_MISMATCH');
+    if (reserved.candidate.status === 'ready') return { status: 'pending', revision: publishedRevision, candidateId: reserved.candidate.candidateId };
+    if (reserved.candidate.status !== 'reserved') throw failure('SEED_RESERVATION_MISMATCH');
+    // This invocation still holds the exact bytes after a lost reserve reply.
+    try { await delivery.upload(reserved.candidate, source.bytes); }
+    catch {
+      try {
+        const recovered = await delivery.finalize(reserved.candidate);
+        if (recovered?.status === 'ready') return { status: 'pending', revision: publishedRevision, candidateId: reserved.candidate.candidateId };
+      } catch {}
+      throw failure('PACKAGE_UPLOAD_UNSETTLED');
+    }
+    const ready = await delivery.finalize(reserved.candidate);
+    if (ready?.status !== 'ready') throw failure('SEED_FINALIZE_FAILED');
+    return { status: 'pending', revision: publishedRevision, candidateId: reserved.candidate.candidateId };
+  } finally { for (const bytes of unlocked?.entries.values() || []) bytes.fill(0); source?.bytes?.fill(0); }
+}
+
 /** The bridge credential is only for private export/bootstrap/receipts. It is
  * never a Supabase administrative API key and never leaves the bridge origin. */
 async function readCheckoutPackage(metadata) {
@@ -255,15 +314,6 @@ export function createSupabasePublisher(options = {}) {
     return { ...value, revision, publishedRevision };
   }
 
-  function trustedMarker(source, exportedValue) {
-    const marker = source.manifest.masterSync?.supabasePublication;
-    if (!marker) return null;
-    if (!record(marker) || marker.version !== 1 || marker.source !== endpoint || marker.sourceSha !== exportedValue.sourceSha ||
-      !Number.isSafeInteger(marker.revision) || marker.revision < 0 || source.manifest.masterSync?.supabaseRevision !== marker.revision ||
-      marker.manifestDigest !== hash(canonical(withoutMarker(source.manifest))) || marker.assetDigest !== assetDigest(source.entries)) throw failure('EXTERNAL_PACKAGE_CHANGE');
-    return marker;
-  }
-
   async function notifyFailure(error, revision) {
     try { await bridge('failure', { ...(Number.isSafeInteger(revision) ? { storageRevision: revision } : {}),
       code: error instanceof PublisherError ? error.code : 'PUBLICATION_FAILED',
@@ -302,46 +352,7 @@ export function createSupabasePublisher(options = {}) {
       throw failure('PACKAGE_UPLOAD_UNSETTLED');
     }
     const source = await seedArchive();
-    const unlocked = await unpack(source.bytes, packageKey);
-    try {
-      const marker = trustedMarker(unlocked, target);
-      if (!marker || marker.revision !== target.publishedRevision ||
-        unlocked.manifest.masterSync?.supabaseRevision !== target.publishedRevision ||
-        target.publication.githubSha && target.publication.githubSha !== source.sha) throw failure('SEED_IDENTITY_MISMATCH');
-      const metadata = { candidateId: randomUUID(), expectedGeneration: 0, storageRevision: target.publishedRevision,
-        sourceSha: target.sourceSha, manifestSha256: null, ownerImagesCommit: null, sha256: SEED_SHA256, bytes: SEED_BYTES,
-        trustedGithubSha: source.sha };
-      let reserved;
-      try { reserved = await delivery.seed(metadata); }
-      catch (error) {
-        const latest = await delivery.readCurrent().catch(() => null);
-        if (!sameReservation(latest?.queued, metadata, 'seed')) throw error;
-        reserved = { status: 'existing', candidate: latest.queued };
-      }
-      if (!sameReservation(reserved.candidate, metadata, 'seed')) throw failure('SEED_RESERVATION_MISMATCH');
-      if (reserved.candidate.status === 'ready') return { status: 'pending', revision: target.publishedRevision, candidateId: reserved.candidate.candidateId };
-      if (reserved.candidate.status !== 'reserved') throw failure('SEED_RESERVATION_MISMATCH');
-      // A lost reserve reply is recoverable in this invocation because the
-      // exact pinned bytes are still held. A later invocation sees queued first.
-      try { await delivery.upload(reserved.candidate, source.bytes); }
-      catch {
-        try {
-          const recovered = await delivery.finalize(reserved.candidate);
-          if (recovered?.status === 'ready') return { status: 'pending', revision: target.publishedRevision, candidateId: reserved.candidate.candidateId };
-        } catch {}
-        throw failure('PACKAGE_UPLOAD_UNSETTLED');
-      }
-      const ready = await delivery.finalize(reserved.candidate);
-      if (ready?.status !== 'ready') throw failure('SEED_FINALIZE_FAILED');
-      return { status: 'pending', revision: target.publishedRevision, candidateId: reserved.candidate.candidateId };
-    } finally { for (const bytes of unlocked.entries.values()) bytes.fill(0); source.bytes.fill(0); }
-  }
-
-  function sameReservation(candidate, meta, kind = 'publication') {
-    return candidate?.kind === kind && candidate?.candidateId === meta.candidateId && candidate?.expectedGeneration === meta.expectedGeneration &&
-      candidate?.storageRevision === meta.storageRevision && candidate?.sourceSha === meta.sourceSha &&
-      candidate?.manifestSha256 === meta.manifestSha256 && candidate?.ownerImagesCommit === meta.ownerImagesCommit &&
-      candidate?.sha256 === meta.sha256 && candidate?.bytes === meta.bytes && candidate?.generation === meta.expectedGeneration + 1;
+    return stageVerifiedSeedArchive({ target, source, delivery, packageKey, endpoint });
   }
 
   function queuedInputMatches(candidate, target) {
@@ -374,7 +385,7 @@ export function createSupabasePublisher(options = {}) {
         const source = await unpack(current.bytes, packageKey);
         let ownerPackage, ownerUnlocked, projected;
         try {
-          const marker = trustedMarker(source, target);
+          const marker = trustedMarker(source, target, endpoint);
           let input;
           if (imagesCommit) {
             if (target.revision < 1) throw failure('OWNER_IMAGES_REQUIRE_INITIALIZED');

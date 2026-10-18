@@ -48,7 +48,7 @@ jobs:
         with:
           node-version: 22
       - name: Initialize shared master when requested
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap && !inputs.seed_delivery_cache }}
         run: node scripts/publish-supabase-master.mjs --bootstrap
       - name: Stage pinned SharePoint seed when requested
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.seed_delivery_cache && !inputs.bootstrap }}

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createPackageDeliveryClient } from '../package-delivery-client.mjs';
-import { createSupabasePublisher, PINNED_SHAREPOINT_SEED } from '../publish-supabase-master.mjs';
+import { createSupabasePublisher, PINNED_SHAREPOINT_SEED, stageVerifiedSeedArchive } from '../publish-supabase-master.mjs';
+import { readFile } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
 import { harness, original, unpacked, packageKey } from './supabase-publisher.mjs';
 import { digest, imageBinding, scopedImageDigest } from '../owner-image-layer.mjs';
 
@@ -23,15 +25,15 @@ const manifestSha = 'a'.repeat(64);
 const id = '11111111-1111-4111-8111-111111111111';
 const date = '2026-10-18T00:00:00.000Z';
 
-function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = false, sameRevision = false, corruptArchive = false, loseUploadReply = false, loseReserveReply = false } = {}) {
+function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = false, sameRevision = false, corruptArchive = false, loseUploadReply = false, loseReserveReply = false, acceptedFfsDate = null } = {}) {
   let current = seed ? null : { candidateId: id, kind: 'seed', generation: 1, expectedGeneration: 0, storageRevision: sameRevision ? revision : 1,
     sourceSha, manifestSha256: manifestSha, ownerImagesCommit: null, sha256: sha256(seedBytes), bytes: seedBytes.length,
     objectKey: `packages/${id}.pkg`, createdAt: date, expiresAt: '2026-10-19T00:00:00.000Z', status: 'published' };
-  let queued = null, store = seedBytes.slice(), next = 1, uploaded = null, finalizeFails = false, publication = { publishedRevision: current?.storageRevision ?? 0, kind: current?.kind ?? null };
+  let queued = null, seedInput = null, store = seedBytes.slice(), next = current?.generation ?? 0, uploaded = null, finalizeFails = false, publication = { publishedRevision: current?.storageRevision ?? 0, kind: current?.kind ?? null };
   const calls = [], exports = [];
   const delivery = {
     async readCurrent() { calls.push('current'); return { phase: seed ? 'seeding' : 'sharepoint', current: clone(current), queued: clone(queued), downloadUrl: current ? `https://fixture.supabase.co/storage/v1/object/sign/ppc-package-delivery/${current.objectKey}?token=read` : undefined }; },
-    async reserve(meta, kind = 'reserve') { calls.push(kind); assert.equal(meta.ownerImagesCommit, owner); assert.equal(meta.sourceSha, sourceSha); assert.equal(meta.manifestSha256, kind === 'seed' ? null : manifestSha); assert.equal(meta.expectedGeneration, current?.generation ?? 0); queued = { ...meta, kind: kind === 'seed' ? 'seed' : 'publication', generation: ++next, objectKey: `packages/${meta.candidateId}.pkg`, createdAt: date, expiresAt: '2026-10-19T00:00:00.000Z', status: 'reserved' }; if (loseReserveReply) throw new Error('Synthetic lost reserve reply'); return { status: 'reserved', candidate: clone(queued) }; },
+    async reserve(meta, kind = 'reserve') { calls.push(kind); assert.equal(meta.ownerImagesCommit, owner); assert.equal(meta.sourceSha, sourceSha); assert.equal(meta.manifestSha256, kind === 'seed' ? null : manifestSha); assert.equal(meta.expectedGeneration, current?.generation ?? 0); if (kind === 'seed') seedInput = clone(meta); const { trustedGithubSha, ...candidateMeta } = meta; queued = { ...candidateMeta, kind: kind === 'seed' ? 'seed' : 'publication', generation: ++next, objectKey: `packages/${meta.candidateId}.pkg`, createdAt: date, expiresAt: '2026-10-19T00:00:00.000Z', status: 'reserved' }; if (loseReserveReply) throw new Error('Synthetic lost reserve reply'); return { status: 'reserved', candidate: clone(queued) }; },
     async upload(candidate, bytes) { calls.push('upload'); assert.equal(candidate.candidateId, queued.candidateId); uploaded = bytes.slice(); if (loseUploadReply) throw new Error('Synthetic lost upload reply'); },
     async finalize(candidate) { calls.push('finalize'); assert.equal(candidate.candidateId, queued.candidateId); if (finalizeFails) throw new Error('Synthetic uncertain object'); queued.status = 'ready'; return { status: 'ready', candidate: clone(queued) }; },
     async seed(meta) { return this.reserve(meta, 'seed'); },
@@ -39,6 +41,7 @@ function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = fal
   const fetchImpl = async (url, options) => {
     if (url === `${endpoint}/export`) {
       calls.push('export'); const manifest = clone(seedManifest);
+      if (acceptedFfsDate) manifest.categories[0].board.products[0].ffsDate = acceptedFfsDate;
       const result = { manifest, sourceSha, storageRevision: revision, acceptedManifestSha256: manifestSha,
         publication: { ...publication, status: 'pending' } }; exports.push(result); return Response.json(result);
     }
@@ -56,9 +59,24 @@ function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = fal
   const publisher = createSupabasePublisher({ endpoint, publisherSecret: secret, packageKey, githubToken: 'github_fixture_private_secret_123456789', publicationMode: 'sharepoint',
     deliveryClient: delivery, fetchImpl, imagesCommit: owner || '', readCachedPackage: () => { throw new Error('Git cache accessed'); },
     writePackage: () => { throw new Error('Git write accessed'); } });
-  return { publisher, delivery, calls, exports, get queued() { return queued; }, get bytes() { return uploaded; }, get current() { return current; },
+  return { publisher, delivery, calls, exports, get queued() { return queued; }, get seedInput() { return seedInput; }, get bytes() { return uploaded; }, get current() { return current; },
     setQueued(value) { queued = value; }, failFinalize(value = true) { finalizeFails = value; }, setCurrent(value, bytes = seedBytes) { current = value; store = bytes; }, setPublication(value) { publication = value; },
     async pendingOutput() { return unpacked(uploaded); } };
+}
+{
+  const workflow = await readFile(new URL('../../.github/workflows/publish-master.yml', import.meta.url), 'utf8');
+  const steps = [...workflow.matchAll(/^ {6}- name: ([^\r\n]+)\r?\n {8}if: \$\{\{ ([^\r\n]+) \}\}\r?\n {8}run: (node scripts\/publish-supabase-master\.mjs(?: --[a-z-]+)?)$/gm)]
+    .map(([, name, condition, command]) => ({ name, condition, command }));
+  assert.equal(steps.length, 3, 'all publisher mutation steps must have explicit conditions');
+  const selected = (eventName, bootstrap, seedDeliveryCache) => steps.filter(step => Boolean(runInNewContext(step.condition,
+    { github: { event_name: eventName }, inputs: { bootstrap, seed_delivery_cache: seedDeliveryCache } }, { timeout: 1000 })))
+    .map(step => step.command);
+  const normal = 'node scripts/publish-supabase-master.mjs';
+  assert.deepEqual(selected('workflow_dispatch', true, true), [], 'combined bootstrap and seed selects no mutating step');
+  assert.deepEqual(selected('workflow_dispatch', true, false), [`${normal} --bootstrap`, normal]);
+  assert.deepEqual(selected('workflow_dispatch', false, true), [`${normal} --seed-delivery-cache`]);
+  assert.deepEqual(selected('workflow_dispatch', false, false), [normal]);
+  assert.deepEqual(selected('schedule', undefined, undefined), [normal]);
 }
 
 // Client transport: same origin, secret only on control and binary PUT; signed read has no credentials.
@@ -160,6 +178,38 @@ function fixture({ owner = null, ownerCandidate = null, revision = 1, seed = fal
   await assert.rejects(h.publisher.publish(), error => error.code === 'SEED_REQUIRED');
   await assert.rejects(h.publisher.seedDeliveryCache(), error => error.code === 'SEED_BYTES_MISMATCH');
   assert.equal(h.calls.filter(v => v === 'seed-read').length, 1);
+  assert.equal(h.calls.filter(v => v === 'seed').length, 0);
+}
+{
+  const h = fixture({ seed: true, revision: 2, acceptedFfsDate: '2027-02-03' });
+  h.setPublication({ publishedRevision: 1, status: 'pending' });
+  await assert.rejects(h.publisher.publish(), error => error.code === 'SEED_REQUIRED');
+  const target = h.exports.at(-1);
+  const result = await stageVerifiedSeedArchive({ target, source: { bytes: seedBytes.slice(), sha: blob(seedBytes) },
+    delivery: h.delivery, packageKey, endpoint });
+  assert.equal(result.status, 'pending'); assert.equal(result.revision, 1, 'seed uses the published baseline, not newer accepted revision');
+  assert.equal(h.queued.kind, 'seed'); assert.equal(h.queued.storageRevision, 1);
+  assert.equal(h.queued.manifestSha256, null); assert.equal(h.queued.ownerImagesCommit, null);
+  assert.equal(h.seedInput.trustedGithubSha, blob(seedBytes));
+  assert.equal(h.calls.filter(v => v === 'seed').length, 1);
+  assert.equal(h.calls.filter(v => v === 'upload').length, 1);
+  h.setCurrent({ ...h.queued, status: 'published' }, seedBytes); h.setQueued(null);
+  h.setPublication({ publishedRevision: 1, kind: 'seed', status: 'pending' });
+  const ordinary = await h.publisher.publish(); assert.equal(ordinary.status, 'pending');
+  assert.equal(h.queued.kind, 'publication'); assert.equal(h.queued.storageRevision, 2);
+  assert.equal((await h.pendingOutput()).manifest.categories[0].board.products[0].ffsDate, '2027-02-03');
+}
+{
+  const h = fixture({ seed: true, revision: 2 }); h.setPublication({ publishedRevision: 2, status: 'pending' });
+  await assert.rejects(h.publisher.publish(), error => error.code === 'SEED_REQUIRED');
+  await assert.rejects(stageVerifiedSeedArchive({ target: h.exports.at(-1), source: { bytes: seedBytes.slice(), sha: blob(seedBytes) },
+    delivery: h.delivery, packageKey, endpoint }), error => error.code === 'SEED_IDENTITY_MISMATCH',
+    'published revision must match the decrypted native package marker, even if accepted facts are newer');
+  assert.equal(h.calls.filter(v => v === 'seed').length, 0);
+  const trusted = structuredClone(h.exports.at(-1)); trusted.publication.publishedRevision = 1; trusted.publication.githubSha = 'f'.repeat(40);
+  await assert.rejects(stageVerifiedSeedArchive({ target: trusted, source: { bytes: seedBytes.slice(), sha: blob(seedBytes) },
+    delivery: h.delivery, packageKey, endpoint }), error => error.code === 'SEED_IDENTITY_MISMATCH',
+    'seed native blob must match any trusted GitHub publication identity supplied in export');
   assert.equal(h.calls.filter(v => v === 'seed').length, 0);
 }
 {
