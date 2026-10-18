@@ -783,7 +783,8 @@ def _state_shape(state, now):
             handoff = validate_handoff(source["handoff"], {"kind": "sharepoint_intake", "raw": raw}, now)
             _require(hashlib.sha256(raw).hexdigest() == source["rawSha256"], "WORKER_STATE_INVALID")
         _require(source["requestId"] == _request_id(handoff["source"]) and _instant(source["frozenAt"]) <= now
-                 and (source["phase"] == "frozen") == (source["receipt"] is None and source["replyAt"] is None), "WORKER_STATE_INVALID")
+                 and ((source["receipt"] is None and source["replyAt"] is None) if source["phase"] == "frozen"
+                      else (source["receipt"] is not None and source["replyAt"] is not None)), "WORKER_STATE_INVALID")
         if source["receipt"] is not None:
             status = 200 if source["phase"] == "complete" else 202
             _source_reply({"body": source["receipt"], "statusCode": status, "requestedAt": source["replyAt"]}, source, now)

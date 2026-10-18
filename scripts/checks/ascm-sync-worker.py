@@ -426,6 +426,48 @@ class DurableSharePointPhases(unittest.TestCase):
         with self.assertRaises(w.WorkerError):
             self.transition("source_reply", {"statusCode": 200, "body": receipt("published"), "requestedAt": "2026-10-18T12:03:00Z"}, NOW+timedelta(minutes=4))
 
+    def test_completed_protected_source_requires_saved_receipt_before_idle_charge(self):
+        # A complete phase with a surviving reply time cannot stand in for its native receipt.
+        self.frozen()
+        state = self.transition("source_reply", {"statusCode": 200, "body": receipt("published"), "requestedAt": "2026-10-18T12:00:00Z"})
+        state["source"]["receipt"] = None
+        w.save_journal(self.root, state)
+        self.assertEqual(w.load_journal(self.root), state)
+        with self.assertRaises(w.WorkerError) as caught:
+            self.transition("idle_charge", None, NOW+timedelta(hours=1))
+        self.assertEqual(caught.exception.code, "WORKER_STATE_INVALID")
+        self.assertEqual(w.load_journal(self.root), state)
+
+    def test_pending_protected_source_cannot_rebind_missing_saved_acceptance(self):
+        # Losing only the protected receipt must not allow a later response to choose revision999.
+        state = self.accepted()
+        self.assertEqual(state["source"]["receipt"]["storageRevision"], 84)
+        state["source"]["receipt"] = None
+        w.save_journal(self.root, state)
+        replacement = receipt(); replacement["storageRevision"] = 999
+        with self.assertRaises(w.WorkerError) as caught:
+            self.transition("source_reply", {"statusCode": 202, "body": replacement, "requestedAt": "2026-10-18T12:01:00Z"}, NOW+timedelta(minutes=1))
+        self.assertEqual(caught.exception.code, "WORKER_STATE_INVALID")
+        self.assertEqual(w.load_journal(self.root), state)
+
+    def test_protected_source_receipt_and_reply_time_are_a_complete_phase_pair(self):
+        # Pending/complete require both fields; frozen requires neither, never a half-pair.
+        for phase in ("pending", "complete"):
+            for missing in ("replyAt", "both"):
+                with self.subTest(phase=phase, missing=missing):
+                    local_root = self.base / (phase+missing)
+                    w.transition_journal(local_root, "source", intake(), expected("sharepoint_intake", BOOK), NOW)
+                    code = 200 if phase == "complete" else 202
+                    body = receipt("published" if code == 200 else "publication_pending")
+                    state = w.transition_journal(local_root, "source_reply", {"statusCode": code, "body": body, "requestedAt": "2026-10-18T12:00:00Z"}, {}, NOW)
+                    state["source"]["replyAt"] = None
+                    if missing == "both": state["source"]["receipt"] = None
+                    w.save_journal(local_root, state)
+                    with self.assertRaises(w.WorkerError) as caught:
+                        w.transition_journal(local_root, "source_reply", {"statusCode": code, "body": body, "requestedAt": "2026-10-18T12:01:00Z"}, {}, NOW+timedelta(minutes=1))
+                    self.assertEqual(caught.exception.code, "WORKER_STATE_INVALID")
+                    self.assertEqual(w.load_journal(local_root), state)
+
 
 @unittest.skipUnless(os.name == "nt", "Windows-native security unsupported on this platform")
 class NativeFoundations(unittest.TestCase):
