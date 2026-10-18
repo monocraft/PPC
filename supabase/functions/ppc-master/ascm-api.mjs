@@ -1,6 +1,6 @@
 import './shared/ascm-import.js';
 import './shared/master-model.js';
-import { planAscmImport, AscmReviewError } from './ascm-plan.mjs';
+import { planAscmImport, AscmReviewError, ASCM_REVIEW_REASONS } from './ascm-plan.mjs';
 import { validateAscmEnvelope } from './ascm-mail-policy.mjs';
 import { qualifiesSharePointPublication } from './package-delivery-contract.mjs';
 
@@ -162,7 +162,10 @@ export function createAscmApi({ env = {}, database, now = () => new Date().toISO
       const safe = error instanceof ApiError ? error : error instanceof AscmReviewError
         ? problem(409, 'ASCM_REVIEW_REQUIRED', 'The report needs owner review. No report changes were saved.') : unavailable();
       if (safe.status === 429) headers['Retry-After'] = '60';
-      return respond(safe.status, { code: safe.code, error: safe.message, archiveAllowed: false });
+      const reviewReason = error instanceof AscmReviewError && safe.status === 409 && safe.code === 'ASCM_REVIEW_REQUIRED'
+        && ASCM_REVIEW_REASONS.includes(error.code) ? error.code : undefined;
+      return respond(safe.status, { code: safe.code, error: safe.message, archiveAllowed: false,
+        ...(reviewReason === undefined ? {} : { reviewReason }) });
     } finally {
       if (leaseStarted) await reportStatus({ phase: 'end', leaseId });
     }

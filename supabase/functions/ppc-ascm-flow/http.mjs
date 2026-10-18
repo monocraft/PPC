@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { parseAscmInstant, validateAscmEnvelope } from '../ppc-master/ascm-mail-policy.mjs';
+import { ASCM_REVIEW_REASONS } from '../ppc-master/ascm-plan.mjs';
 import { createCiphertextVerifier } from '../ppc-package/hash.mjs';
 import { MAX_PACKAGE_BYTES } from '../ppc-master/package-delivery-contract.mjs';
 
@@ -162,7 +163,9 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, getPackageDeli
         headers: { 'Content-Type': 'application/json', 'X-PPC-ASCM-Secret': env.PPC_ASCM_IMPORT_SECRET }, body: JSON.stringify(value), signal: request.signal }));
       const native = await consume(response, 64 * 1024, { signal: request.signal });
       if (!response.ok) return reply([400, 409, 413, 429, 503].includes(response.status) ? response.status : 503,
-        { sourceMessageId: value.messageId, requestId, status: 'held', archiveAllowed: false, code: HOLD_CODES.has(native?.code) ? native.code : 'ASCM_IMPORT_NOT_CONFIRMED' });
+        { sourceMessageId: value.messageId, requestId, status: 'held', archiveAllowed: false, code: HOLD_CODES.has(native?.code) ? native.code : 'ASCM_IMPORT_NOT_CONFIRMED',
+          ...(response.status === 409 && native?.code === 'ASCM_REVIEW_REQUIRED' && ASCM_REVIEW_REASONS.includes(native?.reviewReason)
+            ? { reviewReason: native.reviewReason } : {}) });
       const receipt = safeReceipt(native, response.status, requestId, value.messageId);
       if (receipt.archiveAllowed) {
         let current; try { current = safePublication(await delivery.publicState()); } catch { /* A held/seed/malformed pointer cannot grant Archive. */ }

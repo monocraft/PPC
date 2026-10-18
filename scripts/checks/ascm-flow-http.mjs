@@ -147,6 +147,49 @@ test('native receipt is whitelisted and Archive binds digest/message plus indepe
   const { private: ignored, ...expected } = receipt;
   assert.equal(r.status, 200); assert.deepEqual(value, { ...expected, summary: { savedFields: 2, savedProducts: 1 }, sourceMessageId: report.messageId });
 });
+test('only exact upstream review holds expose the twelve safe reasons without private fields or Archive authority', async () => {
+  const reasons = ['AMBIGUOUS_MATCH', 'CATEGORY_RELOCATION', 'DATE_POLICY_REQUIRED', 'DUPLICATE_MATCH',
+    'INCOMPATIBLE_MAPPING', 'INCOMPLETE_NEW_PRODUCT', 'MALFORMED_REPORT', 'MASTER_CONFLICT', 'PRODUCT_ID_COLLISION',
+    'PROTECTED_DATE', 'STALE_REPORT', 'TOO_MANY_GROUPS'];
+  for (const reviewReason of reasons) {
+    const h = harness({ status: 409, receipt: { code: 'ASCM_REVIEW_REQUIRED', reviewReason, private: 'review-private-sentinel',
+      error: 'review-private-sentinel', details: { productId: 'review-private-sentinel' }, archiveAllowed: true } });
+    const response = await h.handler(req('/api/ascm/import', report));
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { sourceMessageId: report.messageId, requestId: 'ascm-' + digest(workbook),
+      status: 'held', archiveAllowed: false, code: 'ASCM_REVIEW_REQUIRED', reviewReason });
+    assert.deepEqual(h.calls, ['delivery', 'metadata', 'import']);
+  }
+});
+test('absent malformed or unrelated upstream reasons retain the generic held response', async () => {
+  const invalidReasons = [undefined, null, 42, {}, [], '', 'UNKNOWN_REVIEW_REASON', 'DATE_POLICY_REQUIRED '];
+  const cases = [
+    ...invalidReasons.map(reviewReason => ({ status: 409, code: 'ASCM_REVIEW_REQUIRED', reviewReason, expectedStatus: 409, expectedCode: 'ASCM_REVIEW_REQUIRED' })),
+    { status: 409, code: 'ASCM_RETRY_REQUIRED', reviewReason: 'DATE_POLICY_REQUIRED', expectedStatus: 409, expectedCode: 'ASCM_RETRY_REQUIRED' },
+    { status: 409, code: 'UNAPPROVED_CODE', reviewReason: 'DATE_POLICY_REQUIRED', expectedStatus: 409, expectedCode: 'ASCM_IMPORT_NOT_CONFIRMED' },
+    ...[400, 401, 413, 418, 429, 502, 503].map(status => ({ status, code: 'ASCM_REVIEW_REQUIRED', reviewReason: 'DATE_POLICY_REQUIRED',
+      expectedStatus: [400, 413, 429, 503].includes(status) ? status : 503, expectedCode: 'ASCM_REVIEW_REQUIRED' })),
+  ];
+  for (const { status, code, reviewReason, expectedStatus, expectedCode } of cases) {
+    const h = harness({ status, receipt: { code, reviewReason, private: 'review-private-sentinel', archiveAllowed: true } });
+    const response = await h.handler(req('/api/ascm/import', report));
+    assert.equal(response.status, expectedStatus);
+    assert.deepEqual(await response.json(), { sourceMessageId: report.messageId, requestId: 'ascm-' + digest(workbook),
+      status: 'held', archiveAllowed: false, code: expectedCode });
+    assert.deepEqual(h.calls, ['delivery', 'metadata', 'import']);
+  }
+});
+test('published and pending native receipts never copy an unrelated review reason', async () => {
+  for (const status of [200, 202]) {
+    const pending = status === 202;
+    const native = { ...receipt, archiveAllowed: !pending, status: pending ? 'publication_pending' : 'published', reviewReason: 'DATE_POLICY_REQUIRED' };
+    const h = harness({ status, receipt: native });
+    const response = await h.handler(req('/api/ascm/import', report));
+    const { private: ignored, reviewReason: ignoredReason, ...expected } = native;
+    assert.equal(response.status, status);
+    assert.deepEqual(await response.json(), { ...expected, summary: { savedFields: 2, savedProducts: 1 }, sourceMessageId: report.messageId });
+  }
+});
 test('legacy preflight, seed/old/foreign public state and forged receipts never grant Archive', async () => {
   const legacy = harness({ metadata: { phase: 'legacy' } }); assert.equal((await legacy.handler(req('/api/ascm/import', report))).status, 409); assert(!legacy.calls.includes('import'));
   for (const publication of [{ kind: 'seed' }, { storageRevision: 6 }, { provider: 'github' }]) {

@@ -117,6 +117,11 @@ try {
   assert.equal(reads.filter(name => name === 'PPC_ASCM_APPROVED_REPORT').length, 1, 'the native allowlist must read the optional approval');
   assert.equal(handlers.length, 1); assert.deepEqual(served, handlers, 'the native entrypoint must serve the configured application');
 
+  const stagedReviewPlan = await import(pathToFileURL(resolve(directory, 'master/ascm-plan.mjs')).href);
+  const canonicalReviewPlan = await import('../../supabase/functions/ppc-master/ascm-plan.mjs');
+  assert(Array.isArray(stagedReviewPlan.ASCM_REVIEW_REASONS), 'the staged planner must export the approved reason array');
+  assert(Object.isFrozen(stagedReviewPlan.ASCM_REVIEW_REASONS), 'staged consumers share an immutable reason allowlist');
+  assert.deepEqual(stagedReviewPlan.ASCM_REVIEW_REASONS, canonicalReviewPlan.ASCM_REVIEW_REASONS);
   const { createAscmFlowApplication } = await import(pathToFileURL(resolve(directory, 'bootstrap.mjs')).href);
   let networkCalls = 0;
   const handler = createAscmFlowApplication({ env: {}, fetchImpl: () => {
