@@ -16,6 +16,112 @@
   const activityText = (user) => user.activity === "idle" && !user.editing ? `Taking a breather${user.categoryName ? ` · ${user.categoryName}` : ""}` : user.activity === "roadmap" && !user.editing ? `Exploring the roadmap${user.categoryName ? ` · ${user.categoryName}` : ""}` : `${user.editing ? "Editing" : user.activity === "focused" ? "Focused on" : "Viewing"} ${user.productName || user.categoryName || "the portfolio"}${user.productName && user.categoryName ? ` · ${user.categoryName}` : ""}`;
   const connectionSummary = (state) => !state.configured ? "Team sharing is not connected" : state.mode === "github" ? state.connected ? `${state.users.length} recent ${state.users.length === 1 ? "editor" : "editors"}` : "No recent editors" : state.unavailable ? "Shared connection unavailable" : state.connected ? sessionSummary(state.onlineCount) : state.hasKey ? "Connecting…" : "Not connected";
 
+  // Personality only. Accepted snapshot dates are the sole source for the four age replies.
+  const ascmAgeReplies = [
+    "I last updated ASCM {age}.",
+    "ASCM updated {age}.",
+    "The last ASCM update was {age}.",
+    "ASCM's last update? {age}.",
+  ];
+  const ascmFaceReplies = [
+    "Hi.",
+    "I gotchu.",
+    "What do you want? In a friendly way.",
+    "A spreadsheet walked into a bar chart.",
+    "My hobbies include respecting column widths.",
+    "ASCM: four letters, many feelings.",
+    "I have a face for spreadsheets.",
+    "GA and EM: my favorite office duo.",
+    "Please hold. Emotionally, I mean.",
+    "My coffee is entirely hypothetical.",
+    "Tiny face. Full-sized opinions.",
+    "I put the 'cell' in excellent.",
+    "This meeting could have been a tooltip.",
+    "A pivot table is my dance floor.",
+    "I prefer my drama in conditional formatting.",
+    "Please don't merge my feelings.",
+    "Some assembly required. Mostly columns.",
+    "My calendar has commitment issues.",
+    "The antenna is business casual.",
+    "Yes, this is my office face.",
+    "Bold of you to hover here.",
+    "You rang? I have no bell.",
+    "Welcome to my very small office.",
+    "Mind the gap between GA and EM.",
+    "I believe in second breakfasts and first columns.",
+    "The spreadsheet has entered the chat.",
+    "Tabs are just tiny office doors.",
+    "I speak fluent row and column.",
+    "A little less chaos, a little more ASCM.",
+    "My other face is also this face.",
+    "No thoughts. Just well-aligned cells.",
+    "Actually, several thoughts. All rectangular.",
+    "The plot thickens. The columns widen.",
+    "I came. I saw. I scrolled sideways.",
+    "My favorite genre is organized suspense.",
+    "I'd like to thank the header row.",
+    "It's a beautiful day for sensible filenames.",
+    "I have strong opinions about blank rows.",
+    "I'm small enough to fit the agenda.",
+    "Professional on the outside. Tooltip on the inside.",
+    "You bring the questions. I'll bring the eyebrows.",
+    "Wait. Do I have eyebrows?",
+    "My résumé says 'good with cells.'",
+    "The cubicle is a bit compact.",
+    "I would wave, but the budget was a face.",
+    "Hello from the top of the page.",
+    "ASCM sounds like a very organized sneeze.",
+    "Dates: excellent in calendars, confusing in cells.",
+    "GA before coffee. EM after coffee.",
+    "Let's give that column some personal space.",
+    "Every workbook deserves a little plot development.",
+    "If lost, return me to the header.",
+    "The office plant has more vacation days.",
+    "I'm mostly here for the cell service.",
+    "That's a very respectable cursor you have.",
+    "Hovering is a valid management style.",
+    "My weekend plans are off the grid.",
+    "I like my jokes short and my sheets tidy.",
+    "A comma can change an entire afternoon.",
+    "Please file compliments alphabetically.",
+    "I take my pixels very seriously.",
+    "My desk has exactly zero drawers.",
+    "There are no snacks in this tooltip.",
+    "The snack situation remains entirely imaginary.",
+    "A worker with no commute. What a concept.",
+    "Thinking cap sold separately.",
+    "My train of thought has a header row.",
+    "I wonder if spreadsheets dream in grids.",
+    "One small bot, one large workbook philosophy.",
+    "I contain multitudes. And a tiny antenna.",
+    "An excellent time to stretch your shoulders.",
+    "Unclench your jaw. The cells can wait.",
+    "Your mouse deserves a tiny parking space.",
+    "This is the face of mild spreadsheet enthusiasm.",
+    "I have never won office trivia. Suspicious.",
+    "Please imagine a very polite nod.",
+    "My elevator pitch fits in one cell.",
+    "I aspire to be a named range.",
+    "A row by any other name still sorts.",
+    "Even robots appreciate a clear subject line.",
+    "That filename has sequel energy.",
+    "Final_final_v2 has entered the building.",
+    "The semicolon requested its own meeting.",
+    "Let's circle back to the rectangle.",
+    "I'm in my concise era.",
+    "A tiny nod to your excellent hovering.",
+    "Today's outfit: the usual pixels.",
+    "My performance review mentioned excellent margins.",
+    "A spreadsheet pun? That's how I Excel.",
+    "Do not feed the bot loose formulas.",
+    "I respect a well-timed lunch break.",
+    "My superpower is fitting beside the people.",
+    "I was told there would be stationery.",
+    "Office small talk, now in miniature.",
+    "My poker face is suspiciously friendly.",
+    "Thank you for attending this tiny conversation.",
+  ];
+
   function ascmUpdateTimestamp(value, time) {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return "";
     const instant = Date.parse(value);
@@ -28,7 +134,7 @@
     if (!lastUpdatedAt) return null;
     const localDay = (date) => { const day = new Date(0); day.setUTCFullYear(date.getFullYear(), date.getMonth(), date.getDate()); day.setUTCHours(0, 0, 0, 0); return day.getTime() / 86400000; };
     const date = new Date(lastUpdatedAt), days = localDay(new Date(time)) - localDay(date);
-    return { age: days === 0 ? "Today" : `${days} ${days === 1 ? "day" : "days"} ago`, date: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date) };
+    return { days, age: days === 0 ? "Today" : `${days} ${days === 1 ? "day" : "days"} ago`, date: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date) };
   }
 
   function normalizeAscmSupervisor(value, time = Date.now()) {
@@ -42,7 +148,7 @@
     return { ...idle, working: true, productCount: Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500 ? value.productCount : null, expiresAt: value.expiresAt };
   }
 
-  function createAscmSupervisorView({ documentObject = document, indicator, rosterContainer, headerControl, focusFallback, now = Date.now,
+  function createAscmSupervisorView({ documentObject = document, indicator, rosterContainer, headerControl, focusFallback, now = Date.now, random = Math.random,
     setTimeoutImpl = (callback, delay) => root.setTimeout(callback, delay), clearTimeoutImpl = (id) => root.clearTimeout(id) } = {}) {
     const make = (tag, className, text) => { const node = documentObject.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node; };
     const clock = () => { const node = make("span", "ascm-supervisor-clock"); node.setAttribute("aria-hidden", "true"); return node; };
@@ -73,12 +179,55 @@
       portrait.append(face); return portrait;
     }
     const portrait = createPortrait();
-    if (headerControl) { const headerPortrait = createPortrait(); headerPortrait.setAttribute("aria-hidden", "true"); headerControl.append(headerPortrait); }
+    const faceTooltip = make("span", "ascm-face-tooltip"), faceReply = make("span", "ascm-face-reply");
+    faceTooltip.id = "ascmFaceTooltip"; faceTooltip.hidden = true; faceTooltip.setAttribute("role", "tooltip"); faceTooltip.setAttribute("aria-live", "off"); faceTooltip.append(faceReply);
+    if (headerControl) { const headerPortrait = createPortrait(); headerPortrait.setAttribute("aria-hidden", "true"); headerControl.removeAttribute("title"); headerControl.setAttribute("aria-describedby", faceTooltip.id); headerControl.append(headerPortrait, faceTooltip); }
     handoff.id = "ascmReconnectHandoff"; handoff.hidden = true;
     const link = make("a", "ascm-reconnect-link", "Open Copilot Studio"); link.href = "https://copilotstudio.microsoft.com/environments/Default-ca7981a2-785a-463d-b82a-3db87dfc3ce6/flows/5bb99050-adca-f111-a05c-000d3a3191e3/overview"; link.target = "_blank"; link.rel = "noopener noreferrer";
     handoff.append(make("p", "", "The flow owner must reconnect Office 365 Outlook or SharePoint in Copilot Studio → Manage connection references."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
     person.append(reconnect, handoff); row.append(portrait, person); rosterContainer?.append(row);
     let timer = null, latest = null, disposed = false, tooltipHovered = false, tooltipDismissed = false;
+    let faceHovered = false, faceDismissed = false, previousReply = "";
+    function currentSupervisor() { return latest?.connected && !latest.unavailable && latest.mode !== "github" ? normalizeAscmSupervisor(latest.ascmSupervisor, now()) : null; }
+    function positionFaceTooltip() {
+      if (faceTooltip.hidden || !headerControl?.getBoundingClientRect || !faceTooltip.style) return;
+      faceTooltip.style.left = "0px";
+      const anchor = headerControl.getBoundingClientRect(), bounds = faceTooltip.getBoundingClientRect();
+      const viewportWidth = documentObject.documentElement?.clientWidth || root.innerWidth;
+      if (Number.isFinite(viewportWidth)) faceTooltip.style.left = `${Math.max(12 - anchor.left, Math.min(0, viewportWidth - 12 - bounds.right))}px`;
+    }
+    function closeFaceTooltip() { if (faceTooltip.hidden) return false; faceDismissed = true; faceTooltip.hidden = true; return true; }
+    function updateFaceTooltip(opening = false) {
+      const supervisor = currentSupervisor();
+      if (disposed || !headerControl || !supervisor || headerControl.disabled || documentObject.visibilityState === "hidden") { faceHovered = false; faceDismissed = true; faceTooltip.hidden = true; return; }
+      if (faceDismissed || (!faceHovered && documentObject.activeElement !== headerControl)) { faceTooltip.hidden = true; return; }
+      if (faceTooltip.hidden) {
+        if (!opening) return;
+        const details = ascmUpdateReadout(supervisor.lastUpdatedAt, now());
+        const replies = details ? [...ascmAgeReplies.map(reply => reply.replace("{age}", details.age.toLowerCase())), ...ascmFaceReplies] : ascmFaceReplies;
+        const eligible = replies.filter(reply => reply !== previousReply);
+        const sample = random();
+        previousReply = eligible[Math.min(eligible.length - 1, Math.max(0, Math.floor((Number.isFinite(sample) ? sample : 0) * eligible.length)))];
+        faceReply.textContent = previousReply;
+      }
+      faceTooltip.hidden = false; positionFaceTooltip();
+    }
+    const openFaceTooltip = () => { faceDismissed = false; closeUpdateTooltip(); updateFaceTooltip(true); };
+    const faceListeners = [
+      [headerControl, "pointerenter", () => { faceHovered = true; openFaceTooltip(); }],
+      [headerControl, "pointerleave", event => { if (faceTooltip.contains(event.relatedTarget)) return; faceHovered = false; updateFaceTooltip(); }],
+      [headerControl, "focus", openFaceTooltip],
+      [headerControl, "blur", () => updateFaceTooltip()],
+      [faceTooltip, "pointerenter", () => { faceHovered = true; }],
+      [faceTooltip, "pointerleave", event => { if (headerControl?.contains(event.relatedTarget)) return; faceHovered = false; updateFaceTooltip(); }],
+      [headerControl, "click", closeFaceTooltip],
+    ];
+    for (const [node, event, listener] of faceListeners) node?.addEventListener(event, listener);
+    const onFaceEscape = event => { if (event.key === "Escape" && closeFaceTooltip()) { event.preventDefault(); event.stopPropagation(); } };
+    const onVisibilityChange = () => { updateTooltip(); updateFaceTooltip(); };
+    documentObject.addEventListener?.("keydown", onFaceEscape, true);
+    documentObject.addEventListener?.("visibilitychange", onVisibilityChange);
+    root.addEventListener?.("resize", positionFaceTooltip);
     function updateTooltip() {
       if (disposed) return;
       const time = now(), state = latest;
@@ -86,16 +235,18 @@
       const details = ascmUpdateReadout(supervisor?.lastUpdatedAt, time);
       updateHeading.textContent = details ? "Last ASCM update" : "No ASCM update recorded.";
       updateElapsed.textContent = details?.age || ""; updateDate.textContent = details?.date || ""; updateDate.dateTime = supervisor?.lastUpdatedAt || "";
+      updateElapsed.classList.toggle("is-fresh", Boolean(details && details.days < 30));
+      updateElapsed.classList.toggle("is-alert", Boolean(details && details.days >= 30));
       updateElapsed.hidden = updateDivider.hidden = updateDate.hidden = !details;
-      tooltip.setAttribute("aria-label", details ? `Last ASCM update: ${details.age}. ${details.date}` : "No ASCM update recorded.");
+      tooltip.setAttribute("aria-label", details ? `Last ASCM update: ${details.age}. ${details.date}. ${details.days < 30 ? "Under 30 days old" : "30 or more days old"}.` : "No ASCM update recorded.");
       if (!supervisor || documentObject.visibilityState === "hidden") { tooltipHovered = false; tooltipDismissed = false; tooltip.hidden = true; return; }
       tooltip.hidden = tooltipDismissed || (!tooltipHovered && documentObject.activeElement !== indicator);
     }
     function closeUpdateTooltip() { if (tooltip.hidden) return false; tooltipDismissed = true; tooltip.hidden = true; return true; }
     const tooltipListeners = [
-      ["pointerenter", () => { tooltipHovered = true; tooltipDismissed = false; updateTooltip(); }],
+      ["pointerenter", () => { closeFaceTooltip(); tooltipHovered = true; tooltipDismissed = false; updateTooltip(); }],
       ["pointerleave", () => { tooltipHovered = false; updateTooltip(); }],
-      ["focus", () => { tooltipDismissed = false; updateTooltip(); }],
+      ["focus", () => { closeFaceTooltip(); tooltipDismissed = false; updateTooltip(); }],
       ["blur", updateTooltip],
     ];
     for (const [event, listener] of tooltipListeners) indicator?.addEventListener(event, listener);
@@ -134,10 +285,21 @@
       row.hidden = !supervisor; reconnect.hidden = !needsReconnect;
       if (headerControl) headerControl.hidden = !supervisor;
       updateTooltip();
+      updateFaceTooltip();
       if (working) timer = setTimeoutImpl(() => { timer = null; render(latest); }, Math.max(1, Date.parse(supervisor.expiresAt) - now()));
     }
     render(null);
-    return Object.freeze({ render, closeReconnect, closeUpdateTooltip, destroy() { render(null); disposed = true; for (const [event, listener] of tooltipListeners) indicator?.removeEventListener(event, listener); tooltip.remove(); indicator?.removeAttribute("aria-describedby"); indicator?.removeAttribute("tabindex"); reconnect.removeEventListener("click", toggleReconnect); row.remove(); } });
+    return Object.freeze({ render, closeReconnect, closeUpdateTooltip, destroy() {
+      render(null); disposed = true;
+      for (const [event, listener] of tooltipListeners) indicator?.removeEventListener(event, listener);
+      for (const [node, event, listener] of faceListeners) node?.removeEventListener(event, listener);
+      documentObject.removeEventListener?.("keydown", onFaceEscape, true);
+      documentObject.removeEventListener?.("visibilitychange", onVisibilityChange);
+      root.removeEventListener?.("resize", positionFaceTooltip);
+      faceTooltip.remove(); headerControl?.removeAttribute("aria-describedby");
+      tooltip.remove(); indicator?.removeAttribute("aria-describedby"); indicator?.removeAttribute("tabindex");
+      reconnect.removeEventListener("click", toggleReconnect); row.remove();
+    } });
   }
 
   function normalizeRecentEditors(snapshot, identity) {
@@ -308,7 +470,7 @@
     const githubConnect = make("button", "quiet-button", "Connect GitHub"); githubConnect.type = "button"; githubConnect.hidden = true; githubConnect.addEventListener("click", () => root.PortfolioMasterUI?.connectGitHub());
     const play = make("button", "presence-play", "Make a face"); play.type = "button"; play.title = "A little goof for your own face, just on this screen";
     const supervisorRows = make("div", "ascm-supervisor-roster");
-    const supervisorHeader = make("button", "ascm-supervisor-header"); supervisorHeader.type = "button"; supervisorHeader.title = "ASCM supervisor";
+    const supervisorHeader = make("button", "ascm-supervisor-header"); supervisorHeader.type = "button";
     supervisorHeader.setAttribute("aria-label", "ASCM supervisor. View connection status"); supervisorHeader.setAttribute("aria-haspopup", "dialog"); supervisorHeader.setAttribute("aria-expanded", "false"); supervisorHeader.setAttribute("aria-controls", popover.id);
     popover.append(heading, connection, rows, supervisorRows, play, nameForm, githubConnect); shell.append(supervisorHeader, trigger, popover); brand.append(shell);
     const supervisorIndicator = document.getElementById("ascmSupervisorIndicator");
@@ -480,7 +642,7 @@
     shell.addEventListener("pointerdown", () => neighbors?.cancel(), { capture: true, signal });
     trigger.addEventListener("click", () => setOpen(!open), { signal }); supervisorHeader.addEventListener("click", () => setOpen(!open), { signal }); close.addEventListener("click", () => setOpen(false), { signal });
     document.addEventListener("pointerdown", (event) => { inputActivity(); if (open && !shell.contains(event.target)) setOpen(false, { restoreFocus: false }); }, { signal });
-    document.addEventListener("keydown", (event) => { inputActivity(); if (event.key === "Escape") { if (supervisorView.closeUpdateTooltip()) { event.preventDefault(); event.stopPropagation(); return; } if (open) { event.preventDefault(); event.stopPropagation(); if (!supervisorView.closeReconnect()) setOpen(false); } } }, { capture: true, signal });
+    document.addEventListener("keydown", (event) => { inputActivity(); if (event.defaultPrevented) return; if (event.key === "Escape") { if (supervisorView.closeUpdateTooltip()) { event.preventDefault(); event.stopPropagation(); return; } if (open) { event.preventDefault(); event.stopPropagation(); if (!supervisorView.closeReconnect()) setOpen(false); } } }, { capture: true, signal });
     document.addEventListener("pointermove", inputActivity, { passive: true, signal });
     document.addEventListener("wheel", inputActivity, { passive: true, signal });
     shell.addEventListener("pointermove", (event) => {

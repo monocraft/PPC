@@ -115,7 +115,7 @@ class HeaderElement extends Element {
 async function headerFixture() {
   const source = await readFile(new URL('../../public/js/master-presence.js', import.meta.url), 'utf8');
   const documentEvents = new Element();
-  const documentObject = { visibilityState: 'visible', activeElement: null, addEventListener: (...args) => documentEvents.addEventListener(...args), dispatch: (...args) => documentEvents.dispatch(...args), createElement: tag => new HeaderElement(tag, documentObject), createElementNS: (_, tag) => new HeaderElement(tag, documentObject) };
+  const documentObject = { visibilityState: 'visible', activeElement: null, addEventListener: (...args) => documentEvents.addEventListener(...args), removeEventListener: (...args) => documentEvents.removeEventListener(...args), dispatch: (...args) => documentEvents.dispatch(...args), createElement: tag => new HeaderElement(tag, documentObject), createElementNS: (_, tag) => new HeaderElement(tag, documentObject) };
   const brand = documentObject.createElement('div'), indicator = documentObject.createElement('span'); brand.className = 'brand-block';
   documentObject.querySelector = selector => selector === '.brand-block' ? brand : null;
   documentObject.getElementById = id => id === 'ascmSupervisorIndicator' ? indicator : null;
@@ -176,16 +176,164 @@ test('enabled supervisor is visible beside header people before opening the dial
   } finally { f.app.destroy(); }
 });
 
-function viewFixture(initialTime = start) {
+function viewFixture(initialTime = start, random = Math.random) {
   let time = initialTime, sequence = 0;
   const timers = new Map(), indicator = new Element('span'), rosterContainer = new Element();
-  const documentObject = { visibilityState: 'visible', activeElement: null, createElement: tag => new Element(tag, documentObject), createElementNS: (namespace, tag) => { const node = new Element(tag, documentObject); node.namespaceURI = namespace; return node; } };
+  const documentEvents = new Element();
+  const documentObject = { visibilityState: 'visible', activeElement: null, addEventListener: (...args) => documentEvents.addEventListener(...args), removeEventListener: (...args) => documentEvents.removeEventListener(...args), dispatch: (...args) => documentEvents.dispatch(...args), createElement: tag => new Element(tag, documentObject), createElementNS: (namespace, tag) => { const node = new Element(tag, documentObject); node.namespaceURI = namespace; return node; } };
   indicator.ownerDocument = documentObject;
-  const focusFallback = new Element('button', documentObject);
-  const view = presence.createAscmSupervisorView({ documentObject, indicator, rosterContainer, focusFallback, now: () => time,
+  const focusFallback = new Element('button', documentObject), headerControl = new Element('button', documentObject);
+  headerControl.title = 'ASCM supervisor'; headerControl.setAttribute('aria-label', 'ASCM supervisor. View connection status');
+  const view = presence.createAscmSupervisorView({ documentObject, indicator, rosterContainer, headerControl, focusFallback, now: () => time, random,
     setTimeoutImpl: (fn, delay) => { const id = ++sequence; timers.set(id, { fn, at: time + delay }); return id; }, clearTimeoutImpl: id => timers.delete(id) });
-  return { view, indicator, rosterContainer, focusFallback, documentObject, timers, advance(ms) { time += ms; for (const [id, timer] of [...timers]) if (timer.at <= time) { timers.delete(id); timer.fn(); } } };
+  return { view, indicator, rosterContainer, headerControl, focusFallback, documentObject, timers, advance(ms) { time += ms; for (const [id, timer] of [...timers]) if (timer.at <= time) { timers.delete(id); timer.fn(); } } };
 }
+
+test('clock age is fresh for 0–29 local days and warns at 30 with a noncolor description', () => {
+  const previousZone = process.env.TZ; process.env.TZ = 'America/Los_Angeles';
+  try {
+    for (const [at, age, freshness] of [
+      ['2026-10-17T08:00:00.000Z', 'Today', 'fresh'],
+      ['2026-09-18T12:00:00.000Z', '29 days ago', 'fresh'],
+      ['2026-09-17T12:00:00.000Z', '30 days ago', 'alert'],
+      ['2026-09-16T12:00:00.000Z', '31 days ago', 'alert'],
+    ]) {
+      const f = viewFixture();
+      f.view.render({ connected: true, mode: 'service', ascmSupervisor: { enabled: true, working: false, lastUpdatedAt: at } });
+      f.indicator.focus();
+      const elapsed = f.indicator.querySelector('.ascm-update-elapsed'), tooltip = f.indicator.querySelector('.ascm-update-tooltip');
+      assert.equal(elapsed.textContent, age);
+      assert.equal(elapsed.classList.contains('is-fresh'), freshness === 'fresh', age);
+      assert.equal(elapsed.classList.contains('is-alert'), freshness === 'alert', age);
+      assert.match(tooltip.getAttribute('aria-label'), freshness === 'fresh' ? /Under 30 days old/ : /30 or more days old/);
+      f.view.destroy();
+    }
+    for (const lastUpdatedAt of [undefined, '', 'invalid', '2026-02-30T12:00:00.000Z', '2026-10-18T12:00:00.000Z']) {
+      const f = viewFixture();
+      f.view.render({ connected: true, mode: 'service', ascmSupervisor: { enabled: true, lastUpdatedAt } });
+      const elapsed = f.indicator.querySelector('.ascm-update-elapsed');
+      assert.equal(elapsed.hidden, true);
+      assert.equal(elapsed.classList.contains('is-fresh'), false);
+      assert.equal(elapsed.classList.contains('is-alert'), false);
+      assert.equal(f.indicator.querySelector('.ascm-update-tooltip').getAttribute('aria-label'), 'No ASCM update recorded.');
+      f.view.destroy();
+    }
+  } finally { if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone; }
+});
+
+test('face offers 100 distinct reachable short replies and age templates only with a valid accepted date', () => {
+  const replies = new Set(), unknownReplies = new Set();
+  const collect = (count, lastUpdatedAt, target) => {
+    for (let index = 0; index < count; index += 1) {
+      const f = viewFixture(start, () => (index + 0.1) / count);
+      f.view.render({ connected: true, mode: 'service', ascmSupervisor: { enabled: true, lastUpdatedAt } });
+      f.headerControl.dispatch('pointerenter');
+      const bubble = f.headerControl.querySelector('.ascm-face-tooltip');
+      assert(bubble, 'face has an accessible custom speech tooltip');
+      const reply = bubble.querySelector('.ascm-face-reply').textContent;
+      assert(reply.length > 0 && reply.length <= 90, reply);
+      assert(!reply.includes('{age}'));
+      target.add(reply); f.view.destroy();
+    }
+  };
+  collect(100, '2026-10-15T12:00:00.000Z', replies);
+  assert.equal(replies.size, 100, 'all 100 authored replies are reachable without duplicates');
+  assert(replies.has('Hi.')); assert(replies.has('I gotchu.'));
+  assert([...replies].some(reply => /What do you want\?/.test(reply)));
+  assert(replies.has('I last updated ASCM 2 days ago.'));
+  assert(replies.has('ASCM updated 2 days ago.'));
+  for (const invalid of [undefined, 'invalid', '2026-10-18T12:00:00.000Z']) {
+    unknownReplies.clear(); collect(96, invalid, unknownReplies);
+    assert.equal(unknownReplies.size, 96);
+    assert([...unknownReplies].every(reply => replies.has(reply)), 'unknown ages use only the timeless personality pool');
+    assert(![...unknownReplies].some(reply => /(?:updated|last update|days? ago)/i.test(reply)), 'unknown never becomes a fabricated successful update');
+  }
+  for (const [at, expected] of [['2026-10-17T00:00:00.000Z', 'I last updated ASCM today.'], ['2026-10-16T00:00:00.000Z', 'I last updated ASCM 1 day ago.']]) {
+    const f = viewFixture(start, () => 0.001);
+    // UTC keeps these grammar checks independent of the machine's local zone.
+    const previousZone = process.env.TZ; process.env.TZ = 'UTC';
+    try {
+      f.view.render({ connected: true, mode: 'service', ascmSupervisor: { enabled: true, lastUpdatedAt: at } });
+      f.headerControl.focus();
+      assert.equal(f.headerControl.querySelector('.ascm-face-reply').textContent, expected);
+    } finally { f.view.destroy(); if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone; }
+  }
+});
+
+test('face speech stays stable across pointer bridge rerenders and expiry and avoids immediate repeats', () => {
+  let selections = 0;
+  const f = viewFixture(start, () => { selections += 1; return 0; }), state = { connected: true, mode: 'service', ascmSupervisor: active({ lastUpdatedAt: '2026-10-15T12:00:00.000Z' }) };
+  f.view.render(state);
+  const bubble = f.headerControl.querySelector('.ascm-face-tooltip');
+  assert(bubble); assert.equal(bubble.hidden, true); assert.equal(bubble.getAttribute('role'), 'tooltip');
+  assert.equal(f.headerControl.getAttribute('aria-describedby'), bubble.id);
+  assert.equal(f.headerControl.title, '', 'custom tooltip replaces native title');
+  assert.equal(f.headerControl.getAttribute('aria-label'), 'ASCM supervisor. View connection status');
+  f.headerControl.dispatch('pointerenter'); const first = bubble.querySelector('.ascm-face-reply').textContent;
+  assert.equal(bubble.hidden, false); assert.equal(selections, 1);
+  f.headerControl.dispatch('pointerleave', { relatedTarget: bubble }); bubble.dispatch('pointerenter');
+  assert.equal(bubble.hidden, false, 'crossing the bridge keeps the bubble open');
+  f.headerControl.focus(); f.view.render(state); f.advance(120000);
+  assert.equal(bubble.querySelector('.ascm-face-reply').textContent, first);
+  assert.equal(selections, 1, 'refresh and expiry do not draw another reply');
+  assert.equal(f.timers.size, 0, 'speech adds no timer beyond the existing work lease');
+  bubble.dispatch('pointerleave'); assert.equal(bubble.hidden, false, 'focus keeps speech open');
+  f.headerControl.blur(); assert.equal(bubble.hidden, true);
+  f.headerControl.dispatch('pointerenter');
+  assert.notEqual(bubble.querySelector('.ascm-face-reply').textContent, first, 'even repeated random input avoids an immediate repeated reply');
+  assert.equal(selections, 2); f.view.destroy();
+});
+
+test('face speech supports focus Escape blur visibility disconnect and destruction without extra timers', () => {
+  const f = viewFixture(), state = { connected: true, mode: 'service', ascmSupervisor: { enabled: true, working: false } };
+  f.view.render(state);
+  const bubble = f.headerControl.querySelector('.ascm-face-tooltip'); assert(bubble);
+  f.headerControl.focus(); assert.equal(bubble.hidden, false);
+  const escape = f.documentObject.dispatch('keydown', { key: 'Escape' });
+  assert.equal(escape.defaultPrevented, true); assert.equal(bubble.hidden, true);
+  f.view.render(state); assert.equal(bubble.hidden, true);
+  assert.equal(f.documentObject.activeElement, f.headerControl);
+  f.headerControl.blur(); f.headerControl.focus(); assert.equal(bubble.hidden, false);
+  f.headerControl.blur(); assert.equal(bubble.hidden, true);
+  f.headerControl.dispatch('pointerenter');
+  f.documentObject.visibilityState = 'hidden'; f.documentObject.dispatch('visibilitychange'); assert.equal(bubble.hidden, true);
+  f.documentObject.visibilityState = 'visible'; f.view.render(state); assert.equal(bubble.hidden, true, 'visibility return waits for another opening');
+  for (const patch of [{ connected: false }, { unavailable: true }, { mode: 'github' }, { ascmSupervisor: { enabled: false } }]) {
+    f.view.render(state); f.headerControl.dispatch('pointerenter'); assert.equal(bubble.hidden, false);
+    f.view.render({ ...state, ...patch }); assert.equal(bubble.hidden, true);
+    f.view.render(state); assert.equal(bubble.hidden, true, 'reconnection alone cannot reopen speech');
+  }
+  f.headerControl.disabled = true; f.headerControl.dispatch('pointerenter'); assert.equal(bubble.hidden, true);
+  f.headerControl.disabled = false;
+  f.headerControl.dispatch('pointerenter'); f.view.destroy();
+  assert.equal(bubble.hidden, true); assert.equal(bubble.parentNode, null);
+  assert.equal(f.headerControl.getAttribute('aria-describedby'), null);
+  f.headerControl.dispatch('pointerenter'); f.headerControl.focus(); f.documentObject.dispatch('visibilitychange');
+  assert.equal(bubble.hidden, true); assert.equal(f.timers.size, 0);
+  assert([...f.headerControl.listeners.values()].every(listeners => listeners.size === 0), 'destroy removes every face listener');
+});
+
+test('actual header face keeps speech local and Escape dismisses it before the open roster', async () => {
+  const f = await headerFixture();
+  try {
+    const bot = f.brand.querySelector('.ascm-supervisor-header'), bubble = bot.querySelector('.ascm-face-tooltip');
+    const popover = f.brand.querySelector('.master-presence-popover');
+    assert(bubble); assert.equal(bot.title, '');
+    const before = f.calls;
+    bot.dispatch('pointerenter'); assert.equal(bubble.hidden, false);
+    bot.focus(); assert.equal(f.calls, before, 'opening personality never calls presence');
+    bot.click(); assert.equal(bubble.hidden, true, 'face activation dismisses speech before opening connection details');
+    assert.equal(popover.hidden, false);
+    bot.blur(); bot.focus(); assert.equal(bubble.hidden, false);
+    const event = f.documentObject.dispatch('keydown', { key: 'Escape' });
+    assert.equal(event.defaultPrevented, true); assert.equal(bubble.hidden, true);
+    assert.equal(popover.hidden, false, 'the same Escape event cannot also close the roster');
+    assert.equal(f.documentObject.activeElement, bot);
+    f.documentObject.dispatch('keydown', { key: 'Escape' }); assert.equal(popover.hidden, true);
+    assert.equal(f.app.controller.getState().onlineCount, 2);
+    assert.deepEqual(f.pokes, []);
+  } finally { f.app.destroy(); }
+});
 
 test('accepted ASCM timestamp survives controller normalization and lease expiry without another request', async () => {
   const f = setup(), lastUpdatedAt = '2026-10-15T12:00:00.000Z';
@@ -449,9 +597,12 @@ if (process.argv.includes('--preview')) {
     const url = new URL(request.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
       const mode = ['idle', 'disabled', 'expired', 'unknown', 'reconnect', 'missing-update', 'invalid-update'].includes(url.searchParams.get('state')) ? url.searchParams.get('state') : 'active';
+      const requestedAge = url.searchParams.get('age'), previewAge = /^(?:0|[1-9]\d{0,2})$/.test(requestedAge || '') ? Number(requestedAge) : 2;
+      const requestedReply = url.searchParams.get('reply'), previewReply = /^(?:0|[1-9]\d?)$/.test(requestedReply || '') ? Number(requestedReply) : null;
       const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASCM header face · local preview</title><link rel="stylesheet" href="css/fonts.css"><link rel="stylesheet" href="css/styles.css"><link rel="stylesheet" href="css/presence-expressions.css"><script>
 const fixtureMode=${JSON.stringify(mode)};
-const fixtureLastUpdate=new Date();fixtureLastUpdate.setDate(fixtureLastUpdate.getDate()-2);
+const fixtureLastUpdate=new Date();fixtureLastUpdate.setDate(fixtureLastUpdate.getDate()-${previewAge});
+${previewReply === null ? '' : `Math.random=()=>${(previewReply + 0.1) / 100};`}
 const fixtureIdle=['idle','reconnect','missing-update','invalid-update'].includes(fixtureMode);
 const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!fixtureIdle,productCount:fixtureIdle||fixtureMode==='unknown'?null:12,expiresAt:fixtureIdle?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[],...(fixtureMode==='missing-update'?{}:{lastUpdatedAt:fixtureMode==='invalid-update'?'not-a-recorded-date':fixtureLastUpdate.toISOString()})}})})};
 globalThis.PortfolioMasterUI={getSession:()=>fixtureSession};
