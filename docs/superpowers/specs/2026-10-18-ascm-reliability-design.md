@@ -1,0 +1,22 @@
+# ASCM supervisor reliability
+
+The owner requested production resilience after the native seed and ordinary package publication succeeded. Preserve the existing Microsoft connections and private backend authority. Production scheduling remains Off until the recovery release is validated.
+
+## Recovery contract
+
+Accepted report receipts, candidate identity, ciphertext digest/length/envelope, immutable SharePoint publication receipts, and fresh per-report Archive authority remain authoritative. A restart must resume completed work or safely fence work that provably never started. No retry count, elapsed lease, 404, or missing reply proves an uncertain external write absent.
+
+1. A reservation with no upload claim may be atomically replaced under the same delivery/candidate locks after validating the new accepted input. The old candidate must be fenced from later upload claims. Never change ciphertext metadata under an existing candidate ID.
+2. An expired uploading/uncertain cleanup candidate may settle only through positive full-byte verification of that exact candidate/generation/attempt. Missing, partial, wrong, or possibly late data stays held. A negative settlement still requires proven writer termination and an operator; automatic absence inference is excluded.
+3. A valid ready candidate is drained even when newer accepted facts exist. The newer report stays pending until a fresh replay confirms its own normal publication coverage. Older publication never grants premature Archive.
+4. Bounded active-operation retries cover reads and replay-safe requests on transient transport, 408, 429, 502, 503, and 504 outcomes. Honor bounded Retry-After. Do not blindly retry create/promote/upload/move. Auth, policy, validation, protected-data conflicts, and uncertain writes remain held.
+5. Lost Outlook move replies are resolved by GET of the same immutable message ID, matching the original internetMessageId and resolved Archive parent after a fresh published ArchiveAllowed gate and verified pre-move Inbox identity. Never search for or move a replacement.
+6. SharePoint staging keeps a fresh candidate-prefixed GUID per run, native binary creation with retries disabled, and exact actual stage readback after succeeded/failed/timed-out creation before promotion. This resolves a lost create reply within the same run without a second mutation. Final promotion remains create-only through MoveTo(flags=0); equal verified bytes can resume and different bytes hold. A total run loss can still leave an orphan stage. Cross-run deterministic staging is excluded until supported binary-safe conditional creation or durable attempt fencing is proven; the connector's documented CreateFile fields expose no overwrite control. Do not substitute a pre-read for atomic creation safety. Lost promotion replies already resume through final readback and must remain supported.
+7. One canonical nonsecret production flow artifact replaces fragmented authoring checkpoints as the source of truth. Keep the owner-entered credential and existing connection bindings outside source. Validate scope/references, runAfter, typed values, connector operation schemas, fixed destinations, native binary handling, secure history, bounded settings, sequential reports, Hour/1 trigger with concurrency 1, and no bootstrap residue.
+8. Publication is event driven. Remove the five-minute producer cron; retain only the requested hourly Inbox schedule. Empty or ineligible Inbox performs zero new PPC backend calls. Existing GitHub serialization and immutable receipts retain duplicate-dispatch safety; durable dispatch coalescing may be a later optimization and must not delay correctness.
+
+## Release gates
+
+Inject loss/restart at reserve, upload completion, expiration, old/new accepted revision overlap, SharePoint create/promote/confirm, and Outlook move. Reject incorrect identities, digests, versions, scopes, schedules, and alias references. Run the complete canonical local checks with required isolated PGlite, independent review, and deterministic Graphify build/check. Require deployed backend ZIP parity and normalized nonsecret native definition parity before unattended execution.
+
+Do not claim Microsoft revocation, tenant policy restrictions, exhausted credits, or truly ambiguous unfinished writes can self-heal. Retain a safe hold, leave the email unarchived, and use the existing key alert only for connection loss. Do not add header labels, idle probes, new schedules, credentials, grants, storage limits, or billing arrangements.

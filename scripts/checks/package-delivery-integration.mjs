@@ -33,6 +33,7 @@ const now = () => fixed.toISOString();
 const objects = new Map(), artifacts = new Map(), confirmedInputs = new Map();
 let storageReads = 0, storageWrites = 0, artifactReads = 0;
 let afterUpload = null;
+let beforeStore = null, loseStoredResult = false, cleanupAckLoss = null;
 const chunked = bytes => new ReadableStream({
   start(controller) { for (let offset = 0; offset < bytes.length; offset += 4096) controller.enqueue(bytes.slice(offset, offset + 4096)); controller.close(); },
 });
@@ -51,7 +52,13 @@ const sqlCall = async (prefix, names, operation, payload = {}) => {
   return (await db.query(`select public.${prefix}_${operation}($1::jsonb) as result`, [JSON.stringify(payload)])).rows[0].result;
 };
 const master = (op, payload) => sqlCall('ppc_master', masterNames, op, payload);
-const database = (op, payload) => op === 'rate' ? master(op, payload) : sqlCall('ppc_package', packageNames, op, payload);
+const database = async (op, payload) => {
+  if (op === 'upload_result' && payload.outcome === 'stored' && loseStoredResult) { loseStoredResult = false; throw Error('fixture: stored settlement reply lost before commit'); }
+  if (op === 'cleanup' && cleanupAckLoss === 'before') { cleanupAckLoss = null; throw Error('fixture: cleanup acknowledgement lost before commit'); }
+  const result = op === 'rate' ? await master(op, payload) : await sqlCall('ppc_package', packageNames, op, payload);
+  if (op === 'cleanup' && cleanupAckLoss === 'after') { cleanupAckLoss = null; throw Error('fixture: cleanup acknowledgement lost after commit'); }
+  return result;
+};
 const storage = {
   async uploadObject(candidate, stream, { signal } = {}) {
     assert(!objects.has(candidate.objectKey), 'Object creation must not overwrite');
@@ -60,7 +67,7 @@ const storage = {
     finally { body.releaseLock(); }
     const result = new Uint8Array(bytes); let offset = 0;
     for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; }
-    objects.set(candidate.objectKey, result); storageWrites++; await afterUpload?.(); return { stored: true };
+    await beforeStore?.(); objects.set(candidate.objectKey, result); storageWrites++; await afterUpload?.(); return { stored: true };
   },
   async openObject(candidate) {
     storageReads++;
@@ -212,7 +219,12 @@ try {
   assert.equal((await callTool('import_ascm_report', report)).archiveAllowed, false, 'Old Git ack cannot unlock Archive');
   assert.equal((await flowImport(nativeReport, 202)).archiveAllowed, false, 'Seed/Git publication cannot grant native Archive');
   const bytes = await codec.encrypt(packageBytes(state.manifest), key);
+  const unclaimed = await reserve(bytes);
+  assert.equal((await delivery.publisher('current')).queuedUploadState, 'none');
   const candidate = await stage(bytes);
+  assert.notEqual(candidate.candidateId, unclaimed.candidateId);
+  assert.equal(candidate.generation, unclaimed.generation, 'Replacement consumes no publication generation');
+  assert.equal((await database('upload_claim', { candidateId: unclaimed.candidateId, generation: unclaimed.generation })).status, 'stale');
   const nativeConfirmed = await nativePublish(candidate, bytes);
   const replay = await flowImport(nativeReport);
   assert.equal(replay.archiveAllowed, true); assert.equal(replay.alreadySaved, true);
@@ -252,7 +264,7 @@ try {
   let started, release;
   const began = new Promise(resolve => { started = resolve; });
   const blocked = new Promise(resolve => { release = resolve; });
-  afterUpload = () => { started(); return blocked; };
+  beforeStore = () => { started(); return blocked; };
   const lateBytes = await codec.encrypt(packageBytes(state.manifest), key);
   const late = await reserve(lateBytes);
   const lateRequest = new Request(`${base}/functions/v1/ppc-package/api/package/candidates/${late.candidateId}/bytes`, { method: 'PUT',
@@ -262,16 +274,41 @@ try {
     await Promise.race([began, uploading.then(() => { throw Error('The fixture upload completed before its barrier'); })]);
     await db.query("update ppc_private.package_delivery_candidates set created_at=now()-interval '3 hours 1 second',expires_at=now()-interval '1 second' where candidate_id=$1::uuid", [late.candidateId]);
     await delivery.publisher('current', {});
-    assert(objects.has(late.objectKey), 'Expiry must not delete an unsettled write');
+    assert(!objects.has(late.objectKey), 'Fixture has not committed the object; a 404 cannot settle this writer');
     const held = await database('current', {});
     assert.equal(held.cleanup.candidateId, late.candidateId); assert.equal(held.cleanupUpload.state, 'uploading');
     const refused = await database('reserve', { candidateId: randomUUID(), expectedGeneration: imageCandidate.generation,
       storageRevision: state.storageRevision, sourceSha, manifestSha256: state.acceptedManifestSha256, ownerImagesCommit: null, sha256: digest(lateBytes), bytes: lateBytes.length });
     assert.equal(refused.status, 'cleanup_required'); assert(objects.size <= 2);
-  } finally { release(); await uploading; afterUpload = null; }
+  } finally { release(); await uploading; beforeStore = null; }
   await delivery.publisher('current', {});
   assert(!objects.has(late.objectKey));
   assert.equal((await database('current', {})).current.candidateId, imageCandidate.candidateId);
   assert(objects.size <= 2, 'Current plus at most one extra object');
+
+  // A complete create-only object survives an upload settlement reply loss.
+  // Expiry may positively recover it, but deletion/acknowledgement stays bound
+  // to its original candidate, generation and attempt, even across lost acks.
+  for (const lossPoint of ['before', 'after']) {
+    const recoverBytes = await codec.encrypt(packageBytes(state.manifest), key);
+    const recover = await reserve(recoverBytes); loseStoredResult = true;
+    const request = new Request(`${base}/functions/v1/ppc-package/api/package/candidates/${recover.candidateId}/bytes`, { method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(recoverBytes.length), 'X-PPC-Candidate-Generation': String(recover.generation) }, body: chunked(recoverBytes), duplex: 'half' });
+    await assert.rejects(() => delivery.upload(request, recover.candidateId));
+    const uncertain = await database('current'); assert.equal(uncertain.upload.state, 'uncertain');
+    const attemptId = uncertain.upload.attemptId;
+    await db.query("update ppc_private.package_delivery_candidates set created_at=now()-interval '3 hours 1 second',expires_at=now()-interval '1 second' where candidate_id=$1::uuid", [recover.candidateId]);
+    await database('current');
+    assert.equal((await database('upload_result', { candidateId: recover.candidateId, generation: recover.generation, attemptId: randomUUID(), outcome: 'stored' })).status, 'stale');
+    cleanupAckLoss = lossPoint; await delivery.publisher('current');
+    assert(!objects.has(recover.objectKey));
+    const settled = await database('current');
+    assert.equal(settled.cleanup?.candidateId || null, lossPoint === 'before' ? recover.candidateId : null);
+    if (settled.cleanup) { assert.equal(settled.cleanupUpload.state, 'stored'); assert.equal(settled.cleanupUpload.attemptId, attemptId); }
+    await delivery.publisher('current');
+    assert.equal((await database('current')).cleanup, null);
+    assert.equal((await database('current')).current.candidateId, imageCandidate.candidateId);
+    assert.equal(objects.size, 1);
+  }
   console.log('Package delivery integration passed: native worker + signed OAuth → real XLSX/SQL receipt → exact queued encrypted stream → native SharePoint byte readback/CAS and immutable historical retry → browser integrity/transaction/images → exact-message digest-bound Archive gate; no external services.');
 } finally { await db.close(); }

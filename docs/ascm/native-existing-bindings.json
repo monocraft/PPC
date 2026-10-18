@@ -1,0 +1,20 @@
+{
+  "format": "existing-native-bindings/v1",
+  "credential": {
+    "action": "Flow_worker_credential",
+    "policy": "Retain the owner-entered native value without reading, copying, selecting or exporting it. Never apply the source placeholder to a live flow."
+  },
+  "connections": [
+    {
+      "reference": "shared_office365",
+      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "policy": "Reuse the existing Outlook connection binding; no new connection or grant."
+    },
+    {
+      "reference": "shared_sharepointonline",
+      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "policy": "Reuse the existing SharePoint connection binding; no new connection or grant."
+    }
+  ],
+  "packaging": "Import-neutral WDL definition and field manifest only. This is not a supported solution ZIP, connection export, or claim that full-flow import is available."
+}

@@ -39,10 +39,26 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
     return current;
   }
   async function cleanup(state) {
-    // A lease timeout or missing read never proves a writer has settled.
-    if (!state?.cleanup || !['none', 'stored', 'absent'].includes(state.cleanupUpload?.state)) return;
+    if (!state?.cleanup) return;
     const previous = candidate(state.cleanup);
     try {
+      const upload = state.cleanupUpload;
+      if (!sameId(upload, previous)) return;
+      if (['uploading', 'uncertain'].includes(upload.state)) {
+        // An expired lease or 404 cannot prove absence. Only a complete exact
+        // create-only object can settle the still-recorded candidate/attempt.
+        if (!safeText(upload.attemptId)) return;
+        const signal = AbortSignal.timeout(120_000);
+        const opened = await objectStore().openObject(previous, { signal });
+        const declared = opened.headers.get('content-length');
+        if (!opened.ok || !opened.body || declared !== null && declared !== String(previous.bytes)) {
+          await opened.body?.cancel().catch(() => {}); return;
+        }
+        await verifyCiphertext(opened.body, previous, { signal });
+        const settled = await databaseCall('upload_result', { candidateId: previous.candidateId, generation: previous.generation,
+          attemptId: upload.attemptId, outcome: 'stored' });
+        if (settled?.status !== 'stored') return;
+      } else if (!['none', 'stored', 'absent'].includes(upload.state)) return;
       const removed = await objectStore().removeObject(previous);
       if (removed?.absent === true) await databaseCall('cleanup', { candidateId: previous.candidateId, generation: previous.generation, absent: true });
     } catch { /* Keep the recorded slot; the next real operation can retry. */ }
@@ -57,6 +73,7 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
       if (!strict(payload, [])) throw fail(400, 'INVALID_REQUEST');
       const state = await read(); policy(state); await cleanup(state);
       return { phase: state.phase, current: state.current, queued: state.queued,
+        queuedUploadState: state.queued && sameId(state.upload, state.queued) && ['none', 'uploading', 'stored', 'absent', 'uncertain'].includes(state.upload.state) ? state.upload.state : null,
         ...(state.current ? { downloadUrl: await objectStore().signDownload(matchingCurrent(state)) } : {}) };
     }
     if (operation === 'reserve' || operation === 'seed') {

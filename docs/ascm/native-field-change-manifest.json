@@ -1,0 +1,375 @@
+{
+  "format": "import-neutral-field-manifest/v1",
+  "baseline": "reviewed production checkpoints; current manual Bootstrap prefix must be removed separately without reading credential",
+  "trigger": {
+    "path": "/triggers/Recurrence",
+    "operation": "set",
+    "value": {
+      "type": "Recurrence",
+      "recurrence": {
+        "interval": 1,
+        "frequency": "Hour"
+      },
+      "runtimeConfiguration": {
+        "concurrency": {
+          "runs": 1
+        }
+      }
+    }
+  },
+  "credential": "Preserve existing owner-entered Flow_worker_credential and connection bindings; never apply the source placeholder.",
+  "changes": [
+    {
+      "action": "List_monthly_releases",
+      "path": "/actions/List_monthly_releases/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "List_report_attachments",
+      "path": "/actions/Each_report/actions/List_report_attachments/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Get_report_attachment",
+      "path": "/actions/Each_report/actions/Single_complete_workbook/actions/Valid_report_envelope/actions/Get_report_attachment/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Import_report",
+      "path": "/actions/Each_report/actions/Attachment_agrees/actions/Import_report/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Queued_publication",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Queued_publication/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Candidate_ready",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/expression",
+      "operation": "set",
+      "category": "essential-recovery",
+      "value": {
+        "and": [
+          {
+            "equals": [
+              "@and(equals(outputs('Queued_publication')?['statusCode'],200),equals(body('Queued_publication')?['archiveAllowed'],false),not(empty(body('Queued_publication')?['candidate'])),equals(body('Queued_publication')?['candidate']?['provider'],'sharepoint'),greaterOrEquals(coalesce(body('Queued_publication')?['candidate']?['storageRevision'],0),1),greaterOrEquals(coalesce(body('Queued_publication')?['candidate']?['generation'],0),1),not(empty(body('Queued_publication')?['candidate']?['candidateId'])),equals(body('Queued_publication')?['candidate']?['fileName'],concat('master-r',string(coalesce(body('Queued_publication')?['candidate']?['storageRevision'],0)),'-g',string(coalesce(body('Queued_publication')?['candidate']?['generation'],0)),'-',coalesce(body('Queued_publication')?['candidate']?['candidateId'],''),'.pkg')),equals(body('Queued_publication')?['binaryPath'],concat('/api/ascm/publication/',coalesce(body('Queued_publication')?['candidate']?['candidateId'],''),'/bytes')))",
+              "@true"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "Download_package",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Download_package/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Promote_package",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Promote_package/runAfter",
+      "operation": "set",
+      "category": "essential-recovery",
+      "value": {
+        "Stage_bytes_match": [
+          "SUCCEEDED"
+        ]
+      }
+    },
+    {
+      "action": "Item_before",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Item_before/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Versions_before",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Versions_before/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Read_actual_package",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Read_actual_package/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Item_after",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Item_after/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Versions_after",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Versions_after/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Confirm_publication",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Readback_stable/actions/Confirm_publication/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Read_actual_stage",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Read_actual_stage",
+      "operation": "add",
+      "category": "essential-recovery",
+      "value": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "parameters": {
+            "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+            "path": "@concat('/Shared Documents/Product Portfolio/PPC/',outputs('Stage_name'))",
+            "inferContentType": false
+          },
+          "host": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+            "connection": "shared_sharepointonline",
+            "operationId": "GetFileContentByPath"
+          },
+          "retryPolicy": {
+            "type": "exponential",
+            "count": 2,
+            "interval": "PT5S",
+            "minimumInterval": "PT5S",
+            "maximumInterval": "PT30S"
+          }
+        },
+        "runAfter": {
+          "Create_package_stage": [
+            "SUCCEEDED",
+            "FAILED",
+            "TIMEDOUT"
+          ]
+        },
+        "limit": {
+          "timeout": "PT2M"
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "action": "Stage_bytes_match",
+      "path": "/actions/Each_report/actions/Import_pending/actions/Candidate_ready/actions/Stage_bytes_match",
+      "operation": "add",
+      "category": "essential-recovery",
+      "value": {
+        "type": "Compose",
+        "inputs": "@int(if(and(equals(actions('Read_actual_stage')?['status'],'Succeeded'),equals(actions('Download_package')?['status'],'Succeeded'),not(empty(body('Read_actual_stage')?['$content'])),not(empty(body('Download_package')?['$content'])),equals(body('Read_actual_stage')?['$content'],body('Download_package')?['$content'])),'1','Stage_mismatch'))",
+        "runAfter": {
+          "Read_actual_stage": [
+            "SUCCEEDED"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "action": "Replay_report",
+      "path": "/actions/Each_report/actions/Replay_ready/actions/Replay_report/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Resolve_Inbox",
+      "path": "/actions/Each_report/actions/Replay_ready/actions/Archive_allowed/actions/Resolve_Inbox/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Resolve_Archive",
+      "path": "/actions/Each_report/actions/Replay_ready/actions/Archive_allowed/actions/Resolve_Archive/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Read_original_message",
+      "path": "/actions/Each_report/actions/Replay_ready/actions/Archive_allowed/actions/Read_original_message/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Read_moved_message",
+      "path": "/actions/Each_report/actions/Replay_ready/actions/Archive_allowed/actions/Exact_original_in_Inbox/actions/Read_moved_message/inputs/retryPolicy",
+      "operation": "set",
+      "category": "bounded-safe-retry",
+      "value": {
+        "type": "exponential",
+        "count": 2,
+        "interval": "PT5S",
+        "minimumInterval": "PT5S",
+        "maximumInterval": "PT30S"
+      }
+    },
+    {
+      "action": "Read_moved_message",
+      "path": "/actions/Each_report/actions/Replay_ready/actions/Archive_allowed/actions/Exact_original_in_Inbox/actions/Read_moved_message/runAfter",
+      "operation": "set",
+      "category": "essential-recovery",
+      "value": {
+        "Move_exact_report": [
+          "SUCCEEDED",
+          "FAILED",
+          "TIMEDOUT"
+        ]
+      }
+    },
+    {
+      "action": "Archive_verified",
+      "path": "/actions/Each_report/actions/Replay_ready/actions/Archive_allowed/actions/Exact_original_in_Inbox/actions/Archive_verified/expression",
+      "operation": "set",
+      "category": "essential-recovery",
+      "value": {
+        "and": [
+          {
+            "equals": [
+              "@and(equals(outputs('Replay_report')?['statusCode'],200),equals(body('Replay_report')?['status'],'published'),equals(body('Replay_report')?['archiveAllowed'],true),not(empty(outputs('Import_report')?['body']?['requestId'])),equals(body('Replay_report')?['requestId'],outputs('Import_report')?['body']?['requestId']),equals(body('Replay_report')?['sourceMessageId'],items('Each_report')?['id']),not(empty(body('Resolve_Inbox')?['id'])),not(empty(body('Resolve_Archive')?['id'])),not(equals(body('Resolve_Inbox')?['id'],body('Resolve_Archive')?['id'])),not(empty(items('Each_report')?['internetMessageId'])),equals(body('Read_original_message')?['id'],items('Each_report')?['id']),equals(body('Read_original_message')?['internetMessageId'],items('Each_report')?['internetMessageId']),equals(body('Read_original_message')?['parentFolderId'],body('Resolve_Inbox')?['id']),contains(createArray('Succeeded','Failed','TimedOut'),actions('Move_exact_report')?['status']),equals(actions('Read_moved_message')?['status'],'Succeeded'),equals(body('Read_moved_message')?['id'],items('Each_report')?['id']),equals(body('Read_moved_message')?['internetMessageId'],items('Each_report')?['internetMessageId']),equals(body('Read_moved_message')?['parentFolderId'],body('Resolve_Archive')?['id']))",
+              "@true"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "SharePoint_connection_state",
+      "path": "/actions/Each_report/actions/SharePoint_connection_state/inputs",
+      "operation": "set",
+      "category": "essential-recovery",
+      "value": "@coalesce(\r\n  if(equals(actions('Versions_after')?['status'],'Succeeded'),'available',if(and(equals(actions('Versions_after')?['status'],'Failed'),not(equals(string(coalesce(actions('Versions_after')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Versions_after')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_after')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_after')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Item_after')?['status'],'Succeeded'),'available',if(and(equals(actions('Item_after')?['status'],'Failed'),not(equals(string(coalesce(actions('Item_after')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Item_after')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_after')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_after')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Read_actual_package')?['status'],'Succeeded'),'available',if(and(equals(actions('Read_actual_package')?['status'],'Failed'),not(equals(string(coalesce(actions('Read_actual_package')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Read_actual_package')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_package')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_package')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Versions_before')?['status'],'Succeeded'),'available',if(and(equals(actions('Versions_before')?['status'],'Failed'),not(equals(string(coalesce(actions('Versions_before')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Versions_before')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_before')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_before')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Item_before')?['status'],'Succeeded'),'available',if(and(equals(actions('Item_before')?['status'],'Failed'),not(equals(string(coalesce(actions('Item_before')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Item_before')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_before')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_before')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Promote_package')?['status'],'Succeeded'),'available',if(and(equals(actions('Promote_package')?['status'],'Failed'),not(equals(string(coalesce(actions('Promote_package')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Promote_package')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Promote_package')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Promote_package')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Read_actual_stage')?['status'],'Succeeded'),'available',if(and(equals(actions('Read_actual_stage')?['status'],'Failed'),not(equals(string(coalesce(actions('Read_actual_stage')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Read_actual_stage')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_stage')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_stage')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Create_package_stage')?['status'],'Succeeded'),'available',if(and(equals(actions('Create_package_stage')?['status'],'Failed'),not(equals(string(coalesce(actions('Create_package_stage')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Create_package_stage')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Create_package_stage')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Create_package_stage')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  ''\r\n)"
+    }
+  ]
+}

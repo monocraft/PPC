@@ -239,7 +239,9 @@ for (const kind of ['manifest', 'asset']) {
 }
 
 const workflow = await readFile(new URL('../../.github/workflows/publish-master.yml', import.meta.url), 'utf8');
-assert.match(workflow, /cancel-in-progress: false/); assert.match(workflow, /cron: '\*\/5 \* \* \* \*'/);
+assert.match(workflow, /cancel-in-progress: false/);
+assert.doesNotMatch(workflow, /^  schedule:|^    - cron:/m, 'publication is event driven and never starts idle backend traffic');
+assert.match(workflow, /^  workflow_dispatch:/m, 'backend event dispatch and manual publication remain available');
 assert.match(workflow, /contents: write/); assert.match(workflow, /actions: write/);
 assert.match(workflow, /persist-credentials: false/); assert.ok(!workflow.includes('service_role'));
 console.log('Supabase publisher checks passed: exact archive preservation, safe bootstrap, expected-SHA races, monotonic publication, lost responses, receipt and deployment recovery, and secret-safe errors.');

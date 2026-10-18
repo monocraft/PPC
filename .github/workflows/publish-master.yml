@@ -15,8 +15,6 @@ on:
         description: Explicitly stage the pinned, already-published package during SharePoint seeding
         type: boolean
         default: false
-  schedule:
-    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
@@ -54,5 +52,5 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.seed_delivery_cache && !inputs.bootstrap }}
         run: node scripts/publish-supabase-master.mjs --seed-delivery-cache
       - name: Publish accepted changes and request Pages deployment
-        if: ${{ !inputs.seed_delivery_cache }}
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.seed_delivery_cache }}
         run: node scripts/publish-supabase-master.mjs
