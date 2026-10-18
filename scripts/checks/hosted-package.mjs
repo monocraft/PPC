@@ -6,6 +6,9 @@ import { inspectHostedData, validateEncryptedEnvelope, validateDecryptedPackage,
 
 const argumentsSet = new Set(process.argv.slice(2));
 if ([...argumentsSet].some((argument) => !["--required", "--deployment-only"].includes(argument))) throw new Error("Use only --required or --deployment-only.");
+const workflow = await readFile(new URL("../../.github/workflows/deploy.yml", import.meta.url), "utf8");
+assert.match(workflow, /if \[\[ "\$\{PPC_PACKAGE_ENDPOINT\}" != \*\/functions\/v1\/ppc-package\/api\/package\/latest \]\]; then\s+cp public\/data\/master_ppc\.pkg _site\/data\//, "service Pages artifact omits the stale historical package");
+assert.match(workflow, /if \[\[ "\$\{PPC_PACKAGE_ENDPOINT\}" == \*\/functions\/v1\/ppc-package\/api\/package\/latest \]\]; then\s+test ! -e _site\/data\/master_ppc\.pkg\s+else\s+test -f _site\/data\/master_ppc\.pkg/, "service artifact omits ciphertext while legacy artifact still requires it");
 const hosted = await inspectHostedData(undefined, { required: argumentsSet.has("--required") });
 if (!argumentsSet.has("--deployment-only")) {
   const codec = globalThis.PortfolioPackage;

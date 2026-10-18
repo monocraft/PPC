@@ -1,6 +1,8 @@
 import './shared/package-codec.js';
 import './shared/master-model.js';
 import './shared/product-merge.js';
+import { createAscmApi } from './ascm-api.mjs';
+import { qualifiesSharePointPublication } from './package-delivery-contract.mjs';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -129,6 +131,15 @@ export function validateManifest(manifest) {
 
 function safePublication(value) {
   const requestedRevision = Number(value?.requestedRevision || 0), publishedRevision = Number(value?.publishedRevision || 0);
+  if (['seeding', 'sharepoint'].includes(value?.deliveryPhase)) {
+    const valid = value?.provider === 'sharepoint' && ['seed', 'publication'].includes(value.kind)
+      && qualifiesSharePointPublication({ ...value, kind: 'publication' }, Math.max(1, Number(value.storageRevision)));
+    return { requestedRevision, publishedRevision, deliveryPhase: value.deliveryPhase,
+      status: valid && value.kind === 'publication' && publishedRevision >= requestedRevision && value.storageRevision >= requestedRevision ? 'current' : 'pending',
+      error: value?.status === 'error' ? 'The encrypted package update is waiting to retry.' : '',
+      ...(valid ? { provider: 'sharepoint', kind: value.kind, candidateId: value.candidateId, generation: value.generation,
+        sha256: value.sha256, bytes: value.bytes, storageRevision: value.storageRevision, publishedAt: value.publishedAt } : {}) };
+  }
   return {
     requestedRevision, publishedRevision,
     status: publishedRevision >= requestedRevision ? 'current' : value?.status === 'error' ? 'error' : 'pending',
@@ -136,6 +147,22 @@ function safePublication(value) {
     githubSha: SHA_PATTERN.test(value?.githubSha || '') ? value.githubSha : '',
     publishedAt: typeof value?.publishedAt === 'string' ? value.publishedAt : null,
   };
+}
+
+function safeAscmSupervisor(value, currentTime) {
+  if (!record(value) || value.enabled !== true || typeof value.working !== 'boolean'
+    || !(value.productCount === null || Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500)) return null;
+  const services = ['outlook', 'sharepoint'];
+  const provided = value.reconnectRequired;
+  const reconnectRequired = Array.isArray(provided) && provided.length <= 2 && provided.every(service => services.includes(service))
+    && new Set(provided).size === provided.length ? services.filter(service => provided.includes(service)) : [];
+  if (!value.working) return value.productCount === null && value.expiresAt === null
+    ? { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired } : null;
+  if (typeof value.expiresAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.expiresAt)) return null;
+  const expires = Date.parse(value.expiresAt), nowAt = Date.parse(currentTime);
+  if (!Number.isFinite(expires) || !Number.isFinite(nowAt) || new Date(expires).toISOString() !== value.expiresAt || expires > nowAt + 121000) return null;
+  if (expires <= nowAt) return { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired };
+  return { enabled: true, working: true, productCount: value.productCount, expiresAt: value.expiresAt, reconnectRequired };
 }
 
 function requireState(state) {
@@ -157,7 +184,7 @@ export function publicSnapshot(state, snapshotFormat) {
   return ['compact-v1', 'compact-conflict-v1'].includes(snapshotFormat) ? model.compactSnapshot(snapshot) : snapshot;
 }
 
-function requireReadableManifest(manifest) {
+export function requireReadableManifest(manifest) {
   const state = { manifest, storageRevision: Number.MAX_SAFE_INTEGER,
     publication: { requestedRevision: Number.MAX_SAFE_INTEGER, publishedRevision: 0, status: 'pending' } };
   const snapshot = publicSnapshot(state, 'compact-v1');
@@ -188,11 +215,27 @@ function defaultRpc(env, fetchImpl) {
     let response;
     try {
       response = await fetchImpl(`${base}/rest/v1/rpc/ppc_master_${operation}`, {
-        method: 'POST', headers, body: JSON.stringify({ payload }), redirect: 'error', signal: AbortSignal.timeout(15000),
+        method: 'POST', headers, body: JSON.stringify({ payload }), redirect: 'error', signal: AbortSignal.timeout(['ascm_status', 'ascm_connection'].includes(operation) ? 2000 : 15000),
       });
       if (!response.ok) { await response.body?.cancel().catch(() => {}); throw unavailable(); }
-      return await boundedJson(response, MAX_RPC_BYTES);
+      return await boundedJson(response, operation === 'ascm_connection' ? 16 * 1024 : MAX_RPC_BYTES);
     } catch { throw unavailable(); }
+  };
+}
+
+/** Private diagnostics only. Call after an actual authenticated connector result. */
+export function createAscmConnectionReporter({ env = {}, fetchImpl = globalThis.fetch } = {}) {
+  const enabled = env.PPC_ASCM_STATUS_ENABLED === 'true';
+  let database;
+  return async payload => {
+    if (!enabled) return { reported: false };
+    try {
+      if (!record(payload) || Object.keys(payload).length !== 2 || Object.keys(payload).some(key => !['service', 'state'].includes(key))
+        || !['outlook', 'sharepoint'].includes(payload.service) || !['available', 'reconnect_required'].includes(payload.state)) return { reported: false };
+      database ||= defaultRpc(env, fetchImpl);
+      const result = await database('ascm_connection', { service: payload.service, state: payload.state });
+      return { reported: result?.reported === true };
+    } catch { return { reported: false }; }
   };
 }
 
@@ -335,6 +378,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     const result = await database('presence', {
       sessionId, displayName: String(body.displayName || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60),
       categoryId, productId, editing: body.editing === true, leave: body.leave === true,
+      ...(env.PPC_ASCM_STATUS_ENABLED === 'true' ? { includeAscmSupervisor: true } : {}),
       ...(body.activity !== undefined ? { activity: body.editing === true ? 'editing' : body.activity === 'editing' ? 'browsing' : body.activity } : {}),
       ...(body.receivePokes !== undefined ? { receivePokes: body.receivePokes } : {}),
       ...(body.poke !== undefined ? { poke: { id: body.poke.id, targetSessionId: body.poke.targetSessionId } } : {}),
@@ -346,7 +390,9 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       const currentCategoryId = product?.categoryId ?? (categories.has(entry.categoryId) ? entry.categoryId : '');
       return { ...entry, categoryId: currentCategoryId, categoryName: categories.get(currentCategoryId) || '', productName: product?.productName || '' };
     });
-    return { ...result, users: sessions, sessions };
+    const { ascmSupervisor: rawSupervisor, ...presenceResult } = result;
+    const ascmSupervisor = env.PPC_ASCM_STATUS_ENABLED === 'true' ? safeAscmSupervisor(rawSupervisor, now()) : null;
+    return { ...presenceResult, users: sessions, sessions, ...(ascmSupervisor ? { ascmSupervisor } : {}) };
   }
 
   async function publisherOperation(operation, body) {
@@ -364,7 +410,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     if (operation === 'export') {
       const state = requireState(await database('read', {}));
       return { manifest: state.manifest, storageRevision: Number(state.storageRevision), revision: Number(state.storageRevision),
-        sourceSha: state.sourceSha, publication: safePublication(state.publication) };
+        sourceSha: state.sourceSha, ...(HASH_PATTERN.test(state.acceptedManifestSha256 || '') ? { acceptedManifestSha256: state.acceptedManifestSha256 } : {}), publication: safePublication(state.publication) };
     }
     const storageRevision = revisionFrom(body);
     if (operation === 'ack' && !SHA_PATTERN.test(String(body.githubSha || ''))) throw problem(400, 'INVALID_REQUEST', 'The published GitHub revision is invalid.');
@@ -376,6 +422,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     return { storageRevision: Number(state.storageRevision), revision: Number(state.storageRevision), publication: safePublication(state.publication), status: state.status };
   }
 
+  const ascmApi = createAscmApi({ env, database, now, dispatchPublication, validateManifest, validateReadableManifest: requireReadableManifest });
   return async function handle(request) {
     const origin = request.headers.get('origin') || '';
     const headers = {
@@ -386,6 +433,7 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
     try {
       const path = new URL(request.url).pathname;
       const operation = /\/api\/master\/([a-z]+)\/?$/.exec(path)?.[1];
+      if (operation === 'ascm') return await ascmApi(request);
       if (!PUBLIC_OPERATIONS.has(operation) && !PRIVATE_OPERATIONS.has(operation)) throw problem(404, 'NOT_FOUND', 'This master action is unavailable.');
       if (origin && !origins.has(origin)) throw problem(403, 'ORIGIN_DENIED', 'This portfolio address is not allowed to connect.');
       if (origin) headers['Access-Control-Allow-Origin'] = origin;

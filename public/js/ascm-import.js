@@ -396,6 +396,23 @@
     return `${date.getUTCFullYear().toString().padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
   }
 
+  // Unattended imports cannot turn an invalid raw clock/suffix into an accepted
+  // day. Keep the manual parser's established permissive behavior by opting in.
+  function parseStrictExcelDate(value, date1904, sourceRow, field) {
+    const text = String(value == null ? "" : value).trim();
+    if (!text) return "";
+    const iso = text.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):(\d{2}))?)?$/i);
+    if (iso) {
+      const day = parseExcelDate(iso[1], date1904);
+      if (day && Number(iso[2] || 0) <= 23 && Number(iso[3] || 0) <= 59 && Number(iso[4] || 0) <= 59
+        && Number(iso[5] || 0) <= 23 && Number(iso[6] || 0) <= 59) return day;
+    } else if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) {
+      const day = parseExcelDate(text, date1904);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+    }
+    fail("INVALID_DATE_INPUT", "An ASCM lifecycle date contains invalid source text or an impossible calendar/clock value.", { sourceRow, field });
+  }
+
   function parseExcelDateTime(value, date1904 = false) {
     const text = cleanText(value);
     if (!text) return "";
@@ -731,7 +748,7 @@
     return sheets;
   }
 
-  function extractAscmRows(xml, sharedStrings, header, date1904, limits, diagnostics) {
+  function extractAscmRows(xml, sharedStrings, header, date1904, limits, diagnostics, strictDates = false) {
     assertSafeXml(xml, "worksheet");
     const wantedColumns = new Set(Object.values(header.fieldColumns));
     const rowPattern = /<(?:[A-Za-z_][\w.-]*:)?row\b([^>]*)>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?row\s*>/gi;
@@ -774,16 +791,16 @@
       const basePnRaw = cleanText(fieldValue("basePn"));
       const basePn = normalizeBasePn(basePnRaw);
       const description = cleanText(fieldValue("description"));
-      const ga = parseExcelDate(fieldValue("ga"), date1904);
-      const em = parseExcelDate(fieldValue("em"), date1904);
+      const ga = strictDates ? parseStrictExcelDate(fieldValue("ga"), date1904, sourceRow, "ga") : parseExcelDate(fieldValue("ga"), date1904);
+      const em = strictDates ? parseStrictExcelDate(fieldValue("em"), date1904, sourceRow, "em") : parseExcelDate(fieldValue("em"), date1904);
       const featureId = header.fieldColumns.featureId == null ? "" : cleanText(fieldValue("featureId"));
       const codeName = header.fieldColumns.codeName == null ? "" : cleanText(fieldValue("codeName"));
       const missing = [];
       if (!category) missing.push(REQUIRED_HEADERS.category);
       if (!basePn) missing.push(REQUIRED_HEADERS.basePn);
       if (!description) missing.push(REQUIRED_HEADERS.description);
-      if (!cleanText(fieldValue("ga")) || !ga) missing.push(REQUIRED_HEADERS.ga);
-      if (!cleanText(fieldValue("em")) || !em) missing.push(REQUIRED_HEADERS.em);
+      if (!strictDates && (!cleanText(fieldValue("ga")) || !ga)) missing.push(REQUIRED_HEADERS.ga);
+      if (!strictDates && (!cleanText(fieldValue("em")) || !em)) missing.push(REQUIRED_HEADERS.em);
       if (missing.length) {
         invalidRowsFiltered += 1;
         diagnostics.push(diagnostic("error", "INVALID_REQUIRED_VALUE", "A row was skipped because required values were blank or invalid.", { sourceRow, basePn: basePn || basePnRaw, fields: missing }));
@@ -822,7 +839,7 @@
    * metadata, and non-fatal row diagnostics.
    *
    * @param {File|Blob|ArrayBuffer|Uint8Array} input
-   * @param {{limits?: object}} [options]
+   * @param {{limits?: object, strictDates?: boolean}} [options] Strict cloud mode rejects malformed raw dates atomically and retains blank source dates.
    * @returns {Promise<{version:number, rows:Array, metadata:object, diagnostics:Array}>}
    */
   async function parseAscmWorkbook(input, options = {}) {
@@ -880,7 +897,7 @@
     }
     const selected = candidates[0];
     const exportedAt = findWorksheetExportedAt(selected.xml, sharedStrings, date1904, selected.header.rowNumber, limits);
-    const extracted = extractAscmRows(selected.xml, sharedStrings, selected.header, date1904, limits, diagnostics);
+    const extracted = extractAscmRows(selected.xml, sharedStrings, selected.header, date1904, limits, diagnostics, options.strictDates === true);
     if (!extracted.rows.length) fail("NO_PRIMARY_ROWS", "The ASCM worksheet contains no valid primary product rows.", { sheetName: selected.sheet.name });
 
     return {

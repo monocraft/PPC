@@ -195,6 +195,7 @@
       let result;
       if (mode === "pull") {
         const source = pullSource();
+        let deliveryIdentity = null;
         let bytes = source.packageUrl ? downloadedBytes : null;
         if (!bytes) {
           controller = new AbortController();
@@ -203,13 +204,14 @@
           try {
             bytes = await globalThis.PortfolioPackageClient.downloadLatest({ ...source, ...(source.endpoint ? { key } : {}), signal: controller.signal,
               onProgress: (size, total) => { status.textContent = `Downloading ${Math.round(size / 1048576)}${total ? ` of ${Math.ceil(total / 1048576)}` : ""} MB…`; },
+              onIdentity: identity => { deliveryIdentity = identity; },
             });
             if (source.packageUrl) downloadedBytes = bytes;
           } finally { clearTimeout(timeout); controller = null; }
         }
         if (cancelRequested) throw new DOMException("Download cancelled.", "AbortError");
         setBusy(true, true); status.textContent = "Checking and loading the complete package…";
-        result = await globalThis.importProjectPackage(new Blob([bytes]), { key, requireEncrypted: true, fromSharedDownload: true });
+        result = await globalThis.importProjectPackage(new Blob([bytes]), { key, requireEncrypted: true, fromSharedDownload: true, deliveryIdentity });
       } else if (mode === "import") {
         status.textContent = "Checking and loading the complete package…";
         result = await globalThis.importProjectPackage(selectedFile.file, { key });

@@ -43,6 +43,31 @@
     return url.href;
   }
 
+  function isDeliveryService(endpoint) {
+    return /\/functions\/v1\/ppc-package\/api\/package\/latest$/.test(new URL(endpoint).pathname);
+  }
+
+  async function sha256(bytes, { crypto = root.crypto } = {}) {
+    if (!(bytes instanceof Uint8Array) || bytes.length > root.PortfolioPackage.MAX_PACKAGE_BYTES) throw new TypeError("Bounded package bytes are required.");
+    if (!crypto?.subtle) throw new Error("Package integrity checking is unavailable. The workspace was not changed.");
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  function responseIdentity(response) {
+    const get = name => response.headers.get(name);
+    const length = get("Content-Length"), digest = get("X-PPC-Package-SHA256"), generation = get("X-PPC-Package-Generation");
+    const candidateId = get("X-PPC-Package-Candidate-Id"), revision = get("X-PPC-Package-Revision");
+    const complete = /^\d+$/.test(length || "") && /^[a-f0-9]{64}$/.test(digest || "") &&
+      /^[1-9]\d*$/.test(generation || "") && /^[1-9]\d*$/.test(revision || "") &&
+      /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(candidateId || "") &&
+      (get("Content-Encoding") || "identity").toLowerCase() === "identity";
+    if (!complete) throw new Error("The shared package identity is incomplete. The workspace was not changed.");
+    const bytes = Number(length), generationNumber = Number(generation), storageRevision = Number(revision);
+    if (!Number.isSafeInteger(bytes) || bytes < 36 || bytes > root.PortfolioPackage.MAX_PACKAGE_BYTES || !Number.isSafeInteger(generationNumber) || !Number.isSafeInteger(storageRevision)) throw new Error("The shared package identity is invalid. The workspace was not changed.");
+    return { provider: "sharepoint", generation: generationNumber, candidateId: candidateId.toLowerCase(), sha256: digest, bytes, storageRevision };
+  }
+
   async function readLimitedResponse(response, onProgress, signal) {
     const limit = root.PortfolioPackage.MAX_PACKAGE_BYTES;
     const rawLength = response.headers.get("content-length");
@@ -95,7 +120,7 @@
     return bytes;
   }
 
-  async function downloadLatest({ github, packageUrl, endpoint, key, baseUrl, fetchImpl = root.fetch, signal, onProgress } = {}) {
+  async function downloadLatest({ github, packageUrl, endpoint, key, baseUrl, fetchImpl = root.fetch, signal, onProgress, onIdentity } = {}) {
     checkAborted(signal);
     if (github) {
       if (!root.PortfolioMasterGitHub) throw new Error("GitHub sharing could not load. Refresh this page and try again.");
@@ -130,6 +155,14 @@
     if (!staticSource && response.status === 401) throw new Error("That package key could not unlock the shared data. Check the key and try again.");
     if (response.status === 429) throw new Error("Too many attempts. Wait a minute, then try again.");
     if (!response.ok) throw new Error("The shared package is unavailable. Try again later or contact the portfolio owner.");
+    let serviceIdentity = null;
+    if (!staticSource && isDeliveryService(url)) {
+      try { serviceIdentity = responseIdentity(response); }
+      catch (error) {
+        try { await response.body?.cancel(); } catch (_) {}
+        throw error;
+      }
+    }
     let bytes;
     try { bytes = await readLimitedResponse(response, onProgress, signal); }
     catch (error) {
@@ -138,6 +171,11 @@
       throw new Error("The package download was interrupted. Check your connection and try again.");
     }
     if (bytes.length < 36 || !root.PortfolioPackage.isEncrypted(bytes)) throw new Error("The shared source must contain an encrypted unified package. The workspace was not changed.");
+    if (serviceIdentity) {
+      if (bytes.length !== serviceIdentity.bytes || await sha256(bytes) !== serviceIdentity.sha256) throw new Error("The downloaded package does not match its published digest. The workspace was not changed.");
+      checkAborted(signal);
+      onIdentity?.(serviceIdentity);
+    }
     return bytes;
   }
 
@@ -150,5 +188,5 @@
     return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
   }
 
-  root.PortfolioPackageClient = Object.freeze({ normalizePackageUrl, normalizeEndpoint, readLimitedResponse, downloadLatest, gitBlobSha });
+  root.PortfolioPackageClient = Object.freeze({ normalizePackageUrl, normalizeEndpoint, readLimitedResponse, downloadLatest, gitBlobSha, sha256 });
 })(globalThis);

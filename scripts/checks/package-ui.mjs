@@ -214,6 +214,11 @@ relayUi.elements.get("packageKey").value = key;
 await relayUi.submit();
 assert.equal(relayUi.calls.downloads[0].key, key, "the optional existing relay must retain its key authentication");
 assert.equal(Object.hasOwn(relayUi.calls.downloads[0], "packageUrl"), false);
+const serviceUi = createUi({ mode: "relay", endpoint: "https://project.supabase.co/functions/v1/ppc-package/api/package/latest", packageUrl: "" });
+const deliveryIdentity = { provider: "sharepoint", generation: 2, candidateId: "12345678-1234-4234-8234-123456789abc", sha256: "a".repeat(64), bytes: encrypted.length, storageRevision: 3 };
+serviceUi.setDownload(async options => { options.onIdentity(deliveryIdentity); return encrypted; });
+serviceUi.ui.open("pull"); serviceUi.elements.get("packageKey").value = key; await serviceUi.submit();
+assert.deepEqual(serviceUi.calls.imports[0].deliveryIdentity, deliveryIdentity, "verified service identity travels to the guarded import");
 
 const teamUi = createUi(undefined, { mode: "service", team: true, endpoint: "https://private.example/api/master" });
 teamUi.ui.open("pull");

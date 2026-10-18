@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>Connect ASCM imports · Product Portfolio</title>
+  <link rel="stylesheet" href="css/fonts.css">
+  <link rel="stylesheet" href="css/ascm-connect.css">
+  <script defer src="js/ascm-connect-config.js"></script>
+  <script defer src="vendor/supabase-js-2.118.0.js"></script>
+  <script type="module" src="js/ascm-connect.js"></script>
+</head>
+<body>
+  <main class="connection-shell">
+    <header class="connection-brand"><a href="./index.html">Product Portfolio</a><span>ASCM connection</span></header>
+    <div class="connection-layout">
+      <section id="connectionPanel" class="connection-panel" aria-labelledby="connectionHeading" aria-busy="false">
+        <h1 id="connectionHeading">Connect ASCM imports</h1>
+        <p class="connection-intro">Approve a connection for your monthly HyperX release reports.</p>
+        <p id="connectionStatus" class="connection-status" role="status" aria-live="polite">Preparing this connection…</p>
+        <noscript><p class="connection-status">JavaScript is needed for secure sign-in. Enable it, then open this page again from ChatGPT.</p></noscript>
+        <form id="loginForm" class="connection-form" hidden>
+          <label for="accountEmailInput">Account email</label>
+          <input id="accountEmailInput" type="email" name="email" autocomplete="username" inputmode="email" maxlength="320" required>
+          <label for="accountPassword">Password</label>
+          <input id="accountPassword" type="password" name="password" autocomplete="current-password" maxlength="4096" required>
+          <button id="signInButton" class="primary-button" type="submit">Sign in to review</button>
+          <p class="form-note">Use the account created for this connection. Sign-in lasts only while this page is open.</p>
+        </form>
+        <div id="reviewPanel" class="connection-review" hidden>
+          <p class="account-line">Signed in as <strong id="accountEmail"></strong></p>
+          <dl class="request-details">
+            <dt>Requesting client</dt><dd id="clientName"></dd>
+            <dt>Client ID</dt><dd id="clientId" class="technical-value"></dd>
+            <dt>Return to ChatGPT</dt><dd id="redirectUri" class="technical-value"></dd>
+          </dl>
+          <h2>Requested account permission</h2>
+          <ul id="scopeList" class="permission-list"></ul>
+          <div class="connection-actions"><button id="denyButton" class="secondary-button" type="button">Deny</button><button id="connectButton" class="primary-button" type="button">Connect ASCM imports</button></div>
+        </div>
+      </section>
+      <aside class="connection-context" aria-labelledby="capabilityHeading">
+        <h2 id="capabilityHeading">What this connection can do</h2>
+        <p>Import eligible monthly ASCM workbooks into Product Portfolio through your approved ChatGPT workflow.</p>
+        <ul>
+          <li>Check the report’s source and lifecycle dates.</li>
+          <li>Update supported product facts and add unambiguous products.</li>
+          <li>Keep protected dates and reports needing review on hold.</li>
+        </ul>
+        <div class="publication-note"><h3>Publication comes first</h3><p>Your workflow may archive the report only after PPC confirms that its saved revision is published.</p></div>
+        <p class="context-footer">This page approves the PPC connection. Your Outlook account stays connected through ChatGPT.</p>
+      </aside>
+    </div>
+    <footer class="connection-footer">Review the request before connecting. You can close this page to leave it unapproved.</footer>
+  </main>
+</body>
+</html>
