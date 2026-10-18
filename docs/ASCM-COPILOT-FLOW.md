@@ -107,7 +107,9 @@ Network/DLP failures are not logouts.
 The complete main happy path and service-specific auth reporting are now saved
 and independently reviewed. The two Compose inputs (Outlook_connection_state, SharePoint_connection_state)
 and three connection-callback bodies are actual whole-field expressions, not
-interpolated text. The final Flow checker has zero errors and zero warnings.
+interpolated text. The final Designer Flow checker has zero errors and zero
+warnings. Overview separately shows zero errors and one warning: "This flow has
+never been published." This is the expected unpublished draft state.
 Saved recurrence is interval 1 / Hour with runtime concurrency runs 1. The main
 flow remains Off, no runs, owner-only; saved completeness is not runtime proof.
 
