@@ -17,8 +17,8 @@ begin
     and allowed_mime_types=array['application/octet-stream']::text[]) then
     raise exception 'Existing package delivery bucket requires operator review';
   end if;
-  -- Deployment additionally audits pre-existing broad storage.objects policies.
-  -- This migration grants no object policy or public/anon/authenticated access.
+  -- This migration grants no object policies. Operator phase activation below
+  -- rejects unreviewed public/reader-role policies without altering them.
 end;
 $$;
 
@@ -172,6 +172,16 @@ begin
   if not exists(select 1 from storage.buckets where id='ppc-package-delivery'
     and name='ppc-package-delivery' and public=false and file_size_limit=67108864
     and allowed_mime_types=array['application/octet-stream']::text[]) then raise exception 'Package delivery activation requires compatible private bucket'; end if;
+  if not exists(select 1 from pg_class where oid=to_regclass('storage.objects')
+    and relkind in ('r','p') and relrowsecurity) then raise exception 'Package delivery activation requires Storage object RLS'; end if;
+  -- General SQL predicate applicability cannot be safely proven here. Reject
+  -- every command policy available to public/anon/authenticated, including
+  -- inherited roles and even apparently unrelated-bucket predicates. This is
+  -- an activation hold for operator review, never permission to rewrite them.
+  if exists(select 1 from pg_policy p cross join lateral unnest(p.polroles) as policy_role(role_id)
+    where p.polrelid=to_regclass('storage.objects') and case when policy_role.role_id=0 then true
+      else pg_has_role('anon',policy_role.role_id,'MEMBER') or pg_has_role('authenticated',policy_role.role_id,'MEMBER') end)
+    then raise exception 'Package delivery activation requires reviewed Storage object policies'; end if;
   target:=payload->>'phase';
   if target='seeding' then
     seed_value:=payload->'seed';
@@ -341,6 +351,11 @@ begin
   r:=payload->'receipt';
   select * into existing from ppc_private.package_delivery_receipts where candidate_id=c.candidate_id;
   if found then
+    -- The old candidate may no longer be in current/queued after its object
+    -- was retired. Recover only these two absent metadata fields from the
+    -- immutable receipt; never accept caller nulls, other omissions or edits.
+    if not r ? 'kind' then r:=r||jsonb_build_object('kind',existing.receipt->'kind'); end if;
+    if not r ? 'storageRevision' then r:=r||jsonb_build_object('storageRevision',existing.receipt->'storageRevision'); end if;
     if (existing.receipt-'confirmedAt') is distinct from (r-'confirmedAt') then raise exception 'Conflicting package receipt'; end if;
     return jsonb_build_object('status','already_published','publication',existing.publication);
   end if;
@@ -354,6 +369,7 @@ begin
     or r->>'candidateId' is distinct from c.candidate_id::text or r->>'generation' is distinct from c.generation::text
     or r->>'storageRevision' is distinct from c.storage_revision::text or r->>'sha256' is distinct from c.sha256 or r->>'bytes' is distinct from c.bytes::text
     or jsonb_typeof(r->'generation') is distinct from 'number' or jsonb_typeof(r->'storageRevision') is distinct from 'number' or jsonb_typeof(r->'bytes') is distinct from 'number'
+    or jsonb_typeof(r->'sha256') is distinct from 'string' or jsonb_typeof(r->'driveId') is distinct from 'string' or jsonb_typeof(r->'folderId') is distinct from 'string'
     or r->>'driveId' is distinct from d.drive_id or r->>'folderId' is distinct from d.folder_id
     or jsonb_typeof(r->'itemId') is distinct from 'string' or coalesce(r->>'itemId','') !~ '^[^[:cntrl:]]+$' or length(r->>'itemId')>512 or btrim(r->>'itemId')<>r->>'itemId'
     or jsonb_typeof(r->'versionId') is distinct from 'string' or coalesce(r->>'versionId','') !~ '^[^[:cntrl:]]+$' or length(r->>'versionId')>512 or btrim(r->>'versionId')<>r->>'versionId'

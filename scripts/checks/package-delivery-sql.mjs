@@ -177,6 +177,73 @@ test('activation_guards_and_ready_expiry', async () => {
   assert.equal(state.current, null); assert.equal(state.cleanup.candidateId, seed.candidateId); assert.equal(state.cleanupUpload.state, 'stored');
   await expectStatus(call('reserve', seedMeta(ids[1])), 'cleanup_required');
 });
+test('activation_rejects_unreviewed_object_policies', async () => {
+  await reset();
+  await db.exec('alter table storage.objects disable row level security');
+  await assert.rejects(() => phaseSeed(), /activation requires Storage object RLS/);
+  assert.equal((await call('current')).phase, 'legacy');
+  await db.exec('alter table storage.objects enable row level security');
+  for (const [role, command, clause] of [
+    ['public', 'select', "using (bucket_id='ppc-package-delivery')"],
+    ['anon', 'insert', "with check (bucket_id='ppc-package-delivery')"],
+    ['authenticated', 'update', 'using (true) with check (true)'],
+    ['authenticated', 'delete', 'using (true)'],
+    ['public', 'all', 'using (true) with check (true)'],
+    ['authenticated', 'select', "using (bucket_id='unrelated-existing-bucket')"],
+  ]) {
+    await db.exec(`create policy fixture_exposure on storage.objects for ${command} to ${role} ${clause}`);
+    await assert.rejects(() => phaseSeed(), /activation requires reviewed Storage object policies/);
+    assert.equal((await call('current')).phase, 'legacy');
+    assert.equal((await db.query("select count(*)::integer n from pg_policies where schemaname='storage' and tablename='objects' and policyname='fixture_exposure'")).rows[0].n, 1, 'activation must not alter existing policies');
+    await db.exec('drop policy fixture_exposure on storage.objects');
+  }
+  await db.exec('create role fixture_storage_reader; grant fixture_storage_reader to anon; create policy fixture_inherited_exposure on storage.objects for select to fixture_storage_reader using (true)');
+  await assert.rejects(() => phaseSeed(), /activation requires reviewed Storage object policies/);
+  await db.exec('drop policy fixture_inherited_exposure on storage.objects; revoke fixture_storage_reader from anon; drop role fixture_storage_reader');
+  await db.exec('alter table storage.objects rename to objects_fixture');
+  await assert.rejects(() => phaseSeed(), /activation requires Storage object RLS/);
+  await db.exec('alter table storage.objects_fixture rename to objects');
+  await phaseSeed(); const seed = await ready(await reserve(seedMeta())); await confirm(seed);
+  await db.exec('create policy fixture_exposure on storage.objects for select to anon using (true)');
+  await assert.rejects(() => call('phase', { phase: 'sharepoint' }), /activation requires reviewed Storage object policies/);
+  assert.equal((await call('current')).phase, 'seeding');
+  await db.exec('drop policy fixture_exposure on storage.objects');
+  await expectStatus(call('phase', { phase: 'sharepoint' }), 'configured');
+});
+test('receipt_identity_requires_json_strings', async () => {
+  await seeded(); await db.exec("update ppc_private.package_delivery_state set drive_id='123',folder_id='456'");
+  const candidate = await ready(await reserve(await publicationMeta(ids[1], { sha256: '1'.repeat(64) })));
+  const payload = { candidateId: candidate.candidateId, generation: candidate.generation, receipt: { ...receipt(candidate), driveId: '123', folderId: '456' } };
+  for (const field of ['sha256', 'driveId', 'folderId']) {
+    await assert.rejects(() => db.query(`select public.ppc_package_confirm(jsonb_set($1::jsonb,array['receipt',$2],to_jsonb(($1::jsonb->'receipt'->>$2)::numeric)))`, [JSON.stringify(payload), field]), /Invalid package receipt/);
+  }
+  await expectStatus(call('confirm', payload), 'published');
+});
+test('historical_retry_recovers_only_immutable_kind_revision', async () => {
+  const seed = await seeded(); const seedPublication = (await call('current')).publication; await commit();
+  const first = await ready(await reserve(await publicationMeta())); const firstPublished = await confirm(first);
+  await call('cleanup', { candidateId: seed.candidateId, generation: 1, absent: true });
+  const second = await ready(await reserve(await publicationMeta(ids[2], { expectedGeneration: 2, sha256: 'e'.repeat(64) })));
+  await confirm(second); await call('cleanup', { candidateId: first.candidateId, generation: 2, absent: true });
+  await db.exec("update ppc_private.package_delivery_candidates set expires_at=clock_timestamp()-interval '1 second' where generation<3");
+  for (const [candidate, publication] of [[seed, seedPublication], [first, firstPublished.publication]]) {
+    const partial = receipt(candidate); delete partial.kind; delete partial.storageRevision;
+    const result = await expectStatus(call('confirm', { candidateId: candidate.candidateId, generation: candidate.generation, receipt: partial }), 'already_published');
+    assert.deepEqual(result.publication, publication); assert.equal((await call('current')).generation, 3);
+    for (const patch of [{ sha256: 'f'.repeat(64) }, { itemId: 'different-item' }, { kind: 'wrong' }, { storageRevision: 99 }, { extra: 'not allowed' }]) await assert.rejects(() => call('confirm', { candidateId: candidate.candidateId, generation: candidate.generation, receipt: { ...partial, ...patch } }), /Conflicting package receipt/);
+    for (const field of ['provider','candidateId','generation','sha256','bytes','driveId','folderId','itemId','versionId','fileName']) {
+      const missing = { ...partial }; delete missing[field];
+      await assert.rejects(() => call('confirm', { candidateId: candidate.candidateId, generation: candidate.generation, receipt: missing }), /Conflicting package receipt/);
+    }
+  }
+  assert.equal((await db.query('select count(*)::integer n from ppc_private.package_delivery_receipts')).rows[0].n, 3);
+  await reset(); await phaseSeed(); const fresh = await ready(await reserve(seedMeta()));
+  const partial = receipt(fresh); delete partial.kind; delete partial.storageRevision;
+  await assert.rejects(() => call('confirm', { candidateId: fresh.candidateId, generation: 1, receipt: partial }), /Invalid package receipt/);
+  await db.query("update ppc_private.package_delivery_candidates set expires_at=clock_timestamp()-interval '1 second' where candidate_id=$1::uuid", [fresh.candidateId]);
+  await expectStatus(call('confirm', { candidateId: fresh.candidateId, generation: 1, receipt: partial }), 'stale');
+  assert.equal((await db.query('select count(*)::integer n from ppc_private.package_delivery_receipts')).rows[0].n, 0);
+});
 test('private_role_grants', async () => {
   for (const name of ['reserve', 'upload_claim', 'upload_result', 'finalize', 'confirm', 'current', 'cleanup', 'phase']) {
     for (const role of ['anon', 'authenticated', 'supabase_auth_admin']) {
@@ -190,7 +257,7 @@ test('private_role_grants', async () => {
   await db.exec('reset role');
 });
 try {
-  await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create role supabase_auth_admin; create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);');
+  await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create role supabase_auth_admin; create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]); create table storage.objects(id uuid primary key,bucket_id text); alter table storage.objects enable row level security;');
   for (const name of (await readdir(resolve('supabase/migrations'))).filter(name => name.endsWith('.sql') && name < migration).sort()) await db.exec(await readFile(resolve('supabase/migrations', name), 'utf8'));
   await db.exec(sql); await db.exec(sql);
   assert.equal((await call('current')).phase, 'legacy');
