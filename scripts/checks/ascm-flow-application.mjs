@@ -39,12 +39,13 @@ for (const [path, body, extra] of [
   ['/api/ascm/sharepoint/import?next=other', {}, {}],
   ['/api/ascm/publication/prepare', { prepareKey: 'a'.repeat(64), ref: 'main' }, {}],
   ['/api/ascm/publication/prepare', { prepareKey: 'A'.repeat(64) }, {}],
+  ['/api/ascm/publication/prepare', { prepareKey: ['a'.repeat(64)] }, {}],
   ['/api/ascm/sharepoint/import', {}, { 'X-PPC-Publisher-Secret': 'forbidden' }],
 ]) {
   const sourceApp = createAscmFlowApplication({ ...dependencies, env: { ...env, PPC_ASCM_START_AFTER: '', PPC_ASCM_APPROVED_REPORT: '{' } });
   const response = await sourceApp(new Request(base + '/functions/v1/ppc-ascm-flow' + path, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET, ...extra }, body: JSON.stringify(body) }));
-  assert(response.status >= 400); assert.equal((await response.json()).archiveAllowed, false);
+  assert.equal(response.status, 400); assert.equal((await response.json()).archiveAllowed, false);
   assert.deepEqual({ network, gateways, packages, reporters }, { network: 0, gateways: 0, packages: 0, reporters: 0 });
 }
 const projection = { version: 1, action: 'prepare', requestedRevision: 8, publishedRevision: 7, generation: 2, prepareKey: 'a'.repeat(64),

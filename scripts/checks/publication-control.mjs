@@ -52,7 +52,10 @@ test('dispatcher retains legacy boolean adapter payload and fixes preparation ro
     assert.equal(await createPublicationDispatcher({ env, fetchImpl: async () => response }).dispatch({ fixed: true }), expected);
   }
   assert.equal(await createPublicationDispatcher({ env, fetchImpl: async () => { throw Error('private transport'); } }).dispatch({ fixed: true }), 'uncertain');
-  assert.equal(await dispatcher.dispatch({ fixed: true, imagesCommit: 'INVALID' }), 'failed'); assert.equal(calls.length, 2);
+  for (const imagesCommit of ['INVALID', ['d'.repeat(40)], null, {}]) {
+    assert.equal(await dispatcher.dispatch({ fixed: true, imagesCommit }), 'failed');
+  }
+  assert.equal(calls.length, 2, 'non-string commit authority cannot reach dispatch');
 });
 test('pure control uses one metadata RPC and ready delivery beats missing token', async () => {
   for (const projection of [control(), ready(), control({ action: 'idle', requestedRevision: 7, prepareKey: null, intent: null }),
@@ -68,15 +71,19 @@ test('pure control uses one metadata RPC and ready delivery beats missing token'
 });
 test('control rejects malformed and unsafe DTOs instead of inventing idle', async () => {
   for (const projection of [null, {}, control({ extra: true }), control({ requestedRevision: null }), control({ requestedRevision: 0 }),
-    control({ prepareKey: 'A'.repeat(64) }), control({ intent: { kind: 'ordinary', ownerImagesCommit: 'd'.repeat(40) } }),
+    control({ prepareKey: 'A'.repeat(64) }), control({ prepareKey: [key] }),
+    control({ intent: { kind: 'owner_images', ownerImagesCommit: ['d'.repeat(40)] } }),
+    control({ intent: { kind: 'ordinary', ownerImagesCommit: 'd'.repeat(40) } }),
     control({ candidate: safeCandidate }), readyWith({ fileName: 'master_ppc.pkg' }), readyWith({ driveId: 'foreign' }),
-    readyWith({ expiresAt: now() }), { ...ready(), binaryPath: 'https://evil.invalid/bytes' }, control({ archiveAllowed: true }),
+    readyWith({ expiresAt: now() }), readyWith({ candidateId: [attemptId] }), readyWith({ sha256: ['c'.repeat(64)] }),
+    { ...ready(), binaryPath: 'https://evil.invalid/bytes' }, control({ archiveAllowed: true }),
     control({ action: 'backoff', retryAt: null }), control({ action: 'idle' }), control({ action: 'idle', prepareKey: null, intent: null }), control({ holdCode: 'PRIVATE_ERROR' })]) {
     await assert.rejects(fixture({ projection }).delivery.getPublicationControl(), { status: 503 });
   }
   function readyWith(patch) { return { ...ready(), candidate: { ...safeCandidate, ...patch } }; }
 });
 test('attempt exhaustion is timed backoff and cannot be represented as held or dispatched', () => {
+  assert.throws(() => validatePublicationPreparation({ version: 1, status: 'dispatch_requested', prepareKey: [key], retryAt, holdCode: null, archiveAllowed: false }), { status: 503 });
   for (const status of ['held', 'busy', 'dispatch_requested', 'dispatch_rejected', 'dispatch_uncertain']) {
     assert.throws(() => validatePublicationPreparation({ version: 1, status, prepareKey: status === 'held' ? null : key,
       retryAt: status === 'held' ? null : retryAt, holdCode: 'PREPARE_ATTEMPTS_EXHAUSTED', archiveAllowed: false }), { status: 503 });
@@ -91,7 +98,7 @@ test('prepare validates exact key, claims before fixed dispatch and records all 
     assert.deepEqual(dispatch, ['dispatch', { fixed: true, imagesCommit: 'd'.repeat(40) }]);
     assert.deepEqual(recorded, ['prepare_result', { ...claim, outcome }]);
   }
-  for (const invalid of [{}, { prepareKey: key, ref: 'main' }, { prepareKey: key.toUpperCase() }, { prepareKey: null }]) {
+  for (const invalid of [{}, { prepareKey: key, ref: 'main' }, { prepareKey: key.toUpperCase() }, { prepareKey: null }, { prepareKey: [key] }]) {
     const h = fixture(); await assert.rejects(h.delivery.preparePublication(invalid), { status: 400 }); assert.deepEqual(h.calls, []);
   }
   for (const status of ['stale', 'busy', 'backoff', 'not_needed', 'held']) {
@@ -134,7 +141,8 @@ test('HTTP control is GET with no body and prepare is exact JSON; mail policy ca
     ['/api/ascm/publication/queued', { headers: { 'Content-Length': '1' } }, 400],
     ['/api/ascm/publication/prepare', {}, 405], ['/api/ascm/publication/prepare', { method: 'POST', body: '{}' }, 415],
     ['/api/ascm/publication/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': '4097' }, body: '{}' }, 413],
-    ['/api/ascm/publication/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prepareKey: key, ref: 'main' }) }, 400]]) {
+    ['/api/ascm/publication/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prepareKey: key, ref: 'main' }) }, 400],
+    ['/api/ascm/publication/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prepareKey: [key] }) }, 400]]) {
     const before = h.calls.length; const response = await handler(request(path, options)); assert.equal(response.status, status); assert.equal((await response.json()).archiveAllowed, false); assert.equal(h.calls.length, before);
   }
   const stale = fixture({ claimStatus: 'stale' });

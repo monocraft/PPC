@@ -357,6 +357,7 @@ test('SharePoint pending and safe holds never fabricate mail fields or grant com
 test('SharePoint rejects foreign or malformed native receipts before publication read', async () => {
   for (const change of [{ requestId: 'ascm-' + digest(workbook) }, { archiveAllowed: true }, { acceptedRequestId: '' },
     { acceptedRequestId: 'ascm-sp-' + 'd'.repeat(64) },
+    { outcome: 'equivalent', acceptedRequestId: [spId], summary: { savedFields: 0, savedProducts: 0 } },
     { source: { ...spReceipt.source, rawSha256: 'd'.repeat(64) } }, { outcome: 'equivalent', summary: { savedFields: 1, savedProducts: 0 } },
     { alreadySaved: 'true' }, { status: 'unknown' }]) {
     const h = sourceHarness({ receipt: { ...spReceipt, ...change } }); const response = await h.handler(req('/api/ascm/sharepoint/import', spInput));

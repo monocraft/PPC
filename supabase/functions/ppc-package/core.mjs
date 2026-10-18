@@ -19,6 +19,7 @@ const safeText = value => typeof value === 'string' && value.length > 0 && value
 const sameId = (value, input) => value?.candidateId === input.candidateId && value?.generation === input.generation;
 const filename = candidate => candidate.kind === 'seed' ? 'master_ppc.pkg' : `master-r${candidate.storageRevision}-g${candidate.generation}-${candidate.candidateId}.pkg`;
 const PREPARE_KEY = /^[a-f0-9]{64}$/;
+const hex64 = value => typeof value === 'string' && PREPARE_KEY.test(value);
 const CONTROL_FIELDS = ['version', 'action', 'requestedRevision', 'publishedRevision', 'generation', 'prepareKey', 'retryAt', 'intent', 'candidate', 'binaryPath', 'holdCode', 'archiveAllowed'];
 const HOLD_CODES = new Set(['PHASE_NOT_READY', 'CURRENT_MISSING', 'STATE_INVALID', 'OWNER_INTENT_UNKNOWN', 'PUBLISHER_NOT_CONFIGURED', 'PREPARE_ATTEMPTS_EXHAUSTED']);
 const instant = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
@@ -27,11 +28,11 @@ export function validatePublicationControl(value, env, now) {
   if (!strict(value, CONTROL_FIELDS) || value.version !== 1 || value.archiveAllowed !== false
     || !['idle', 'deliver', 'prepare', 'recover', 'backoff', 'held'].includes(value.action)
     || !integer(value.requestedRevision, 1) || !integer(value.publishedRevision) || value.publishedRevision > value.requestedRevision || !integer(value.generation)
-    || value.prepareKey !== null && !PREPARE_KEY.test(value.prepareKey) || value.retryAt !== null && !instant(value.retryAt)
+    || value.prepareKey !== null && !hex64(value.prepareKey) || value.retryAt !== null && !instant(value.retryAt)
     || value.holdCode !== null && !HOLD_CODES.has(value.holdCode)) throw fail();
   const intent = value.intent;
   if (intent !== null && (!strict(intent, ['kind', 'ownerImagesCommit'])
-    || !(intent.kind === 'ordinary' && intent.ownerImagesCommit === null || intent.kind === 'owner_images' && /^[a-f0-9]{40}$/.test(intent.ownerImagesCommit)))) throw fail();
+    || !(intent.kind === 'ordinary' && intent.ownerImagesCommit === null || intent.kind === 'owner_images' && typeof intent.ownerImagesCommit === 'string' && /^[a-f0-9]{40}$/.test(intent.ownerImagesCommit)))) throw fail();
   if (value.action === 'held') {
     if (!value.holdCode || value.holdCode === 'PREPARE_ATTEMPTS_EXHAUSTED' || [value.prepareKey, value.retryAt, intent, value.candidate, value.binaryPath].some(v => v !== null)) throw fail();
   } else if (value.action === 'idle') {
@@ -40,24 +41,24 @@ export function validatePublicationControl(value, env, now) {
     const c = value.candidate;
     if (!intent || value.prepareKey !== null || value.retryAt !== null || value.holdCode !== null
       || !strict(c, ['candidateId', 'generation', 'storageRevision', 'sha256', 'bytes', 'expiresAt', 'fileName', 'provider', 'driveId', 'folderId'])
-      || !UUID.test(c.candidateId) || !integer(c.generation, 1) || !integer(c.storageRevision, 1) || c.storageRevision > value.requestedRevision
-      || !PREPARE_KEY.test(c.sha256) || !integer(c.bytes, 36) || c.bytes > MAX_PACKAGE_BYTES
+      || typeof c.candidateId !== 'string' || !UUID.test(c.candidateId) || !integer(c.generation, 1) || !integer(c.storageRevision, 1) || c.storageRevision > value.requestedRevision
+      || !hex64(c.sha256) || !integer(c.bytes, 36) || c.bytes > MAX_PACKAGE_BYTES
       || !instant(c.expiresAt) || Date.parse(c.expiresAt) <= Date.parse(now()) || !Number.isFinite(Date.parse(now()))
       || c.fileName !== filename({ ...c, kind: 'publication' }) || c.provider !== 'sharepoint'
       || !safeText(c.driveId) || !safeText(c.folderId) || c.driveId !== env.PPC_PACKAGE_SP_DRIVE_ID || c.folderId !== env.PPC_PACKAGE_SP_FOLDER_ID
       || value.binaryPath !== `/api/ascm/publication/${c.candidateId}/bytes`) throw fail();
-  } else if (!intent || !PREPARE_KEY.test(value.prepareKey) || value.candidate !== null || value.binaryPath !== null
+  } else if (!intent || !hex64(value.prepareKey) || value.candidate !== null || value.binaryPath !== null
     || (value.action === 'backoff' ? !instant(value.retryAt) || ![null, 'PREPARE_ATTEMPTS_EXHAUSTED'].includes(value.holdCode) : value.retryAt !== null || value.holdCode !== null)) throw fail();
   return structuredClone(value);
 }
 export function validatePublicationPreparation(value) {
   if (!strict(value, ['version', 'status', 'prepareKey', 'retryAt', 'holdCode', 'archiveAllowed']) || value.version !== 1 || value.archiveAllowed !== false
     || !['dispatch_requested', 'dispatch_rejected', 'dispatch_uncertain', 'busy', 'backoff', 'not_needed', 'held'].includes(value.status)
-    || value.prepareKey !== null && !PREPARE_KEY.test(value.prepareKey) || value.retryAt !== null && !instant(value.retryAt)
+    || value.prepareKey !== null && !hex64(value.prepareKey) || value.retryAt !== null && !instant(value.retryAt)
     || value.holdCode !== null && !HOLD_CODES.has(value.holdCode)
     || value.holdCode === 'PREPARE_ATTEMPTS_EXHAUSTED' && value.status !== 'backoff'
     || (['dispatch_requested', 'dispatch_rejected', 'dispatch_uncertain', 'busy', 'backoff'].includes(value.status)
-      ? !PREPARE_KEY.test(value.prepareKey) || !instant(value.retryAt) || ![null, 'PREPARE_ATTEMPTS_EXHAUSTED'].includes(value.holdCode)
+      ? !hex64(value.prepareKey) || !instant(value.retryAt) || ![null, 'PREPARE_ATTEMPTS_EXHAUSTED'].includes(value.holdCode)
       : value.prepareKey !== null || value.retryAt !== null || (value.status === 'held' ? !value.holdCode : value.holdCode !== null))) throw fail();
   return structuredClone(value);
 }
@@ -77,7 +78,7 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
   }
   async function preparePublication(input) {
     requireEnabled();
-    if (!strict(input, ['prepareKey']) || !PREPARE_KEY.test(input.prepareKey)) throw fail(400, 'INVALID_REQUEST');
+    if (!strict(input, ['prepareKey']) || !hex64(input.prepareKey)) throw fail(400, 'INVALID_REQUEST');
     if (!configuredPublisher()) return preparation('held', null, null, 'PUBLISHER_NOT_CONFIGURED');
     const attemptId = randomUUID(), claim = await databaseCall('prepare_claim', { prepareKey: input.prepareKey, attemptId });
     if (!strict(claim, ['status', 'control', 'attemptId', 'leaseUntil', 'retryAt'])) throw fail();

@@ -81,5 +81,20 @@ try {
   const withCue=handler({PPC_ASCM_STATUS_ENABLED:'true'},async(op,p)=>{if(op==='ascm_sharepoint_commit')activeDuringCommit=(await db.query('select count(*) n from ppc_private.ascm_supervisor_runs')).rows[0].n;return database(op,p);});
   assert.equal((await call(withCue,body)).status,202);assert.equal(activeDuringCommit,1,'source planning retains actual-work supervisor lease');assert.equal((await db.query('select count(*) n from ppc_private.ascm_supervisor_runs')).rows[0].n,0,'source lease ends after committed response');
   assert.equal((await validateAscmSharePointInput(body)).rawSha256,createHash('sha256').update(Buffer.from(body.workbookBase64,'base64')).digest('hex'));
+  for (const [exported, expected] of [
+    ['2026-09-30', '2026-09-30'],
+    ['2026-09-30T03:53:45', '2026-09-30T03:53:45'],
+    ['2026-09-30T03:53:45Z', '2026-09-30T03:53:45.000Z'],
+    ['2026-09-30T05:53:45+02:00', '2026-09-30T03:53:45.000Z'],
+  ]) {
+    await reset();
+    const accepted = await call(handler(), await bodyFor({ exported }));
+    assert.equal(accepted.status, 202, `${exported}: ${JSON.stringify(accepted)}`);
+    assert.equal((await state()).manifest.ascmSnapshot.exportedAt, expected, 'retain the native parser output without adding or removing timezone information');
+  }
+  await reset();
+  const wrongDay = await call(handler(), await bodyFor({ exported: '2026-09-30T23:53:45-02:00' }));
+  assert.equal(wrongDay.status, 400, 'parser-normalized Exported calendar day must still match filename');
+  assert.equal((await state()).storageRevision, 1);
   console.log('SharePoint source API passed: real strict XLSX/native PGlite, authority/bounds/Exported/dataset/fingerprints/replay/equivalence/receipt/publication/lost-response contracts; external fetch blocked.');
 }finally{await db.close();}

@@ -116,7 +116,9 @@ export function createAscmSharePointApi({env={},database,now=()=>new Date().toIS
       catch{throw problem(400,'ASCM_INVALID_WORKBOOK','The report could not be imported completely. Use owner review.');}
       dataset.metadata.fileName=input.source.fileName;
       validateAscmDataset(dataset);
-      if(typeof dataset.metadata.exportedAt!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(dataset.metadata.exportedAt)||dataset.metadata.exportedAt.slice(0,10)!==input.reportDate)throw invalid();
+      // Keep the native parser's date-only, local-time or normalized zoned form.
+      // Calendar-day matching adds no timezone to an unzoned source value.
+      if(typeof dataset.metadata.exportedAt!=='string'||!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{3}Z)?)?$/.test(dataset.metadata.exportedAt)||dataset.metadata.exportedAt.slice(0,10)!==input.reportDate)throw invalid();
       const businessSha256=await ascmBusinessFingerprint(dataset,input.reportDate);
       const fingerprint=await hashJson(['ppc-ascm-sharepoint-source-v1',input.requestId,input.source.fileName,input.reportDate,input.rawSha256,1,businessSha256]);
       let alreadySaved=false;

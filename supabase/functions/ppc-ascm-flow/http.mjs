@@ -98,7 +98,7 @@ function safeSharePointReceipt(value, status, input) {
   const count = v => Number.isSafeInteger(v) && v >= 0 && v <= 1_000_000;
   const sourceKeys = ['driveId', 'listId', 'listItemId', 'itemUniqueId', 'versionLabel', 'rawSha256'];
   if (!record(value) || value.sourceProvider !== 'sharepoint' || value.requestId !== input.requestId
-    || !/^ascm-sp-[a-f0-9]{64}$/.test(value.acceptedRequestId || '') || !strict(value.source, sourceKeys)
+    || typeof value.acceptedRequestId !== 'string' || !/^ascm-sp-[a-f0-9]{64}$/.test(value.acceptedRequestId) || !strict(value.source, sourceKeys)
     || sourceKeys.some(k => value.source[k] !== (k === 'rawSha256' ? input.rawSha256 : input.source[k]))
     || !Number.isSafeInteger(value.storageRevision) || value.storageRevision < 1 || typeof value.alreadySaved !== 'boolean'
     || !['accepted', 'equivalent'].includes(value.outcome) || value.archiveAllowed !== false
@@ -199,7 +199,7 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, invokeSharePoi
         return reply(200, { candidate, ...(candidate ? { binaryPath: `/api/ascm/publication/${candidate.candidateId}/bytes` } : {}), archiveAllowed: false });
       }
       if (path === '/api/ascm/publication/prepare') {
-        if (!strict(value, ['prepareKey']) || !/^[a-f0-9]{64}$/.test(value.prepareKey || '')) throw problem(400, 'INVALID_REQUEST');
+        if (!strict(value, ['prepareKey']) || typeof value.prepareKey !== 'string' || !/^[a-f0-9]{64}$/.test(value.prepareKey)) throw problem(400, 'INVALID_REQUEST');
         return reply(200, validatePublicationPreparation(await getPackageDelivery().preparePublication(value)));
       }
       const requestId = reportInput(value, config.cutoff, now, config.approvedReport), delivery = getPackageDelivery();

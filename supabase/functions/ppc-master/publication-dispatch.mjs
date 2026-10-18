@@ -9,7 +9,7 @@ export function createPublicationDispatcher({ env = {}, fetchImpl = globalThis.f
       && (!fixed || owner === 'monocraft' && repo === 'PPC' && workflow === 'publish-master.yml'));
   }
   async function dispatch({ fixed = false, imagesCommit = '' } = {}) {
-    if (!canDispatch({ fixed }) || fixed && imagesCommit !== '' && !/^[a-f0-9]{40}$/.test(imagesCommit)) return 'failed';
+    if (!canDispatch({ fixed }) || fixed && (typeof imagesCommit !== 'string' || imagesCommit !== '' && !/^[a-f0-9]{40}$/.test(imagesCommit))) return 'failed';
     try {
       const result = await fetchImpl(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches`, {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
