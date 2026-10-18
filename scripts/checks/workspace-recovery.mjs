@@ -90,7 +90,7 @@ for(const laterSurvivorEdit of [false,true]){
  const restored=h.context.portfolio.categories[0].board.products.find(product=>product.id==='removed');
  assert.equal(restored.name,'Deleted before backup');assert.equal(restored.imageAssetId,nextId);assert.equal(await h.images.get(restored.imageAssetId).text(),'new recovery pixels');
 }
-const main=html.indexOf('<main class="app-shell">');for(const id of ['workspaceRecoveryExport','workspaceRecoveryFile','workspaceRecoveryKey','workspaceRecoveryReview','workspaceRecoveryRestore'])assert.ok(html.indexOf(`id="${id}"`)<main,`${id} remains accessible outside the inert workspace`);
+const main=html.search(/<main\b[^>]*\bclass="[^"]*\bapp-shell\b[^"]*"/);assert.ok(main>=0,'the workspace main exists');for(const id of ['workspaceRecoveryExport','workspaceRecoveryFile','workspaceRecoveryKey','workspaceRecoveryReview','workspaceRecoveryRestore'])assert.ok(html.indexOf(`id="${id}"`)<main,`${id} remains accessible outside the inert workspace`);
 assert.match(app,/await workspaceStorage\.recover\(plan\.serialized/);assert.match(app,/await workspaceStorage\.rollbackRecovery\(receipt\)/);assert.match(app,/await showWorkspaceRecovery\(\);/);
 console.log('Workspace recovery checks passed: exact raw export outside inert shell, reviewed complete backups, no-write preview, explicit validated replacement, quota/activation/rollback faults, cross-tab and legacy stale refusal, missing-image/duplicate validation, isolated retry queues, preserved merge undo/deleted-record images and stale-edit guards, retained canonical baselines, credentials and protected prior records.');
 
