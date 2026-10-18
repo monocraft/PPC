@@ -92,6 +92,7 @@ assert.equal(initial.status, 202, JSON.stringify(initial.data));
 assert.equal(initial.data.requestId, requestId);
 assert.equal(initial.data.storageRevision, 2);
 assert.equal(initial.data.archiveAllowed, false, 'accepted import is not published yet');
+assert.equal(Object.hasOwn(initial.data, 'reviewReason'), false, 'successful receipts never gain a review reason');
 assert.equal(db.commits, 1); assert.equal(dispatches, 1);
 assert.deepEqual(db.inspect().manifest.imageAssets, seed.imageAssets);
 assert.deepEqual(db.inspect().manifest.custom, seed.custom);
@@ -105,6 +106,7 @@ db.publish(2); db.advance();
 const published = await call(handle);
 assert.equal(published.status, 200); assert.equal(published.data.archiveAllowed, true);
 assert.equal(published.data.storageRevision, 2, 'archive gate uses receipt revision, not current unrelated revision');
+assert.equal(Object.hasOwn(published.data, 'reviewReason'), false);
 // In either cutover phase, legacy Git acknowledgements and historical seed
 // receipts cannot satisfy Archive. A native import receipt remains mandatory.
 for (const phase of ['seeding', 'sharepoint']) {
@@ -135,14 +137,61 @@ assert.equal((await call(handler(db), badZip)).status, 400); assert.equal(db.com
 const dateSeed = clone(seed);
 dateSeed.categories[0].board.products[0].generalAvailabilityDate = '2026-01-01';
 db = fixture(dateSeed);
-assert.equal((await call(handler(db))).data.code, 'ASCM_REVIEW_REQUIRED'); assert.equal(db.commits, 0, 'unknown device locks hold an existing date update');
+const beforeReviewDispatches = dispatches;
+const dateReview = await call(handler(db));
+assert.equal(dateReview.status, 409);
+assert.equal(dateReview.data.code, 'ASCM_REVIEW_REQUIRED');
+assert.equal(dateReview.data.archiveAllowed, false);
+assert.equal(db.commits, 0, 'unknown device locks hold an existing date update');
+assert.equal(dispatches, beforeReviewDispatches);
 db = fixture(dateSeed);
 assert.equal((await call(handler(db, { PPC_ASCM_DATE_POLICY: JSON.stringify({ version: 1, allowUpdates: true, protected: [] }) }))).status, 202);
 assert.equal(db.inspect().manifest.categories[0].board.products[0].generalAvailabilityDate, '2026-01-15');
 db = fixture(dateSeed);
-assert.equal((await call(handler(db, { PPC_ASCM_DATE_POLICY: JSON.stringify({ version: 1, allowUpdates: true, protected: [{ productId: 'cloud-iii', fields: ['generalAvailabilityDate'] }] }) }))).status, 409);
+const beforeProtectedDispatches = dispatches;
+const protectedReview = await call(handler(db, { PPC_ASCM_DATE_POLICY: JSON.stringify({ version: 1, allowUpdates: true, protected: [{ productId: 'cloud-iii', fields: ['generalAvailabilityDate'] }] }) }));
+assert.equal(protectedReview.status, 409);
+assert.equal(protectedReview.data.code, 'ASCM_REVIEW_REQUIRED');
+assert.equal(protectedReview.data.archiveAllowed, false);
 assert.equal(db.commits, 0);
+assert.equal(dispatches, beforeProtectedDispatches);
+assert.deepEqual([dateReview.data.reviewReason, protectedReview.data.reviewReason], ['DATE_POLICY_REQUIRED', 'PROTECTED_DATE'],
+  'real lifecycle protection holds expose their distinct safe reasons');
 assert.equal((await call(handler(db, { PPC_ASCM_DATE_POLICY: 'malformed' }))).status, 503);
+
+const reviewPlan = await import('../../supabase/functions/ppc-master/ascm-plan.mjs');
+const expectedReviewReasons = ['AMBIGUOUS_MATCH', 'CATEGORY_RELOCATION', 'DATE_POLICY_REQUIRED', 'DUPLICATE_MATCH',
+  'INCOMPATIBLE_MAPPING', 'INCOMPLETE_NEW_PRODUCT', 'MALFORMED_REPORT', 'MASTER_CONFLICT', 'PRODUCT_ID_COLLISION',
+  'PROTECTED_DATE', 'STALE_REPORT', 'TOO_MANY_GROUPS'];
+assert(Array.isArray(reviewPlan.ASCM_REVIEW_REASONS));
+assert(Object.isFrozen(reviewPlan.ASCM_REVIEW_REASONS));
+assert.deepEqual(reviewPlan.ASCM_REVIEW_REASONS, expectedReviewReasons);
+const privateSentinel = 'review-private-sentinel';
+const invalidReviewReasons = [undefined, null, 42, {}, [], '', 'UNKNOWN_REVIEW_REASON', 'DATE_POLICY_REQUIRED '];
+for (const reason of [...expectedReviewReasons, ...invalidReviewReasons]) {
+  const error = new reviewPlan.AscmReviewError(reason, privateSentinel, { productId: privateSentinel, sourceRow: 12 });
+  db = fixture(); let rejectedDispatches = 0;
+  const rejecting = createAscmApi({ env: { PPC_ASCM_IMPORT_SECRET: secret }, database: db.database, now,
+    dispatchPublication: async () => { rejectedDispatches++; return true; },
+    validateManifest() { throw error; }, validateReadableManifest: requireReadableManifest });
+  const held = await call(rejecting);
+  assert.equal(held.status, 409);
+  assert.deepEqual(held.data, { code: 'ASCM_REVIEW_REQUIRED', error: 'The report needs owner review. No report changes were saved.',
+    archiveAllowed: false, ...(expectedReviewReasons.includes(reason) ? { reviewReason: reason } : {}) });
+  assert.equal(JSON.stringify(held.data).includes(privateSentinel), false);
+  assert.equal(db.commits, 0); assert.equal(rejectedDispatches, 0);
+  assert.deepEqual(db.calls, ['rate', 'read'], 'review diagnostics add no database access or commits');
+}
+db = fixture(); let lookalikeDispatches = 0;
+const lookalike = Object.assign(new Error(privateSentinel), { name: 'AscmReviewError', code: 'DATE_POLICY_REQUIRED', details: { productId: privateSentinel } });
+const rejectingLookalike = createAscmApi({ env: { PPC_ASCM_IMPORT_SECRET: secret }, database: db.database, now,
+  dispatchPublication: async () => { lookalikeDispatches++; return true; },
+  validateManifest() { throw lookalike; }, validateReadableManifest: requireReadableManifest });
+const lookalikeResponse = await call(rejectingLookalike);
+assert.equal(lookalikeResponse.status, 503);
+assert.deepEqual(lookalikeResponse.data, { code: 'ASCM_UNAVAILABLE', error: 'The ASCM import could not be confirmed. Keep the email and retry later.', archiveAllowed: false });
+assert.equal(JSON.stringify(lookalikeResponse.data).includes(privateSentinel), false);
+assert.equal(db.commits, 0); assert.equal(lookalikeDispatches, 0); assert.deepEqual(db.calls, ['rate', 'read']);
 const { createMasterGateway } = await import('../../supabase/functions/ppc-master/gateway.mjs');
 db = fixture();
 const gatewayEnv = { PPC_PACKAGE_KEY_HASH: 'a'.repeat(64), PPC_PUBLISHER_SECRET: 'p'.repeat(48), PPC_ASCM_IMPORT_SECRET: secret };

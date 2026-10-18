@@ -1,6 +1,12 @@
 # Monthly ASCM cloud supervisor
 
-This optional supervisor checks Outlook from a cloud schedule, imports a published monthly HyperX ASCM workbook, and archives the exact message only after its accepted revision is published. The preferred route uses the owner's existing HP-approved ChatGPT Outlook connection and a separate OAuth PPC tool; the GitHub app-only runner is an alternative. Both routes remain **disabled until configured and verified**. Source preparation alone creates no running supervisor.
+This optional supervisor checks Outlook from a cloud schedule, imports a published monthly HyperX ASCM workbook, and archives the exact message only after its accepted revision is published. The selected direction is now a native Copilot Studio scheduled flow using its approved Outlook/SharePoint connections and the narrowly scoped PPC worker API. It remains **disabled until configured and verified**. Source preparation alone creates no running supervisor.
+
+## Current native Copilot Studio integration
+
+HP rejected creation of the private ChatGPT PPC app, and the owner declined that approval route. Native Copilot Studio authoring and Outlook/SharePoint connections were verified in the existing environment. The saved flow remains Off with no runs. Its native scheduled trigger can use the Copilot Studio consumption plan; available environment capacity and permitted connector/endpoint policy still require confirmation. The owner's Codex token allowance does not establish Copilot Studio runtime capacity.
+
+See [native flow setup and verification](ASCM-COPILOT-FLOW.md) and the [worker design](superpowers/specs/2026-10-17-copilot-ascm-worker-design.md) for the selected architecture, secure source staging, raw package/provenance boundaries and activation gates. The ChatGPT OAuth and app-only sections below document retained alternatives and historical preparation; they are not prerequisites for this native flow.
 
 On October 17, 2026, the ASCM operation was deployed in the existing `ppc-master` function through the owner's signed-in dashboard. All nine downloaded deployment source files matched the tested source at commit `cb58fa346d8748a242bb31b613afec4af8b4cccd`; the previous deployment source ZIP was retained privately for rollback. The dedicated import credential remained unset, and one bounded request confirmed HTTP 404 with `archiveAllowed: false`. This deployment applied no SQL migration, changed no existing credential, and imported or archived no report. [Draft pull request #88](https://github.com/monocraft/PPC/pull/88) tracks the prepared importer and runner. The preferred existing ChatGPT Outlook connection still needs a securely authenticated PPC tool and a verified cloud schedule before activation.
 

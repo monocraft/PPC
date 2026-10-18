@@ -1,0 +1,1402 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "triggers": {
+    "Recurrence": {
+      "type": "Recurrence",
+      "recurrence": {
+        "interval": 1,
+        "frequency": "Hour"
+      },
+      "runtimeConfiguration": {
+        "concurrency": {
+          "runs": 1
+        }
+      }
+    }
+  },
+  "actions": {
+    "Flow_worker_credential": {
+      "type": "Compose",
+      "inputs": "__OWNER_ENTERED_CREDENTIAL_RETAIN_IN_NATIVE_FLOW__",
+      "runtimeConfiguration": {
+        "secureData": {
+          "properties": [
+            "inputs"
+          ]
+        }
+      }
+    },
+    "Initialize_report_guard": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "Report_replay_ready",
+            "type": "boolean",
+            "value": false
+          }
+        ]
+      },
+      "runAfter": {
+        "Flow_worker_credential": [
+          "SUCCEEDED"
+        ]
+      }
+    },
+    "List_monthly_releases": {
+      "type": "OpenApiConnection",
+      "inputs": {
+        "parameters": {
+          "Uri": "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?%24top=25&%24select=id%2CinternetMessageId%2CparentFolderId%2Csubject%2Cfrom%2Csender%2CreceivedDateTime%2ChasAttachments&%24filter=receivedDateTime%20gt%202026-10-18T03%3A42%3A00Z%20and%20from%2FemailAddress%2Faddress%20eq%20'linny.chen%40hp.com'%20and%20startswith(subject%2C'ASCM%20Report%20Accessories%20HyperX%20Release%20Notification')%20and%20hasAttachments%20eq%20true&%24orderby=receivedDateTime%20desc",
+          "Method": "GET",
+          "CustomHeader1": "Prefer: IdType=\"ImmutableId\""
+        },
+        "host": {
+          "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+          "connection": "shared_office365",
+          "operationId": "HttpRequest"
+        },
+        "retryPolicy": {
+          "type": "exponential",
+          "count": 2,
+          "interval": "PT5S",
+          "minimumInterval": "PT5S",
+          "maximumInterval": "PT30S"
+        }
+      },
+      "runAfter": {
+        "Initialize_report_guard": [
+          "SUCCEEDED"
+        ]
+      },
+      "limit": {
+        "timeout": "PT2M"
+      },
+      "runtimeConfiguration": {
+        "secureData": {
+          "properties": [
+            "inputs",
+            "outputs"
+          ]
+        }
+      }
+    },
+    "Each_report": {
+      "type": "Foreach",
+      "foreach": "@body('List_monthly_releases')?['value']",
+      "actions": {
+        "List_report_attachments": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "parameters": {
+              "Uri": "@concat('https://graph.microsoft.com/v1.0/me/messages/',uriComponent(items('Each_report')?['id']),'/attachments?$select=id,name,contentType,size,isInline&$top=20')",
+              "Method": "GET",
+              "CustomHeader1": "Prefer: IdType=\"ImmutableId\""
+            },
+            "host": {
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+              "connection": "shared_office365",
+              "operationId": "HttpRequest"
+            },
+            "retryPolicy": {
+              "type": "exponential",
+              "count": 2,
+              "interval": "PT5S",
+              "minimumInterval": "PT5S",
+              "maximumInterval": "PT30S"
+            }
+          },
+          "runAfter": {
+            "Reset_report_guard": [
+              "SUCCEEDED"
+            ]
+          },
+          "limit": {
+            "timeout": "PT2M"
+          },
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": [
+                "inputs",
+                "outputs"
+              ]
+            }
+          }
+        },
+        "Ordinary_XLSX": {
+          "type": "Query",
+          "inputs": {
+            "from": "@body('List_report_attachments')?['value']",
+            "where": "@and(equals(item()?['@odata.type'],'#microsoft.graph.fileAttachment'),equals(item()?['isInline'],false),endsWith(toLower(coalesce(item()?['name'],'')),'.xlsx'))"
+          },
+          "runAfter": {
+            "List_report_attachments": [
+              "SUCCEEDED"
+            ]
+          },
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": [
+                "inputs",
+                "outputs"
+              ]
+            }
+          }
+        },
+        "Single_complete_workbook": {
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@and(empty(body('List_report_attachments')?['@odata.nextLink']),equals(length(body('Ordinary_XLSX')),1))",
+                  "@true"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Valid_report_envelope": {
+              "type": "If",
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@and(not(empty(items('Each_report')?['id'])),not(empty(items('Each_report')?['internetMessageId'])),not(empty(first(body('Ordinary_XLSX'))?['id'])),startsWith(coalesce(first(body('Ordinary_XLSX'))?['name'],''),'ASCM Report_HyperX_'),greater(first(body('Ordinary_XLSX'))?['size'],0),lessOrEquals(first(body('Ordinary_XLSX'))?['size'],2097152))",
+                      "@true"
+                    ]
+                  }
+                ]
+              },
+              "actions": {
+                "Get_report_attachment": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "Uri": "@concat('https://graph.microsoft.com/v1.0/me/messages/',uriComponent(items('Each_report')?['id']),'/attachments/',uriComponent(first(body('Ordinary_XLSX'))?['id']))",
+                      "Method": "GET",
+                      "CustomHeader1": "Prefer: IdType=\"ImmutableId\""
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                      "connection": "shared_office365",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {}
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          },
+          "runAfter": {
+            "Ordinary_XLSX": [
+              "SUCCEEDED"
+            ]
+          }
+        },
+        "Attachment_agrees": {
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@and(equals(actions('Get_report_attachment')?['status'],'Succeeded'),equals(outputs('Get_report_attachment')?['body']?['@odata.type'],'#microsoft.graph.fileAttachment'),equals(outputs('Get_report_attachment')?['body']?['isInline'],false),equals(outputs('Get_report_attachment')?['body']?['id'],outputs('Ordinary_XLSX')?['body']?[0]?['id']),equals(outputs('Get_report_attachment')?['body']?['name'],outputs('Ordinary_XLSX')?['body']?[0]?['name']),equals(outputs('Get_report_attachment')?['body']?['size'],outputs('Ordinary_XLSX')?['body']?[0]?['size']),equals(outputs('Get_report_attachment')?['body']?['contentType'],outputs('Ordinary_XLSX')?['body']?[0]?['contentType']),not(empty(outputs('Get_report_attachment')?['body']?['contentBytes'])))",
+                  "@true"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Report_payload": {
+              "type": "Compose",
+              "inputs": "@setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'sender',items('Each_report')?['from']?['emailAddress']?['address']),'subject',items('Each_report')?['subject']),'receivedAt',items('Each_report')?['receivedDateTime']),'messageId',items('Each_report')?['id']),'fileName',body('Get_report_attachment')?['name']),'workbookBase64',body('Get_report_attachment')?['contentBytes'])",
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs"
+                  ]
+                }
+              }
+            },
+            "Import_report": {
+              "type": "Http",
+              "inputs": {
+                "uri": "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow/api/ascm/import",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}"
+                },
+                "body": "@outputs('Report_payload')",
+                "retryPolicy": {
+                  "type": "exponential",
+                  "count": 2,
+                  "interval": "PT5S",
+                  "minimumInterval": "PT5S",
+                  "maximumInterval": "PT30S"
+                }
+              },
+              "runAfter": {
+                "Report_payload": [
+                  "SUCCEEDED"
+                ]
+              },
+              "limit": {
+                "timeout": "PT2M"
+              },
+              "operationOptions": "DisableAsyncPattern",
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          },
+          "runAfter": {
+            "Single_complete_workbook": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          }
+        },
+        "Reset_report_guard": {
+          "type": "SetVariable",
+          "inputs": {
+            "name": "Report_replay_ready",
+            "value": false
+          }
+        },
+        "Initial_published": {
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@and(equals(actions('Import_report')?['status'],'Succeeded'),equals(outputs('Import_report')?['statusCode'],200),equals(outputs('Import_report')?['body']?['status'],'published'),equals(outputs('Import_report')?['body']?['archiveAllowed'],true),equals(outputs('Import_report')?['body']?['sourceMessageId'],items('Each_report')?['id']),not(empty(outputs('Import_report')?['body']?['requestId'])),greaterOrEquals(coalesce(outputs('Import_report')?['body']?['storageRevision'],0),1))",
+                  "@true"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Allow_initial_replay": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "Report_replay_ready",
+                "value": true
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          },
+          "runAfter": {
+            "Attachment_agrees": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          }
+        },
+        "Import_pending": {
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@and(equals(actions('Import_report')?['status'],'Succeeded'),equals(outputs('Import_report')?['statusCode'],202),equals(outputs('Import_report')?['body']?['status'],'publication_pending'),equals(outputs('Import_report')?['body']?['archiveAllowed'],false),equals(outputs('Import_report')?['body']?['sourceMessageId'],items('Each_report')?['id']),not(empty(outputs('Import_report')?['body']?['requestId'])),greaterOrEquals(coalesce(outputs('Import_report')?['body']?['storageRevision'],0),1))",
+                  "@true"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Queued_publication": {
+              "type": "Http",
+              "inputs": {
+                "uri": "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow/api/ascm/publication/queued",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}"
+                },
+                "body": "@json('{}')",
+                "retryPolicy": {
+                  "type": "exponential",
+                  "count": 2,
+                  "interval": "PT5S",
+                  "minimumInterval": "PT5S",
+                  "maximumInterval": "PT30S"
+                }
+              },
+              "limit": {
+                "timeout": "PT2M"
+              },
+              "operationOptions": "DisableAsyncPattern",
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Candidate_ready": {
+              "type": "If",
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@and(equals(outputs('Queued_publication')?['statusCode'],200),equals(body('Queued_publication')?['archiveAllowed'],false),not(empty(body('Queued_publication')?['candidate'])),equals(body('Queued_publication')?['candidate']?['provider'],'sharepoint'),greaterOrEquals(coalesce(body('Queued_publication')?['candidate']?['storageRevision'],0),1),greaterOrEquals(coalesce(body('Queued_publication')?['candidate']?['generation'],0),1),not(empty(body('Queued_publication')?['candidate']?['candidateId'])),equals(body('Queued_publication')?['candidate']?['fileName'],concat('master-r',string(coalesce(body('Queued_publication')?['candidate']?['storageRevision'],0)),'-g',string(coalesce(body('Queued_publication')?['candidate']?['generation'],0)),'-',coalesce(body('Queued_publication')?['candidate']?['candidateId'],''),'.pkg')),equals(body('Queued_publication')?['binaryPath'],concat('/api/ascm/publication/',coalesce(body('Queued_publication')?['candidate']?['candidateId'],''),'/bytes')))",
+                      "@true"
+                    ]
+                  }
+                ]
+              },
+              "actions": {
+                "Download_package": {
+                  "type": "Http",
+                  "inputs": {
+                    "uri": "@concat('https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow',body('Queued_publication')?['binaryPath'])",
+                    "method": "GET",
+                    "headers": {
+                      "Accept": "application/octet-stream",
+                      "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}",
+                      "X-PPC-Package-Generation": "@{string(body('Queued_publication')?['candidate']?['generation'])}"
+                    },
+                    "queries": {},
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "operationOptions": "DisableAsyncPattern",
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Stage_name": {
+                  "type": "Compose",
+                  "inputs": "@concat('PPC-native-stage-',body('Queued_publication')?['candidate']?['candidateId'],'-',guid(),'.pkg')",
+                  "runAfter": {
+                    "Download_package": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs"
+                      ]
+                    }
+                  }
+                },
+                "Create_package_stage": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                      "folderPath": "/Shared Documents/Product Portfolio/PPC",
+                      "name": "@outputs('Stage_name')",
+                      "body": "@body('Download_package')"
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "CreateFile"
+                    },
+                    "retryPolicy": {
+                      "type": "none"
+                    }
+                  },
+                  "runAfter": {
+                    "Stage_name": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "contentTransfer": {
+                      "transferMode": "Chunked"
+                    },
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Promote_package": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                      "parameters/method": "POST",
+                      "parameters/uri": "@concat('_api/web/GetFileByServerRelativeUrl(''/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC/',outputs('Stage_name'),''')/MoveTo(newurl=''/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC/',body('Queued_publication')?['candidate']?['fileName'],''',flags=0)')",
+                      "parameters/headers": {
+                        "Accept": "application/json;odata=verbose"
+                      }
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "none"
+                    }
+                  },
+                  "runAfter": {
+                    "Stage_bytes_match": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Item_before": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com",
+                      "parameters/method": "GET",
+                      "parameters/uri": "@concat('_api/v2.0/drives/',uriComponent(body('Queued_publication')?['candidate']?['driveId']),'/items/',uriComponent(body('Queued_publication')?['candidate']?['folderId']),':/',uriComponent(body('Queued_publication')?['candidate']?['fileName']),'?$select=id,name,size,eTag,parentReference,file')",
+                      "parameters/headers": {
+                        "Accept": "application/json"
+                      }
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Promote_package": [
+                      "SUCCEEDED",
+                      "TIMEDOUT",
+                      "FAILED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Versions_before": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com",
+                      "parameters/method": "GET",
+                      "parameters/uri": "@concat('_api/v2.0/drives/',uriComponent(body('Queued_publication')?['candidate']?['driveId']),'/items/',uriComponent(body('Item_before')?['id']),'/versions')",
+                      "parameters/headers": {
+                        "Accept": "application/json"
+                      }
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Item_before": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Read_actual_package": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                      "path": "@concat('/Shared Documents/Product Portfolio/PPC/',body('Queued_publication')?['candidate']?['fileName'])",
+                      "inferContentType": false
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "GetFileContentByPath"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Versions_before": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Item_after": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com",
+                      "parameters/method": "GET",
+                      "parameters/uri": "@concat('_api/v2.0/drives/',uriComponent(body('Queued_publication')?['candidate']?['driveId']),'/items/',uriComponent(body('Queued_publication')?['candidate']?['folderId']),':/',uriComponent(body('Queued_publication')?['candidate']?['fileName']),'?$select=id,name,size,eTag,parentReference,file')",
+                      "parameters/headers": {
+                        "Accept": "application/json"
+                      }
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Read_actual_package": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Versions_after": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com",
+                      "parameters/method": "GET",
+                      "parameters/uri": "@concat('_api/v2.0/drives/',uriComponent(body('Queued_publication')?['candidate']?['driveId']),'/items/',uriComponent(body('Item_after')?['id']),'/versions')",
+                      "parameters/headers": {
+                        "Accept": "application/json"
+                      }
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Item_after": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Readback_stable": {
+                  "type": "If",
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@and(equals(actions('Read_actual_package')?['status'],'Succeeded'),not(empty(body('Item_before')?['id'])),not(empty(body('Item_before')?['eTag'])),not(equals(body('Item_before')?['file'],null)),not(empty(body('Versions_before')?['value']?[0]?['id'])),equals(body('Item_before')?['parentReference']?['driveId'],body('Queued_publication')?['candidate']?['driveId']),equals(body('Item_before')?['parentReference']?['id'],body('Queued_publication')?['candidate']?['folderId']),equals(body('Item_before')?['name'],body('Queued_publication')?['candidate']?['fileName']),equals(body('Item_before')?['size'],body('Queued_publication')?['candidate']?['bytes']),equals(body('Item_after')?['id'],body('Item_before')?['id']),equals(body('Item_after')?['parentReference']?['driveId'],body('Item_before')?['parentReference']?['driveId']),equals(body('Item_after')?['parentReference']?['id'],body('Item_before')?['parentReference']?['id']),equals(body('Item_after')?['name'],body('Item_before')?['name']),equals(body('Item_after')?['size'],body('Item_before')?['size']),equals(body('Item_after')?['eTag'],body('Item_before')?['eTag']),equals(body('Versions_after')?['value']?[0]?['id'],body('Versions_before')?['value']?[0]?['id']))",
+                          "@true"
+                        ]
+                      }
+                    ]
+                  },
+                  "actions": {
+                    "Confirm_publication": {
+                      "type": "Http",
+                      "inputs": {
+                        "uri": "@concat('https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow/api/ascm/publication/',body('Queued_publication')?['candidate']?['candidateId'],'/confirm')",
+                        "method": "POST",
+                        "headers": {
+                          "Content-Type": "application/octet-stream",
+                          "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}",
+                          "X-PPC-Package-Generation": "@{string(body('Queued_publication')?['candidate']?['generation'])}",
+                          "X-PPC-SP-Drive-Id": "@{body('Item_before')?['parentReference']?['driveId']}",
+                          "X-PPC-SP-Folder-Id": "@{body('Item_before')?['parentReference']?['id']}",
+                          "X-PPC-SP-Item-Id": "@{body('Item_before')?['id']}",
+                          "X-PPC-SP-Version-Id": "@{body('Versions_before')?['value']?[0]?['id']}",
+                          "X-PPC-SP-File-Name": "@{body('Item_before')?['name']}"
+                        },
+                        "body": "@body('Read_actual_package')",
+                        "retryPolicy": {
+                          "type": "exponential",
+                          "count": 2,
+                          "interval": "PT5S",
+                          "minimumInterval": "PT5S",
+                          "maximumInterval": "PT30S"
+                        }
+                      },
+                      "limit": {
+                        "timeout": "PT2M"
+                      },
+                      "operationOptions": "DisableAsyncPattern",
+                      "runtimeConfiguration": {
+                        "secureData": {
+                          "properties": [
+                            "inputs",
+                            "outputs"
+                          ]
+                        }
+                      }
+                    },
+                    "Confirmation_matches": {
+                      "type": "If",
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@and(equals(outputs('Confirm_publication')?['statusCode'],200),or(equals(body('Confirm_publication')?['status'],'published'),equals(body('Confirm_publication')?['status'],'already_published')),equals(body('Confirm_publication')?['archiveAllowed'],false),equals(body('Confirm_publication')?['publication']?['provider'],'sharepoint'),equals(body('Confirm_publication')?['publication']?['kind'],'publication'),equals(body('Confirm_publication')?['publication']?['candidateId'],body('Queued_publication')?['candidate']?['candidateId']),equals(body('Confirm_publication')?['publication']?['generation'],body('Queued_publication')?['candidate']?['generation']),equals(body('Confirm_publication')?['publication']?['sha256'],body('Queued_publication')?['candidate']?['sha256']),equals(body('Confirm_publication')?['publication']?['bytes'],body('Queued_publication')?['candidate']?['bytes']),equals(body('Confirm_publication')?['publication']?['storageRevision'],body('Queued_publication')?['candidate']?['storageRevision']))",
+                              "@true"
+                            ]
+                          }
+                        ]
+                      },
+                      "actions": {
+                        "Allow_publication_replay": {
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "Report_replay_ready",
+                            "value": true
+                          }
+                        }
+                      },
+                      "else": {
+                        "actions": {}
+                      },
+                      "runAfter": {
+                        "Confirm_publication": [
+                          "SUCCEEDED"
+                        ]
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {}
+                  },
+                  "runAfter": {
+                    "Versions_after": [
+                      "SUCCEEDED"
+                    ]
+                  }
+                },
+                "Read_actual_stage": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "dataset": "https://hp.sharepoint.com/teams/PCGamingCategory",
+                      "path": "@concat('/Shared Documents/Product Portfolio/PPC/',outputs('Stage_name'))",
+                      "inferContentType": false
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                      "connection": "shared_sharepointonline",
+                      "operationId": "GetFileContentByPath"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Create_package_stage": [
+                      "SUCCEEDED",
+                      "FAILED",
+                      "TIMEDOUT"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Stage_bytes_match": {
+                  "type": "Compose",
+                  "inputs": "@int(if(and(equals(actions('Read_actual_stage')?['status'],'Succeeded'),equals(actions('Download_package')?['status'],'Succeeded'),not(empty(body('Read_actual_stage')?['$content'])),not(empty(body('Download_package')?['$content'])),equals(body('Read_actual_stage')?['$content'],body('Download_package')?['$content'])),'1','Stage_mismatch'))",
+                  "runAfter": {
+                    "Read_actual_stage": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs"
+                      ]
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {}
+              },
+              "runAfter": {
+                "Queued_publication": [
+                  "SUCCEEDED"
+                ]
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          },
+          "runAfter": {
+            "Initial_published": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          }
+        },
+        "Replay_ready": {
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@and(equals(actions('Reset_report_guard')?['status'],'Succeeded'),equals(variables('Report_replay_ready'),true))",
+                  "@true"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Replay_report": {
+              "type": "Http",
+              "inputs": {
+                "uri": "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow/api/ascm/import",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}"
+                },
+                "body": "@outputs('Report_payload')",
+                "retryPolicy": {
+                  "type": "exponential",
+                  "count": 2,
+                  "interval": "PT5S",
+                  "minimumInterval": "PT5S",
+                  "maximumInterval": "PT30S"
+                }
+              },
+              "limit": {
+                "timeout": "PT2M"
+              },
+              "operationOptions": "DisableAsyncPattern",
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Archive_allowed": {
+              "type": "If",
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@and(equals(outputs('Replay_report')?['statusCode'],200),equals(body('Replay_report')?['status'],'published'),equals(body('Replay_report')?['archiveAllowed'],true),not(empty(outputs('Import_report')?['body']?['requestId'])),equals(body('Replay_report')?['requestId'],outputs('Import_report')?['body']?['requestId']),equals(body('Replay_report')?['sourceMessageId'],items('Each_report')?['id']))",
+                      "@true"
+                    ]
+                  }
+                ]
+              },
+              "actions": {
+                "Resolve_Inbox": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "Uri": "https://graph.microsoft.com/v1.0/me/mailFolders/inbox?$select=id",
+                      "Method": "GET",
+                      "CustomHeader1": "Prefer: IdType=\"ImmutableId\""
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                      "connection": "shared_office365",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Resolve_Archive": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "Uri": "https://graph.microsoft.com/v1.0/me/mailFolders/archive?$select=id,displayName",
+                      "Method": "GET",
+                      "CustomHeader1": "Prefer: IdType=\"ImmutableId\""
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                      "connection": "shared_office365",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Resolve_Inbox": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Read_original_message": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "Uri": "@concat('https://graph.microsoft.com/v1.0/me/messages/',uriComponent(items('Each_report')?['id']),'?$select=id,internetMessageId,parentFolderId')",
+                      "Method": "GET",
+                      "CustomHeader1": "Prefer: IdType=\"ImmutableId\""
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                      "connection": "shared_office365",
+                      "operationId": "HttpRequest"
+                    },
+                    "retryPolicy": {
+                      "type": "exponential",
+                      "count": 2,
+                      "interval": "PT5S",
+                      "minimumInterval": "PT5S",
+                      "maximumInterval": "PT30S"
+                    }
+                  },
+                  "runAfter": {
+                    "Resolve_Archive": [
+                      "SUCCEEDED"
+                    ]
+                  },
+                  "limit": {
+                    "timeout": "PT2M"
+                  },
+                  "runtimeConfiguration": {
+                    "secureData": {
+                      "properties": [
+                        "inputs",
+                        "outputs"
+                      ]
+                    }
+                  }
+                },
+                "Exact_original_in_Inbox": {
+                  "type": "If",
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@and(not(empty(body('Resolve_Inbox')?['id'])),not(empty(body('Resolve_Archive')?['id'])),not(equals(body('Resolve_Inbox')?['id'],body('Resolve_Archive')?['id'])),not(empty(items('Each_report')?['internetMessageId'])),equals(body('Read_original_message')?['id'],items('Each_report')?['id']),equals(body('Read_original_message')?['internetMessageId'],items('Each_report')?['internetMessageId']),equals(body('Read_original_message')?['parentFolderId'],body('Resolve_Inbox')?['id']))",
+                          "@true"
+                        ]
+                      }
+                    ]
+                  },
+                  "actions": {
+                    "Move_exact_report": {
+                      "type": "OpenApiConnection",
+                      "inputs": {
+                        "parameters": {
+                          "Uri": "@concat('https://graph.microsoft.com/v1.0/me/messages/',uriComponent(items('Each_report')?['id']),'/move')",
+                          "Method": "POST",
+                          "CustomHeader1": "Prefer: IdType=\"ImmutableId\"",
+                          "Body": "@string(setProperty(json('{}'),'destinationId',body('Resolve_Archive')?['id']))",
+                          "ContentType": "application/json"
+                        },
+                        "host": {
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                          "connection": "shared_office365",
+                          "operationId": "HttpRequest"
+                        },
+                        "retryPolicy": {
+                          "type": "none"
+                        }
+                      },
+                      "limit": {
+                        "timeout": "PT2M"
+                      },
+                      "runtimeConfiguration": {
+                        "secureData": {
+                          "properties": [
+                            "inputs",
+                            "outputs"
+                          ]
+                        }
+                      }
+                    },
+                    "Read_moved_message": {
+                      "type": "OpenApiConnection",
+                      "inputs": {
+                        "parameters": {
+                          "Uri": "@concat('https://graph.microsoft.com/v1.0/me/messages/',uriComponent(items('Each_report')?['id']),'?$select=id,internetMessageId,parentFolderId')",
+                          "Method": "GET",
+                          "CustomHeader1": "Prefer: IdType=\"ImmutableId\""
+                        },
+                        "host": {
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                          "connection": "shared_office365",
+                          "operationId": "HttpRequest"
+                        },
+                        "retryPolicy": {
+                          "type": "exponential",
+                          "count": 2,
+                          "interval": "PT5S",
+                          "minimumInterval": "PT5S",
+                          "maximumInterval": "PT30S"
+                        }
+                      },
+                      "runAfter": {
+                        "Move_exact_report": [
+                          "SUCCEEDED",
+                          "FAILED",
+                          "TIMEDOUT"
+                        ]
+                      },
+                      "limit": {
+                        "timeout": "PT2M"
+                      },
+                      "runtimeConfiguration": {
+                        "secureData": {
+                          "properties": [
+                            "inputs",
+                            "outputs"
+                          ]
+                        }
+                      }
+                    },
+                    "Archive_verified": {
+                      "type": "If",
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@and(equals(outputs('Replay_report')?['statusCode'],200),equals(body('Replay_report')?['status'],'published'),equals(body('Replay_report')?['archiveAllowed'],true),not(empty(outputs('Import_report')?['body']?['requestId'])),equals(body('Replay_report')?['requestId'],outputs('Import_report')?['body']?['requestId']),equals(body('Replay_report')?['sourceMessageId'],items('Each_report')?['id']),not(empty(body('Resolve_Inbox')?['id'])),not(empty(body('Resolve_Archive')?['id'])),not(equals(body('Resolve_Inbox')?['id'],body('Resolve_Archive')?['id'])),not(empty(items('Each_report')?['internetMessageId'])),equals(body('Read_original_message')?['id'],items('Each_report')?['id']),equals(body('Read_original_message')?['internetMessageId'],items('Each_report')?['internetMessageId']),equals(body('Read_original_message')?['parentFolderId'],body('Resolve_Inbox')?['id']),contains(createArray('Succeeded','Failed','TimedOut'),actions('Move_exact_report')?['status']),equals(actions('Read_moved_message')?['status'],'Succeeded'),equals(body('Read_moved_message')?['id'],items('Each_report')?['id']),equals(body('Read_moved_message')?['internetMessageId'],items('Each_report')?['internetMessageId']),equals(body('Read_moved_message')?['parentFolderId'],body('Resolve_Archive')?['id']))",
+                              "@true"
+                            ]
+                          }
+                        ]
+                      },
+                      "actions": {
+                        "ASCM_cycle_complete": {
+                          "type": "Compose",
+                          "inputs": "Exact ASCM email archived after confirmed normal publication."
+                        }
+                      },
+                      "else": {
+                        "actions": {}
+                      },
+                      "runAfter": {
+                        "Read_moved_message": [
+                          "SUCCEEDED"
+                        ]
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {}
+                  },
+                  "runAfter": {
+                    "Read_original_message": [
+                      "SUCCEEDED"
+                    ]
+                  }
+                }
+              },
+              "else": {
+                "actions": {}
+              },
+              "runAfter": {
+                "Replay_report": [
+                  "SUCCEEDED"
+                ]
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          },
+          "runAfter": {
+            "Import_pending": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          }
+        },
+        "Outlook_connection_state": {
+          "type": "Compose",
+          "inputs": "@coalesce(\r\n  if(equals(actions('Read_moved_message')?['status'],'Succeeded'),'available',if(and(equals(actions('Read_moved_message')?['status'],'Failed'),not(equals(string(coalesce(actions('Read_moved_message')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Read_moved_message')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_moved_message')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_moved_message')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Move_exact_report')?['status'],'Succeeded'),'available',if(and(equals(actions('Move_exact_report')?['status'],'Failed'),not(equals(string(coalesce(actions('Move_exact_report')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Move_exact_report')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Move_exact_report')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Move_exact_report')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Read_original_message')?['status'],'Succeeded'),'available',if(and(equals(actions('Read_original_message')?['status'],'Failed'),not(equals(string(coalesce(actions('Read_original_message')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Read_original_message')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_original_message')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_original_message')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Resolve_Archive')?['status'],'Succeeded'),'available',if(and(equals(actions('Resolve_Archive')?['status'],'Failed'),not(equals(string(coalesce(actions('Resolve_Archive')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Resolve_Archive')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Resolve_Archive')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Resolve_Archive')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Resolve_Inbox')?['status'],'Succeeded'),'available',if(and(equals(actions('Resolve_Inbox')?['status'],'Failed'),not(equals(string(coalesce(actions('Resolve_Inbox')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Resolve_Inbox')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Resolve_Inbox')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Resolve_Inbox')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Get_report_attachment')?['status'],'Succeeded'),'available',if(and(equals(actions('Get_report_attachment')?['status'],'Failed'),not(equals(string(coalesce(actions('Get_report_attachment')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Get_report_attachment')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Get_report_attachment')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Get_report_attachment')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(and(equals(actions('List_report_attachments')?['status'],'Failed'),not(equals(string(coalesce(actions('List_report_attachments')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('List_report_attachments')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('List_report_attachments')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('List_report_attachments')?['error']?['code'],'')))),'reconnect_required',null),\r\n  ''\r\n)",
+          "runAfter": {
+            "Replay_ready": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          },
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": [
+                "inputs"
+              ]
+            }
+          }
+        },
+        "Outlook_transition_present": {
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@not(empty(outputs('Outlook_connection_state')))",
+                  "@true"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Report_Outlook_connection": {
+              "type": "Http",
+              "inputs": {
+                "uri": "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow/api/ascm/connection",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}"
+                },
+                "body": "@setProperty(setProperty(json('{}'),'service','outlook'),'state',outputs('Outlook_connection_state'))",
+                "retryPolicy": {
+                  "type": "none"
+                }
+              },
+              "limit": {
+                "timeout": "PT2M"
+              },
+              "operationOptions": "DisableAsyncPattern",
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          },
+          "runAfter": {
+            "Outlook_connection_state": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          }
+        },
+        "SharePoint_connection_state": {
+          "type": "Compose",
+          "inputs": "@coalesce(\r\n  if(equals(actions('Versions_after')?['status'],'Succeeded'),'available',if(and(equals(actions('Versions_after')?['status'],'Failed'),not(equals(string(coalesce(actions('Versions_after')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Versions_after')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_after')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_after')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Item_after')?['status'],'Succeeded'),'available',if(and(equals(actions('Item_after')?['status'],'Failed'),not(equals(string(coalesce(actions('Item_after')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Item_after')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_after')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_after')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Read_actual_package')?['status'],'Succeeded'),'available',if(and(equals(actions('Read_actual_package')?['status'],'Failed'),not(equals(string(coalesce(actions('Read_actual_package')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Read_actual_package')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_package')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_package')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Versions_before')?['status'],'Succeeded'),'available',if(and(equals(actions('Versions_before')?['status'],'Failed'),not(equals(string(coalesce(actions('Versions_before')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Versions_before')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_before')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Versions_before')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Item_before')?['status'],'Succeeded'),'available',if(and(equals(actions('Item_before')?['status'],'Failed'),not(equals(string(coalesce(actions('Item_before')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Item_before')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_before')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Item_before')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Promote_package')?['status'],'Succeeded'),'available',if(and(equals(actions('Promote_package')?['status'],'Failed'),not(equals(string(coalesce(actions('Promote_package')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Promote_package')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Promote_package')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Promote_package')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Read_actual_stage')?['status'],'Succeeded'),'available',if(and(equals(actions('Read_actual_stage')?['status'],'Failed'),not(equals(string(coalesce(actions('Read_actual_stage')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Read_actual_stage')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_stage')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Read_actual_stage')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  if(equals(actions('Create_package_stage')?['status'],'Succeeded'),'available',if(and(equals(actions('Create_package_stage')?['status'],'Failed'),not(equals(string(coalesce(actions('Create_package_stage')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('Create_package_stage')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Create_package_stage')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('Create_package_stage')?['error']?['code'],'')))),'reconnect_required',null)),\r\n  ''\r\n)",
+          "runAfter": {
+            "Outlook_transition_present": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          },
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": [
+                "inputs"
+              ]
+            }
+          }
+        },
+        "SharePoint_transition_present": {
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@not(empty(outputs('SharePoint_connection_state')))",
+                  "@true"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Report_SharePoint_connection": {
+              "type": "Http",
+              "inputs": {
+                "uri": "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow/api/ascm/connection",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}"
+                },
+                "body": "@setProperty(setProperty(json('{}'),'service','sharepoint'),'state',outputs('SharePoint_connection_state'))",
+                "retryPolicy": {
+                  "type": "none"
+                }
+              },
+              "limit": {
+                "timeout": "PT2M"
+              },
+              "operationOptions": "DisableAsyncPattern",
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs",
+                    "outputs"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {}
+          },
+          "runAfter": {
+            "SharePoint_connection_state": [
+              "SUCCEEDED",
+              "TIMEDOUT",
+              "SKIPPED",
+              "FAILED"
+            ]
+          }
+        }
+      },
+      "runAfter": {
+        "List_monthly_releases": [
+          "SUCCEEDED"
+        ]
+      }
+    },
+    "Inbox_connection_failed": {
+      "type": "If",
+      "expression": {
+        "and": [
+          {
+            "equals": [
+              "@and(equals(actions('List_monthly_releases')?['status'],'Failed'),not(equals(string(coalesce(actions('List_monthly_releases')?['outputs']?['statusCode'],0)),'403')),or(equals(string(coalesce(actions('List_monthly_releases')?['outputs']?['statusCode'],0)),'401'),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('List_monthly_releases')?['code'],'')),contains(createArray('ConnectionAuthorizationFailed','InvalidAuthenticationToken'),coalesce(actions('List_monthly_releases')?['error']?['code'],''))))",
+              "@true"
+            ]
+          }
+        ]
+      },
+      "actions": {
+        "Report_Inbox_connection_lost": {
+          "type": "Http",
+          "inputs": {
+            "uri": "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-ascm-flow/api/ascm/connection",
+            "method": "POST",
+            "headers": {
+              "Content-Type": "application/json",
+              "X-PPC-ASCM-Flow-Secret": "@{outputs('Flow_worker_credential')}"
+            },
+            "body": "@json('{\"service\":\"outlook\",\"state\":\"reconnect_required\"}')",
+            "retryPolicy": {
+              "type": "none"
+            }
+          },
+          "limit": {
+            "timeout": "PT2M"
+          },
+          "operationOptions": "DisableAsyncPattern",
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": [
+                "inputs",
+                "outputs"
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "actions": {}
+      },
+      "runAfter": {
+        "Each_report": [
+          "SUCCEEDED",
+          "TIMEDOUT",
+          "SKIPPED",
+          "FAILED"
+        ]
+      }
+    }
+  }
+}

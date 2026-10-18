@@ -149,20 +149,29 @@ function safePublication(value) {
   };
 }
 
-function safeAscmSupervisor(value, currentTime) {
+function safeAscmSupervisor(value, currentTime, lastUpdatedAt) {
   if (!record(value) || value.enabled !== true || typeof value.working !== 'boolean'
     || !(value.productCount === null || Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500)) return null;
+  const nowAt = Date.parse(currentTime);
+  let lastUpdate = {};
+  if (typeof lastUpdatedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(lastUpdatedAt)) {
+    const updatedAt = Date.parse(lastUpdatedAt);
+    const canonical = lastUpdatedAt.includes('.') ? lastUpdatedAt : lastUpdatedAt.replace(/Z$/, '.000Z');
+    if (Number.isFinite(updatedAt) && Number.isFinite(nowAt) && updatedAt <= nowAt && new Date(updatedAt).toISOString() === canonical) {
+      lastUpdate = { lastUpdatedAt: canonical };
+    }
+  }
   const services = ['outlook', 'sharepoint'];
   const provided = value.reconnectRequired;
   const reconnectRequired = Array.isArray(provided) && provided.length <= 2 && provided.every(service => services.includes(service))
     && new Set(provided).size === provided.length ? services.filter(service => provided.includes(service)) : [];
   if (!value.working) return value.productCount === null && value.expiresAt === null
-    ? { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired } : null;
+    ? { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...lastUpdate } : null;
   if (typeof value.expiresAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.expiresAt)) return null;
-  const expires = Date.parse(value.expiresAt), nowAt = Date.parse(currentTime);
+  const expires = Date.parse(value.expiresAt);
   if (!Number.isFinite(expires) || !Number.isFinite(nowAt) || new Date(expires).toISOString() !== value.expiresAt || expires > nowAt + 121000) return null;
-  if (expires <= nowAt) return { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired };
-  return { enabled: true, working: true, productCount: value.productCount, expiresAt: value.expiresAt, reconnectRequired };
+  if (expires <= nowAt) return { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...lastUpdate };
+  return { enabled: true, working: true, productCount: value.productCount, expiresAt: value.expiresAt, reconnectRequired, ...lastUpdate };
 }
 
 function requireState(state) {
@@ -391,7 +400,8 @@ export function createMasterGateway({ env = {}, rpc, fetchImpl = globalThis.fetc
       return { ...entry, categoryId: currentCategoryId, categoryName: categories.get(currentCategoryId) || '', productName: product?.productName || '' };
     });
     const { ascmSupervisor: rawSupervisor, ...presenceResult } = result;
-    const ascmSupervisor = env.PPC_ASCM_STATUS_ENABLED === 'true' ? safeAscmSupervisor(rawSupervisor, now()) : null;
+    const ascmSupervisor = env.PPC_ASCM_STATUS_ENABLED === 'true'
+      ? safeAscmSupervisor(rawSupervisor, now(), record(state.manifest.ascmSnapshot) ? state.manifest.ascmSnapshot.importedAt : undefined) : null;
     return { ...presenceResult, users: sessions, sessions, ...(ascmSupervisor ? { ascmSupervisor } : {}) };
   }
 

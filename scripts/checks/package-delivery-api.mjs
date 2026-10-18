@@ -18,7 +18,8 @@ const stream = value => new ReadableStream({ start(c) { for (let i = 0; i < valu
 function harness({ config = {}, current = null, cleanup = null, uploadState = 'stored', data = bytes, dbHook } = {}) {
   const calls = [], objects = [];
   const state = { phase: 'sharepoint', current, queued: candidate, cleanup, publication: current ? publication : null,
-    upload: { candidateId: candidate.candidateId, generation: 2, attemptId: 'attempt', state: uploadState }, cleanupUpload: cleanup ? { state: uploadState } : null,
+    upload: { candidateId: candidate.candidateId, generation: 2, attemptId: 'attempt', state: uploadState },
+    cleanupUpload: cleanup ? { candidateId: cleanup.candidateId, generation: cleanup.generation, attemptId: 'attempt', state: uploadState } : null,
     policy: { provider: 'sharepoint', host: 'hp.sharepoint.com', driveId: 'drive', folderId: 'folder' } };
   const database = async (op, payload) => {
     calls.push([op, payload]); const custom = await dbHook?.(op, payload); if (custom) return custom;
@@ -39,6 +40,44 @@ function harness({ config = {}, current = null, cleanup = null, uploadState = 's
   return { core, handler, calls, objects, state, storage };
 }
 const control = (op, body = {}, secret = env.PPC_PUBLISHER_SECRET, origin) => new Request('https://service.invalid/api/package/' + op, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PPC-Publisher-Secret': secret, ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify(body) });
+for (const mount of ['', '/ppc-package', '/functions/v1/ppc-package']) {
+  test(`package routes accept the exact ${mount || 'direct'} mount without changing auth, methods or binary content`, async () => {
+    const url = path => 'https://service.invalid' + mount + '/api/package/' + path;
+    const headers = { 'Content-Type': 'application/json', 'X-PPC-Publisher-Secret': env.PPC_PUBLISHER_SECRET };
+    const current = harness();
+    const response = await current.handler(new Request(url('current'), { method: 'POST', headers, body: '{}' }));
+    assert.equal(response.status, 200); assert.equal((await response.json()).phase, 'sharepoint');
+    assert.deepEqual(current.calls, [['current', {}]]); assert.deepEqual(current.objects, []);
+    for (const [method, secret, status] of [['GET', env.PPC_PUBLISHER_SECRET, 405], ['POST', 'bad', 401]]) {
+      const rejected = harness();
+      const request = new Request(url('current'), { method, headers: { ...headers, 'X-PPC-Publisher-Secret': secret }, ...(method === 'POST' ? { body: '{}' } : {}) });
+      assert.equal((await rejected.handler(request)).status, status); assert.deepEqual(rejected.calls, []); assert.deepEqual(rejected.objects, []);
+    }
+    const upload = harness();
+    const uploaded = await upload.handler(new Request(url(`candidates/${candidate.candidateId}/bytes`), { method: 'PUT', headers: {
+      'Content-Type': 'application/octet-stream', 'Content-Length': String(bytes.length), 'X-PPC-Candidate-Generation': '2', 'X-PPC-Publisher-Secret': env.PPC_PUBLISHER_SECRET }, body: bytes }));
+    assert.equal(uploaded.status, 200); assert.equal(upload.objects.filter(value => value[0] === 'write').length, 1);
+    const read = harness({ current: { ...candidate, status: 'published' } });
+    const reader = origin => new Request(url('latest'), { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ key }) });
+    assert.equal((await read.handler(reader('https://attacker.invalid'))).status, 403); assert.deepEqual(read.objects, []);
+    const opened = await read.handler(reader('https://monocraft.github.io'));
+    assert.equal(opened.status, 200); assert.equal(opened.headers.get('Access-Control-Allow-Origin'), 'https://monocraft.github.io');
+    assert.deepEqual(Buffer.from(await opened.arrayBuffer()), bytes);
+  });
+}
+
+test('package namespace lookalikes, sibling mounts and doubled prefixes never reach persistence or Storage', async () => {
+  for (const path of ['/other/api/package/current', '/ppc-package-extra/api/package/current', '/functions/v1/ppc-package-extra/api/package/current',
+    '/ppc-ascm-flow/api/package/current', '/functions/v1/ppc-ascm-flow/api/package/current', '/ppc-package/ppc-package/api/package/current',
+    '/functions/v1/ppc-package/ppc-package/api/package/current', '/ppc-package/functions/v1/ppc-package/api/package/current',
+    '/%70pc-package/api/package/current', '/ppc-package%2fapi/package/current']) {
+    const h = harness(); const request = new Request('https://service.invalid' + path, { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-PPC-Publisher-Secret': env.PPC_PUBLISHER_SECRET }, body: '{}' });
+    Object.defineProperty(request, 'body', { get() { throw Error('Rejected namespace must not read the body'); } });
+    assert.equal((await h.handler(request)).status, 404, path); assert.deepEqual(h.calls, []); assert.deepEqual(h.objects, []);
+  }
+});
+
 test('unauthorized_no_storage and default-off refuse before persistence or object access', async () => {
   for (const config of [{}, { PPC_PACKAGE_DELIVERY_ENABLED: '' }]) {
     const h = harness({ config }); const response = await h.handler(control('current', {}, 'bad'));
@@ -108,12 +147,69 @@ test('historical seed and normal lost-confirm retries still reach immutable rece
 });
 test('bounded_cleanup never deletes unsettled writes or releases slot after failure; public state is sanitized', async () => {
   const cleanup = { ...candidate, status: 'cleanup' };
-  const held = harness({ cleanup, uploadState: 'uncertain' }); await held.core.publisher('current', {}); assert(!held.objects.some(c => c[0] === 'remove')); assert(!held.calls.some(c => c[0] === 'cleanup'));
+  const held = harness({ cleanup, uploadState: 'uncertain', data: bytes.subarray(0, -1) }); await held.core.publisher('current', {}); assert(!held.objects.some(c => c[0] === 'remove')); assert(!held.calls.some(c => c[0] === 'cleanup'));
   const settled = harness({ cleanup }); await settled.core.publisher('current', {}); assert.equal(settled.objects.filter(c => c[0] === 'remove').length, 1); assert.equal(settled.calls.filter(c => c[0] === 'cleanup').length, 1);
   const failed = harness({ cleanup }); failed.storage.removeObject = async () => { throw Error('isolated delete failure'); };
   await failed.core.publisher('current', {}); assert(!failed.calls.some(c => c[0] === 'cleanup'), 'failed delete cannot release the recorded slot');
   const h = harness({ current: { ...candidate, status: 'published' } }); assert.deepEqual(await h.core.publicState(), publication);
   assert(!JSON.stringify(await h.core.publicState()).includes('objectKey'));
+});
+
+test('publisher current exposes only the allowlisted queued upload state and no attempt authority', async () => {
+  for (const uploadState of ['none', 'uploading', 'stored', 'absent', 'uncertain', 'unexpected', null]) {
+    const h = harness({ uploadState }); const result = await h.core.publisher('current', {});
+    assert.equal(result.queuedUploadState, ['none', 'uploading', 'stored', 'absent', 'uncertain'].includes(uploadState) ? uploadState : null);
+    assert.equal(Object.hasOwn(result, 'upload'), false); assert.equal(Object.hasOwn(result, 'cleanupUpload'), false);
+    assert(!JSON.stringify(result).includes('attempt'));
+  }
+  const h = harness(); h.state.queued = null;
+  assert.equal((await h.core.publisher('current', {})).queuedUploadState, null);
+  const mismatched = harness(); mismatched.state.upload.candidateId = '22222222-2222-4222-8222-222222222222';
+  assert.equal((await mismatched.core.publisher('current', {})).queuedUploadState, null);
+});
+
+test('expired cleanup positively verifies complete ciphertext then settles the exact candidate generation and attempt before deletion', async () => {
+  for (const uploadState of ['uploading', 'uncertain']) {
+    const cleanup = { ...candidate, status: 'cleanup', expiresAt: '2026-10-17T00:59:00.000Z' };
+    const h = harness({ cleanup, uploadState }); h.state.queued = null;
+    await h.core.publisher('current', {});
+    assert.deepEqual(h.objects.map(call => call[0]), ['read', 'remove']);
+    assert.deepEqual(h.calls.find(call => call[0] === 'upload_result')?.[1], {
+      candidateId: candidate.candidateId, generation: 2, attemptId: 'attempt', outcome: 'stored',
+    });
+    assert.deepEqual(h.calls.at(-1), ['cleanup', { candidateId: candidate.candidateId, generation: 2, absent: true }]);
+  }
+});
+
+test('expired cleanup retains missing partial oversized bad-envelope wrong-digest and stale-attempt objects', async () => {
+  const cleanup = { ...candidate, status: 'cleanup' };
+  for (const data of [null, bytes.subarray(0, -1), Buffer.concat([bytes, Buffer.from([1])]), Buffer.alloc(bytes.length), Buffer.concat([bytes.subarray(0, -1), Buffer.from([8])])]) {
+    const h = harness({ cleanup, uploadState: 'uncertain', data });
+    if (data === null) h.storage.openObject = async () => new Response(null, { status: 404 });
+    await h.core.publisher('current', {});
+    assert(!h.calls.some(call => call[0] === 'upload_result')); assert(!h.calls.some(call => call[0] === 'cleanup'));
+    assert(!h.objects.some(call => call[0] === 'remove'));
+  }
+  for (const patch of [{ candidateId: '22222222-2222-4222-8222-222222222222' }, { generation: 3 }, { attemptId: null }]) {
+    const h = harness({ cleanup, uploadState: 'uncertain' }); Object.assign(h.state.cleanupUpload, patch);
+    await h.core.publisher('current', {}); assert.deepEqual(h.objects, []); assert(!h.calls.some(call => call[0] === 'upload_result'));
+  }
+  const stale = harness({ cleanup, uploadState: 'uncertain', dbHook: op => op === 'upload_result' ? { status: 'stale' } : null });
+  await stale.core.publisher('current', {}); assert.equal(stale.objects[0]?.[0], 'read');
+  assert(!stale.objects.some(call => call[0] === 'remove')); assert(!stale.calls.some(call => call[0] === 'cleanup'));
+});
+
+test('lost cleanup acknowledgement replays only the exact settled object and never repeats uncertain settlement after deletion', async () => {
+  const cleanup = { ...candidate, status: 'cleanup' }; let firstAck = true;
+  const h = harness({ cleanup, uploadState: 'uncertain', dbHook: (op, payload) => {
+    if (op === 'upload_result') h.state.cleanupUpload.state = payload.outcome;
+    if (op === 'cleanup' && firstAck) { firstAck = false; throw Error('lost acknowledgement before commit'); }
+  } });
+  await h.core.publisher('current', {}); await h.core.publisher('current', {});
+  assert.deepEqual(h.objects.map(call => call[0]), ['read', 'remove', 'remove']);
+  assert.equal(h.calls.filter(call => call[0] === 'upload_result').length, 1);
+  assert.equal(h.calls.filter(call => call[0] === 'cleanup').length, 2);
+  assert(h.objects.every(call => call[1].candidateId === candidate.candidateId));
 });
 test('private export retains backend accepted-manifest digest while public snapshot discloses only sanitized identity', async () => {
   const acceptedManifestSha256 = 'b'.repeat(64);

@@ -1,6 +1,12 @@
 import "./shared/master-model.js";
 import "./shared/ascm-import.js";
 
+export const ASCM_REVIEW_REASONS = Object.freeze([
+  "AMBIGUOUS_MATCH", "CATEGORY_RELOCATION", "DATE_POLICY_REQUIRED", "DUPLICATE_MATCH",
+  "INCOMPATIBLE_MAPPING", "INCOMPLETE_NEW_PRODUCT", "MALFORMED_REPORT", "MASTER_CONFLICT",
+  "PRODUCT_ID_COLLISION", "PROTECTED_DATE", "STALE_REPORT", "TOO_MANY_GROUPS",
+]);
+
 export class AscmReviewError extends Error {
   constructor(code, message, details = {}) {
     super(message);

@@ -39,10 +39,26 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
     return current;
   }
   async function cleanup(state) {
-    // A lease timeout or missing read never proves a writer has settled.
-    if (!state?.cleanup || !['none', 'stored', 'absent'].includes(state.cleanupUpload?.state)) return;
+    if (!state?.cleanup) return;
     const previous = candidate(state.cleanup);
     try {
+      const upload = state.cleanupUpload;
+      if (!sameId(upload, previous)) return;
+      if (['uploading', 'uncertain'].includes(upload.state)) {
+        // An expired lease or 404 cannot prove absence. Only a complete exact
+        // create-only object can settle the still-recorded candidate/attempt.
+        if (!safeText(upload.attemptId)) return;
+        const signal = AbortSignal.timeout(120_000);
+        const opened = await objectStore().openObject(previous, { signal });
+        const declared = opened.headers.get('content-length');
+        if (!opened.ok || !opened.body || declared !== null && declared !== String(previous.bytes)) {
+          await opened.body?.cancel().catch(() => {}); return;
+        }
+        await verifyCiphertext(opened.body, previous, { signal });
+        const settled = await databaseCall('upload_result', { candidateId: previous.candidateId, generation: previous.generation,
+          attemptId: upload.attemptId, outcome: 'stored' });
+        if (settled?.status !== 'stored') return;
+      } else if (!['none', 'stored', 'absent'].includes(upload.state)) return;
       const removed = await objectStore().removeObject(previous);
       if (removed?.absent === true) await databaseCall('cleanup', { candidateId: previous.candidateId, generation: previous.generation, absent: true });
     } catch { /* Keep the recorded slot; the next real operation can retry. */ }
@@ -57,6 +73,7 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
       if (!strict(payload, [])) throw fail(400, 'INVALID_REQUEST');
       const state = await read(); policy(state); await cleanup(state);
       return { phase: state.phase, current: state.current, queued: state.queued,
+        queuedUploadState: state.queued && sameId(state.upload, state.queued) && ['none', 'uploading', 'stored', 'absent', 'uncertain'].includes(state.upload.state) ? state.upload.state : null,
         ...(state.current ? { downloadUrl: await objectStore().signDownload(matchingCurrent(state)) } : {}) };
     }
     if (operation === 'reserve' || operation === 'seed') {
@@ -124,6 +141,27 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
       sha256: value.sha256, bytes: value.bytes, expiresAt: value.expiresAt, fileName: filename(value), provider: 'sharepoint', driveId: destination.driveId, folderId: destination.folderId },
     downloadUrl: await objectStore().signDownload(value) };
   }
+  async function getQueuedPublicationMetadata() {
+    requireEnabled(); const state = await read(); const destination = policy(state);
+    if (!state.queued || state.queued.status !== 'ready' || Date.parse(state.queued.expiresAt) <= Date.parse(now())) return { phase: state.phase, candidate: null };
+    const value = candidate(state.queued);
+    return { phase: state.phase, candidate: { candidateId: value.candidateId, generation: value.generation, storageRevision: value.storageRevision,
+      sha256: value.sha256, bytes: value.bytes, expiresAt: value.expiresAt, fileName: filename(value), provider: 'sharepoint', driveId: destination.driveId, folderId: destination.folderId } };
+  }
+  async function openQueuedPublication(input, { signal } = {}) {
+    requireEnabled(); candidateInput(input);
+    const state = await read(); policy(state);
+    const value = candidate(state.queued);
+    if (!sameId(value, input) || value.status !== 'ready' || Date.parse(value.expiresAt) <= Date.parse(now())) throw fail(409, 'PACKAGE_STALE');
+    const bounded = signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
+    const opened = await objectStore().openObject(value, { signal: bounded });
+    const declared = opened.headers.get('content-length');
+    if (!opened.ok || !opened.body || declared !== null && declared !== String(value.bytes)) { await opened.body?.cancel().catch(() => {}); throw fail(); }
+    return new Response(verifiedCiphertextStream(opened.body, value, { signal: bounded }), { headers: {
+      'Content-Type': 'application/octet-stream', 'Content-Length': String(value.bytes), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+      'X-PPC-Package-SHA256': value.sha256, 'X-PPC-Package-Generation': String(value.generation), 'X-PPC-Package-Candidate-Id': value.candidateId,
+    } });
+  }
   async function confirmPublication(input) {
     requireEnabled();
     if (!strict(input, ['candidateId', 'generation', 'item', 'verified'])) throw fail(400, 'INVALID_REQUEST');
@@ -172,7 +210,7 @@ export function createPackageDelivery({ env = {}, database, storage, now = () =>
     } });
   }
   async function publicState() { requireEnabled(); const state = await read(); matchingCurrent(state); return identity(state.publication); }
-  return Object.freeze({ enabled, publisher, upload, getQueuedPublication, confirmPublication, reader, publicState });
+  return Object.freeze({ enabled, publisher, upload, getQueuedPublication, getQueuedPublicationMetadata, openQueuedPublication, confirmPublication, reader, publicState });
 }
 
 export async function boundedJson(request, maximum = 32 * 1024) {

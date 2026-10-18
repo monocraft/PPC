@@ -7,6 +7,7 @@ import '../public/js/master-model.js';
 import {projectOwnerImages} from './owner-image-layer.mjs';
 import {createGitPackageWriter} from './git-package-writer.mjs';
 import { createPackageDeliveryClient, PackageDeliveryClientError } from './package-delivery-client.mjs';
+import { validateCandidate } from '../supabase/functions/ppc-master/package-delivery-contract.mjs';
 
 const codec = globalThis.PortfolioPackage;
 const model = globalThis.PortfolioMasterModel;
@@ -14,6 +15,7 @@ const PACKAGE_PATH = 'public/data/master_ppc.pkg';
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
 const SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const TRANSIENT_STATUS = new Set([408, 429, 502, 503, 504]);
 const SEED_URL = 'https://monocraft.github.io/PPC/data/master_ppc.pkg';
 const SEED_SHA256 = 'd1af8e0e7fd1782a2b52433a38b62db227cc42a999179fb3ddd7d7d2bee1b7e2';
 const SEED_BYTES = 45_439_227;
@@ -35,7 +37,12 @@ export class PublisherError extends Error {
     super(message); this.code = code;
   }
 }
-const failure = code => new PublisherError(code);
+const SAFE_STAGES = new Set(['current', 'reserve', 'seed', 'upload', 'finalize', 'export', 'archive', 'github-read', 'deploy', 'bootstrap', 'ack', 'failure', 'request']);
+const failure = (code, stage) => {
+  const error = new PublisherError(code);
+  if (SAFE_STAGES.has(stage)) error.stage = stage;
+  return error;
+};
 
 export function normalizePublisherEndpoint(value) {
   let url;
@@ -47,7 +54,9 @@ export function normalizePublisherEndpoint(value) {
 
 async function readBytes(response, maximum) {
   const declared = response.headers.get('content-length');
-  if (declared && (!/^\d+$/.test(declared) || Number(declared) > maximum)) throw failure('RESPONSE_TOO_LARGE');
+  const encoding = response.headers.get('content-encoding');
+  // Fetch exposes decoded bytes; an encoded Content-Length measures wire bytes.
+  if (declared && (!/^\d+$/.test(declared) || (!encoding || encoding.trim().toLowerCase() === 'identity') && Number(declared) > maximum)) throw failure('RESPONSE_TOO_LARGE');
   const reader = response.body?.getReader();
   if (!reader) {
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -168,7 +177,7 @@ export async function stageVerifiedSeedArchive({ target, source, delivery, packa
         const recovered = await delivery.finalize(reserved.candidate);
         if (recovered?.status === 'ready') return { status: 'pending', revision: publishedRevision, candidateId: reserved.candidate.candidateId };
       } catch {}
-      throw failure('PACKAGE_UPLOAD_UNSETTLED');
+      throw failure('PACKAGE_UPLOAD_UNSETTLED', 'upload');
     }
     const ready = await delivery.finalize(reserved.candidate);
     if (ready?.status !== 'ready') throw failure('SEED_FINALIZE_FAILED');
@@ -213,30 +222,64 @@ export function createSupabasePublisher(options = {}) {
   const repository = `https://api.github.com/repos/${owner}/${repo}`;
   const timeoutMs = options.timeoutMs ?? 120000;
   const maxAttempts = options.maxAttempts ?? 4;
-  if (typeof fetchImpl !== 'function' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) throw failure('INVALID_CONFIGURATION');
+  const wait = options.wait || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const now = options.now || Date.now;
+  if (typeof fetchImpl !== 'function' || typeof wait !== 'function' || typeof now !== 'function' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) throw failure('INVALID_CONFIGURATION');
   const writePackage = publicationMode === 'github' ? (options.writePackage || createGitPackageWriter({owner, repo, branch, githubToken, timeoutMs})) : null;
   if (publicationMode === 'github' && typeof writePackage !== 'function') throw failure('INVALID_CONFIGURATION');
   const delivery = publicationMode === 'sharepoint' ? (options.deliveryClient || createPackageDeliveryClient({
-    endpoint: endpoint.replace('/ppc-master/api/master', '/ppc-package/api/package'), publisherSecret, fetchImpl, timeoutMs })) : null;
+    endpoint: endpoint.replace('/ppc-master/api/master', '/ppc-package/api/package'), publisherSecret, fetchImpl, timeoutMs, wait, now })) : null;
   if (delivery && ['readCurrent', 'reserve', 'upload', 'finalize', 'seed'].some(name => typeof delivery[name] !== 'function')) throw failure('INVALID_CONFIGURATION');
 
-  async function call(url, request, maximum = MAX_JSON_BYTES) {
+  async function callOnce(url, request, maximum) {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
     try {
-      const response = await fetchImpl(url, { credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer', ...request, signal: controller.signal });
+      response = await fetchImpl(url, { credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer', ...request, signal: controller.signal });
       const bytes = await readBytes(response, maximum);
       return { response, bytes };
     } catch (error) {
+      // Once headers establish an auth/policy/conflict hold, a truncated body
+      // cannot reclassify that response as retryable transport uncertainty.
+      if (response && !response.ok && !TRANSIENT_STATUS.has(response.status)) return { response, bytes: new Uint8Array() };
       if (error instanceof PublisherError) throw error;
       // Do not echo upstream errors, URLs, response bodies, or authorization.
       throw failure(controller.signal.aborted ? 'REQUEST_TIMEOUT' : 'CONNECTION_FAILED');
     } finally { clearTimeout(timer); }
   }
 
+  async function call(url, request, maximum = MAX_JSON_BYTES, stage = 'request', replaySafe = request.method === 'GET') {
+    const attempts = replaySafe ? 3 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      let result;
+      try { result = await callOnce(url, request, maximum); }
+      catch (error) {
+        error.stage = stage;
+        if (!['CONNECTION_FAILED', 'REQUEST_TIMEOUT'].includes(error.code) || attempt + 1 >= attempts) throw error;
+      }
+      if (result) {
+        let code;
+        const transientStatus = TRANSIENT_STATUS.has(result.response.status);
+        if (transientStatus) {
+          try { code = JSON.parse(new TextDecoder().decode(result.bytes))?.code; } catch {}
+        }
+        const transient = transientStatus &&
+          (!code || ['PACKAGE_UNAVAILABLE', 'MASTER_UNAVAILABLE', 'BRIDGE_UNAVAILABLE', 'RATE_LIMIT'].includes(code));
+        if (!transient || attempt + 1 >= attempts) return result;
+        result.bytes.fill(0);
+      }
+      const header = result?.response.headers.get('retry-after');
+      const delay = /^\d+$/.test(header || '') ? Number(header) * 1000
+        : /^[A-Za-z]{3}, /.test(header || '') ? Date.parse(header) - now() : NaN;
+      const fallback = 250 * (attempt + 1);
+      await wait(Number.isFinite(delay) && delay > 0 ? Math.min(30_000, Math.max(fallback, delay)) : fallback);
+    }
+  }
+
   async function bridge(operation, payload = {}) {
     const { response, bytes } = await call(`${endpoint}/${operation}`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-PPC-Publisher-Secret': publisherSecret }, body: JSON.stringify(payload) });
-    if (!response.ok) throw failure(operation === 'ack' ? 'ACK_FAILED' : operation === 'bootstrap' ? 'BOOTSTRAP_REJECTED' : 'BRIDGE_UNAVAILABLE');
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-PPC-Publisher-Secret': publisherSecret }, body: JSON.stringify(payload) }, MAX_JSON_BYTES, operation, operation === 'export');
+    if (!response.ok) throw failure(operation === 'ack' ? 'ACK_FAILED' : operation === 'bootstrap' ? 'BOOTSTRAP_REJECTED' : 'BRIDGE_UNAVAILABLE', operation);
     try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw failure('INVALID_EXPORT'); }
   }
 
@@ -245,7 +288,7 @@ export function createSupabasePublisher(options = {}) {
     const headers = { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
     if (operation === 'blob') {
       headers.Accept = 'application/vnd.github.raw+json';
-      const result = await call(`${repository}/git/blobs/${payload}`, { method: 'GET', headers }, codec.MAX_PACKAGE_BYTES);
+      const result = await call(`${repository}/git/blobs/${payload}`, { method: 'GET', headers }, codec.MAX_PACKAGE_BYTES, 'github-read');
       if (!result.response.ok) throw failure('GITHUB_READ_FAILED');
       return result.bytes;
     }
@@ -254,7 +297,7 @@ export function createSupabasePublisher(options = {}) {
       : `${repository}/contents/${PACKAGE_PATH}${reading ? `?ref=${encodeURIComponent(operation === 'read-ref' ? payload : branch)}` : ''}`;
     if (!reading) headers['Content-Type'] = 'application/json';
     const result = await call(url, { method: reading ? 'GET' : 'POST', headers,
-      ...(!reading && payload ? { body: JSON.stringify(payload) } : {}) });
+      ...(!reading && payload ? { body: JSON.stringify(payload) } : {}) }, MAX_JSON_BYTES, reading ? 'github-read' : 'deploy');
     if (operation === 'deploy') {
       if (result.response.status !== 204) throw failure('DEPLOY_DISPATCH_FAILED');
       return null;
@@ -287,16 +330,16 @@ export function createSupabasePublisher(options = {}) {
     if (url.origin !== origin || url.username || url.password || url.hash ||
       url.pathname !== `/storage/v1/object/sign/ppc-package-delivery/${candidate.objectKey}` ||
       url.searchParams.getAll('token').length !== 1 || !url.searchParams.get('token')) throw failure('DELIVERY_CURRENT_INVALID');
-    const { response, bytes } = await call(url.href, { method: 'GET', headers: { Accept: 'application/octet-stream' } }, candidate.bytes);
+    const { response, bytes } = await call(url.href, { method: 'GET', headers: { Accept: 'application/octet-stream' } }, candidate.bytes, 'archive');
     if (!response.ok || bytes.length !== candidate.bytes || hash(bytes) !== candidate.sha256 || !codec.isEncrypted(bytes)) {
-      bytes.fill(0); throw failure('DELIVERY_CURRENT_INVALID');
+      bytes.fill(0); throw failure('DELIVERY_CURRENT_INVALID', 'archive');
     }
     return { bytes, sha: blobSha(bytes) };
   }
 
   async function seedArchive() {
     if (!SHA256.test(SEED_SHA256) || SEED_SHA256.length !== 64) throw failure('SEED_PIN_INVALID');
-    const { response, bytes } = await call(SEED_URL, { method: 'GET', headers: { Accept: 'application/octet-stream' } }, SEED_BYTES);
+    const { response, bytes } = await call(SEED_URL, { method: 'GET', headers: { Accept: 'application/octet-stream' } }, SEED_BYTES, 'archive');
     if (!response.ok || bytes.length !== SEED_BYTES || hash(bytes) !== SEED_SHA256 || !codec.isEncrypted(bytes)) {
       bytes.fill(0); throw failure('SEED_BYTES_MISMATCH');
     }
@@ -349,15 +392,10 @@ export function createSupabasePublisher(options = {}) {
           if (recovered?.status === 'ready') return { status: 'pending', revision: queued.storageRevision, candidateId: queued.candidateId };
         } catch {}
       }
-      throw failure('PACKAGE_UPLOAD_UNSETTLED');
+      throw failure('PACKAGE_UPLOAD_UNSETTLED', 'upload');
     }
     const source = await seedArchive();
     return stageVerifiedSeedArchive({ target, source, delivery, packageKey, endpoint });
-  }
-
-  function queuedInputMatches(candidate, target) {
-    return candidate.kind === 'publication' && candidate.sourceSha === target.sourceSha && candidate.storageRevision === target.revision &&
-      candidate.manifestSha256 === target.acceptedManifestSha256 && candidate.ownerImagesCommit === (imagesCommit || null);
   }
 
   async function publish() {
@@ -371,14 +409,32 @@ export function createSupabasePublisher(options = {}) {
           if (!['seeding', 'sharepoint'].includes(deliveryState?.phase)) throw failure('DELIVERY_PHASE_INVALID');
           if (!deliveryState.current) throw failure(deliveryState.phase === 'seeding' ? 'SEED_REQUIRED' : 'DELIVERY_CURRENT_MISSING');
           if (deliveryState.queued) {
-            if (!queuedInputMatches(deliveryState.queued, target)) throw failure('PACKAGE_QUEUED_OTHER_INPUT');
-            if (deliveryState.queued.status === 'ready') return { status: 'pending', revision: deliveryState.queued.storageRevision, candidateId: deliveryState.queued.candidateId };
-            if (deliveryState.queued.status !== 'reserved') throw failure('PACKAGE_QUEUED_OTHER_INPUT');
-            try {
-              const recovered = await delivery.finalize(deliveryState.queued);
-              if (recovered?.status === 'ready') return { status: 'pending', revision: deliveryState.queued.storageRevision, candidateId: deliveryState.queued.candidateId };
-            } catch {}
-            throw failure('PACKAGE_UPLOAD_UNSETTLED');
+            const queued = deliveryState.queued;
+            try { validateCandidate(queued); } catch { throw failure('PACKAGE_QUEUED_OTHER_INPUT'); }
+            if (queued.kind !== 'publication' || queued.expectedGeneration !== deliveryState.current.generation ||
+              queued.storageRevision > target.revision) throw failure('PACKAGE_QUEUED_OTHER_INPUT');
+            // An explicit owner-image commit exists only in this dispatch. Hold
+            // a different queued input so the requested commit is not lost.
+            if (imagesCommit && queued.ownerImagesCommit !== imagesCommit) throw failure('PACKAGE_QUEUED_OTHER_INPUT');
+            // The queued commit is the durable owner input. A generic dispatch
+            // cannot regenerate it as null; its matching owner command must retry.
+            if (!imagesCommit && queued.ownerImagesCommit && queued.status === 'reserved' &&
+              ['none', 'absent'].includes(deliveryState.queuedUploadState)) throw failure('PACKAGE_QUEUED_OTHER_INPUT');
+            // This identity already binds its accepted input and ciphertext. A
+            // newer export must not strand ready work or acquire its coverage.
+            if (queued.status === 'ready') return { status: 'pending', revision: queued.storageRevision, candidateId: queued.candidateId };
+            if (queued.status !== 'reserved') throw failure('PACKAGE_QUEUED_OTHER_INPUT');
+            if (!['none', 'absent'].includes(deliveryState.queuedUploadState)) {
+              // Only positive readback may settle a claimed/unknown upload. A
+              // timeout, missing bytes or expired lease never grants replacement.
+              try {
+                const recovered = await delivery.finalize(queued);
+                if (recovered?.status === 'ready') return { status: 'pending', revision: queued.storageRevision, candidateId: queued.candidateId };
+              } catch {}
+              throw failure('PACKAGE_UPLOAD_UNSETTLED', 'upload');
+            }
+            // Build fresh ciphertext with a fresh ID below. Reserve validates the
+            // exact accepted export and atomically fences the unclaimed old ID.
           }
         }
         const current = publicationMode === 'sharepoint' ? await signedArchive(deliveryState.current, deliveryState.downloadUrl) : await currentPackage();
@@ -469,10 +525,10 @@ export function createSupabasePublisher(options = {}) {
                   const recovered = await delivery.finalize(reserved.candidate);
                   if (recovered?.status === 'ready') return { status: 'pending', revision: target.revision, candidateId: reserved.candidate.candidateId };
                 } catch {}
-                throw failure('PACKAGE_UPLOAD_UNSETTLED');
+                throw failure('PACKAGE_UPLOAD_UNSETTLED', 'upload');
               }
               const ready = await delivery.finalize(reserved.candidate);
-              if (ready?.status !== 'ready') throw failure('PACKAGE_FINALIZE_FAILED');
+              if (ready?.status !== 'ready') throw failure('PACKAGE_FINALIZE_FAILED', 'finalize');
               return { status: 'pending', revision: target.revision, candidateId: reserved.candidate.candidateId };
             }
             let accepted;
@@ -504,7 +560,7 @@ export function createSupabasePublisher(options = {}) {
       }
       throw failure('PACKAGE_CHANGED_RETRY');
     } catch (error) {
-      const safe = error instanceof PublisherError ? error : failure(error instanceof PackageDeliveryClientError || /^(OWNER|GIT)_[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'PUBLICATION_FAILED');
+      const safe = error instanceof PublisherError ? error : failure(error instanceof PackageDeliveryClientError || /^(OWNER|GIT)_[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'PUBLICATION_FAILED', error instanceof PackageDeliveryClientError ? error.stage : undefined);
       await notifyFailure(safe, desiredRevision);
       throw safe;
     }
@@ -526,7 +582,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       : `Encrypted master publication ${result.status}; revision ${result.revision}.`);
   } catch (error) {
     const code = error instanceof PublisherError ? error.code : 'PUBLICATION_FAILED';
-    console.error(`Encrypted master publication needs attention (${code}). No credentials or private product data were logged.`);
+    const stage = error instanceof PublisherError && SAFE_STAGES.has(error.stage) ? `${error.stage}/` : '';
+    console.error(`Encrypted master publication needs attention (${stage}${code}). No credentials or private product data were logged.`);
     process.exitCode = 1;
   }
 }

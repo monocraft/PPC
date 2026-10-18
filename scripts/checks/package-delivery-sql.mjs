@@ -12,6 +12,9 @@ assert.equal(typeof sql, 'string', 'Package delivery requires its private transa
 if (process.env.PPC_REQUIRE_SQL_TESTS === '1' && !process.env.PPC_TEST_PGLITE_MODULE) throw new Error('SQL verification requires PPC_TEST_PGLITE_MODULE.');
 const { PGlite } = await import(process.env.PPC_TEST_PGLITE_MODULE ? pathToFileURL(resolve(process.env.PPC_TEST_PGLITE_MODULE)).href : '@electric-sql/pglite');
 const db = new PGlite();
+const applyForwardMigrations = async () => {
+  for (const name of (await readdir(resolve('supabase/migrations'))).filter(name => name.endsWith('.sql') && name > migration).sort()) await db.exec(await readFile(resolve('supabase/migrations', name), 'utf8'));
+};
 const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
 const source = 'a'.repeat(40), blob = 'b'.repeat(40), digest = 'c'.repeat(64), ownerA = 'a'.repeat(40), ownerB = 'b'.repeat(40);
 const call = async (name, payload = {}) => (await db.query(`select public.ppc_package_${name}($1::jsonb) as result`, [JSON.stringify(payload)])).rows[0].result;
@@ -54,10 +57,13 @@ test('candidate_slot_and_generation', async () => {
   await seeded(); const meta = await publicationMeta(); const candidate = await reserve(meta);
   assert.equal(candidate.generation, 2); assert.equal(candidate.expectedGeneration, 1); assert.equal(candidate.kind, 'publication');
   assert.equal(candidate.objectKey, `packages/${ids[1]}.pkg`); assert.equal(Date.parse(candidate.expiresAt) - Date.parse(candidate.createdAt), 10800000);
+  await call('upload_claim', { candidateId: candidate.candidateId, generation: 2 });
   await expectStatus(call('reserve', { ...meta, candidateId: ids[2] }), 'busy');
   await expectStatus(call('reserve', { ...meta, expectedGeneration: 0 }), 'stale');
   await commit(); await db.exec('update ppc_private.package_delivery_candidates set expires_at=clock_timestamp()-interval \'1 second\' where candidate_id=\'' + ids[1] + '\'');
   await call('current'); await expectStatus(call('reserve', await publicationMeta(ids[2])), 'cleanup_required');
+  const expired = await call('current');
+  await call('phase', { reconcile: { candidateId: ids[1], generation: 2, attemptId: expired.cleanupUpload.attemptId, outcome: 'absent' }, settled: true });
   await expectStatus(call('cleanup', { candidateId: ids[1], generation: 2, absent: true }), 'cleaned');
   await expectStatus(call('reserve', { ...await publicationMeta(ids[2]), manifestSha256: meta.manifestSha256 }), 'accepted_changed');
   await expectStatus(call('reserve', { ...await publicationMeta(ids[2]), storageRevision: 1 }), 'accepted_changed');
@@ -83,7 +89,58 @@ test('owner_commit_retry_identity', async () => {
   await seeded(); const meta = await publicationMeta(ids[1], { ownerImagesCommit: ownerB }); await reserve(meta);
   await expectStatus(call('reserve', meta), 'existing');
   for (const patch of [{ ownerImagesCommit: ownerA }, { ownerImagesCommit: null }, { sha256: digest }, { bytes: 41 }, { sourceSha: 'f'.repeat(40) }, { manifestSha256: digest }]) await expectStatus(call('reserve', { ...meta, ...patch }), 'retry_mismatch');
+  await call('upload_claim', { candidateId: ids[1], generation: 2 });
   await expectStatus(call('reserve', { ...meta, candidateId: ids[2], ownerImagesCommit: ownerA }), 'busy');
+});
+
+test('validated_unclaimed_replacement_fences_old_identity_without_consuming_generation', async () => {
+  await seeded(); const metadata = await publicationMeta(); const old = await reserve(metadata);
+  const next = await reserve({ ...metadata, candidateId: ids[2], sha256: 'e'.repeat(64), bytes: 44 });
+  assert.equal(next.generation, 2); assert.equal(next.expectedGeneration, 1);
+  const state = await call('current');
+  assert.equal(state.generation, 1); assert.equal(state.queued.candidateId, ids[2]); assert.equal(state.cleanup, null);
+  await expectStatus(call('upload_claim', { candidateId: old.candidateId, generation: 2 }), 'stale');
+  await expectStatus(call('reserve', metadata), 'stale');
+  const retired = (await db.query('select status,sha256,bytes,upload_state from ppc_private.package_delivery_candidates where candidate_id=$1::uuid', [old.candidateId])).rows[0];
+  assert.deepEqual(retired, { status: 'cleanup', sha256: 'd'.repeat(64), bytes: 40, upload_state: 'none' });
+  await ready(next); await expectStatus(confirm(next), 'published');
+  assert.equal((await call('current')).generation, 2);
+});
+
+test('replacement_validates_fresh_accepted_metadata_before_retiring_queued_candidate', async () => {
+  await seeded(); const oldMeta = await publicationMeta(); const old = await reserve(oldMeta);
+  await commit(); const fresh = await publicationMeta(ids[2]);
+  for (const patch of [{ storageRevision: 1 }, { manifestSha256: oldMeta.manifestSha256 }, { sourceSha: 'f'.repeat(40) }]) {
+    await expectStatus(call('reserve', { ...fresh, ...patch }), 'accepted_changed');
+    assert.equal((await call('current')).queued.candidateId, old.candidateId);
+  }
+  await expectStatus(call('reserve', { ...fresh, expectedGeneration: 0 }), 'stale');
+  await assert.rejects(() => call('reserve', { ...fresh, bytes: '44' }), /Invalid package reservation/);
+  assert.equal((await call('current')).queued.candidateId, old.candidateId);
+  assert.equal((await reserve(fresh)).storageRevision, 2);
+  await expectStatus(call('upload_claim', { candidateId: old.candidateId, generation: 2 }), 'stale');
+});
+
+test('claim_wins_holds_replacement_until_proven_settled_absent_and_fences_old_attempt', async () => {
+  await seeded(); const old = await reserve(await publicationMeta());
+  const claim = await expectStatus(call('upload_claim', { candidateId: old.candidateId, generation: 2 }), 'claimed');
+  const fresh = await publicationMeta(ids[2], { sha256: 'e'.repeat(64) });
+  await expectStatus(call('reserve', fresh), 'busy');
+  assert.equal((await call('current')).queued.candidateId, old.candidateId);
+  await call('upload_result', { candidateId: old.candidateId, generation: 2, attemptId: claim.attemptId, outcome: 'uncertain' });
+  await expectStatus(call('reserve', fresh), 'busy');
+  await call('phase', { reconcile: { candidateId: old.candidateId, generation: 2, attemptId: claim.attemptId, outcome: 'absent' }, settled: true });
+  await reserve(fresh);
+  await expectStatus(call('upload_claim', { candidateId: old.candidateId, generation: 2 }), 'stale');
+  await expectStatus(call('upload_result', { candidateId: old.candidateId, generation: 2, attemptId: claim.attemptId, outcome: 'stored' }), 'stale');
+});
+
+test('ready_or_stored_candidates_cannot_be_retired_by_reservation', async () => {
+  await seeded(); const old = await ready(await reserve(await publicationMeta()));
+  await expectStatus(call('reserve', await publicationMeta(ids[2])), 'busy');
+  assert.equal((await call('current')).queued.candidateId, old.candidateId);
+  await db.query("update ppc_private.package_delivery_candidates set status='reserved' where candidate_id=$1::uuid", [old.candidateId]);
+  await expectStatus(call('reserve', await publicationMeta(ids[2])), 'busy');
 });
 test('published_seed_with_newer_accepted_facts', async () => {
   await reset(); await commit(); const facts = (await master('read')).manifest; await phaseSeed(); const seed = await ready(await reserve(seedMeta()));
@@ -170,7 +227,7 @@ test('activation_guards_and_ready_expiry', async () => {
   await db.exec('alter schema storage rename to storage_fixture');
   await assert.rejects(() => phaseSeed(), /activation requires Storage/);
   await db.exec('alter schema storage_fixture rename to storage');
-  await phaseSeed(); await db.exec(sql); assert.equal((await call('current')).phase, 'seeding', 'migration replay cannot reset operator state');
+  await phaseSeed(); await db.exec(sql); await applyForwardMigrations(); assert.equal((await call('current')).phase, 'seeding', 'migration replay cannot reset operator state');
   const seed = await ready(await reserve(seedMeta()));
   await db.query('update ppc_private.package_delivery_candidates set expires_at=clock_timestamp()-interval \'1 second\' where candidate_id=$1::uuid', [seed.candidateId]);
   await expectStatus(confirm(seed), 'stale'); const state = await call('current');
@@ -244,6 +301,31 @@ test('historical_retry_recovers_only_immutable_kind_revision', async () => {
   await expectStatus(call('confirm', { candidateId: fresh.candidateId, generation: 1, receipt: partial }), 'stale');
   assert.equal((await db.query('select count(*)::integer n from ppc_private.package_delivery_receipts')).rows[0].n, 0);
 });
+test('expired_positive_settlement_rejects_wrong_candidate_generation_attempt_and_preserves_slot', async () => {
+  await seeded(); const value = await reserve(await publicationMeta());
+  const claimed = await call('upload_claim', { candidateId: value.candidateId, generation: 2 });
+  await call('upload_result', { candidateId: value.candidateId, generation: 2, attemptId: claimed.attemptId, outcome: 'uncertain' });
+  await db.query("update ppc_private.package_delivery_candidates set expires_at=clock_timestamp()-interval '1 second' where candidate_id=$1::uuid", [value.candidateId]);
+  await call('current');
+  for (const patch of [{ candidateId: ids[2] }, { generation: 3 }, { attemptId: ids[2] }]) {
+    await expectStatus(call('upload_result', { candidateId: value.candidateId, generation: 2, attemptId: claimed.attemptId, outcome: 'stored', ...patch }), 'stale');
+    assert.equal((await call('current')).cleanupUpload.state, 'uncertain');
+    await expectStatus(call('cleanup', { candidateId: value.candidateId, generation: 2, absent: true }), 'upload_unsettled');
+  }
+  await expectStatus(call('upload_result', { candidateId: value.candidateId, generation: 2, attemptId: claimed.attemptId, outcome: 'stored' }), 'stored');
+  await expectStatus(call('cleanup', { candidateId: value.candidateId, generation: 2, absent: true }), 'cleaned');
+  assert.equal((await call('current')).generation, 1);
+});
+
+test('forward_migration_replay_preserves_unsettled_identity_and_current_receipt', async () => {
+  await seeded(); const value = await reserve(await publicationMeta());
+  const claim = await call('upload_claim', { candidateId: value.candidateId, generation: 2 });
+  await call('upload_result', { candidateId: value.candidateId, generation: 2, attemptId: claim.attemptId, outcome: 'uncertain' });
+  const before = await call('current'); await applyForwardMigrations(); await applyForwardMigrations();
+  assert.deepEqual(await call('current'), before);
+  await expectStatus(call('reserve', await publicationMeta(ids[2])), 'busy');
+});
+
 test('private_role_grants', async () => {
   for (const name of ['reserve', 'upload_claim', 'upload_result', 'finalize', 'confirm', 'current', 'cleanup', 'phase']) {
     for (const role of ['anon', 'authenticated', 'supabase_auth_admin']) {
@@ -260,8 +342,14 @@ try {
   await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create role supabase_auth_admin; create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]); create table storage.objects(id uuid primary key,bucket_id text); alter table storage.objects enable row level security;');
   for (const name of (await readdir(resolve('supabase/migrations'))).filter(name => name.endsWith('.sql') && name < migration).sort()) await db.exec(await readFile(resolve('supabase/migrations', name), 'utf8'));
   await db.exec(sql); await db.exec(sql);
+  await applyForwardMigrations(); await applyForwardMigrations();
   assert.equal((await call('current')).phase, 'legacy');
   assert.deepEqual((await db.query("select public,file_size_limit,allowed_mime_types from storage.buckets where id='ppc-package-delivery'")).rows[0], { public: false, file_size_limit: 67108864, allowed_mime_types: ['application/octet-stream'] });
-  for (const { name, run } of tests) { await run(); console.log(`PASS ${name}`); }
+  const failures = [];
+  for (const { name, run } of tests) {
+    try { await run(); console.log(`PASS ${name}`); }
+    catch (error) { failures.push(error); console.error(`FAIL ${name}: ${error.message}`); }
+  }
+  if (failures.length) throw new AggregateError(failures, `${failures.length} package delivery SQL checks failed`);
   console.log(`Package delivery SQL passed: ${tests.length}/${tests.length}, real isolated PGlite; no live endpoints.`);
 } finally { await db.close(); }

@@ -15,3 +15,8 @@ entrypoint = "./functions/ppc-ascm-mcp/index.ts"
 verify_jwt = false
 entrypoint = "./functions/ppc-package/index.ts"
 
+# Dedicated server-only worker-secret verification; missing configuration is 404.
+[functions.ppc-ascm-flow]
+verify_jwt = false
+entrypoint = "./functions/ppc-ascm-flow/index.ts"
+
