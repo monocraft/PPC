@@ -244,7 +244,14 @@ h2 { font-size: 18px; } h3 { font-size: 13px; }
 .view-tab.is-active { border-color: transparent; background: var(--color-header); color: var(--color-text);  box-shadow: inset 0 -2px 0 var(--color-accent); }
 .toolbar-actions { display: flex; align-items: center; gap: 7px; }
 .toolbar-actions > button { white-space: nowrap; }
-.ascm-supervisor-indicator { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 6px; min-height: 30px; padding-inline: 3px; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; }
+.ascm-supervisor-indicator { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 6px; min-height: 30px; padding-inline: 3px; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; }
+.ascm-supervisor-indicator:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.ascm-update-tooltip { position: absolute; top: 100%; right: 0; z-index: 100; width: max-content; max-width: calc(100vw - 24px); padding-top: 8px; white-space: normal; }
+.ascm-update-tooltip[hidden], .ascm-update-readout [hidden] { display: none !important; }
+.ascm-update-readout { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-height: 30px; padding: 7px 10px; border: 1px solid var(--color-border); border-radius: 3px; background: var(--color-surface); color: var(--color-text); font-size: 12px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.ascm-update-heading, .ascm-update-date { color: var(--color-text-secondary); font-size: 11px; }
+.ascm-update-elapsed { font-weight: 500; }
+.ascm-update-divider { flex: 0 0 1px; width: 1px; height: 12px; background: var(--color-border-strong); }
 .ascm-supervisor-indicator[hidden], .ascm-supervisor-row[hidden], .ascm-supervisor-header[hidden], .ascm-supervisor-label[hidden], .ascm-supervisor-reconnect[hidden], .ascm-reconnect-handoff[hidden] { display: none !important; }
 .ascm-supervisor-clock { position: relative; display: inline-block; flex: 0 0 auto; width: 17px; height: 17px; border: 1.3px solid currentColor; border-radius: 50%; }
 .ascm-supervisor-clock::before, .ascm-supervisor-clock::after { content: ""; position: absolute; left: 6.6px; width: 1.3px; background: currentColor; border-radius: 1px; transform-origin: 50% 100%; }

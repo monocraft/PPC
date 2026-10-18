@@ -16,14 +16,30 @@
   const activityText = (user) => user.activity === "idle" && !user.editing ? `Taking a breather${user.categoryName ? ` · ${user.categoryName}` : ""}` : user.activity === "roadmap" && !user.editing ? `Exploring the roadmap${user.categoryName ? ` · ${user.categoryName}` : ""}` : `${user.editing ? "Editing" : user.activity === "focused" ? "Focused on" : "Viewing"} ${user.productName || user.categoryName || "the portfolio"}${user.productName && user.categoryName ? ` · ${user.categoryName}` : ""}`;
   const connectionSummary = (state) => !state.configured ? "Team sharing is not connected" : state.mode === "github" ? state.connected ? `${state.users.length} recent ${state.users.length === 1 ? "editor" : "editors"}` : "No recent editors" : state.unavailable ? "Shared connection unavailable" : state.connected ? sessionSummary(state.onlineCount) : state.hasKey ? "Connecting…" : "Not connected";
 
+  function ascmUpdateTimestamp(value, time) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return "";
+    const instant = Date.parse(value);
+    if (!Number.isFinite(instant) || !Number.isFinite(time) || instant > time) return "";
+    const canonical = new Date(instant).toISOString();
+    return canonical === value.replace(/Z$/, value.includes(".") ? "Z" : ".000Z") ? canonical : "";
+  }
+
+  function ascmUpdateReadout(lastUpdatedAt, time) {
+    if (!lastUpdatedAt) return null;
+    const localDay = (date) => { const day = new Date(0); day.setUTCFullYear(date.getFullYear(), date.getMonth(), date.getDate()); day.setUTCHours(0, 0, 0, 0); return day.getTime() / 86400000; };
+    const date = new Date(lastUpdatedAt), days = localDay(new Date(time)) - localDay(date);
+    return { age: days === 0 ? "Today" : `${days} ${days === 1 ? "day" : "days"} ago`, date: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date) };
+  }
+
   function normalizeAscmSupervisor(value, time = Date.now()) {
     if (!value || typeof value !== "object" || Array.isArray(value) || value.enabled !== true) return null;
     const reconnectRequired = Array.isArray(value.reconnectRequired) ? ["outlook", "sharepoint"].filter((provider) => value.reconnectRequired.includes(provider)) : [];
-    const idle = { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired };
+    const lastUpdatedAt = ascmUpdateTimestamp(value.lastUpdatedAt, time);
+    const idle = { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...(lastUpdatedAt ? { lastUpdatedAt } : {}) };
     const expiry = typeof value.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.expiresAt) ? Date.parse(value.expiresAt) : NaN;
     // Server leases are 120 seconds. Allow five seconds of clock skew, never an indefinite busy badge.
     if (value.working !== true || !Number.isFinite(expiry) || expiry <= time || expiry - time > 125000 || new Date(expiry).toISOString() !== value.expiresAt) return idle;
-    return { enabled: true, working: true, productCount: Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500 ? value.productCount : null, expiresAt: value.expiresAt, reconnectRequired };
+    return { ...idle, working: true, productCount: Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500 ? value.productCount : null, expiresAt: value.expiresAt };
   }
 
   function createAscmSupervisorView({ documentObject = document, indicator, rosterContainer, headerControl, focusFallback, now = Date.now,
@@ -31,7 +47,11 @@
     const make = (tag, className, text) => { const node = documentObject.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node; };
     const clock = () => { const node = make("span", "ascm-supervisor-clock"); node.setAttribute("aria-hidden", "true"); return node; };
     const label = make("span", "ascm-supervisor-label");
-    if (indicator) indicator.replaceChildren(clock(), label);
+    const tooltip = make("span", "ascm-update-tooltip"), readout = make("span", "ascm-update-readout");
+    const updateHeading = make("span", "ascm-update-heading"), updateElapsed = make("span", "ascm-update-elapsed"), updateDivider = make("span", "ascm-update-divider"), updateDate = make("time", "ascm-update-date");
+    tooltip.id = "ascmUpdateTooltip"; tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); tooltip.setAttribute("aria-live", "off"); updateDivider.setAttribute("aria-hidden", "true");
+    readout.append(updateHeading, updateElapsed, updateDivider, updateDate); tooltip.append(readout);
+    if (indicator) { indicator.removeAttribute("title"); indicator.setAttribute("tabindex", "0"); indicator.setAttribute("aria-describedby", tooltip.id); indicator.replaceChildren(clock(), label, tooltip); }
     const row = make("div", "master-presence-row ascm-supervisor-row"), person = make("div", "master-presence-person ascm-supervisor-person");
     const reconnect = make("button", "icon-button ascm-supervisor-reconnect"), handoff = make("div", "ascm-reconnect-handoff");
     reconnect.type = "button"; reconnect.title = "Reconnect Microsoft"; reconnect.setAttribute("aria-label", "Reconnect Microsoft"); reconnect.setAttribute("aria-expanded", "false"); reconnect.setAttribute("aria-controls", "ascmReconnectHandoff");
@@ -58,7 +78,27 @@
     const link = make("a", "ascm-reconnect-link", "Open Copilot Studio"); link.href = "https://copilotstudio.microsoft.com/environments/Default-ca7981a2-785a-463d-b82a-3db87dfc3ce6/flows/5bb99050-adca-f111-a05c-000d3a3191e3/overview"; link.target = "_blank"; link.rel = "noopener noreferrer";
     handoff.append(make("p", "", "The flow owner must reconnect Office 365 Outlook or SharePoint in Copilot Studio → Manage connection references."), make("p", "", "Complete Microsoft sign-in, then return here."), make("p", "", "Status updates after the next successful supervisor check."), link);
     person.append(reconnect, handoff); row.append(portrait, person); rosterContainer?.append(row);
-    let timer = null, latest = null, disposed = false;
+    let timer = null, latest = null, disposed = false, tooltipHovered = false, tooltipDismissed = false;
+    function updateTooltip() {
+      if (disposed) return;
+      const time = now(), state = latest;
+      const supervisor = state?.connected && !state.unavailable && state.mode !== "github" ? normalizeAscmSupervisor(state.ascmSupervisor, time) : null;
+      const details = ascmUpdateReadout(supervisor?.lastUpdatedAt, time);
+      updateHeading.textContent = details ? "Last ASCM update" : "No ASCM update recorded.";
+      updateElapsed.textContent = details?.age || ""; updateDate.textContent = details?.date || ""; updateDate.dateTime = supervisor?.lastUpdatedAt || "";
+      updateElapsed.hidden = updateDivider.hidden = updateDate.hidden = !details;
+      tooltip.setAttribute("aria-label", details ? `Last ASCM update: ${details.age}. ${details.date}` : "No ASCM update recorded.");
+      if (!supervisor || documentObject.visibilityState === "hidden") { tooltipHovered = false; tooltipDismissed = false; tooltip.hidden = true; return; }
+      tooltip.hidden = tooltipDismissed || (!tooltipHovered && documentObject.activeElement !== indicator);
+    }
+    function closeUpdateTooltip() { if (tooltip.hidden) return false; tooltipDismissed = true; tooltip.hidden = true; return true; }
+    const tooltipListeners = [
+      ["pointerenter", () => { tooltipHovered = true; tooltipDismissed = false; updateTooltip(); }],
+      ["pointerleave", () => { tooltipHovered = false; updateTooltip(); }],
+      ["focus", () => { tooltipDismissed = false; updateTooltip(); }],
+      ["blur", updateTooltip],
+    ];
+    for (const [event, listener] of tooltipListeners) indicator?.addEventListener(event, listener);
     function closeReconnect({ restoreFocus = true } = {}) {
       if (handoff.hidden) return false;
       handoff.hidden = true; reconnect.setAttribute("aria-expanded", "false");
@@ -86,7 +126,6 @@
       const text = working ? `Updating ASCM${supervisor.productCount === null ? "" : ` · ${supervisor.productCount} ${supervisor.productCount === 1 ? "product" : "products"}`}` : "";
       if (indicator) {
         indicator.hidden = !supervisor;
-        indicator.title = text || "ASCM supervisor";
         indicator.setAttribute("aria-label", text || "ASCM supervisor");
         indicator.classList.toggle("is-working", working);
         indicator.classList.toggle("is-paused", documentObject.visibilityState === "hidden");
@@ -94,10 +133,11 @@
       label.textContent = text; label.hidden = !working;
       row.hidden = !supervisor; reconnect.hidden = !needsReconnect;
       if (headerControl) headerControl.hidden = !supervisor;
+      updateTooltip();
       if (working) timer = setTimeoutImpl(() => { timer = null; render(latest); }, Math.max(1, Date.parse(supervisor.expiresAt) - now()));
     }
     render(null);
-    return Object.freeze({ render, closeReconnect, destroy() { render(null); disposed = true; reconnect.removeEventListener("click", toggleReconnect); row.remove(); } });
+    return Object.freeze({ render, closeReconnect, closeUpdateTooltip, destroy() { render(null); disposed = true; for (const [event, listener] of tooltipListeners) indicator?.removeEventListener(event, listener); tooltip.remove(); indicator?.removeAttribute("aria-describedby"); indicator?.removeAttribute("tabindex"); reconnect.removeEventListener("click", toggleReconnect); row.remove(); } });
   }
 
   function normalizeRecentEditors(snapshot, identity) {
@@ -271,7 +311,8 @@
     const supervisorHeader = make("button", "ascm-supervisor-header"); supervisorHeader.type = "button"; supervisorHeader.title = "ASCM supervisor";
     supervisorHeader.setAttribute("aria-label", "ASCM supervisor. View connection status"); supervisorHeader.setAttribute("aria-haspopup", "dialog"); supervisorHeader.setAttribute("aria-expanded", "false"); supervisorHeader.setAttribute("aria-controls", popover.id);
     popover.append(heading, connection, rows, supervisorRows, play, nameForm, githubConnect); shell.append(supervisorHeader, trigger, popover); brand.append(shell);
-    const supervisorView = createAscmSupervisorView({ indicator: document.getElementById("ascmSupervisorIndicator"), rosterContainer: supervisorRows, headerControl: supervisorHeader, focusFallback: close });
+    const supervisorIndicator = document.getElementById("ascmSupervisorIndicator");
+    const supervisorView = createAscmSupervisorView({ indicator: supervisorIndicator, rosterContainer: supervisorRows, headerControl: supervisorHeader, focusFallback: close });
     // Expression updates are entirely local. They never send an additional presence request.
     const listeners = new root.AbortController(), signal = listeners.signal;
     let open = false, disposed = false, debounceTimer = null, playTimer = null, gazeFrame = null, reactionFrame = null, playfulUntil = 0, rosterOpener = trigger;
@@ -357,7 +398,7 @@
       if (disposed) return;
       latestState = state;
       supervisorView.render(state);
-      if (supervisorHeader.hidden && document.activeElement === supervisorHeader) trigger.focus({ preventScroll: true });
+      if (supervisorHeader.hidden && document.activeElement === supervisorHeader || supervisorIndicator?.hidden && document.activeElement === supervisorIndicator) trigger.focus({ preventScroll: true });
       title.textContent = state.mode === "github" ? "Recent editors" : "Connected now";
       close.setAttribute("aria-label", state.mode === "github" ? "Close recent editors" : "Close connected sessions");
       nameForm.hidden = state.mode === "github"; nameForm.style.display = state.mode === "github" ? "none" : "";
@@ -439,7 +480,7 @@
     shell.addEventListener("pointerdown", () => neighbors?.cancel(), { capture: true, signal });
     trigger.addEventListener("click", () => setOpen(!open), { signal }); supervisorHeader.addEventListener("click", () => setOpen(!open), { signal }); close.addEventListener("click", () => setOpen(false), { signal });
     document.addEventListener("pointerdown", (event) => { inputActivity(); if (open && !shell.contains(event.target)) setOpen(false, { restoreFocus: false }); }, { signal });
-    document.addEventListener("keydown", (event) => { inputActivity(); if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!supervisorView.closeReconnect()) setOpen(false); } }, { capture: true, signal });
+    document.addEventListener("keydown", (event) => { inputActivity(); if (event.key === "Escape") { if (supervisorView.closeUpdateTooltip()) { event.preventDefault(); event.stopPropagation(); return; } if (open) { event.preventDefault(); event.stopPropagation(); if (!supervisorView.closeReconnect()) setOpen(false); } } }, { capture: true, signal });
     document.addEventListener("pointermove", inputActivity, { passive: true, signal });
     document.addEventListener("wheel", inputActivity, { passive: true, signal });
     shell.addEventListener("pointermove", (event) => {

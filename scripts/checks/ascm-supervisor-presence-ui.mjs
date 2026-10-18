@@ -89,12 +89,15 @@ class Element {
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name) { this.attributes.delete(name); if (name === 'title') this.title = ''; }
   remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(child => child !== this); this.parentNode = null; }
   querySelector(selector) { for (const child of this.children) { if (child.className.split(/\s+/).includes(selector.slice(1))) return child; const nested = child.querySelector(selector); if (nested) return nested; } return null; }
   addEventListener(type, listener) { if (!this.listeners.has(type)) this.listeners.set(type, new Set()); this.listeners.get(type).add(listener); }
   removeEventListener(type, listener) { this.listeners.get(type)?.delete(listener); }
-  click() { for (const listener of this.listeners.get('click') || []) listener({ target: this }); }
-  focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  dispatch(type, details = {}) { const event = { target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...details }; for (const listener of this.listeners.get(type) || []) listener(event); return event; }
+  click() { this.dispatch('click'); }
+  focus() { if (this.ownerDocument) { this.ownerDocument.activeElement?.blur?.(); this.ownerDocument.activeElement = this; } this.dispatch('focus'); }
+  blur() { if (this.ownerDocument?.activeElement === this) this.ownerDocument.activeElement = null; this.dispatch('blur'); }
   contains(node) { return this === node || this.children.some(child => child.contains(node)); }
   set innerHTML(_) { assert.fail('Status rendering must use inert DOM nodes'); }
 }
@@ -111,7 +114,8 @@ class HeaderElement extends Element {
 }
 async function headerFixture() {
   const source = await readFile(new URL('../../public/js/master-presence.js', import.meta.url), 'utf8');
-  const documentObject = { visibilityState: 'visible', activeElement: null, addEventListener() {}, createElement: tag => new HeaderElement(tag, documentObject), createElementNS: (_, tag) => new HeaderElement(tag, documentObject) };
+  const documentEvents = new Element();
+  const documentObject = { visibilityState: 'visible', activeElement: null, addEventListener: (...args) => documentEvents.addEventListener(...args), dispatch: (...args) => documentEvents.dispatch(...args), createElement: tag => new HeaderElement(tag, documentObject), createElementNS: (_, tag) => new HeaderElement(tag, documentObject) };
   const brand = documentObject.createElement('div'), indicator = documentObject.createElement('span'); brand.className = 'brand-block';
   documentObject.querySelector = selector => selector === '.brand-block' ? brand : null;
   documentObject.getElementById = id => id === 'ascmSupervisorIndicator' ? indicator : null;
@@ -172,15 +176,122 @@ test('enabled supervisor is visible beside header people before opening the dial
   } finally { f.app.destroy(); }
 });
 
-function viewFixture() {
-  let time = start, sequence = 0;
+function viewFixture(initialTime = start) {
+  let time = initialTime, sequence = 0;
   const timers = new Map(), indicator = new Element('span'), rosterContainer = new Element();
   const documentObject = { visibilityState: 'visible', activeElement: null, createElement: tag => new Element(tag, documentObject), createElementNS: (namespace, tag) => { const node = new Element(tag, documentObject); node.namespaceURI = namespace; return node; } };
+  indicator.ownerDocument = documentObject;
   const focusFallback = new Element('button', documentObject);
   const view = presence.createAscmSupervisorView({ documentObject, indicator, rosterContainer, focusFallback, now: () => time,
     setTimeoutImpl: (fn, delay) => { const id = ++sequence; timers.set(id, { fn, at: time + delay }); return id; }, clearTimeoutImpl: id => timers.delete(id) });
   return { view, indicator, rosterContainer, focusFallback, documentObject, timers, advance(ms) { time += ms; for (const [id, timer] of [...timers]) if (timer.at <= time) { timers.delete(id); timer.fn(); } } };
 }
+
+test('accepted ASCM timestamp survives controller normalization and lease expiry without another request', async () => {
+  const f = setup(), lastUpdatedAt = '2026-10-15T12:00:00.000Z';
+  f.reply = { sessions: [{ sessionId: 'owner-tab-1234', displayName: 'Alex' }], ascmSupervisor: active({ lastUpdatedAt }) };
+  await f.controller.heartbeat();
+  assert.equal(f.controller.getState().ascmSupervisor.lastUpdatedAt, lastUpdatedAt, 'normalization preserves accepted update time');
+  f.advance(120000);
+  assert.deepEqual(plain(f.controller.getState().ascmSupervisor), { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired: [], lastUpdatedAt });
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.controller.getState().onlineCount, 1);
+  for (const value of [undefined, null, false, 42, {}, [], '', 'tomorrow', '2026-02-30T12:00:00.000Z', '2026-10-15T12:00:00+00:00', '2026-10-15T12:00:00.1Z', new Date(start + 120001).toISOString()]) {
+    const status = presence.normalizeAscmSupervisor(active({ lastUpdatedAt: value }), start);
+    assert.equal(Object.hasOwn(status, 'lastUpdatedAt'), false, String(value));
+    assert.equal(status.working, true, 'invalid age does not suppress genuine work');
+  }
+  const idle = presence.normalizeAscmSupervisor({ enabled: true, working: false, lastUpdatedAt: '2026-10-15T12:00:00Z' }, start);
+  assert.equal(idle.lastUpdatedAt, lastUpdatedAt);
+});
+
+test('clock offers a persistent styled hover and focus description without native title or new timer', () => {
+  const f = viewFixture(), state = { connected: true, mode: 'service', ascmSupervisor: active({ working: false, lastUpdatedAt: '2026-10-15T12:00:00.000Z' }) };
+  f.view.render(state);
+  const tooltip = f.indicator.querySelector('.ascm-update-tooltip');
+  assert(tooltip, 'clock has a dedicated styled readout');
+  assert.equal(tooltip.hidden, true);
+  assert.equal(tooltip.getAttribute('role'), 'tooltip');
+  assert.equal(tooltip.getAttribute('aria-live'), 'off');
+  assert.equal(f.indicator.getAttribute('tabindex'), '0');
+  assert.equal(f.indicator.getAttribute('aria-describedby'), tooltip.id);
+  assert.equal(f.indicator.title, '');
+  const priorFocus = new Element('button', f.documentObject); priorFocus.focus();
+  f.indicator.dispatch('pointerenter');
+  assert.equal(tooltip.hidden, false);
+  assert.equal(f.documentObject.activeElement, priorFocus);
+  assert.equal(f.timers.size, 0);
+  tooltip.dispatch('pointerenter');
+  assert.equal(tooltip.hidden, false, 'moving into its descendant card keeps the hover open');
+  f.indicator.focus(); f.indicator.dispatch('pointerleave');
+  assert.equal(tooltip.hidden, false, 'keyboard focus keeps the description open after pointer leaves');
+  f.indicator.blur(); assert.equal(tooltip.hidden, true);
+  f.indicator.focus(); assert.equal(tooltip.hidden, false);
+  assert.equal(f.view.closeUpdateTooltip(), true);
+  assert.equal(tooltip.hidden, true);
+  assert.equal(f.documentObject.activeElement, f.indicator);
+  f.view.render(state); assert.equal(tooltip.hidden, true, 'normal refresh cannot undo Escape dismissal');
+  f.indicator.blur(); f.indicator.focus(); assert.equal(tooltip.hidden, false);
+  f.view.render({ ...state, ascmSupervisor: { enabled: true, working: false } });
+  assert.equal(tooltip.hidden, false, 'open card refreshes in place');
+  assert.equal(f.indicator.querySelector('.ascm-update-heading').textContent, 'No ASCM update recorded.');
+  assert.equal(f.indicator.querySelector('.ascm-update-elapsed').hidden, true);
+  assert.equal(f.indicator.querySelector('.ascm-update-date').hidden, true);
+  f.view.render({ ...state, connected: false }); assert.equal(tooltip.hidden, true);
+  f.view.render(state); f.indicator.dispatch('pointerenter'); assert.equal(tooltip.hidden, false);
+  f.view.destroy(); assert.equal(tooltip.hidden, true);
+  f.indicator.dispatch('pointerenter'); assert.equal(tooltip.hidden, true);
+  assert.equal(f.timers.size, 0);
+});
+
+test('readout counts local calendar days across midnight year boundary and daylight saving', () => {
+  const previousZone = process.env.TZ; process.env.TZ = 'America/Los_Angeles';
+  try {
+    for (const [current, at, age, date] of [
+      ['2026-10-17T12:00:00.000Z', '2026-10-17T08:00:00.000Z', 'Today', 'Oct 17, 2026'],
+      ['2026-10-18T07:10:00.000Z', '2026-10-18T06:50:00.000Z', '1 day ago', 'Oct 17, 2026'],
+      ['2026-10-18T12:00:00.000Z', '2026-10-16T12:00:00.000Z', '2 days ago', 'Oct 16, 2026'],
+      ['2027-01-01T08:10:00.000Z', '2027-01-01T07:50:00.000Z', '1 day ago', 'Dec 31, 2026'],
+      ['2026-03-09T07:30:00.000Z', '2026-03-08T08:30:00.000Z', '1 day ago', 'Mar 8, 2026'],
+      ['2026-11-02T08:30:00.000Z', '2026-11-01T07:30:00.000Z', '1 day ago', 'Nov 1, 2026'],
+    ]) {
+      const f = viewFixture(Date.parse(current));
+      f.view.render({ connected: true, mode: 'service', ascmSupervisor: { enabled: true, working: false, lastUpdatedAt: at } });
+      const elapsed = f.indicator.querySelector('.ascm-update-elapsed');
+      assert(elapsed, 'styled readout exposes the accepted update age');
+      f.indicator.focus();
+      assert.equal(elapsed.textContent, age, current);
+      assert.equal(f.indicator.querySelector('.ascm-update-date').textContent, date);
+      assert.equal(f.indicator.querySelector('.ascm-update-date').dateTime, at);
+      assert.equal(f.indicator.querySelector('.ascm-update-heading').textContent, 'Last ASCM update');
+      f.view.destroy();
+    }
+  } finally { if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone; }
+});
+
+test('Escape dismisses the clock readout before roster and hidden focused clock returns to connection control', async () => {
+  const f = await headerFixture();
+  try {
+    const bot = f.brand.querySelector('.ascm-supervisor-header'), popover = f.brand.querySelector('.master-presence-popover');
+    const tooltip = f.indicator.querySelector('.ascm-update-tooltip');
+    assert(tooltip, 'actual initializer mounts the clock readout');
+    bot.focus(); bot.click(); await f.app.refresh();
+    assert.equal(popover.hidden, false);
+    const before = f.calls;
+    f.indicator.focus(); assert.equal(tooltip.hidden, false);
+    const event = f.documentObject.dispatch('keydown', { key: 'Escape' });
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(tooltip.hidden, true);
+    assert.equal(popover.hidden, false, 'tooltip Escape does not close the separate people dialog');
+    assert.equal(f.documentObject.activeElement, f.indicator);
+    assert.equal(f.calls, before);
+    f.documentObject.dispatch('keydown', { key: 'Escape' }); assert.equal(popover.hidden, true);
+    f.indicator.focus();
+    f.reply = { sessions: [], ascmSupervisor: { enabled: false } }; await f.app.refresh();
+    assert.equal(f.documentObject.activeElement, f.brand.querySelector('.master-presence-trigger'));
+    assert.equal(tooltip.hidden, true);
+  } finally { f.app.destroy(); }
+});
 
 test('enabled supervisor has its own noninteractive portrait and a blank name while actual work stays in the toolbar', () => {
   const f = viewFixture();
@@ -209,12 +320,12 @@ test('enabled supervisor has its own noninteractive portrait and a blank name wh
     assert.equal(person.querySelector('.ascm-supervisor-reconnect').hidden, true);
   }
   f.view.render({ ...state, ascmSupervisor: active({ productCount: 1 }) });
-  assert.equal(f.indicator.title, 'Updating ASCM · 1 product');
+  assert.equal(f.indicator.getAttribute('aria-label'), 'Updating ASCM · 1 product');
   f.view.render({ ...state, ascmSupervisor: active({ productCount: null }) });
-  assert.equal(f.indicator.title, 'Updating ASCM');
+  assert.equal(f.indicator.getAttribute('aria-label'), 'Updating ASCM');
   f.advance(120000);
   assert.equal(f.indicator.classList.contains('is-working'), false);
-  assert.equal(f.indicator.title, 'ASCM supervisor');
+  assert.equal(f.indicator.getAttribute('aria-label'), 'ASCM supervisor');
   assert.equal(f.indicator.querySelector('.ascm-supervisor-label').hidden, true);
   assert.equal(row.hidden, false);
   assert.equal(f.timers.size, 0);
@@ -284,7 +395,7 @@ test('only reported connection loss exposes a nontext key action and honest hand
   link.click();
   assert.deepEqual(controllerFixture.controller.getState().ascmSupervisor.reconnectRequired, ['outlook']);
   assert.equal(controllerFixture.calls.length, 1);
-  assert.equal(f.indicator.title, 'ASCM supervisor');
+  assert.equal(f.indicator.getAttribute('aria-label'), 'ASCM supervisor');
   controllerFixture.reply = { sessions: [], ascmSupervisor: { enabled: true, working: false, productCount: null, expiresAt: null } };
   await controllerFixture.controller.heartbeat(); f.view.render(controllerFixture.controller.getState());
   assert.equal(action, f.rosterContainer.querySelector('.ascm-supervisor-reconnect'));
@@ -306,7 +417,7 @@ test('reconnect focus survives lost-state updates and closes safely on Escape, r
   f.view.render({ ...state, ascmSupervisor: active({ productCount: 1, reconnectRequired: ['outlook'] }) });
   assert.equal(hint.hidden, false);
   assert.equal(f.documentObject.activeElement, hint.querySelector('.ascm-reconnect-link'));
-  assert.equal(f.indicator.title, 'Updating ASCM · 1 product');
+  assert.equal(f.indicator.getAttribute('aria-label'), 'Updating ASCM · 1 product');
   assert.equal(f.view.closeReconnect(), true);
   assert.equal(hint.hidden, true);
   assert.equal(f.documentObject.activeElement, action);
@@ -337,12 +448,14 @@ if (process.argv.includes('--preview')) {
     response.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'");
     const url = new URL(request.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
-      const mode = ['idle', 'disabled', 'expired', 'unknown', 'reconnect'].includes(url.searchParams.get('state')) ? url.searchParams.get('state') : 'active';
+      const mode = ['idle', 'disabled', 'expired', 'unknown', 'reconnect', 'missing-update', 'invalid-update'].includes(url.searchParams.get('state')) ? url.searchParams.get('state') : 'active';
       const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASCM header face · local preview</title><link rel="stylesheet" href="css/fonts.css"><link rel="stylesheet" href="css/styles.css"><link rel="stylesheet" href="css/presence-expressions.css"><script>
 const fixtureMode=${JSON.stringify(mode)};
-const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!['idle','reconnect'].includes(fixtureMode),productCount:['idle','reconnect','unknown'].includes(fixtureMode)?null:12,expiresAt:['idle','reconnect'].includes(fixtureMode)?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[]}})})};
+const fixtureLastUpdate=new Date();fixtureLastUpdate.setDate(fixtureLastUpdate.getDate()-2);
+const fixtureIdle=['idle','reconnect','missing-update','invalid-update'].includes(fixtureMode);
+const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!fixtureIdle,productCount:fixtureIdle||fixtureMode==='unknown'?null:12,expiresAt:fixtureIdle?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[],...(fixtureMode==='missing-update'?{}:{lastUpdatedAt:fixtureMode==='invalid-update'?'not-a-recorded-date':fixtureLastUpdate.toISOString()})}})})};
 globalThis.PortfolioMasterUI={getSession:()=>fixtureSession};
-</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">The supervisor's face is visible beside the people in the main header. Select it to open the existing connection details. A lost connection adds the key alert in those details; healthy status keeps the face without a name or key. Open Copilot Studio opens the owner's actual flow in a new tab; flow access requires the owner's Microsoft account.</section></div></main></body></html>`;
+</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status and ASCM update date. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Hover or focus the right-side clock for the synthetic last-update readout. The supervisor's face is visible beside the people in the main header. Select it to open the existing connection details. A lost connection adds the key alert in those details; healthy status keeps the face without a name or key. Open Copilot Studio opens the owner's actual flow in a new tab; flow access requires the owner's Microsoft account.</section></div></main></body></html>`;
       response.setHeader('Content-Type', 'text/html'); response.end(body); return;
     }
     if (!routes.has(url.pathname)) { response.writeHead(404); response.end(); return; }
