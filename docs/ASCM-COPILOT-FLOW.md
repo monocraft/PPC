@@ -6,6 +6,8 @@ receipts and encrypted SharePoint delivery. An Off draft or local test is not an
 activated supervisor. The binding design is
 [Native Copilot ASCM worker](superpowers/specs/2026-10-17-copilot-ascm-worker-design.md).
 
+The dated checkpoints below preserve setup history. The latest diagnostic/capacity/UI checkpoint records the current flags and runtime outcomes; it supersedes earlier status-false, capacity-confirmed, unpublished-draft and not-yet-run statements.
+
 ## Backend setup
 
 `node scripts/prepare-ascm-flow-deployment.mjs` stages an explicit 17-file source
@@ -26,8 +28,8 @@ all 17 staged files, allowing only CRLF/LF normalization. In a later owner-entry
 checkpoint, the exact `PPC_ASCM_FLOW_SECRET` secret name was confirmed and the
 flow's secured worker credential was saved; no raw key was read. The owner has
 now approved only this worker's saved-secret/fixed-route access and platform JWT
-Off, which is persisted, and confirmed existing Copilot capacity.
-`PPC_ASCM_FLOW_ENABLED=true` is persisted, with status false. Main is published
+Off, which is persisted. Existing capacity was owner-reported at this historical checkpoint; the later actual normal-run credit block supersedes that assumption.
+`PPC_ASCM_FLOW_ENABLED=true` is persisted. Status was false at this historical checkpoint and is now verified true as recorded below. Main was published
 manual setup and verified Off after three intentionally canceled tests. Native
 worker auth/private-queue access, actual native seed receipt, and ordinary
 SharePoint publication generation 2 / revision 82 are verified. Report import,
@@ -37,7 +39,7 @@ requested restart/retry/deployment hardening before production; see
 See the current seed-cache/native-confirmation checkpoint below; these prerequisites
 do not establish an operating hourly supervisor.
 
-## Temporary manual bootstrap checkpoint
+## Historical temporary manual bootstrap checkpoint
 
 The same flow `5bb99050-adca-f111-a05c-000d3a3191e3` now holds a saved,
 published temporary **Request / Button** bootstrap setup. The reviewed hourly
@@ -267,7 +269,7 @@ connection test; fresh post-test Overview verified Off and hourly remains disabl
 worker consent and existing capacity are confirmed; the current seed-reader
 failure is described below.
 
-## Current operator checkpoint: seed confirmed, normal publication pending
+## Historical operator checkpoints: seed then normal publication
 
 Scoped worker consent and existing Copilot capacity are confirmed. Worker JWT
 Off and `PPC_ASCM_FLOW_ENABLED=true` are persisted; status remains false. Package
@@ -370,9 +372,9 @@ nonsecret release source. The owner-entered credential remains opaque and must
 never be replaced with the source placeholder. The saved native report branch
 now matches the canonical branch after only equivalent runAfter status
 case/order normalization. Its recovery edits and finite safe-request retries
-are saved in the existing Off manual flow; the latest draft is not published.
+were saved in the Off manual flow at this historical authoring checkpoint, before the protected manual report-test version was published.
 Microsoft's final Designer checker reports **zero errors and zero warnings**.
-Temporary bootstrap isolation is still present pending the approved report test.
+The later controlled report tests exercised the protected manual path; this earlier bootstrap-isolation observation is historical.
 
 Forward migration `202610180001_package_delivery_recovery.sql` is deployed.
 Actual function-body fingerprints match both reviewed functions, with anon and
@@ -413,12 +415,11 @@ distinct runtime gates. A total run loss may leave a harmless staging orphan;
 this release does not claim cross-run conditional creation or negative upload
 settlement.
 
-A fresh bounded Inbox query still found no eligible report after the unchanged
-`2026-10-18T03:42:00Z` cutoff. The owner has now approved a **one-message** test
-of the October 2026 monthly release from Linny Chen, received September 30 at
-09:01:09 UTC. That test has not run yet. It must preserve exact-message identity,
-the protected-data checks, and normal-publication Archive authority, then restore
-the normal query. This authorizes no general historical backfill.
+A fresh bounded Inbox query found no eligible report after the unchanged
+`2026-10-18T03:42:00Z` cutoff. The owner-approved exact October historical-report
+test has since run and reached the protected date-policy hold below. Exact
+message identity and protected-data/publication/Archive gates were retained.
+This authorizes no general historical backfill or ordinary-cutoff change.
 
 Global SharePoint source cutover has an additional liveness hold: standalone
 ordinary or owner-image publications have no queue consumer when there is no
@@ -427,6 +428,81 @@ designed separately; no new inbound capability or permission is activated, and
 idle backend polling is not an acceptable workaround. Real report/Archive,
 source adoption, production recurrence restoration, and the first scheduled
 cloud run remain incomplete.
+
+## Latest diagnostic, capacity and UI checkpoint (October 18, 2026)
+
+The exact-source historical exception is source `87eb040`, followed by pushed
+review-diagnostic source `6878b488bff79026c534b1080154b004a1343413`.
+The temporary exact-source exception is now disabled while paused:
+`PPC_ASCM_APPROVED_REPORT` was replaced with `{}` and its persisted SHA256
+`44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a`
+was verified. The setting was retained; its prior historical expiry is not a
+current admission grant. Ordinary cutoff and every protected-data, receipt,
+publication and Archive gate remain unchanged. Private message IDs stay excluded.
+No authoritative ASCM date policy has been configured yet.
+
+The diagnostic now exposes only allowlisted typed review reasons. Its real RED
+and independent review covered actual date-policy holds, twelve typed reasons,
+eight invalid cases plus a separate lookalike case, zero commit and private-data preservation. HTTP
+**22/22**, deployment **17**, and three syntax checks passed. Both copies of the
+planner/API/HTTP closure were deployed. Downloaded worker ZIP5 SHA256
+`55ce9caa01b7f476e25d8fd0197fdf33fda9c0473cdeaa143cbc057b789fc86b`
+matched all **17/17** frozen staged files in `live-review-reason-worker-parity.json`.
+No key, JWT or grant was changed.
+
+An actual Overview **Run** was blocked **before execution** because the
+environment does not have sufficient Copilot Credits to run workflows
+(`ascm-copilot-capacity-blocked.png`). This actual result overrides the earlier
+owner-reported capacity assumption. No purchase, billing change or normal-run
+retry followed. A legitimate bounded designer test did execute: run
+`08584092609529257352237070179CU12`, **9 seconds**, protected source/history,
+Import **HTTP409 `ASCM_REVIEW_REQUIRED`**, exact reason **`DATE_POLICY_REQUIRED`**,
+`archiveAllowed=false`, and no accepted changes or SharePoint publication.
+Move exact report, read moved message and Archive verification were all
+**Skipped**. `actual-october-review-reason.json` retains this bounded outcome.
+The previous test's unknown reason is now resolved; accepted report/Archive is
+still unproven. Root freshly verified settled **Status Off**, Turn on available and a persisted
+description stating the capacity block and pending date-policy choice. No hourly trigger has operated. Publisher
+is Disabled.
+
+Two owner answers remain pending: allocate existing environment credits versus
+the laptop fallback, and whether ASCM should authoritatively update GA/EM versus
+protect specific dates. No date-policy setting or billing allocation is inferred
+from those pending questions.
+
+Supervisor status is now **true**, verified by the configured flag digest and one
+configuration-row readback. The owner's connected-browser screenshot shows the
+bot in the Users popover and the clock in the toolbar, proving that released
+status presentation. The inline-face change is commit `8e6878f`; its independent
+review, eleven UI and eighteen presence checks passed. An isolated browser
+preview verified the idle bot beside two human portraits and Enter/close/focus
+behavior. The requested Roadmap-Today-style last-update hover is commit
+`4bbd2c2`. Genuine REDs preceded API **9/9** and UI **15/15** passing checks;
+the four existing backend operations are unchanged. Independent review approved
+the five-file hover delta with no actionable P1/P2 findings. The actual isolated
+browser preview showed a
+compact card, “Last ASCM update”, “2 days ago” and “Oct 16, 2026”; pointer hover,
+the bridge between trigger/card, departure dismissal and keyboard Escape passed.
+At 390px width the card's right edge was 380px. Keyboard focus showed the existing
+two-pixel focus ring, and reduced-motion emulation disabled clock animation
+without hiding working text. Accepted
+`ascmSnapshot.importedAt` projects as `lastUpdatedAt` through existing presence,
+without SQL or new requests; optional telemetry failure preserves successful
+commit timing. The displayed preview date is synthetic evidence, not live ASCM
+freshness. Main remains Off/manual with exact-test authoring still to restore;
+publisher remains Disabled.
+
+The final combined source passed all **160/160** canonical commands with
+required isolated PGlite, followed by generated shared-source parity and
+`git diff --check`. The single final deterministic Graphify build and check
+passed with **7,711 nodes / 14,200 edges / 317 communities** and current source
+hashes. PR #92 tracks source integration and the Pages release; source review
+and these isolated previews do not themselves prove deployed frontend bytes.
+The overall goal remains incomplete: normal execution lacks allocated credits,
+report saving is held for date policy, global SharePoint browser adoption and
+ordinary-publication consumption remain held, and hourly execution is unproven.
+Monthly durable Inbox plus accepted-receipt replay remains sufficient follow-
+through; no new SAS or idle polling is needed for that monthly path.
 
 ## Required seed and source cutover
 
@@ -462,7 +538,7 @@ are now verified; source cutover remains unverified.
 Worker JWT is Off and Flow enablement true within the approved bounded setup.
 Actual 45,439,227-byte worker download/raw confirmation is verified. Real eligible report processing,
 policy/history-concealment checks and first scheduled run remain separate gates.
-Existing Copilot capacity has been confirmed.
+Existing capacity was owner-reported here; the latest actual normal-run insufficient-Credits result above overrides that historical assumption.
 
 ## Verification and activation
 
