@@ -43,13 +43,13 @@
 - Package core produces `getQueuedPublicationMetadata()` without signed URLs and `openQueuedPublication({candidateId,generation},{signal})` returning a verified binary Response. Existing methods unchanged.
 - Confirmation headers: `X-PPC-Package-Generation`, `X-PPC-SP-Drive-Id`, `X-PPC-SP-Folder-Id`, `X-PPC-SP-Item-Id`, `X-PPC-SP-Version-Id`, `X-PPC-SP-File-Name`; canonical bounded text, no caller digest.
 
-- [ ] Write route/auth/default-off and cutoff tests; run and observe missing behavior fail.
-- [ ] Implement only the scoped HTTP contract and lazy application composition; keep import credential server-side.
-- [ ] Test 200/202/held/error receipt sanitization, exact digest/message binding, legacy/seed Archive denial and independent current normal-publication check.
-- [ ] Add core queued metadata/open tests: no signed URL leakage, current/history denial, exact identity, expiry, raw envelope/hash/length/cancellation; observe failure before code.
-- [ ] Add raw confirmation tests including an actual generated 45 MiB fixture, full 64 MiB bound, truncation/stall/abort, historical confirmation replay and no digest-as-proof path.
-- [ ] Extend actual PGlite integration with native worker transport, generated XLSX, native acceptance/publication receipt, protected browser workspace and final exact-message gate.
-- [ ] Run focused tests plus existing MCP/package/import regressions, then commit only verified source/tests.
+- [x] Write route/auth/default-off and cutoff tests; run and observe missing behavior fail.
+- [x] Implement only the scoped HTTP contract and lazy application composition; keep import credential server-side.
+- [x] Test 200/202/held/error receipt sanitization, exact digest/message binding, legacy/seed Archive denial and independent current normal-publication check.
+- [x] Add core queued metadata/open tests: no signed URL leakage, current/history denial, exact identity, expiry, raw envelope/hash/length/cancellation; observe failure before code.
+- [x] Add raw confirmation tests including an actual generated 45 MiB fixture, full 64 MiB bound, truncation/stall/abort, historical confirmation replay and no digest-as-proof path.
+- [x] Extend actual PGlite integration with native worker transport, generated XLSX, native acceptance/publication receipt, protected browser workspace and final exact-message gate.
+- [x] Run focused tests plus existing MCP/package/import regressions, then commit only verified source/tests.
 
 ### Task 2: Deployable source and native flow assembly
 
@@ -57,11 +57,16 @@
 
 **Interfaces:** Consume Task 1 routes/headers. Produce a self-contained source manifest/staged directory using existing canonical master/package files, and exact native flow action/condition configuration.
 
-- [ ] Test a temporary deployment stage with source-file hash mapping and rewritten relative imports; run fail first, implement preparer, verify no credentials included.
-- [ ] Validate canonical/staged Deno sources with the existing frozen runtime and reviewed source bundle method; add configured project check.
-- [ ] Document exact actions, binary token wiring, create-only REST operation, metadata/version checks, secure history settings, retry rules and recovery links.
-- [ ] Assemble the existing Studio draft using supported UI authoring. Save only; preserve plan, approved connections and Off state. Do not silently add a new flow or agent.
-- [ ] Run local configured checks, deterministic Graphify build/check once, and independent source/security review. Resolve substantive findings before deployment.
+- [x] Test a temporary deployment stage with source-file hash mapping and rewritten relative imports; run fail first, implement preparer, verify no credentials included.
+- [x] Validate canonical/staged Deno sources with the existing frozen runtime and reviewed source bundle method; add configured project check.
+- [x] Document exact actions, binary token wiring, create-only REST operation, metadata/version checks, secure history settings, retry rules and recovery links.
+- [x] Assemble the existing Studio draft using supported UI authoring. Save only; preserve plan, approved connections and Off state. Do not silently add a new flow or agent.
+- [x] Run local configured checks, deterministic Graphify build/check once, and independent source/security review. Resolve substantive findings before deployment.
+
+Task 1 and 2 completion is source/draft preparation only. The saved native main
+flow remains unpublished and Off with no runs. Separate announced manual test
+assets proved small binary transfer, collision refusal, and actual RESTv2 item
+and version metadata; package-scale native execution remains a Task 3 gate.
 
 ### Task 3: Bounded production integration and verified activation
 
