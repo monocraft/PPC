@@ -91,6 +91,87 @@ test('signed READ expires in five minutes and delete absence is checked only for
   assert.deepEqual(await storage.removeObject(candidate), { absent: true });
   assert.deepEqual(calls.slice(1).map(c => c.options.method), ['DELETE', 'GET']);
 });
+test('legacy HTTP 400 NoSuchKey for the exact object still requires independent missing GET', async () => {
+  const missingBody = { statusCode: '404', code: 'NoSuchKey',
+    error: 'NoSuchKey', message: 'Object not found' };
+  const observedLegacyBody = { ...missingBody, error: 'not_found' };
+  const legacyMissing = body => Response.json(body, { status: 400 });
+  for (const [deleteMissing, body] of [[true, missingBody], [false, missingBody],
+    [true, observedLegacyBody], [false, observedLegacyBody]]) {
+    const calls = [];
+    const storage = createPackageDeliveryStorage({ env, fetchImpl: async (url, options) => {
+      calls.push({ url, method: options.method });
+      assert.equal(url, `${env.SUPABASE_URL}/storage/v1/object/${options.method === 'GET' ? 'authenticated/' : ''}ppc-package-delivery/${candidate.objectKey}`);
+      return options.method === 'DELETE' && !deleteMissing ? new Response(null, { status: 200 }) : legacyMissing(body);
+    } });
+    assert.deepEqual(await storage.removeObject(candidate), { absent: true });
+    assert.deepEqual(calls.map(call => call.method), ['DELETE', 'GET']);
+  }
+  const present = createPackageDeliveryStorage({ env, fetchImpl: async (_url, options) =>
+    options.method === 'DELETE' ? legacyMissing(missingBody) : new Response(bytes) });
+  await assert.rejects(() => present.removeObject(candidate), 'DELETE missing alone cannot release a present object');
+});
+test('only the exact bounded legacy missing-object error qualifies; other failures keep cleanup held', async () => {
+  const exact = { statusCode: '404', code: 'NoSuchKey', error: 'NoSuchKey', message: 'Object not found' };
+  const bad = [
+    { ...exact, code: 'NoSuchBucket' }, { ...exact, error: 'AccessDenied' },
+    { ...exact, error: 'other_missing' }, { ...exact, extra: 'unexpected' },
+    { statusCode: '404', code: 'NoSuchKey', message: 'Object not found' },
+    { ...exact, statusCode: '400' }, { ...exact, statusCode: 404 },
+    { ...exact, message: 'Access denied' },
+    { httpStatusCode: 404, userStatusCode: 400, resource: candidate.objectKey,
+      code: 'NoSuchKey', metadata: {}, error: 'not_found' },
+  ];
+  for (const body of bad) {
+    let calls = 0;
+    const storage = createPackageDeliveryStorage({ env, fetchImpl: async (_url, options) => {
+      calls++; return options.method === 'DELETE' ? Response.json(body, { status: 400 }) : new Response(null, { status: 404 });
+    } });
+    await assert.rejects(() => storage.removeObject(candidate));
+    assert.equal(calls, 1, 'unqualified DELETE cannot proceed to independent GET');
+  }
+  for (const response of [new Response('<html>NoSuchKey</html>', { status: 400 }),
+    Response.json(exact, { status: 403 }), Response.json(exact, { status: 400,
+      headers: { 'content-length': '8192' } }), new Response(JSON.stringify(exact), { status: 400,
+      headers: { 'content-type': 'text/html' } })]) {
+    const storage = createPackageDeliveryStorage({ env, fetchImpl: async () => response });
+    await assert.rejects(() => storage.removeObject(candidate));
+  }
+});
+test('HTTP 400 cleanup diagnostics classify bounded wire shape without exposing values or changing the hold', async () => {
+  const observed = []; const original = console.error;
+  console.error = value => { observed.push(value); };
+  try {
+    const body = { statusCode: '404', error: 'not_found', message: 'Object not found', resource: 'PRIVATE_RESOURCE_SENTINEL' };
+    const storage = createPackageDeliveryStorage({ env, fetchImpl: async () => Response.json(body, { status: 400 }) });
+    await assert.rejects(() => storage.removeObject(candidate));
+    assert.equal(observed.length, 1);
+    const event = JSON.parse(observed[0]);
+    assert.deepEqual(event, { event: 'package_storage_missing_shape', phase: 'delete',
+      contentTypeJson: true, body: 'parsed', keys: ['error', 'message', 'resource', 'statusCode'], unknownKeys: false,
+      statusCode: 'string404', code: 'absent', error: 'not_found', message: 'object_not_found' });
+    assert.equal(observed[0].includes('PRIVATE_RESOURCE_SENTINEL'), false);
+  } finally { console.error = original; }
+});
+test('verification-side 400 is separately classified; a failing log sink cannot change cleanup outcome', async () => {
+  const exact = { statusCode: '404', code: 'NoSuchKey', error: 'NoSuchKey', message: 'Object not found' };
+  const observed = []; const original = console.error;
+  try {
+    console.error = value => { observed.push(value); };
+    const storage = createPackageDeliveryStorage({ env, fetchImpl: async (_url, options) => Response.json(options.method === 'DELETE'
+      ? exact : { ...exact, PRIVATE_KEY_SENTINEL: 'PRIVATE_VALUE_SENTINEL' }, { status: 400 }) });
+    await assert.rejects(() => storage.removeObject(candidate));
+    assert.deepEqual(observed.map(value => JSON.parse(value).phase), ['delete', 'verify']);
+    assert.equal(JSON.parse(observed[1]).unknownKeys, true);
+    assert.equal(observed.join('\n').includes('PRIVATE_KEY_SENTINEL'), false);
+    assert.equal(observed.join('\n').includes('PRIVATE_VALUE_SENTINEL'), false);
+    console.error = () => { throw Error('PRIVATE_LOG_SINK_SENTINEL'); };
+    const missing = createPackageDeliveryStorage({ env, fetchImpl: async () => Response.json(exact, { status: 400 }) });
+    assert.deepEqual(await missing.removeObject(candidate), { absent: true });
+    const held = createPackageDeliveryStorage({ env, fetchImpl: async () => Response.json({ ...exact, code: 'NoSuchBucket' }, { status: 400 }) });
+    await assert.rejects(() => held.removeObject(candidate), error => !error.message.includes('PRIVATE_LOG_SINK_SENTINEL'));
+  } finally { console.error = original; }
+});
 test('package deployment stages a deterministic independent module closure with disabled defaults', async () => {
   let staging; try { staging = await import('../prepare-package-delivery-deployment.mjs'); } catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error; }
   assert.equal(typeof staging?.preparePackageDeliveryDeployment, 'function', 'standalone package deployment preparation is required');

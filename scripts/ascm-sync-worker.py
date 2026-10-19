@@ -706,7 +706,8 @@ def read_handoff(root: Path, manifest_file: str, expected: dict, now: datetime):
 
 def _new_state():
     return {"version": 1, "source": None, "publication": None, "pending": None, "idleAttempts": [], "maxWallTime": None,
-            "engine": {"retryAt": None, "providerSignal": None, "commandSubmission": None, "preSubmissionHistory": [], "deliveryDemand": None}}
+            "engine": {"retryAt": None, "providerSignal": None, "commandSubmission": None, "preSubmissionHistory": [], "deliveryDemand": None,
+                       "lastOutcome": None, "providerReported": None}}
 
 
 def _request_id(source):
@@ -769,12 +770,31 @@ def _state_shape(state, now):
     """Reject malformed protected business state before indexing nested records."""
     # Upgrade only the reviewed pre-engine shape; never reset its accepted work.
     if type(state) is dict and set(state) == set(_new_state()) - {"engine"}:
-        state["engine"] = {"retryAt": None, "providerSignal": None, "commandSubmission": None, "preSubmissionHistory": [], "deliveryDemand": None}
+        state["engine"] = _new_state()["engine"]
+    legacy_engine = {"retryAt", "providerSignal", "commandSubmission", "preSubmissionHistory", "deliveryDemand"}
+    if type(state) is dict and type(state.get("engine")) is dict and set(state["engine"]) == legacy_engine:
+        state["engine"].update(lastOutcome=None, providerReported=None)
     _require(_exact(state, _new_state()) and type(state["version"]) is int and state["version"] == 1
              and type(state["idleAttempts"]) is list and len(state["idleAttempts"]) <= 24, "WORKER_STATE_INVALID")
-    _require(_exact(state["engine"], {"retryAt", "providerSignal", "commandSubmission", "preSubmissionHistory", "deliveryDemand"})
+    _require(_exact(state["engine"], legacy_engine | {"lastOutcome", "providerReported"})
              and state["engine"]["providerSignal"] in (None, "available", "reconnect_required"), "WORKER_STATE_INVALID")
     if state["engine"]["retryAt"] is not None: _instant(state["engine"]["retryAt"])
+    outcome = state["engine"]["lastOutcome"]
+    if outcome is not None:
+        _require(_exact(outcome, {"code", "reviewReason", "statusCode", "at"})
+                 and outcome["code"] in ("SOURCE_REVIEW_REQUIRED", "IMPORT_AUTH_REQUIRED", "IMPORT_FORBIDDEN", "SOURCE_HELD")
+                 and _integer(outcome["statusCode"], 100, 599) and outcome["statusCode"] not in (200, 202)
+                 and _instant(outcome["at"]) <= now, "WORKER_STATE_INVALID")
+        if outcome["code"] == "SOURCE_REVIEW_REQUIRED":
+            _require(outcome["statusCode"] == 409 and type(outcome["reviewReason"]) is str and outcome["reviewReason"] in SOURCE_REVIEW_REASONS, "WORKER_STATE_INVALID")
+        else:
+            _require(outcome["reviewReason"] is None and (outcome["code"] == "SOURCE_HELD"
+                     or outcome["statusCode"] == (401 if outcome["code"] == "IMPORT_AUTH_REQUIRED" else 403)), "WORKER_STATE_INVALID")
+    reported = state["engine"]["providerReported"]
+    if reported is not None:
+        _require(_exact(reported, {"attemptId", "state", "authAttemptId"}) and reported["state"] in ("available", "reconnect_required")
+                 and all(reported[k] is None or _match(reported[k], UUID_PATTERN) for k in ("attemptId", "authAttemptId"))
+                 and (reported["state"] != "reconnect_required" or reported["attemptId"] is not None and reported["authAttemptId"] == reported["attemptId"]), "WORKER_STATE_INVALID")
     demand = state["engine"]["deliveryDemand"]
     if demand is not None:
         _require(_exact(demand, {"candidateId", "generation", "observedAt"}) and _match(demand["candidateId"], UUID_PATTERN)
@@ -974,6 +994,9 @@ SOURCE_ROUTE = "/api/ascm/sharepoint/import"
 PREPARE_ROUTE = "/api/ascm/publication/prepare"
 CONNECTION_ROUTE = "/api/ascm/connection"
 HOLD_CODES = {"PHASE_NOT_READY", "CURRENT_MISSING", "STATE_INVALID", "OWNER_INTENT_UNKNOWN", "PUBLISHER_NOT_CONFIGURED", "PREPARE_ATTEMPTS_EXHAUSTED"}
+SOURCE_REVIEW_REASONS = frozenset(("AMBIGUOUS_MATCH", "CATEGORY_RELOCATION", "DATE_POLICY_REQUIRED", "DUPLICATE_MATCH",
+    "INCOMPATIBLE_MAPPING", "INCOMPLETE_NEW_PRODUCT", "MALFORMED_REPORT", "MASTER_CONFLICT",
+    "PRODUCT_ID_COLLISION", "PROTECTED_DATE", "STALE_REPORT", "TOO_MANY_GROUPS"))
 
 
 def validate_control(value, destination, now):
@@ -1175,9 +1198,19 @@ class _Pass:
     def finish(self, phase, code, *, report=True):
         signal = self.state["engine"]["providerSignal"]
         if report and self.was_active and signal is not None and self.calls < 6 and self.monotonic()-self.started < 480:
+            command = (self.state["publication"] or {}).get("command")
+            source = self.state["source"]
+            attempt = command["attemptId"] if command is not None else source["handoff"]["attemptId"] if source is not None else None
+            previous = self.state["engine"]["providerReported"]
+            if previous is not None and previous["attemptId"] == attempt and previous["state"] == signal:
+                self.state["engine"]["providerSignal"] = None; self.save()
+                return {"phase": phase, "calls": self.calls, "code": code}
             status, result = self.json_call("POST", CONNECTION_ROUTE, value={"service": "sharepoint", "state": signal}, replay=False)
             _require(status == 200 and _exact(result, {"reported", "archiveAllowed"}) and type(result["reported"]) is bool and result["archiveAllowed"] is False, "CONNECTION_REPLY_INVALID")
-            if result["reported"]: self.state["engine"]["providerSignal"] = None; self.save()
+            if result["reported"]:
+                auth_attempt = attempt if signal == "reconnect_required" else previous["authAttemptId"] if previous is not None else None
+                self.state["engine"]["providerReported"] = {"attemptId": attempt, "state": signal, "authAttemptId": auth_attempt}
+                self.state["engine"]["providerSignal"] = None; self.save()
         return {"phase": phase, "calls": self.calls, "code": code}
 
     def discover(self):
@@ -1217,8 +1250,21 @@ class _Pass:
         raw = base64.b64decode(source["rawBase64"], validate=True)
         _raw_identity(raw, source["rawSha256"], handoff["source"]["bytes"])
         requested = _stamp(self.now())
-        status, body = self.json_call("POST", SOURCE_ROUTE, value={"schemaVersion": 1, "source": handoff["source"], "before": handoff["before"], "after": handoff["after"], "workbookBase64": source["rawBase64"]})
-        _require(status in (200, 202), "SOURCE_HELD")
+        response = self.call("POST", SOURCE_ROUTE, value={"schemaVersion": 1, "source": handoff["source"], "before": handoff["before"], "after": handoff["after"], "workbookBase64": source["rawBase64"]})
+        status = response["status"]
+        if status not in (200, 202):
+            try: body = strict_json(response["body"])
+            except WorkerError: body = None
+            review = type(body) is dict and body.get("code") == "ASCM_REVIEW_REQUIRED" and status == 409
+            reason = body.get("reviewReason") if review else None
+            reason = reason if type(reason) is str and reason in SOURCE_REVIEW_REASONS else None
+            code = "SOURCE_REVIEW_REQUIRED" if reason is not None else "IMPORT_AUTH_REQUIRED" if status == 401 else "IMPORT_FORBIDDEN" if status == 403 else "SOURCE_HELD"
+            self.state["engine"]["lastOutcome"] = {"code": code, "reviewReason": reason, "statusCode": status, "at": _stamp(self.now())}
+            # This is an active-source retry, separate from the unchanged idle metadata allowance.
+            if status in (401, 403, 409): self.state["engine"]["retryAt"] = _stamp(self.now()+timedelta(hours=1))
+            self.save(); raise WorkerError(code)
+        body = strict_json(response["body"])
+        self.state["engine"]["lastOutcome"] = None
         self.event("source_reply", {"statusCode": status, "body": body, "requestedAt": requested})
         self.fault("source_reply_saved")
 
@@ -1241,7 +1287,8 @@ class _Pass:
         else: value, raw = matches[-1]
         self.event("result", value, {"raw": raw})
         if value["status"] != "verified":
-            if value["code"] == "SHAREPOINT_AUTH_REQUIRED":
+            reported = self.state["engine"]["providerReported"]
+            if value["code"] == "SHAREPOINT_AUTH_REQUIRED" and (reported is None or reported["authAttemptId"] != cmd["attemptId"]):
                 self.state["engine"]["providerSignal"] = "reconnect_required"; self.save()
             return False
         self.state["engine"]["providerSignal"] = "available"; self.save(); self.fault("remote_verified")
@@ -1317,7 +1364,7 @@ class _Pass:
                 _raw_identity(raw, publication["candidate"]["sha256"], publication["candidate"]["bytes"], package=True)
                 self.publish_command(raw)
                 return self.finish("waiting", "COMMAND_WAIT", report=False)
-            if not self.command_result(): return self.finish("waiting", "COMMAND_WAIT", report=self.state["engine"]["providerSignal"] == "reconnect_required")
+            if not self.command_result(): return self.finish("waiting", "COMMAND_WAIT", report=self.state["engine"]["providerSignal"] is not None)
             self.replay_source()
         else:
             self.replay_source()
@@ -1506,6 +1553,19 @@ def task_xml(runtime, sid, now, *, enabled=False):
     return ET.tostring(root, encoding="unicode")
 
 
+def _task_owner_sam(sid):
+    """Accept only the native current owner's SAM form, never resolve an input name."""
+    code = "TASK_DEFINITION_INVALID"
+    _require(current_sid() == sid, code)
+    lookup = ctypes.WinDLL("secur32", use_last_error=True).GetUserNameExW
+    lookup.argtypes = [ctypes.c_int, W.LPWSTR, ctypes.POINTER(W.ULONG)]
+    lookup.restype = ctypes.c_ubyte  # SEC_ENTRY BOOLEAN, not the four-byte BOOL.
+    size = W.ULONG(32768); buffer = ctypes.create_unicode_buffer(size.value)
+    _require(lookup(2, buffer, ctypes.byref(size)) != 0 and 0 < size.value < len(buffer), code)
+    _require(current_sid() == sid and _text(buffer.value, 32767) and "\\" in buffer.value, code)
+    return buffer.value
+
+
 def verify_task(xml, runtime, sid, *, enabled):
     code = "TASK_DEFINITION_INVALID"
     _require(type(xml) is str and len(xml) <= 131072 and "<!" not in xml, code)
@@ -1516,6 +1576,16 @@ def verify_task(xml, runtime, sid, *, enabled):
         values = nodes(path); _require(len(values) == 1, code); return values[0]
     def text(path, expected): _require(one(path).text == expected, code)
     _require(tree.tag == "{"+TASK_NS+"}Task", code)
+    # Windows omits these documented defaults when reading back registered XML.
+    # Normalize only this fixed list; explicit values still pass the strict checks.
+    defaults = {"Principals/Principal/RunLevel": "LeastPrivilege", "Triggers/LogonTrigger/Enabled": "true",
+                "Triggers/TimeTrigger/Enabled": "true", "Triggers/TimeTrigger/Repetition/StopAtDurationEnd": "false",
+                "Settings/StartWhenAvailable": "false", "Settings/RunOnlyIfNetworkAvailable": "false", "Settings/Enabled": "true"}
+    for path, value in defaults.items():
+        found = nodes(path); _require(len(found) <= 1, code)
+        if not found:
+            parent, name = path.rsplit("/", 1)
+            ET.SubElement(one(parent), "{"+TASK_NS+"}"+name).text = value
     _require(len(list(one("Actions"))) == 1 and len(list(one("Principals"))) == 1 and len(list(one("Triggers"))) == 2, code)
     _require(one("Actions").get("Context") == "Owner" and one("Principals/Principal").get("id") == "Owner", code)
     for path, fields in (("Principals/Principal", {"UserId", "LogonType", "RunLevel"}),
@@ -1526,14 +1596,20 @@ def verify_task(xml, runtime, sid, *, enabled):
         children = list(one(path))
         _require(len(children) == len(fields) and {child.tag.rsplit("}", 1)[-1] for child in children} == fields, code)
     for path, expected in (("Principals/Principal/UserId", sid), ("Principals/Principal/LogonType", "InteractiveToken"), ("Principals/Principal/RunLevel", "LeastPrivilege"),
-                           ("Triggers/LogonTrigger/UserId", sid), ("Triggers/LogonTrigger/Enabled", "true"), ("Triggers/TimeTrigger/Enabled", "true"),
+                           ("Triggers/LogonTrigger/Enabled", "true"), ("Triggers/TimeTrigger/Enabled", "true"),
                            ("Triggers/TimeTrigger/Repetition/Interval", "PT5M"), ("Triggers/TimeTrigger/Repetition/StopAtDurationEnd", "false"),
                            ("Settings/MultipleInstancesPolicy", "IgnoreNew"), ("Settings/Enabled", "true" if enabled else "false"),
                            ("Settings/ExecutionTimeLimit", "PT8M"), ("Settings/StartWhenAvailable", "false"),
                            ("Settings/DisallowStartIfOnBatteries", "false"), ("Settings/StopIfGoingOnBatteries", "false"), ("Settings/RunOnlyIfNetworkAvailable", "false"),
                            ("Actions/Exec/Command", runtime["pythonw"]), ("Actions/Exec/Arguments", '-I -B "'+runtime["worker"]+'" run'),
                            ("Actions/Exec/WorkingDirectory", str(Path(runtime["worker"]).parent))): text(path, expected)
-    _instant(one("Triggers/TimeTrigger/StartBoundary").text)
+    logon_owner = one("Triggers/LogonTrigger/UserId").text
+    _require(logon_owner == sid or logon_owner == _task_owner_sam(sid), code)
+    # Task Scheduler serializes local offsets; business/protocol _instant stays UTC-only.
+    boundary = one("Triggers/TimeTrigger/StartBoundary").text
+    _require(_match(boundary, r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"), code)
+    try: datetime.fromisoformat(boundary.replace("Z", "+00:00"))
+    except ValueError: raise WorkerError(code) from None
     _require(one("Triggers/TimeTrigger/Repetition").find("{*}Duration") is None, code)
 
 
@@ -1611,11 +1687,14 @@ def status(root: Path) -> dict:
         if not Path(root).is_dir() or not _exists(Path(root), "worker-config.dpapi"):
             return {"status": "unconfigured", "code": "WORKER_NOT_CONFIGURED"}
         _runtime(root)
-        phase = "idle"
+        phase, extra = "idle", {}
         if _exists(Path(root), "journal.dpapi"):
             state = _decode(Path(root), "journal.dpapi"); _state_shape(state, datetime.now(timezone.utc))
             if state["source"] is not None: phase = state["source"]["phase"]
-        return {"status": "configured", "phase": phase, "code": "LOCAL_STATUS"}
+            outcome = state["engine"]["lastOutcome"]
+            if outcome is not None: extra["lastOutcome"] = {key: outcome[key] for key in ("code", "reviewReason")}
+            if state["engine"]["retryAt"] is not None: extra["retryAt"] = state["engine"]["retryAt"]
+        return {"status": "configured", "phase": phase, "code": "LOCAL_STATUS", **extra}
     except (WorkerError, OSError, ValueError, TypeError, KeyError) as error:
         return {"status": "held", "code": error.code if isinstance(error, WorkerError) else "LOCAL_STATUS_UNAVAILABLE"}
 

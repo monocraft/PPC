@@ -877,6 +877,227 @@ class WorkerPasses(unittest.TestCase):
         self.assertEqual(json.loads(self.requests[-1][3]), {"service": "sharepoint", "state": "reconnect_required"})
 
 
+    def test_known_source_review_waits_one_hour_across_restarts_then_replays_exact_bytes(self):
+        # A known rejection must not resend the workbook on every five-minute task tick.
+        self.stage_source()
+        review = {"code": "ASCM_REVIEW_REQUIRED", "reviewReason": "AMBIGUOUS_MATCH", "archiveAllowed": False, "private": "private-body-SENTINEL"}
+        self.responses = [http_response(review, 409)]
+        first = self.run_pass(); self.assertEqual(first, {"phase": "held", "calls": 1, "code": "SOURCE_REVIEW_REQUIRED"})
+        state = w.load_journal(self.root); frozen = deepcopy(state["source"])
+        self.assertEqual(state["engine"]["retryAt"], "2026-10-18T13:03:00Z")
+        self.assertEqual(state["engine"]["lastOutcome"], {"code": "SOURCE_REVIEW_REQUIRED", "reviewReason": "AMBIGUOUS_MATCH", "statusCode": 409, "at": "2026-10-18T12:03:00Z"})
+        self.assertEqual(state["idleAttempts"], [])
+        for _ in range(11):
+            self.now += timedelta(minutes=5)
+            self.assertEqual(self.run_pass(), {"phase": "waiting", "calls": 0, "code": "WORKER_BACKOFF"})
+        self.now += timedelta(minutes=5); self.responses = [http_response(review, 409)]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(len(self.requests), 2); self.assertEqual(self.requests[0][3], self.requests[1][3])
+        self.assertEqual(w.load_journal(self.root)["source"], frozen)
+        self.assertNotIn("private-body-SENTINEL", json.dumps(w.load_journal(self.root)))
+
+    def test_source_credential_denial_is_distinct_from_microsoft_reconnect(self):
+        # A worker credential failure is not evidence that the SharePoint connection failed.
+        for status, code in ((401, "IMPORT_AUTH_REQUIRED"), (403, "IMPORT_FORBIDDEN")):
+            with self.subTest(status=status):
+                self.root = self.base/str(status); self.now = NOW+timedelta(minutes=3); self.stage_source()
+                self.responses = [http_response({"code": "UNAUTHORIZED", "private": "credential-body-SENTINEL"}, status)]
+                out = self.run_pass(); self.assertEqual(out["code"], code)
+                state = w.load_journal(self.root)
+                self.assertEqual(state["engine"]["retryAt"], "2026-10-18T13:03:00Z")
+                self.assertEqual(state["engine"]["lastOutcome"]["reviewReason"], None)
+                self.assertNotEqual(state["engine"]["providerSignal"], "reconnect_required")
+                self.now += timedelta(minutes=5); self.assertEqual(self.run_pass()["calls"], 0)
+                self.assertNotIn("credential-body-SENTINEL", json.dumps(state)+json.dumps(out))
+                for index, raw in enumerate((b"<html>private-SENTINEL</html>", b"")):
+                    self.root = self.base/(str(status)+"-raw-"+str(index)); self.now = NOW+timedelta(minutes=3)
+                    self.responses = [http_response(raw, status)]
+                    self.assertEqual(self.run_pass()["code"], code)
+                    saved = w.load_journal(self.root)
+                    self.assertEqual(saved["engine"]["retryAt"], "2026-10-18T13:03:00Z")
+                    self.assertNotIn("SENTINEL", json.dumps(saved["engine"]))
+
+    def test_unknown_or_malformed_source_error_has_only_a_generic_safe_outcome(self):
+        # Never promote untrusted body text, objects or unknown reasons into durable/status output.
+        for index, raw in enumerate((b'not-json-private-SENTINEL', [], {"code": "ASCM_REVIEW_REQUIRED", "reviewReason": {"secret": "private-SENTINEL"}}, {"code": "ASCM_REVIEW_REQUIRED", "reviewReason": "UNKNOWN_PRIVATE_SENTINEL"}, {"code": "private-SENTINEL"})):
+            with self.subTest(index=index):
+                self.root = self.base/('unknown'+str(index)); self.now = NOW+timedelta(minutes=3); self.stage_source()
+                self.responses = [http_response(raw, 409)]
+                out = self.run_pass(); self.assertEqual(out["code"], "SOURCE_HELD")
+                state = w.load_journal(self.root)
+                self.assertIn("lastOutcome", state["engine"])
+                self.assertEqual(state["engine"]["lastOutcome"], {"code": "SOURCE_HELD", "reviewReason": None, "statusCode": 409, "at": "2026-10-18T12:03:00Z"})
+                self.assertEqual(state["engine"]["retryAt"], "2026-10-18T13:03:00Z")
+                self.assertNotIn("SENTINEL", json.dumps(out)+json.dumps(state))
+
+    def test_successful_source_resume_clears_prior_hold_without_resetting_source(self):
+        # A repaired master must be able to resume the same frozen source at its retry boundary.
+        self.stage_source(); self.responses = [http_response({"code": "ASCM_REVIEW_REQUIRED", "reviewReason": "AMBIGUOUS_MATCH"}, 409)]; self.run_pass()
+        frozen = deepcopy(w.load_journal(self.root)["source"])
+        self.now += timedelta(hours=1)
+        self.responses = [http_response(receipt("published")), http_response(control()), http_response({"reported": True, "archiveAllowed": False})]
+        self.assertEqual(self.run_pass()["code"], "IDLE")
+        state = w.load_journal(self.root)
+        self.assertIn("lastOutcome", state["engine"]); self.assertIsNone(state["engine"]["lastOutcome"])
+        self.assertEqual(state["source"]["requestId"], frozen["requestId"])
+        self.assertEqual(state["source"]["phase"], "complete"); self.assertIsNone(state["source"]["rawBase64"])
+        self.assertEqual(self.requests[0][3], self.requests[1][3])
+
+    def test_closed_legacy_journal_migration_preserves_work_and_rejects_partial_new_shape(self):
+        # Migration may append diagnostics, never erase frozen work, pending budget or old fields.
+        self.stage_source(); self.responses = [TimeoutError("synthetic")]; self.run_pass()
+        original = w.load_journal(self.root)
+        for legacy in ("engine", "pre-engine"):
+            state = deepcopy(original)
+            state["engine"].pop("lastOutcome", None); state["engine"].pop("providerReported", None)
+            if legacy == "pre-engine": state.pop("engine")
+            before = deepcopy(state); w._state_shape(state, self.now)
+            self.assertIn("lastOutcome", state["engine"]); self.assertIn("providerReported", state["engine"])
+            for key in ("source", "publication", "pending", "idleAttempts", "maxWallTime"): self.assertEqual(state[key], before[key])
+            if legacy == "engine":
+                for key, value in before["engine"].items(): self.assertEqual(state["engine"][key], value)
+        malformed = deepcopy(original); malformed["engine"].pop("providerReported", None); malformed["engine"]["lastOutcome"] = None
+        with self.assertRaises(w.WorkerError): w._state_shape(malformed, self.now)
+        self.assertEqual(w.load_journal(self.root), original)
+
+    def test_operational_hold_validation_is_closed_and_status_is_sanitized(self):
+        # A DPAPI envelope is not permission to surface attacker-controlled diagnostics.
+        self.stage_source(); self.responses = [http_response({"code": "ASCM_REVIEW_REQUIRED", "reviewReason": "AMBIGUOUS_MATCH"}, 409)]; self.run_pass()
+        state = w.load_journal(self.root)
+        self.assertIn("lastOutcome", state["engine"])
+        for patch in ({"code": "PRIVATE_SENTINEL"}, {"reviewReason": "PRIVATE_SENTINEL"}, {"statusCode": True}, {"at": "2099-01-01T00:00:00Z"}, {"extra": "PRIVATE_SENTINEL"}):
+            altered = deepcopy(state); altered["engine"]["lastOutcome"].update(patch)
+            with self.subTest(patch=patch), self.assertRaises(w.WorkerError): w._state_shape(altered, self.now)
+        for patch in ({"state": "private-SENTINEL"}, {"attemptId": "FOREIGN"}, {"authAttemptId": OP}, {"extra": "private-SENTINEL"}):
+            altered = deepcopy(state); altered["engine"]["providerReported"] = {"attemptId": ATTEMPT, "state": "reconnect_required", "authAttemptId": ATTEMPT, **patch}
+            with self.subTest(provider=patch), self.assertRaises(w.WorkerError): w._state_shape(altered, self.now)
+        (self.root/"worker-config.dpapi").write_bytes(b"synthetic opaque config")
+        before = (self.root/"journal.dpapi").read_bytes()
+        with mock.patch.object(w, "_runtime", return_value=(self.services["configuration"], "synthetic")):
+            value = w.status(self.root)
+        self.assertEqual(value, {"status": "configured", "phase": "frozen", "code": "LOCAL_STATUS", "lastOutcome": {"code": "SOURCE_REVIEW_REQUIRED", "reviewReason": "AMBIGUOUS_MATCH"}, "retryAt": "2026-10-18T13:03:00Z"})
+        self.assertEqual((self.root/"journal.dpapi").read_bytes(), before)
+        self.assertNotIn("SENTINEL", json.dumps(value))
+
+    def test_acknowledged_auth_result_is_not_reported_each_task_tick(self):
+        # Re-reading one immutable held command result must not create duplicate connection posts.
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]; self.run_pass(); self.now += timedelta(minutes=5)
+        held = result("held"); held["code"] = "SHAREPOINT_AUTH_REQUIRED"; self.stage_result(held)
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        for _ in range(3):
+            self.now += timedelta(minutes=5); self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(len([r for r in self.requests if r[1] == w.CONNECTION_ROUTE]), 1)
+        self.assertEqual(len(list((self.handoff/"commands").glob("*.json"))), 1)
+
+    def test_lost_or_negative_provider_ack_is_retried_then_deduplicated(self):
+        # An unacknowledged report must not be mistaken for a successfully delivered notification.
+        for label, reply in (("lost", TimeoutError("synthetic lost ack")), ("negative", http_response({"reported": False, "archiveAllowed": False}))):
+            with self.subTest(label=label):
+                self.root = self.base/label; self.now = NOW+timedelta(minutes=3)
+                self.responses = [http_response(control("deliver")), http_response(PACKAGE)]; self.run_pass(); self.now += timedelta(minutes=5)
+                held = result("held"); held["code"] = "SHAREPOINT_AUTH_REQUIRED"; self.stage_result(held)
+                self.responses = [reply]; self.assertEqual(self.run_pass()["calls"], 1)
+                self.now += timedelta(minutes=5); self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+                self.assertEqual(self.run_pass()["calls"], 1)
+                self.now += timedelta(minutes=5); self.assertEqual(self.run_pass()["calls"], 0)
+
+    def test_fresh_available_proof_clears_auth_without_old_result_reassertion(self):
+        # Fresh positive SharePoint evidence may clear reconnect; the old immutable failure stays deduped.
+        self.responses = [http_response(control("deliver")), http_response(PACKAGE)]; self.run_pass(); self.now += timedelta(minutes=5)
+        held = result("held"); held["code"] = "SHAREPOINT_AUTH_REQUIRED"; self.stage_result(held)
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]; self.run_pass()
+        self.now += timedelta(minutes=5); self.stage_source()
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(json.loads(self.requests[-1][3]), {"service": "sharepoint", "state": "available"})
+        self.now += timedelta(minutes=5); self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(w.load_journal(self.root)["publication"]["phase"], "command_held")
+
+
+class TaskReadbackNormalization(unittest.TestCase):
+    # Actual disabled schtasks readback shape; only account and action paths sanitized.
+    XML = r'''<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+      <RegistrationInfo><URI>\PPC ASCM SharePoint Worker</URI></RegistrationInfo>
+      <Principals><Principal id="Owner"><UserId>S-1-5-21-111-222-333-1001</UserId><LogonType>InteractiveToken</LogonType></Principal></Principals>
+      <Settings><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+        <Enabled>false</Enabled><ExecutionTimeLimit>PT8M</ExecutionTimeLimit><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+        <IdleSettings><StopOnIdleEnd>true</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings><UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine></Settings>
+      <Triggers><LogonTrigger><UserId>EXAMPLE\owner</UserId></LogonTrigger><TimeTrigger><StartBoundary>2026-10-18T21:24:56-07:00</StartBoundary><Repetition><Interval>PT5M</Interval></Repetition></TimeTrigger></Triggers>
+      <Actions Context="Owner"><Exec><Command>__PYTHONW__</Command><Arguments>-I -B "__WORKER__" run</Arguments><WorkingDirectory>__WORKDIR__</WorkingDirectory></Exec></Actions></Task>'''
+    SID, SAM = "S-1-5-21-111-222-333-1001", r"EXAMPLE\owner"
+
+    def setUp(self):
+        self.runtime = {"pythonw": str(Path("synthetic runtime")/"pythonw.exe"), "worker": str(Path("synthetic worker")/"ascm-sync-worker.py")}
+        self.xml = self.XML.replace("__PYTHONW__", self.runtime["pythonw"]).replace("__WORKER__", self.runtime["worker"]).replace("__WORKDIR__", str(Path(self.runtime["worker"]).parent))
+        def username(fmt, buffer, size):
+            self.assertEqual(fmt, 2); buffer.value = self.SAM; size._obj.value = len(self.SAM); return 1
+        self.lookup = mock.Mock(side_effect=username)
+        for patch in (mock.patch.object(w, "current_sid", return_value=self.SID), mock.patch.object(w.ctypes, "WinDLL", return_value=mock.Mock(GetUserNameExW=self.lookup), create=True)):
+            patch.start(); self.addCleanup(patch.stop)
+
+    def change(self, xml, path, value):
+        tree = w.ET.fromstring(xml); parent, name = path.rsplit("/", 1)
+        node = tree.find("{*}"+path.replace("/", "/{*}")); owner = tree.find("{*}"+parent.replace("/", "/{*}"))
+        if value is None: owner.remove(node)
+        elif node is None: w.ET.SubElement(owner, "{"+w.TASK_NS+"}"+name).text = value
+        else: node.text = value
+        return w.ET.tostring(tree, encoding="unicode")
+
+    def test_actual_normalized_disabled_and_enabled_readbacks(self):
+        w.verify_task(self.xml, self.runtime, self.SID, enabled=False)
+        enabled = self.change(self.xml, "Settings/Enabled", "true")
+        w.verify_task(enabled, self.runtime, self.SID, enabled=True)
+        w.verify_task(self.change(enabled, "Settings/Enabled", None), self.runtime, self.SID, enabled=True)
+        self.assertGreater(self.lookup.call_count, 0)
+        self.assertIs(self.lookup.restype, w.ctypes.c_ubyte)
+        with self.assertRaises(w.WorkerError): w.verify_task(self.xml, self.runtime, self.SID, enabled=True)
+        with self.assertRaises(w.WorkerError): w.verify_task(self.change(self.xml, "Settings/Enabled", None), self.runtime, self.SID, enabled=False)
+
+    def test_only_documented_defaults_may_be_omitted(self):
+        paths = {"Principals/Principal/RunLevel": "HighestAvailable", "Triggers/LogonTrigger/Enabled": "false", "Triggers/TimeTrigger/Enabled": "false",
+                 "Triggers/TimeTrigger/Repetition/StopAtDurationEnd": "true", "Settings/StartWhenAvailable": "true", "Settings/RunOnlyIfNetworkAvailable": "true"}
+        valid = w.task_xml(self.runtime, self.SID, NOW, enabled=False)
+        for path, wrong in paths.items():
+            with self.subTest(path=path):
+                w.verify_task(self.change(valid, path, None), self.runtime, self.SID, enabled=False)
+                with self.assertRaises(w.WorkerError): w.verify_task(self.change(self.xml, path, wrong), self.runtime, self.SID, enabled=False)
+
+    def test_sam_alias_requires_the_current_sid_and_exact_native_account(self):
+        for other in (r"OTHER\owner", r"EXAMPLE\another", self.SID+"0", "owner"):
+            with self.subTest(other=other), self.assertRaises(w.WorkerError):
+                w.verify_task(self.change(self.xml, "Triggers/LogonTrigger/UserId", other), self.runtime, self.SID, enabled=False)
+        self.lookup.reset_mock()
+        with mock.patch.object(w, "current_sid", return_value=self.SID+"0"), self.assertRaises(w.WorkerError):
+            w.verify_task(self.xml, self.runtime, self.SID, enabled=False)
+        self.lookup.assert_not_called()
+        self.lookup.side_effect = lambda *args: 0
+        with self.assertRaises(w.WorkerError): w.verify_task(self.xml, self.runtime, self.SID, enabled=False)
+
+    def test_task_offset_boundary_does_not_relax_business_instants(self):
+        for stamp in ("2026-10-19T04:24:56Z", "2026-10-18T21:24:56.123456-07:00", "2026-10-19T04:24:56+00:00"):
+            with self.subTest(stamp=stamp): w.verify_task(self.change(self.xml, "Triggers/TimeTrigger/StartBoundary", stamp), self.runtime, self.SID, enabled=False)
+        for stamp in ("2026-02-30T21:24:56-07:00", "2026-10-18T21:24:56", "2026-10-18T21:24:56+24:00", "2026-10-18T21:24:56+00:60", "2026-10-18 21:24:56-07:00", "2026-10-18T21:24:56.1234567-07:00"):
+            with self.subTest(stamp=stamp), self.assertRaises(w.WorkerError): w.verify_task(self.change(self.xml, "Triggers/TimeTrigger/StartBoundary", stamp), self.runtime, self.SID, enabled=False)
+        with self.assertRaises(w.WorkerError): w._instant("2026-10-18T21:24:56-07:00")
+
+    def test_normalized_readback_preserves_required_identity_action_and_budget_guards(self):
+        changes = {"Principals/Principal/UserId": self.SID+"0", "Principals/Principal/LogonType": "Password", "Principals/Principal/RunLevel": "HighestAvailable",
+                   "Triggers/TimeTrigger/Repetition/Interval": "PT1M", "Settings/MultipleInstancesPolicy": "Parallel", "Settings/ExecutionTimeLimit": "PT9M",
+                   "Settings/DisallowStartIfOnBatteries": "true", "Settings/StopIfGoingOnBatteries": "true", "Actions/Exec/Command": "cmd.exe", "Actions/Exec/Arguments": " run --endpoint evil", "Actions/Exec/WorkingDirectory": "foreign"}
+        for path, value in changes.items():
+            with self.subTest(path=path), self.assertRaises(w.WorkerError): w.verify_task(self.change(self.xml, path, value), self.runtime, self.SID, enabled=False)
+        for path in ("Principals/Principal/UserId", "Principals/Principal/LogonType", "Triggers/LogonTrigger/UserId", "Triggers/TimeTrigger/StartBoundary", "Triggers/TimeTrigger/Repetition/Interval", "Settings/ExecutionTimeLimit", "Actions/Exec/Command", "Actions/Exec/Arguments", "Actions/Exec/WorkingDirectory"):
+            with self.subTest(missing=path), self.assertRaises(w.WorkerError): w.verify_task(self.change(self.xml, path, None), self.runtime, self.SID, enabled=False)
+
+    def test_normalized_readback_rejects_extra_or_duplicate_guard_nodes(self):
+        for old, extra in (("</Principal>", "<GroupId>S-1-5-32-544</GroupId>"), ("</LogonTrigger>", "<Enabled>true</Enabled><Enabled>false</Enabled>"),
+                           ("</TimeTrigger>", "<EndBoundary>2026-10-19T04:25:56Z</EndBoundary>"), ("</Repetition>", "<Duration>PT10M</Duration>"),
+                           ("</Settings>", "<Enabled>false</Enabled>"), ("</Exec>", "</Exec><Exec><Command>cmd.exe</Command>")):
+            xml = self.xml.replace(old, extra+old)
+            with self.subTest(extra=extra), self.assertRaises(w.WorkerError): w.verify_task(xml, self.runtime, self.SID, enabled=False)
+
+
 @unittest.skipUnless(os.name == "nt", "Windows-native setup storage requires Windows")
 class WorkerSetup(unittest.TestCase):
     def setUp(self):
@@ -938,6 +1159,24 @@ class WorkerSetup(unittest.TestCase):
             self.assertNotIn(b"SENTINEL", (self.root/name).read_bytes())
             self.assertTrue(w.verify_owner_acl(self.root/name, w.current_sid()))
         self.assertNotIn("SENTINEL", output.getvalue()+json.dumps(result)+json.dumps(self.scheduler_calls))
+
+    def test_setup_accepts_windows_normalized_disabled_then_enabled_readback(self):
+        self.write_binding(); original = self.scheduler
+        def scheduler(action, xml=None):
+            value = original(action, xml)
+            if action != "query" or value is None: return value
+            tree = w.ET.fromstring(value)
+            for path in ("Principals/Principal/RunLevel", "Triggers/LogonTrigger/Enabled", "Triggers/TimeTrigger/Enabled", "Triggers/TimeTrigger/Repetition/StopAtDurationEnd", "Settings/StartWhenAvailable", "Settings/RunOnlyIfNetworkAvailable"):
+                parent, name = path.rsplit("/", 1); owner = tree.find("{*}"+parent.replace("/", "/{*}")); owner.remove(owner.find("{*}"+name))
+            tree.find("{*}Triggers/{*}TimeTrigger/{*}StartBoundary").text = NOW.astimezone(timezone(timedelta(hours=-7))).isoformat()
+            if self.enabled:
+                settings = tree.find("{*}Settings"); settings.remove(settings.find("{*}Enabled"))
+            return w.ET.tostring(tree, encoding="unicode")
+        self.services["scheduler"] = scheduler
+        result = w.setup(self.root, services=self.services)
+        self.assertEqual(result, {"status": "configured", "code": "SETUP_COMPLETE"})
+        self.assertTrue(self.enabled); self.assertTrue(w._decode(self.root, "worker-config.dpapi")["taskVerified"])
+        self.assertEqual([entry[0] for entry in self.scheduler_calls], ["query", "create_disabled", "query", "enable", "query"])
 
     def test_setup_refuses_foreign_mapping_and_placeholder_before_prompt(self):
         for field in ("ownerSid", "handoffRoot", "destination", "privacy"):
