@@ -1,10 +1,12 @@
-# Hosted encrypted master package
+# Shared encrypted master package
 
-The app now defaults to direct GitHub reads and conflict-checked product/date/specification/SKU saves. See [Shared master editing](SHARED-MASTER-EDITING.md) for individual GitHub access and the Save to master flow. The full-package publication flow below remains available for images, layout changes and other owner-managed package updates; read-only Pages behavior can be selected with `PPC_MASTER_MODE=static`.
+The current PPC site uses the private master service for accepted product facts and the keyed package service for the complete encrypted portfolio. Normal publication copies an immutable package to the owner's private SharePoint location; its verified receipt selects the current file. PPC opens that package with the existing access key. See [Shared master editing](SHARED-MASTER-EDITING.md) for supported product edits and [SharePoint laptop supervisor](ascm/sharepoint-laptop-supervisor.md) for the publication and activation boundaries. The checked-in `public/data/master_ppc.pkg` current-branch file is retired; historical Git commits and the old SharePoint seed remain provenance, not the current publication.
 
-The shared master is the encrypted `public/data/master_ppc.pkg` in the PPC repository. GitHub Pages publishes it at `https://monocraft.github.io/PPC/data/master_ppc.pkg`. Viewers choose **Pull latest data**, enter their package key, and load Products and Roadmap together. No Microsoft account, extension, app registration, or separate package server is required for this connection.
+The Pages site contains public service addresses only. It does not contain the encrypted current package, package key, Microsoft credential, or service credential. Opening the complete package replaces the local workspace and its images; save any drafts that must be retained before loading it. The current package is an immutable `master-r{revision}-g{generation}-{candidateId}.pkg` in SharePoint, not the historical mutable `master_ppc.pkg` seed.
 
-The encrypted file is publicly downloadable. The package key remains separate from the repository and is used only to decrypt and validate the package in the viewer's browser. Static pulls never send the key to GitHub. The repository and site must contain neither an unencrypted master nor a key file.
+## Legacy direct GitHub package mode
+
+The instructions below describe the explicit GitHub mode for older deployments. That mode reads and updates `public/data/master_ppc.pkg` in `monocraft/PPC` and uses GitHub Pages to host the encrypted file. It is not the current site's service configuration. Its package key stays separate from the repository; static GitHub pulls do not send that key to GitHub.
 
 ## Build and publish an update
 
@@ -16,7 +18,7 @@ The encrypted file is publicly downloadable. The package key remains separate fr
 6. Wait until the latest **Deploy to GitHub Pages** run succeeds in [GitHub Actions](https://github.com/monocraft/PPC/actions). The GitHub commit alone does not mean the updated package is available on the live site yet.
 7. Open the [live PPC app](https://monocraft.github.io/PPC/), choose **Pull latest data**, and verify the update with the existing key. Users can now pull the same new master.
 
-For a normal data update, only replace **one file**, `public/data/master_ppc.pkg`. Keep its folder and filename unchanged. No application source changes or new key are needed. GitHub redeploys the site automatically after the replacement commit.
+For a legacy GitHub-mode data update, replace **one file**, `public/data/master_ppc.pkg`. Keep its folder and filename unchanged. No application source changes or new key are needed in that mode. GitHub redeploys the site automatically after the replacement commit.
 
 GitHub's browser uploader accepts files up to 25 MiB. Larger packages can be committed through Git or GitHub Desktop; PPC itself accepts packages up to 64 MiB. See [GitHub's file upload documentation](https://docs.github.com/en/repositories/working-with-files/managing-files/adding-a-file-to-a-repository). Frequent large binary updates also grow repository history; GitHub recommends keeping Pages repositories below 1 GB. See [GitHub Pages limits](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits).
 
@@ -33,13 +35,13 @@ GitHub's browser uploader accepts files up to 25 MiB. Larger packages can be com
 
 Each new package build records the current UTC build timestamp automatically. Rebuilding creates a fresh update date, even when you retain the same package key. The optional comments describe that specific package update and allow up to 2,000 characters, including line breaks. Viewers see the date and comments after the package has been unlocked and imported; no separate public metadata file is published.
 
-The package's update date comes from its build, not its GitHub upload or deployment time. Uploading the same built file again preserves its original date and comments. To publish a new update date or change the comments, build a new package and replace `public/data/master_ppc.pkg` using the normal steps above.
+In legacy GitHub mode, the package's update date comes from its build, not its GitHub upload or deployment time. Uploading the same built file again preserves its original date and comments. To change either, build and publish a new package using the legacy steps above. Current SharePoint publication retains its immutable filename and receipt.
 
 Older packages without this metadata remain supported. PPC does not invent a build date or updater comments for them. When an older master needs those details, load it, build a new package with comments, and publish that new file with the same key.
 
 ## Publishing checks and optional local helper
 
-`node scripts/checks/hosted-package.mjs --required` checks the deployed master envelope and rejects an unencrypted ZIP, an oversized package, unexpected package files, or symlinks under `public/data`. This runs before GitHub Pages publishes.
+In legacy GitHub mode, `node scripts/checks/hosted-package.mjs --required` checks the hosted master envelope and rejects an unencrypted ZIP, an oversized package, unexpected package files, or symlinks under `public/data`. Current service-mode Pages builds omit that file and still reject unexpected packages or symlinks under `public/data`.
 
 The optional local publishing helper can validate and copy an encrypted download into the fixed repository path before committing it:
 
@@ -47,12 +49,12 @@ The optional local publishing helper can validate and copy an encrypted download
 node scripts/publish-master-package.mjs --input "C:/PrivateDownloads/master_ppc.pkg" --key-file "C:/PrivateKeys/PACKAGE-KEY.txt"
 ```
 
-The key file is read locally for authenticated decryption and validation; it is never copied to `public/`, printed, or uploaded. With a key file supplied, the helper also validates the optional update date and comments and rejects malformed metadata before replacing the current master. Missing metadata in older packages remains valid. The helper does not print decrypted comments or create a public metadata file. Keep the key file in a private, ignored location. The app's package builder remains the normal way to make updates.
+The key file is read locally for authenticated decryption and validation; it is never copied to `public/`, printed, or uploaded. With a key file supplied, the helper also validates the optional update date and comments and rejects malformed metadata before replacing the legacy GitHub master. Missing metadata in older packages remains valid. The helper does not print decrypted comments or create a public metadata file. Keep the key file in a private, ignored location. This helper and the manual repository upload are not the current normal SharePoint publication path.
 
 ## Intentional key changes
 
 Build and publish with a new key only when deliberately changing access to future master packages. Distribute the replacement key separately to intended viewers. Earlier downloads and encrypted files retained in repository history still exist; a new key does not revoke data already obtained with an earlier key.
 
-## Optional service compatibility
+## Current service and optional legacy configurations
 
-The older package relay remains available for deployments that explicitly configure `PPC_PACKAGE_ENDPOINT`. With no service override, the app reads and updates the encrypted master directly through GitHub. `PPC_MASTER_MODE=static` intentionally selects the hosted read-only master above. Neither GitHub mode nor static mode needs a separate server, SharePoint source link or browser companion.
+The current deployment configures the exact package and master service endpoints through the Pages workflow. The older fixed-file relay remains available for explicit alternative service deployments. The generator still supports explicit GitHub mode and `PPC_MASTER_MODE=static` for historical deployments; neither changes the current SharePoint publication or restores the retired current-branch package.
