@@ -59,7 +59,7 @@ function productIdentity(group) {
   return `ascm-${slug}-${hash(group.ascmKey || group.key)}`;
 }
 
-function validateDataset(dataset, importer) {
+export function validateAscmDataset(dataset, importer = globalThis.ASCMImporter) {
   if (!object(dataset) || !Array.isArray(dataset.rows) || !dataset.rows.length || !object(dataset.metadata)
     || !Array.isArray(dataset.diagnostics || [])) fail("MALFORMED_REPORT", "The ASCM report has no usable primary rows or metadata.");
   for (const field of ["invalidRowsFiltered", "invalidLocalRowsFiltered", "duplicateBasePnRows"]) {
@@ -93,7 +93,7 @@ export function planAscmImport({ manifest, dataset, reportDate, importedAt, requ
     || !Number.isFinite(Date.parse(importedAt)) || !validDay(importedAt.slice(0, 10))
     || new Date(importedAt).toISOString() !== importedAt.replace(/Z$/, importedAt.includes(".") ? "Z" : ".000Z")
     || typeof requestId !== "string" || !requestId || requestId.length > 180) fail("MALFORMED_REPORT", "The ASCM transaction identity or timestamp is invalid.");
-  validateDataset(dataset, importer);
+  validateAscmDataset(dataset, importer);
   const sourceDate = SOURCE_FILE.exec(dataset.metadata.fileName || "")?.[1];
   if (!validDay(sourceDate) || sourceDate !== reportDate) fail("MALFORMED_REPORT", "The ASCM source filename and report date disagree.");
 

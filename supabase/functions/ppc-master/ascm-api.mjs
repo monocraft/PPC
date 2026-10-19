@@ -56,7 +56,7 @@ function decodeWorkbook(value) {
   if (btoa(binary) !== value) throw problem(400, 'ASCM_INVALID_WORKBOOK', 'Provide a canonical workbook encoding.');
   return Uint8Array.from(binary, character => character.charCodeAt(0));
 }
-function configuredDatePolicy(value) {
+export function configuredDatePolicy(value) {
   if (!value) return undefined;
   if (typeof value !== 'string' || value.length > 65536) throw problem(503, 'ASCM_POLICY_REQUIRED', 'The cloud date protection policy needs owner review.');
   let policy;

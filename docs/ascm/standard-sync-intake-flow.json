@@ -1,0 +1,602 @@
+{
+  "format": "ppc-standard-sync-flow/v1",
+  "kind": "intake",
+  "readiness": {
+    "state": "Off",
+    "activationAllowed": false,
+    "importTested": false,
+    "runtimeSyntax": "binding-required",
+    "note": "Offline reviewed binding blueprint. BindingRequired is deliberately not a Power Automate action. The guard must remain until exact designer/export binding, persistence, collision and restart proofs pass."
+  },
+  "authority": {
+    "provider": "sharepoint",
+    "hostname": "hp.sharepoint.com",
+    "sitePath": "/teams/IPSG_SCM_and_Product_Requirements_Info",
+    "site": "https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info",
+    "library": "ASCM-Accessories Commercial",
+    "driveId": "b!Dxcy8q8LE0GivbyM3D6Dq5C5iXHjfxBMsvQrwTpLknS0JFIuvvhlQoilkLMqZkl9",
+    "listId": "2e5224b4-f8be-4265-88a5-90b32a66497d"
+  },
+  "destination": {
+    "site": "https://hp.sharepoint.com/teams/PCGamingCategory",
+    "serverRelativeFolder": "/teams/PCGamingCategory/Shared Documents/Product Portfolio/PPC",
+    "connectorFolder": "/Shared Documents/Product Portfolio/PPC",
+    "driveId": "__BIND_VERIFIED_FIXED_PPC_DRIVE_ID__",
+    "folderId": "__BIND_VERIFIED_FIXED_PPC_FOLDER_ID__",
+    "callerOverride": false
+  },
+  "handoff": {
+    "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+    "root": "/Documents/PPC ASCM",
+    "intake": "/Documents/PPC ASCM/intake",
+    "commands": "/Documents/PPC ASCM/commands",
+    "results": "/Documents/PPC ASCM/results",
+    "attempts": "/Documents/PPC ASCM/results/attempts",
+    "cursors": "/Documents/PPC ASCM/intake/cursors",
+    "access": "verified-owner-flow-worker-only-with-corporate-administration",
+    "verified": false,
+    "jsonMaxBytes": 65536,
+    "canonicalProducer": "checked-worker-within-verified-private-boundary",
+    "cloudDuplicateMemberRejection": false
+  },
+  "connectionReferences": {
+    "shared_sharepointonline": {
+      "connectionName": "__BIND_EXISTING_STANDARD_SHAREPOINT_CONNECTION__",
+      "source": "Embedded",
+      "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "apiName": "sharepointonline",
+      "newConnectionAllowed": false
+    }
+  },
+  "evidence": {
+    "scheduled": "standard-scheduled-export-proof.json",
+    "transfer": "standard-transfer-proof-flow-export-proof.json",
+    "transport": "standard-sync-transport-proof.json",
+    "nativeActionShapes": "scripts/native-ascm-flow.mjs#indexNativeActions",
+    "officialConnector": "https://learn.microsoft.com/en-us/connectors/sharepointonline/",
+    "provenOperations": [
+      "GetFolderMetadataByPath",
+      "GetFileContentByPath",
+      "CreateFile"
+    ],
+    "documentedNotReplacementVerified": [
+      "GetFileItems",
+      "GetFileMetadataByPath",
+      "GetOnUpdatedFileItems",
+      "HttpRequest"
+    ]
+  },
+  "errorPolicy": {
+    "secureInputs": true,
+    "secureOutputs": true,
+    "rawException": false,
+    "publicDiagnostic": "closed-code-only",
+    "reconnect": "actual-observed-connector-auth-failure-only",
+    "available": "actual-supported-sharepoint-success-only",
+    "ppcCalls": 0
+  },
+  "bindingRequirements": [
+    {
+      "id": "source-discovery",
+      "status": "unverified",
+      "requiredProof": "Exact GetFileItems folder/pagination output; all three months checked or positively absent; finite continuation validation/overflow hold; internal immutable last-successfully-staged cursor after manifest completion, a discovery hint with no acceptance authority or new command kind."
+    },
+    {
+      "id": "source-selection",
+      "status": "unverified",
+      "requiredProof": "Strict calendar day, positive canonical numeric major version and ambiguity logic lowered into supported expressions."
+    },
+    {
+      "id": "source-metadata",
+      "status": "unverified",
+      "requiredProof": "Actual list ID, unique item ID, published version, opaque file eTag and size mapping before/after the actual content read; list-row eTag is not substituted."
+    },
+    {
+      "id": "private-create-only",
+      "status": "unverified",
+      "requiredProof": "Existing Standard HttpRequest Files/add overwrite=false exact binary body binding and actual no-overwrite/collision/uncertain-write behavior."
+    },
+    {
+      "id": "private-boundary",
+      "status": "unverified",
+      "requiredProof": "Private handoff inherited permissions, intended owner, local mapping, sync inclusion and immutable canonical producer."
+    }
+  ],
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$authentication": {
+        "type": "SecureObject",
+        "defaultValue": {}
+      },
+      "$connections": {
+        "type": "Object",
+        "defaultValue": {}
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Hour",
+          "interval": "1"
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          },
+          "concurrency": {
+            "runs": 1
+          }
+        }
+      }
+    },
+    "actions": {
+      "Runtime_binding_required": {
+        "type": "Terminate",
+        "inputs": {
+          "runStatus": "Failed",
+          "runError": {
+            "code": "FLOW_BINDING_REQUIRED",
+            "message": "FLOW_BINDING_REQUIRED"
+          }
+        },
+        "runAfter": {},
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Discover_bounded_sources": {
+        "type": "BindingRequired",
+        "inputs": {
+          "bindingId": "source-discovery",
+          "contract": {
+            "operation": "bounded_source_discovery",
+            "readOnly": true,
+            "site": "https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info",
+            "table": "2e5224b4-f8be-4265-88a5-90b32a66497d",
+            "calendar": "UTC",
+            "monthOffsets": [
+              0,
+              -1,
+              -2
+            ],
+            "folderFormat": "({MM}) {MMMM} {yyyy}",
+            "folderNames": "observed-English-calendar-names",
+            "folderOnly": true,
+            "recursive": false,
+            "folderCoverage": "all-three-checked-or-positively-absent-otherwise-held",
+            "pageSize": 100,
+            "maxPagesPerFolder": 5,
+            "maxItemsPerFolder": 500,
+            "maxTotalItems": 1501,
+            "pagination": "explicit-finite",
+            "continuationAuthority": "same-fixed-library-and-folder-only",
+            "onOverflow": "held",
+            "knownCurrentItem": {
+              "listItemId": 908,
+              "itemUniqueId": "e5cb1d81-7071-40b6-93cb-86ef0b577f52",
+              "keepOutsideWindow": true,
+              "role": "startup-discovery-hint-only",
+              "thereafter": "__BIND_LAST_SUCCESSFULLY_STAGED_CURRENT_ITEM_HINT__"
+            },
+            "currentHint": {
+              "storage": "/Documents/PPC ASCM/intake/cursors",
+              "immutable": true,
+              "maxCursorRecords": 100,
+              "onOverflow": "held",
+              "acceptedAuthority": false,
+              "lastStagedOnly": true
+            },
+            "nativeOperation": {
+              "operationId": "GetFileItems",
+              "parameters": {
+                "dataset": "https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info",
+                "table": "2e5224b4-f8be-4265-88a5-90b32a66497d",
+                "folderPath": "__BIND_EXACT_CALENDAR_FOLDER__",
+                "$top": 100
+              }
+            }
+          }
+        },
+        "runAfter": {
+          "Runtime_binding_required": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Select_latest_eligible": {
+        "type": "BindingRequired",
+        "inputs": {
+          "bindingId": "source-selection",
+          "contract": {
+            "operation": "select_latest_source",
+            "filenamePattern": "^ASCM Report_HyperX_(\\d{4}-\\d{2}-\\d{2})\\.xlsx$",
+            "filenameDay": "strict-calendar",
+            "floor": "2026-09-30",
+            "versionPattern": "^[1-9][0-9]*\\.0$",
+            "versionOrder": "numeric-positive-major",
+            "choose": "greatest-report-date",
+            "ambiguity": "different-items-at-greatest-date-hold",
+            "sameItemVersionConflict": "held",
+            "folderDateMustEqualReportDate": false,
+            "modifiedTimeOrdering": false,
+            "baselineInferenceFromMail": false,
+            "initialBaseline": {
+              "listItemId": 908,
+              "itemUniqueId": "e5cb1d81-7071-40b6-93cb-86ef0b577f52",
+              "versionLabel": "2.0",
+              "reportDate": "2026-09-30"
+            },
+            "monotonicity": "backend-rechecks-report-day-and-current-item-numeric-major"
+          }
+        },
+        "runAfter": {
+          "Discover_bounded_sources": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Operation_id": {
+        "type": "Compose",
+        "inputs": "@toLower(guid())",
+        "runAfter": {
+          "Select_latest_eligible": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Attempt_id": {
+        "type": "Compose",
+        "inputs": "@toLower(guid())",
+        "runAfter": {
+          "Operation_id": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Source_before": {
+        "type": "BindingRequired",
+        "inputs": {
+          "bindingId": "source-metadata",
+          "contract": {
+            "operation": "source_metadata",
+            "phase": "before",
+            "selectedOnly": true,
+            "site": "https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info",
+            "sourceFields": [
+              "provider",
+              "hostname",
+              "sitePath",
+              "driveId",
+              "listId",
+              "listItemId",
+              "itemUniqueId",
+              "fileName",
+              "relativePath",
+              "versionLabel",
+              "eTag",
+              "createdAt",
+              "lastModifiedAt",
+              "bytes"
+            ],
+            "proofFields": [
+              "listItemId",
+              "itemUniqueId",
+              "versionLabel",
+              "eTag",
+              "bytes"
+            ],
+            "maxBytes": 2097152,
+            "eTag": "actual-opaque-file-tag",
+            "version": "actual-published-positive-major.0"
+          }
+        },
+        "runAfter": {
+          "Attempt_id": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Read_source_workbook": {
+        "type": "OpenApiConnection",
+        "inputs": {
+          "host": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+            "connectionName": "shared_sharepointonline",
+            "operationId": "GetFileContentByPath"
+          },
+          "parameters": {
+            "dataset": "https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info",
+            "path": "@outputs('Select_latest_eligible')?['contentPath']",
+            "inferContentType": true
+          },
+          "authentication": "@parameters('$authentication')",
+          "retryPolicy": {
+            "type": "none"
+          }
+        },
+        "runAfter": {
+          "Source_before": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        },
+        "limit": {
+          "timeout": "PT2M"
+        }
+      },
+      "Source_after": {
+        "type": "BindingRequired",
+        "inputs": {
+          "bindingId": "source-metadata",
+          "contract": {
+            "operation": "source_metadata",
+            "phase": "after",
+            "selectedOnly": true,
+            "site": "https://hp.sharepoint.com/teams/IPSG_SCM_and_Product_Requirements_Info",
+            "sameObjectAs": "Source_before",
+            "proofFields": [
+              "listItemId",
+              "itemUniqueId",
+              "versionLabel",
+              "eTag",
+              "bytes"
+            ],
+            "eTag": "actual-opaque-file-tag",
+            "version": "actual-published-positive-major.0"
+          }
+        },
+        "runAfter": {
+          "Read_source_workbook": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Stable_source": {
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "equals": [
+                "@and(equals(outputs('Source_before')?['proof'],outputs('Source_after')?['proof']),not(empty(body('Read_source_workbook')?['$content'])),greater(outputs('Source_before')?['proof']?['bytes'],0),lessOrEquals(outputs('Source_before')?['proof']?['bytes'],2097152),equals(sub(mul(div(length(body('Read_source_workbook')?['$content']),4),3),if(endsWith(body('Read_source_workbook')?['$content'],'=='),2,if(endsWith(body('Read_source_workbook')?['$content'],'='),1,0))),outputs('Source_before')?['proof']?['bytes']))",
+                true
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "Create_private_workbook": {
+            "type": "BindingRequired",
+            "inputs": {
+              "bindingId": "private-create-only",
+              "contract": {
+                "operation": "create_only_file",
+                "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                "folderPath": "/Documents/PPC ASCM/intake",
+                "name": "@concat(outputs('Attempt_id'),'.xlsx')",
+                "body": "@body('Read_source_workbook')",
+                "overwrite": false,
+                "retryPolicy": {
+                  "type": "none"
+                },
+                "success": "positive-exact-new-object",
+                "uncertain": "hold-no-blind-repeat",
+                "sourceMutation": false
+              }
+            },
+            "runAfter": {},
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          },
+          "Intake_manifest": {
+            "type": "Compose",
+            "inputs": {
+              "schemaVersion": 1,
+              "kind": "sharepoint_intake",
+              "operationId": "@outputs('Operation_id')",
+              "attemptId": "@outputs('Attempt_id')",
+              "createdAt": "@formatDateTime(utcNow(),'yyyy-MM-ddTHH:mm:ss.fffZ')",
+              "source": "@outputs('Source_before')?['source']",
+              "before": "@outputs('Source_before')?['proof']",
+              "after": "@outputs('Source_after')?['proof']",
+              "workbookFile": "@concat(outputs('Attempt_id'),'.xlsx')",
+              "sha256": null
+            },
+            "runAfter": {
+              "Create_private_workbook": [
+                "Succeeded"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          },
+          "Create_intake_manifest_last": {
+            "type": "BindingRequired",
+            "inputs": {
+              "bindingId": "private-create-only",
+              "contract": {
+                "operation": "create_only_file",
+                "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                "folderPath": "/Documents/PPC ASCM/intake",
+                "name": "@concat(outputs('Attempt_id'),'.json')",
+                "body": "@string(outputs('Intake_manifest'))",
+                "overwrite": false,
+                "retryPolicy": {
+                  "type": "none"
+                },
+                "maxBytes": 65536,
+                "manifestLast": true,
+                "uncertain": "hold-no-blind-repeat"
+              }
+            },
+            "runAfter": {
+              "Intake_manifest": [
+                "Succeeded"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          },
+          "Persist_current_discovery_hint": {
+            "type": "BindingRequired",
+            "inputs": {
+              "bindingId": "source-discovery",
+              "contract": {
+                "operation": "append_discovery_cursor",
+                "site": "https://hp-my.sharepoint.com/personal/tung_nguyen_hp_com",
+                "folderPath": "/Documents/PPC ASCM/intake/cursors",
+                "name": "@concat(outputs('Attempt_id'),'.json')",
+                "source": "@outputs('Source_before')?['source']",
+                "afterPositiveManifestCompletion": true,
+                "acceptedAuthority": false,
+                "immutable": true,
+                "overwrite": false,
+                "retryPolicy": {
+                  "type": "none"
+                },
+                "uncertain": "positive-exact-cursor-read-only",
+                "missingCursor": "retain-prior-known-hint-and-startup-item",
+                "newCommandKind": false
+              }
+            },
+            "runAfter": {
+              "Create_intake_manifest_last": [
+                "Succeeded"
+              ]
+            },
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {}
+        },
+        "runAfter": {
+          "Source_after": [
+            "Succeeded"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      },
+      "Safe_diagnostic": {
+        "type": "Compose",
+        "inputs": {
+          "status": "held",
+          "code": "SOURCE_OPERATION_HELD",
+          "details": null
+        },
+        "runAfter": {
+          "Stable_source": [
+            "Succeeded",
+            "Failed",
+            "TimedOut"
+          ]
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

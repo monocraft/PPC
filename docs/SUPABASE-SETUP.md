@@ -15,7 +15,7 @@ This repository contains the saving function, restricted database migration, pub
 - **GitHub package current:** The publisher confirmed the encrypted package in GitHub and requested a Pages deployment. GitHub Pages deployment has its own workflow and can still be in progress.
 - **GitHub package retry required:** Publication failed. Accepted changes remain in Supabase. The next publisher run retries without accepting the edit twice or replacing newer data with an older package.
 
-The scheduled publisher checks approximately every five minutes. GitHub schedules run on a best-effort basis and can be delayed; five minutes is not a guaranteed delivery time. Owners can run **Publish encrypted shared master** manually from GitHub Actions to publish sooner. An optional private workflow dispatch token can request a run immediately after a save, but the default setup does not require a personal GitHub token.
+The publisher runs through `workflow_dispatch`: owners can run **Publish encrypted shared master** manually from GitHub Actions, and a configured private server-side workflow dispatch token can request publication after a save. The SharePoint supervisor requires that server-side dispatch configuration and obtains a fenced preparation claim before requesting the fixed normal producer. Missing dispatch configuration holds preparation as `PUBLISHER_NOT_CONFIGURED`.
 
 ## Owner setup
 
@@ -38,7 +38,7 @@ Bootstrap only initializes an empty shared master. Repeating the exact original 
 | `PPC_PACKAGE_KEY_HASH` | SHA-256 of the UTF-8, normalized existing `PPC-…` package key. The function stores the verifier, not the decrypting key. Generate it privately from the existing package key using `PortfolioPackage.normalizeKey` first. |
 | `PPC_PUBLISHER_SECRET` | A fresh random secret with at least 32 characters, shared only between this private function and GitHub Actions. It authorizes export, seed, and publication receipts. It is not a Supabase administrative API key. |
 | `PPC_ALLOWED_ORIGINS` | Exact comma-separated app origins, normally `https://monocraft.github.io`. Add `http://127.0.0.1:4190` only while using that local preview. No paths or wildcards. |
-| `PPC_GITHUB_DISPATCH_TOKEN` | Optional. A private fine-grained token scoped to `monocraft/PPC` with **Actions: read and write** can request prompt publication. Leave unset for the default scheduled/manual publisher. |
+| `PPC_GITHUB_DISPATCH_TOKEN` | Optional. A private fine-grained token scoped to `monocraft/PPC` with **Actions: read and write** can request prompt publication. Manual owner runs do not require this server-side token; the SharePoint supervisor's fixed server dispatch does. |
 
 Optional dispatch settings default to owner `monocraft`, repository `PPC`, and workflow `publish-master.yml`: `PPC_GITHUB_OWNER`, `PPC_GITHUB_REPO`, and `PPC_GITHUB_PUBLISH_WORKFLOW`.
 
@@ -76,7 +76,7 @@ The existing GitHub token is passed only through a temporary, repository-scoped 
 
 After confirmed upload, the publisher requests `deploy.yml`, then acknowledges the exact revision and package SHA to Supabase. A lost upload response is recovered by checking the actual immutable blob SHA. A failed deployment request or receipt is retried from the marker, without creating another package commit. An accepted save that arrives during publication remains pending for the next revision.
 
-The workflow has one shared concurrency group and `cancel-in-progress: false`. It runs on a manual request and a five-minute schedule. Its checkout does not persist credentials. Error output contains only stable failure codes and safe text; it does not print keys, tokens, database passwords, upstream response bodies, or product manifests.
+The workflow has one shared concurrency group and `cancel-in-progress: false`. It runs on `workflow_dispatch` from an owner's manual request or the configured server dispatcher. Its checkout does not persist credentials. Error output contains only stable failure codes and safe text; it does not print keys, tokens, database passwords, upstream response bodies, or product manifests.
 
 Native Git failures identify the safe command stage and exit/timeout category, for example `GIT_PUSH_EXIT_1` or `GIT_FETCH_TIMEOUT`. Raw Git output, upstream messages and credentials are discarded. Diagnose existing evidence before dispatching another production attempt. The prior Contents and Git Database HTTP422 responses did not retain their raw cause; no API capacity claim is inferred from them. There is no automatic API-upload fallback, force update, permission change, new credential or backend endpoint.
 
