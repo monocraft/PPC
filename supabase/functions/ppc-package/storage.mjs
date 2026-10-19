@@ -87,13 +87,63 @@ export function createPackageDeliveryStorage({ env = {}, fetchImpl = globalThis.
     if (url.origin !== base || url.pathname !== `/storage/v1/object/sign/${object}` || url.searchParams.getAll('token').length !== 1 || !url.searchParams.get('token')) throw unavailable();
     return url.href;
   }
+  async function exactMissing(response, phase) {
+    if (response.status === 404) { await response.body?.cancel().catch(() => {}); return true; }
+    if (response.status !== 400) { await response.body?.cancel().catch(() => {}); return false; }
+    const diagnostic = { event: 'package_storage_missing_shape', phase,
+      contentTypeJson: /^application\/json(?:;\s*charset=utf-8)?$/i.test(response.headers.get('content-type') || ''),
+      body: 'not_read', keys: [], unknownKeys: false,
+      statusCode: 'absent', code: 'absent', error: 'absent', message: 'absent' };
+    const emit = () => { try { console.error(JSON.stringify(diagnostic)); } catch {} };
+    if (!diagnostic.contentTypeJson) {
+      emit();
+      await response.body?.cancel().catch(() => {}); return false;
+    }
+    const declared = response.headers.get('content-length');
+    if (declared !== null && (!/^(?:0|[1-9]\d*)$/.test(declared) || Number(declared) > 2048)) {
+      diagnostic.body = 'oversize'; emit();
+      await response.body?.cancel().catch(() => {}); return false;
+    }
+    const reader = response.body?.getReader(); if (!reader) { diagnostic.body = 'unavailable'; emit(); return false; }
+    const decoder = new TextDecoder('utf-8', { fatal: true }); let text = '', size = 0;
+    try {
+      for (;;) {
+        const part = await reader.read(); if (part.done) break;
+        size += part.value.byteLength; if (size > 2048) { diagnostic.body = 'oversize'; return false; }
+        text += decoder.decode(part.value, { stream: true });
+      }
+      const value = JSON.parse(text + decoder.decode());
+      diagnostic.body = 'parsed';
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const known = new Set(['statusCode', 'code', 'error', 'message', 'httpStatusCode', 'userStatusCode', 'resource', 'metadata']);
+        diagnostic.keys = Object.keys(value).filter(key => known.has(key)).sort();
+        diagnostic.unknownKeys = Object.keys(value).some(key => !known.has(key));
+        diagnostic.statusCode = !Object.hasOwn(value, 'statusCode') ? 'absent'
+          : value.statusCode === '404' ? 'string404' : value.statusCode === 404 ? 'numeric404' : 'other';
+        diagnostic.code = !Object.hasOwn(value, 'code') ? 'absent' : value.code === 'NoSuchKey' ? 'NoSuchKey' : 'other';
+        diagnostic.error = !Object.hasOwn(value, 'error') ? 'absent'
+          : value.error === 'NoSuchKey' ? 'NoSuchKey' : value.error === 'not_found' ? 'not_found' : 'other';
+        diagnostic.message = !Object.hasOwn(value, 'message') ? 'absent'
+          : value.message === 'Object not found' ? 'object_not_found' : 'other';
+      }
+      return value && typeof value === 'object' && !Array.isArray(value)
+        && Object.keys(value).length === 4
+        && ['statusCode', 'code', 'error', 'message'].every(key => Object.hasOwn(value, key))
+        && value.statusCode === '404' && value.code === 'NoSuchKey'
+        && value.message === 'Object not found'
+        && (value.error === 'NoSuchKey' || value.error === 'not_found');
+    } catch { diagnostic.body = 'invalid'; return false; }
+    finally { emit(); await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  }
   async function removeObject(candidate) {
     const object = path(candidate);
     const removed = await transport(`/object/${object}`, { method: 'DELETE' });
-    await removed.body?.cancel().catch(() => {}); if (!removed.ok && removed.status !== 404) throw unavailable();
-    // Only the core calls this for a settled upload; 404 cannot settle an in-flight writer.
+    if (removed.ok) await removed.body?.cancel().catch(() => {});
+    else if (!await exactMissing(removed, 'delete')) throw unavailable();
+    // Only the core calls this for a settled upload. A missing DELETE never
+    // settles the slot without an independent exact-object GET.
     const checked = await transport(`/object/authenticated/${object}`, { method: 'GET' });
-    await checked.body?.cancel().catch(() => {}); if (checked.status !== 404) throw unavailable();
+    if (!await exactMissing(checked, 'verify')) throw unavailable();
     return { absent: true };
   }
   return Object.freeze({ uploadObject, openObject, signDownload, removeObject });

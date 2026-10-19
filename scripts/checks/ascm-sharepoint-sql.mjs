@@ -11,7 +11,13 @@ export async function sourceDatabase() {
   const { PGlite } = await import(process.env.PPC_TEST_PGLITE_MODULE ? pathToFileURL(resolve(process.env.PPC_TEST_PGLITE_MODULE)).href : '@electric-sql/pglite');
   const db = new PGlite();
   await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create role supabase_auth_admin; create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]); create table storage.objects(id uuid primary key,bucket_id text); alter table storage.objects enable row level security;');
-  for (const name of (await readdir(resolve('supabase/migrations'))).filter(name => name.endsWith('.sql') && name <= '202610180003_ascm_sharepoint_source.sql').sort()) await db.exec(await readFile(resolve('supabase/migrations', name), 'utf8'));
+  for (const name of (await readdir(resolve('supabase/migrations'))).filter(name => name.endsWith('.sql') && name <= '202610180004_ascm_sharepoint_timeout.sql').sort()) {
+    const identity = "select prosrc,proacl,prosecdef,proowner from pg_proc where oid='public.ppc_master_ascm_sharepoint_commit(jsonb)'::regprocedure";
+    const before = name === '202610180004_ascm_sharepoint_timeout.sql' ? (await db.query(identity)).rows[0] : null;
+    await db.exec(await readFile(resolve('supabase/migrations', name), 'utf8'));
+    if (before) assert.deepEqual((await db.query(identity)).rows[0], before,
+      'timeout migration must preserve source commit body, security definer, owner, and grants');
+  }
   const database = async (operation, payload = {}) => (await db.query(`select public.ppc_master_${operation}($1::jsonb) result`, [JSON.stringify(payload)])).rows[0].result;
   return { db, database };
 }
@@ -29,6 +35,9 @@ async function run() {
   const snapshot = async () => (await db.query("select jsonb_build_object('m',(select to_jsonb(s) from ppc_private.master_state s),'r',(select jsonb_agg(to_jsonb(r) order by request_id) from ppc_private.master_receipts r)) value")).rows[0].value;
   try {
     assert.equal((await db.query("select to_regprocedure('public.ppc_master_ascm_sharepoint_commit(jsonb)') is not null available")).rows[0].available, true, 'SharePoint source needs an atomic provenance/native commit wrapper');
+    const timeouts=(await db.query("select proname,proconfig from pg_proc where oid in ('public.ppc_master_commit(jsonb)'::regprocedure,'public.ppc_master_ascm_sharepoint_commit(jsonb)'::regprocedure) order by proname")).rows;
+    assert.deepEqual(timeouts.map(row=>[row.proname,row.proconfig?.includes('statement_timeout=12s')]),
+      [['ppc_master_ascm_sharepoint_commit',true],['ppc_master_commit',true]],'the outer PostgREST RPC must hoist the same bounded timeout as the nested native commit');
     await database('bootstrap', { manifest: { initial: true }, sourceSha: 'a'.repeat(40), fingerprint: 'f'.repeat(64) });
     const first = fixture(); await status(call(first), 'saved');
     let state = await read(first.requestId);

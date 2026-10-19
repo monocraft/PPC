@@ -223,14 +223,27 @@ function defaultRpc(env, fetchImpl) {
   return async (operation, payload = {}) => {
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json', apikey: credential };
     if (!credential.startsWith('sb_secret_')) headers.Authorization = `Bearer ${credential}`;
-    let response;
+    const started = Date.now();
+    let response, failureClass = 'TRANSPORT', status = 0;
     try {
       response = await fetchImpl(`${base}/rest/v1/rpc/ppc_master_${operation}`, {
         method: 'POST', headers, body: JSON.stringify({ payload }), redirect: 'error', signal: AbortSignal.timeout(['ascm_status', 'ascm_connection'].includes(operation) ? 2000 : 15000),
       });
-      if (!response.ok) { await response.body?.cancel().catch(() => {}); throw unavailable(); }
+      failureClass = 'INVALID_RESPONSE';
+      if (typeof response?.ok !== 'boolean' || !Number.isInteger(response.status) || response.status < 100 || response.status > 599) throw unavailable();
+      status = response.status;
+      if (!response.ok) { failureClass = 'HTTP'; await response.body?.cancel().catch(() => {}); throw unavailable(); }
       return await boundedJson(response, operation === 'ascm_connection' ? 16 * 1024 : MAX_RPC_BYTES);
-    } catch { throw unavailable(); }
+    } catch (error) {
+      if (failureClass !== 'HTTP' && ['TimeoutError', 'AbortError'].includes(error?.name)) failureClass = 'TIMEOUT';
+      if (operation === 'ascm_sharepoint_read' || operation === 'ascm_sharepoint_commit') {
+        const elapsed = Math.max(0, Date.now() - started);
+        const elapsedBucket = elapsed < 1000 ? 'under_1s' : elapsed < 5000 ? '1_to_5s' : elapsed < 15000 ? '5_to_15s' : 'over_15s';
+        try { console.error(JSON.stringify({ event: 'PPC_ASCM_SOURCE_RPC_FAILURE', operation, failureClass, status, elapsedBucket })); }
+        catch { /* Diagnostics must never replace the original RPC failure. */ }
+      }
+      throw unavailable();
+    }
   };
 }
 
