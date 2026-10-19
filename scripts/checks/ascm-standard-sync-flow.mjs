@@ -159,7 +159,12 @@ export function validateStandardSyncFlow(flow) {
   const ordered=(next,previous,statuses=['Succeeded'])=>require(same(a[next]?.runAfter,{[previous]:statuses}),'WRITE_ORDER',next);
   const trigger=flow.definition?.triggers;
   if(flow.kind==='intake'){
-    const t=trigger?.Recurrence;require(exactKeys(trigger,['Recurrence'])&&t?.type==='Recurrence'&&t?.recurrence?.frequency==='Hour'&&t?.recurrence?.interval==='1'&&t?.runtimeConfiguration?.concurrency?.runs===1&&secure(t),'TRIGGER_BOUNDARY');
+    const t=trigger?.Recurrence,r=t?.recurrence,s=r?.schedule;
+    require(exactKeys(trigger,['Recurrence'])&&t?.type==='Recurrence'
+      &&exactKeys(r,['frequency','interval','timeZone','schedule'])&&r.frequency==='Week'&&r.interval===1
+      &&r.timeZone==='Pacific Standard Time'&&exactKeys(s,['weekDays','hours','minutes'])
+      &&same(s.weekDays,['Tuesday'])&&same(s.hours,[13])&&same(s.minutes,[0])
+      &&t?.runtimeConfiguration?.concurrency?.runs===1&&secure(t),'TRIGGER_BOUNDARY');
     const discovery=c('Discover_bounded_sources'), selection=c('Select_latest_eligible');
     require(discovery?.readOnly===true&&same(discovery?.monthOffsets,[0,-1,-2])&&discovery?.calendar==='UTC'&&discovery?.folderOnly===true&&discovery?.recursive===false&&discovery?.pageSize===100&&discovery?.maxPagesPerFolder===5&&discovery?.maxItemsPerFolder===500&&discovery?.maxTotalItems===1501&&discovery?.onOverflow==='held'&&discovery?.pagination==='explicit-finite'&&discovery?.continuationAuthority==='same-fixed-library-and-folder-only'&&discovery?.knownCurrentItem?.listItemId===908&&discovery?.knownCurrentItem?.keepOutsideWindow===true,'DISCOVERY_BOUNDARY');
     require(selection?.floor==='2026-09-30'&&selection?.filenameDay==='strict-calendar'&&selection?.versionPattern==='^[1-9][0-9]*\\.0$'&&selection?.versionOrder==='numeric-positive-major'&&selection?.choose==='greatest-report-date'&&selection?.ambiguity==='different-items-at-greatest-date-hold'&&selection?.folderDateMustEqualReportDate===false&&selection?.modifiedTimeOrdering===false&&selection?.baselineInferenceFromMail===false,'DISCOVERY_BOUNDARY');
@@ -271,8 +276,15 @@ function registerTests() {
     rejection('command', flow => { flow.readiness.importTested = true; }, 'RUNTIME_BINDING_GATE');
     rejection('command', (flow, a) => { delete flow.definition.actions.Runtime_binding_required; }, 'RUNTIME_BINDING_GATE');
   });
-  test('rejects wrong hourly type, parallel runs, manual auth, or another connection', () => {
-    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.interval = 1; }, 'TRIGGER_BOUNDARY');
+  test('rejects weekly day, time, zone, interval, parallel runs, manual auth, or another connection', () => {
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.frequency = 'Hour'; }, 'TRIGGER_BOUNDARY');
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.interval = '1'; }, 'TRIGGER_BOUNDARY');
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.interval = 2; }, 'TRIGGER_BOUNDARY');
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.timeZone = 'UTC'; }, 'TRIGGER_BOUNDARY');
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.schedule.weekDays = ['Monday']; }, 'TRIGGER_BOUNDARY');
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.schedule.weekDays.push('Wednesday'); }, 'TRIGGER_BOUNDARY');
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.schedule.hours = [12]; }, 'TRIGGER_BOUNDARY');
+    rejection('intake', flow => { flow.definition.triggers.Recurrence.recurrence.schedule.minutes = [30]; }, 'TRIGGER_BOUNDARY');
     rejection('intake', flow => { flow.definition.triggers.Recurrence.runtimeConfiguration.concurrency.runs = 2; }, 'TRIGGER_BOUNDARY');
     rejection('command', flow => { flow.connectionReferences.shared_sharepointonline.source = 'Invoker'; }, 'CONNECTION_BOUNDARY');
     rejection('command', (flow, a) => { a.Read_command.inputs.host.connectionName = 'new-account'; }, 'CONNECTION_BOUNDARY');

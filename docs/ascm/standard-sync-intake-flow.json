@@ -119,8 +119,20 @@
       "Recurrence": {
         "type": "Recurrence",
         "recurrence": {
-          "frequency": "Hour",
-          "interval": "1"
+          "frequency": "Week",
+          "interval": 1,
+          "timeZone": "Pacific Standard Time",
+          "schedule": {
+            "weekDays": [
+              "Tuesday"
+            ],
+            "hours": [
+              13
+            ],
+            "minutes": [
+              0
+            ]
+          }
         },
         "runtimeConfiguration": {
           "secureData": {
