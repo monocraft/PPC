@@ -1,12 +1,14 @@
 # Shared master editing
 
-The recommended team connection is now the private [Supabase shared master setup](SUPABASE-SETUP.md). Teammates use the existing package unlock key and an optional name, without personal GitHub tokens or another login. It supports product creation/removal, specifications, SKU/colorway updates, every shared lifecycle date, live category/product presence, and explicit concurrent conflict choices. Accepted updates are immediately available to connected teammates; the encrypted GitHub package is published automatically with separate pending/error status. The direct GitHub and local service instructions below remain available as fallbacks.
+The current team connection uses the private [Supabase shared master setup](SUPABASE-SETUP.md). Teammates use the existing package unlock key and an optional name, without personal GitHub tokens or another login. It supports product creation/removal, specifications, SKU/colorway updates, every shared lifecycle date, live category/product presence, and explicit concurrent conflict choices. Accepted facts are immediately available to connected teammates; the complete encrypted package publishes separately to an immutable SharePoint file with pending/error status. The current Pages package and master sources use the same project's fixed services. The direct GitHub and local fixed-file service instructions below remain available for explicit alternative deployments.
 
 Product lane and card order changes are saved through the same review, whether made by dragging in Reorder products or by choosing a lane in Edit product. The shared model treats lane and order as one placement value and validates the lane within the product's category. Changes to an affected lane by another teammate require a conflict choice; unrelated specification edits can merge normally. After acceptance, the updated placement is used by refresh and package publication. Closing an editor or choosing Done saves the local draft; Save to master shares it.
 
 Once the current tab is connected, the main Pull latest data action refreshes the accepted shared snapshot. It does not replace the workspace with a downloadable package that may still be behind. An unconnected tab uses the normal package unlock flow. This also lets the first placement-capable snapshot establish older placement baselines while retaining local lane and order differences for review.
 
-PPC saves supported product edits directly to the encrypted `public/data/master_ppc.pkg` in `monocraft/PPC`, on `main`. GitHub stores the master and accepts updates; a separate server is not required. The checked-in app and Pages configuration select this GitHub mode by default.
+## Legacy direct GitHub mode
+
+In this explicit historical mode, PPC saves supported product edits directly to the encrypted `public/data/master_ppc.pkg` in `monocraft/PPC`, on `main`. GitHub stores the master and accepts updates; a separate server is not required. The current app and Pages deployment select the service endpoints instead, and the current branch no longer carries that package file.
 
 ## The user flow
 
@@ -36,7 +38,7 @@ Per-field revisions catch values that changed away from and back to their origin
 
 GitHub mode shows **Recent editors** beside the category selector. The panel lists accounts recorded by accepted shared saves and when they saved. The connected GitHub account supplies its username and available display name; users do not need to invent a label. This history is not an online count, and the app does not claim that those people currently have the page open.
 
-Actual **Connected now** circles are available only for the optional service mode below. That service uses temporary heartbeats, anonymous browser labels and optional display names. GitHub mode sends no presence commits or heartbeat writes.
+Actual **Connected now** circles are available in the current service mode. That service uses temporary heartbeats, anonymous browser labels and optional display names. GitHub mode sends no presence commits or heartbeat writes.
 
 The circles now share an original expressive icon family instead of initials. Each browser session keeps its own contour, eye spacing, tilt and blink timing. The desktop strip shows seven people before `+N`; compact widths use five or three while retaining the accurate overflow count. Header footprints remain 29 px, 25 px and 23 px at the existing breakpoints; roster portraits remain 30 px. Local activity changes the current person's expression immediately. Service mode shares the validated browsing, roadmap, focused, idle and editing states through its existing presence updates. After a minute of observed editing on the same product, occasional seeded frustrated and angry expressions join the normal editing face in twelve-second beats. These are playful visual expressions; the shared factual activity remains Editing. Switching products or ending editing resets that clock. GitHub history remains static and never implies current activity.
 
@@ -62,13 +64,13 @@ Manual notes remain limited to 2,000 characters. Stored update comments allow up
 
 ## Publish the application
 
-Publish the changed app through the existing Pages workflow. With no service override, `scripts/configure-package-source.mjs` generates GitHub mode for the fixed repository/master path. No access token or package key is a deployment setting. `PPC_MASTER_MODE=static` intentionally restores read-only hosted-package behavior. Do not set separate package/master service endpoints unless choosing service mode for both.
+Publish the changed app through the existing Pages workflow. The current deployment supplies the exact package and master service endpoints; the checked-in public source mirrors that pair and contains no credential. `scripts/configure-package-source.mjs` still generates explicit GitHub mode when no service endpoints are configured, but that mode requires its own physical package and is not this deployment. `PPC_MASTER_MODE=static` intentionally selects read-only hosted-package behavior. Do not mix package and master service projects.
 
 Each accepted GitHub master save creates a repository commit, which also triggers the existing Pages workflow. Reading the master through the API avoids that rebuild delay. Frequent binary changes grow Git history, so review normal repository storage usage for a large portfolio.
 
-The current master is about 24.8 MB. Preserving its complete encrypted package means each save uploads about 33 MB after Base64 encoding, even for a small date change. Review several edits together in one save when practical. Package transfers have a two-minute deadline; smaller metadata/account requests have a 30-second deadline.
+In the historical GitHub mode, the master was about 24.8 MB, so preserving its complete encrypted package made each small save upload about 33 MB after Base64 encoding. The current service stores accepted facts separately and prepares a complete package asynchronously. Package transfer and request bounds remain enforced by their respective current endpoints.
 
-## Optional service mode and local trial
+## Other service implementations and local trial
 
 `npm run try:master` starts the isolated three-product trial at `http://127.0.0.1:4187`. It uses a separate temporary encrypted master and browser workspace; it does not write to GitHub or change the real portfolio. This trial exercises the shared conflict UI using the optional local service.
 

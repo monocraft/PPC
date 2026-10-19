@@ -18,7 +18,7 @@ Use this order when deciding what is authoritative:
 | Current browser session | `localStorage` plus IndexedDB for the exact origin being tested |
 | UI palette | CSS/JavaScript tokens derived from the supplied charcoal/core palette references |
 | Deployment contents | `.github/workflows/deploy.yml`, checked against `public/index.html` runtime references |
-| Shared master and service | Default direct GitHub reads/updates of `monocraft/PPC` `main` `public/data/master_ppc.pkg`. Individual tokens stay in memory. Optional static mode or fixed-file service overrides remain supported. See [Shared master editing](SHARED-MASTER-EDITING.md). |
+| Shared master and package | Current accepted facts use the private `ppc-master` service; complete encrypted packages use the keyed `ppc-package` service and an immutable SharePoint publication receipt. Pages carries only their public endpoint addresses. Explicit historical GitHub/static and fixed-file modes remain in source, but the current branch does not carry `public/data/master_ppc.pkg`. See [Shared master editing](SHARED-MASTER-EDITING.md) and [SharePoint laptop supervisor](ascm/sharepoint-laptop-supervisor.md). |
 
 Do not copy an older local folder over this workspace. A future GitHub ZIP or clone should be staged separately, inventoried, and diffed before any merge.
 
@@ -91,13 +91,13 @@ Package import validates the manifest and image references, stages local binarie
 
 ### 4.1 Publish and pull the shared master
 
-Use **Settings → Data & export → Export project package**, keep package protection selected, and enter the existing key or choose **Create new key**. **Export package** downloads encrypted `master_ppc.pkg`; the key stays available to copy until **Done**. Upload that file to the same private SharePoint location, keeping the key separately. Unprotected export is an explicit private local backup, not a shared master.
+The current normal publisher builds an encrypted complete package from accepted master facts and images, sends one immutable command through the private SharePoint handoff, and confirms publication through a verified receipt. The checked-in `public/data/master_ppc.pkg` is retired from the current branch; the older SharePoint `master_ppc.pkg` remains only the historical seed. Do not overwrite that seed or rename a confirmed immutable `master-r{revision}-g{generation}-{candidateId}.pkg`. **Settings → Data & export → Export project package** remains a separate owner backup path; keep package protection selected and the key private. An unprotected export is an explicit private local backup, not a shared master.
 
-Follow [Shared master editing](SHARED-MASTER-EDITING.md) for direct GitHub reads and product-fact saves. Each editor uses their own GitHub write access and memory-only token; the package key stays on the device. Full-package owner publishing remains available for images/layout in [Shared package setup](SHARED-PACKAGE-SETUP.md).
+Follow [Shared master editing](SHARED-MASTER-EDITING.md) for current service-backed product-fact saves and explicit historical GitHub behavior. Teammates use the package key with the current service, not personal GitHub tokens. See [Shared package setup](SHARED-PACKAGE-SETUP.md) for package opening and legacy publishing instructions.
 
-Pages generates `_site/js/package-source.js` through `scripts/configure-package-source.mjs`. With no service override, it selects the fixed GitHub master. No credentials belong in this file or repository variables. `PPC_MASTER_MODE=static` restores read-only hosted pulls. Explicit package/master endpoint variables select the optional service; point both to the same master.
+Pages generates `_site/js/package-source.js` through `scripts/configure-package-source.mjs`. The current deployment supplies the exact same-project `ppc-package` and `ppc-master` endpoints, matching checked-in `public/js/package-source.js`. No credentials belong in that file or repository variables. If endpoints are absent, the generator retains explicit historical GitHub mode, which requires a physical package; `PPC_MASTER_MODE=static` selects read-only hosting for a separate deployment.
 
-**Pull latest data** retrieves the encrypted master and invokes the same validated replacement path as manual package import. Products and Roadmap update together. Supported edits then use **Save to master** with explicit conflicts. Simulated GitHub writes verify behavior without publishing; live repository access and a real save require the editor's credentials and permission.
+For a connected current-service tab, **Pull latest data** refreshes accepted facts without replacing the open complete package. An unconnected tab's **Open complete package** flow retrieves the encrypted published copy and uses the validated replacement path, updating Products, Roadmap, settings and images together. Preserve any draft before that replacement. Supported edits use **Save to master** with explicit conflicts; historical GitHub writes remain isolated in synthetic checks.
 
 ## 5. Understand a new upstream source safely
 
@@ -177,7 +177,7 @@ rg -n "<script|<link" public/index.html
 - Keep package content validation and new-ID image staging before metadata commit; never clear the original image store to begin an import. Preserve original data/images until metadata and workspace activation succeed, roll back failed commits/staging, and only then delete superseded image IDs that the current workspace does not reference. Retire valid legacy recovery images and metadata after successful replacement; do not create a new recovery slot.
 - Add an export→import→export round-trip test with byte-independent semantic comparison.
 - Keep URL images as references only when that is an explicit privacy/offline decision.
-- Keep encrypted `master_ppc.pkg` as the default publisher flow and legacy stored-ZIP import as compatibility. Missing local image binaries must block a supposedly complete export; an unprotected export remains an explicit private-backup choice.
+- Keep current normal publication on the immutable SharePoint package and verified receipt; retain the old `master_ppc.pkg` only as historical seed and explicit GitHub-mode compatibility. Legacy stored-ZIP import remains compatible. Missing local image binaries must block a supposedly complete export; an unprotected export remains an explicit private-backup choice.
 - Keep package keys ephemeral. The fixed-file relay must authenticate the encrypted envelope before returning bytes, accept no client source path/URL, and cache no keys/plaintext. Preserve exact CORS, body/source size limits, rate limits, trusted-proxy restrictions, loopback binding, generic errors, and HTTPS for remote access.
 
 ### 6.4 UI and palette
@@ -242,7 +242,7 @@ public/vendor/pptxgen.bundle.js
 
 The deployed entrypoint remains `index.html`; runtime URLs are `css/styles.css`, `js/…`, `assets/…`, and `vendor/…`. Do not add an extra `public/` level to the deployed URL or publish the repository root.
 
-Pages generates only public GitHub/source configuration with `scripts/configure-package-source.mjs`. Optional `PPC_PACKAGE_ENDPOINT`/`PPC_MASTER_ENDPOINT` select a service, and `PPC_MASTER_MODE=static` selects read-only hosting. Keep keys, GitHub tokens, private source paths, `server/` and real `.env` settings outside the Pages artifact.
+Pages generates only public source addresses with `scripts/configure-package-source.mjs`. The current `PPC_PACKAGE_ENDPOINT`/`PPC_MASTER_ENDPOINT` select the same-project services; explicit historical GitHub mode requires its physical package, and `PPC_MASTER_MODE=static` selects read-only hosting. Keep keys, GitHub tokens, private source paths, `server/` and real `.env` settings outside the Pages artifact.
 
 It must exclude:
 

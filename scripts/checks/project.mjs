@@ -260,6 +260,20 @@ for (const [first, second] of [["js/reference-theme.js", "js/portfolio-model.js"
 
 const workflowSource = await readFile(projectPath(".github/workflows/deploy.yml"), "utf8");
 const { staged, unsafe } = parseCopySteps(workflowSource);
+const packageSource = vm.createContext({});
+try {
+  new vm.Script(await readFile(projectPath("public/js/package-source.js"), "utf8"), { filename: "package-source.js" })
+    .runInContext(packageSource, { timeout: 1_000 });
+} catch (error) { fail(`Package source configuration is invalid: ${error.message}`); }
+const servicePackage = packageSource.PPC_PACKAGE_SOURCE?.mode === "relay"
+  && packageSource.PPC_PACKAGE_SOURCE.packageUrl === ""
+  && packageSource.PPC_PACKAGE_SOURCE.endpoint === "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-package/api/package/latest"
+  && packageSource.PPC_MASTER_SOURCE?.mode === "service"
+  && packageSource.PPC_MASTER_SOURCE.endpoint === "https://abzzcswajjzbordmwuuh.supabase.co/functions/v1/ppc-master/api/master"
+  && packageSource.PPC_MASTER_SOURCE.team === true
+  && (!process.env.PPC_PACKAGE_ENDPOINT || process.env.PPC_PACKAGE_ENDPOINT === packageSource.PPC_PACKAGE_SOURCE.endpoint)
+  && (!process.env.PPC_MASTER_ENDPOINT || process.env.PPC_MASTER_ENDPOINT === packageSource.PPC_MASTER_SOURCE.endpoint)
+  && (!process.env.PPC_MASTER_MODE || process.env.PPC_MASTER_MODE === "service");
 const requiredDeploymentEntries = new Set([
   "public/index.html",
   "public/css/styles.css",
@@ -267,7 +281,7 @@ const requiredDeploymentEntries = new Set([
   "public/js/catalog-data.js",
   "public/assets",
   "public/vendor",
-  "public/data/master_ppc.pkg",
+  ...(servicePackage ? [] : ["public/data/master_ppc.pkg"]),
   ...scriptReferences.map(publicPath),
   ...stylesheetReferences.map(publicPath),
 ]);
@@ -311,7 +325,7 @@ if (await isDirectory("public")) {
       fail(`Non-site content must not be inside the public deployment folder: ${file}`);
     }
   }
-  try { await inspectHostedData(path.join(publicRoot, "data"), { required: true }); }
+  try { await inspectHostedData(path.join(publicRoot, "data"), { required: !servicePackage }); }
   catch (error) { fail(error.message); }
 }
 for (const entry of await readdir(projectRoot, { withFileTypes: true })) {
