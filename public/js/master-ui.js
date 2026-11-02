@@ -65,7 +65,7 @@
     dialog.id = "masterDialog";
     dialog.setAttribute("aria-labelledby", "masterDialogTitle"); dialog.setAttribute("aria-describedby", "masterDialogDescription");
     document.body.append(dialog);
-    let running = false, discarding = false, connectingGitHub = false, modalResolve = null, modalCancel = null, lastError = "", lastErrorWasSave = false, publicationDelayed = false;
+    let running = false, discarding = false, connectingAccess = false, modalResolve = null, modalCancel = null, lastError = "", lastErrorWasSave = false, publicationDelayed = false;
     let progressState = null, progressTimer = null, modalOperation = null, modalView = "", destroyed = false;
     let lastCheckedAt = 0, checkedPublication = null, lastCheckError = "", checkMessage = "", localBaselineGeneration = 0;
     const updates = element("dialog", "master-dialog portfolio-updates-dialog");
@@ -133,15 +133,15 @@
       if (saveButton) {
         const canShowProgress = running && progressState && progressState.generation === localBaselineGeneration;
         saveButton.hidden = !count && !running && !discarding;
-        saveButton.textContent = discarding ? "Discarding…" : running ? connectingGitHub ? "Connecting…" : "Saving…" : `Save changes${count ? ` (${count})` : ""}`;
+        saveButton.textContent = discarding ? "Discarding…" : running ? connectingAccess ? "Connecting…" : "Saving…" : `Save changes${count ? ` (${count})` : ""}`;
         saveButton.disabled = discarding || refreshRunning || Boolean(adapter.hasPendingPackageOperation?.()) || Boolean((running || state.busy) && !canShowProgress);
         saveButton.classList.toggle("master-save-active", Boolean(canShowProgress));
-        saveButton.setAttribute("aria-label", canShowProgress ? connectingGitHub ? "Show connection progress" : "Show save progress" : saveButton.textContent);
+        saveButton.setAttribute("aria-label", canShowProgress ? connectingAccess ? "Show connection progress" : "Show save progress" : saveButton.textContent);
         saveButton.title = canShowProgress ? "View progress. Closing the panel keeps this operation running." : "Review and save your product changes";
       }
       if (publicationDelayed) button.title += ". Saved changes are available to the team; the downloadable copy is waiting to update. See Messages for status.";
       button.classList.toggle("master-has-changes", count > 0);
-      if (count) notices?.publish({ id: "master-pending", severity: "info", title: discarding ? "Discarding changes…" : running ? connectingGitHub ? "Connecting…" : "Saving changes…" : "Changes ready to save", message: running || discarding ? "Your changes are safe while this update finishes." : `${count} ${count === 1 ? "product has" : "products have"} unsaved changes. Review them when you’re ready.`, toast: false, dismissible: false, actions: running || discarding ? [] : [{ label: "Review changes", onClick: saveFlow }] });
+      if (count) notices?.publish({ id: "master-pending", severity: "info", title: discarding ? "Discarding changes…" : running ? connectingAccess ? "Connecting…" : "Saving changes…" : "Changes ready to save", message: running || discarding ? "Your changes are safe while this update finishes." : `${count} ${count === 1 ? "product has" : "products have"} unsaved changes. Review them when you’re ready.`, toast: false, dismissible: false, actions: running || discarding ? [] : [{ label: "Review changes", onClick: saveFlow }] });
       else notices?.resolve("master-pending");
       if (count && !configured) notices?.publish({ id: "master-saving-unavailable", severity: "warning", title: "Saving is not available yet", message: "You can keep editing. Your changes are safe; ask your portfolio owner to enable saving.", toast: false });
       else notices?.resolve("master-saving-unavailable");
@@ -404,7 +404,7 @@
       operation.hidden = false;
       if (dialog.open && modalOperation === operation && modalView === "progress") { updateProgress(operation); return; }
       const description = operation.count ? `${operation.count} ${operation.count === 1 ? "product" : "products"}` : "";
-      void show(connectingGitHub ? "Connecting" : "Saving changes", description, ({ body, footer }) => {
+      void show(connectingAccess ? "Connecting" : "Saving changes", description, ({ body, footer }) => {
         const row = element("div", "master-progress"), indicator = element("span", "master-progress-indicator"), copy = element("div", "master-progress-copy");
         indicator.setAttribute("aria-hidden", "true");
         const title = element("span", "master-progress-title"), detail = element("span", "master-progress-detail"), elapsed = element("span", "master-progress-elapsed");
@@ -412,7 +412,7 @@
         copy.append(title, detail); row.append(indicator, copy, elapsed); body.append(row);
         operation.nodes = { title, detail, elapsed };
         const hide = element("button", "quiet-button", "Keep working"); hide.type = "button"; hide.addEventListener("click", () => hideProgress(operation)); footer.append(hide);
-      }, { view: "progress", dismissLabel: "Close save progress", onDismiss: () => hideProgress(operation) }).catch(() => hideProgress(operation));
+      }, { view: "progress", dismissLabel: connectingAccess ? "Close connection progress" : "Close save progress", onDismiss: () => hideProgress(operation) }).catch(() => hideProgress(operation));
       updateProgress(operation);
       stopProgressTimer();
       progressTimer = root.setInterval(() => updateProgress(operation), 1000);
@@ -427,13 +427,61 @@
       if (!operation.hidden) openProgress();
     }
 
+    async function connectShared() {
+      const state = session.getState();
+      if (destroyed || githubMode || !configured || state.hasKey || running || discarding || refreshRunning || dialog.open || updates.open || state.busy || adapter.hasPendingPackageOperation?.() || adapter.canRefresh?.() === false) return;
+      const operationGeneration = localBaselineGeneration, restoreFocus = document.activeElement;
+      root.PortfolioMasterPresence?.close?.();
+      let operation = null, message = "", restoreCancelledUnlock = false;
+      try {
+        for (;;) {
+          const key = await getAccess(false, message);
+          if (!key) { restoreCancelledUnlock = true; return; }
+          if (operationGeneration !== localBaselineGeneration) return;
+          const current = session.getState();
+          if (current.hasKey || current.busy || discarding || refreshRunning || dialog.open || updates.open || running && (!operation || progressState !== operation) || adapter.hasPendingPackageOperation?.() || adapter.canRefresh?.() === false) return;
+          if (!operation) operation = { generation: operationGeneration, count: 0, phase: "", startedAt: null, phaseStartedAt: null, hidden: false, nodes: null };
+          progressState = operation; running = true; connectingAccess = true; progress("connect");
+          try {
+            const result = await session.connect({ key }); closeOperation(operation);
+            if (operationGeneration !== localBaselineGeneration) return;
+            if (result === null) throw Object.assign(new Error("Another update is in progress."), { code: "MASTER_BUSY" });
+            lastCheckedAt = Date.now(); checkedPublication = session.getState().snapshot?.publication ? JSON.parse(JSON.stringify(session.getState().snapshot.publication)) : null;
+            lastCheckError = ""; retryUntil = 0;
+            if (!lastErrorWasSave || !session.track().length) lastError = "";
+            notices?.resolve("master-connection-error");
+            return;
+          } catch (error) {
+            closeOperation(operation);
+            if (operationGeneration !== localBaselineGeneration) return;
+            if (error.code !== "INVALID_KEY") throw error;
+            message = friendlyError(error);
+          }
+        }
+      } catch (error) {
+        if (operationGeneration !== localBaselineGeneration) return;
+        lastCheckError = friendlyError(error);
+        if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil);
+        notices?.publish({ id: "master-connection-error", severity: "error", title: "Connection needs attention", message: lastCheckError, toast: false,
+          actions: [{ label: "Try again", onClick: () => session.getState().hasKey ? refreshQuietly({ force: true }) : connectShared() }] });
+      } finally {
+        let restoreConnectionFocus = restoreCancelledUnlock;
+        if (operation) {
+          const ownsRun = !progressState || progressState === operation;
+          restoreConnectionFocus = retireProgress(operation) || restoreConnectionFocus;
+          if (ownsRun) { running = false; connectingAccess = false; }
+        }
+        if (!destroyed) { updateStatus(); if (restoreConnectionFocus && operationGeneration === localBaselineGeneration && !running && !dialog.open && restoreFocus?.isConnected && !restoreFocus.disabled) restoreFocus.focus({ preventScroll: true }); }
+      }
+    }
+
     async function connectGitHub() {
       if (destroyed || !githubMode || running || dialog.open || !session.getState().hasKey) return;
       const operationGeneration = localBaselineGeneration;
       root.PortfolioMasterPresence?.close?.();
       const token = await getAccess("github"); if (!token || operationGeneration !== localBaselineGeneration) return;
       const operation = { generation: operationGeneration, count: 0, phase: "", startedAt: null, phaseStartedAt: null, hidden: false, nodes: null };
-      progressState = operation; running = true; connectingGitHub = true; progress("account");
+      progressState = operation; running = true; connectingAccess = true; progress("account");
       try {
         const account = await session.setGitHubToken(token);
         if (operationGeneration !== localBaselineGeneration) { closeOperation(operation); return; }
@@ -442,7 +490,7 @@
         notices?.publish({ id: "master-github-connected", severity: "success", title: "Connected", message: `Connected as ${account.name || account.login}.`, revision: String(Date.now()), toast: true });
       } catch (error) { closeOperation(operation); if (operationGeneration !== localBaselineGeneration) return; if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); lastError = friendlyError(error); }
       finally {
-        const restoreFocus = retireProgress(operation); running = false; connectingGitHub = false; if (!destroyed) updateStatus();
+        const restoreFocus = retireProgress(operation); running = false; connectingAccess = false; if (!destroyed) updateStatus();
         if (restoreFocus && !destroyed) (saveButton && !saveButton.hidden && !saveButton.disabled ? saveButton : button).focus({ preventScroll: true });
       }
     }
@@ -551,19 +599,19 @@
       lastRefreshAt = Date.now();
       const operationGeneration = localBaselineGeneration;
       refreshRunning = true; checkMessage = ""; updateStatus();
-      try { const result = await session.refresh(); if (operationGeneration !== localBaselineGeneration) return { status: "superseded" }; if (result === null) throw Object.assign(new Error("Another update is in progress."), { code: "MASTER_BUSY" }); lastCheckedAt = Date.now(); checkedPublication = session.getState().snapshot?.publication ? JSON.parse(JSON.stringify(session.getState().snapshot.publication)) : null; lastCheckError = ""; if (!lastErrorWasSave || !session.getState().pending.length) lastError = ""; retryUntil = 0; return { status: "checked", checkedAt: lastCheckedAt }; }
+      try { const result = await session.refresh(); if (operationGeneration !== localBaselineGeneration) return { status: "superseded" }; if (result === null) throw Object.assign(new Error("Another update is in progress."), { code: "MASTER_BUSY" }); lastCheckedAt = Date.now(); checkedPublication = session.getState().snapshot?.publication ? JSON.parse(JSON.stringify(session.getState().snapshot.publication)) : null; lastCheckError = ""; if (!lastErrorWasSave || !session.getState().pending.length) lastError = ""; retryUntil = 0; notices?.resolve("master-connection-error"); return { status: "checked", checkedAt: lastCheckedAt }; }
       catch (error) { if (operationGeneration !== localBaselineGeneration) return { status: "superseded" }; lastCheckError = friendlyError(error); if (Number.isFinite(error.retryUntil)) retryUntil = Math.max(retryUntil, error.retryUntil); if (!lastErrorWasSave) lastError = lastCheckError; return { status: "error" }; }
       finally { refreshRunning = false; updateStatus(); }
     }
     const timer = root.setInterval(refreshQuietly, githubMode ? 60000 : 45000);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "hidden") refreshQuietly(); });
-    active = Object.freeze({ session, updateStatus, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow, saveScoped, openUpdates: showUpdates,
+    active = Object.freeze({ session, updateStatus, connectShared, connectGitHub, refresh: () => refreshQuietly({ force: true }), save: saveFlow, saveScoped, openUpdates: showUpdates,
       getSummary() { const state = session.getState(); return { pendingCount: session.track().length, busy: Boolean(state.busy || running || discarding || refreshRunning), connected: state.connected, lastCheckedAt, publicationStatus: checkedPublication?.status || state.snapshot?.publication?.status || '', error: Boolean(lastError || lastCheckError) }; },
       reviewConflicts(conflicts) { if (running || discarding || session.getState().busy || !Array.isArray(conflicts) || !conflicts.length) return null; return resolveConflicts(conflicts); },
       markImported(products, key) { localBaselineGeneration += 1; retireProgress(); session.markImported(products, key); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; lastRefreshAt = 0; retryUntil = 0; updateStatus(); if (key) refreshQuietly(); },
-      adoptLocalBaseline() { localBaselineGeneration += 1; retireProgress(); session.adoptLocalBaseline(); lastError = ""; lastErrorWasSave = false; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; checkMessage = ""; publicationDelayed = false; lastRefreshAt = 0; retryUntil = 0; for (const id of ["master-save-result", "master-sync-error", "master-publication", "master-github-connected", "plc-master-sharing", "master-discard-result", "master-discard-undone"]) notices?.resolve(id); updateStatus(); },
-      disconnect() { localBaselineGeneration += 1; retireProgress(); root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); lastError = ""; lastCheckedAt = 0; checkedPublication = null; lastCheckError = ""; updateStatus(); },
-      destroy() { destroyed = true; localBaselineGeneration += 1; retireProgress(); root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); updates.remove(); dialog.remove(); },
+      adoptLocalBaseline() { localBaselineGeneration += 1; retireProgress(); session.adoptLocalBaseline(); lastError = ""; lastErrorWasSave = false; lastCheckError = ""; lastCheckedAt = 0; checkedPublication = null; checkMessage = ""; publicationDelayed = false; lastRefreshAt = 0; retryUntil = 0; for (const id of ["master-save-result", "master-sync-error", "master-publication", "master-github-connected", "master-connection-error", "plc-master-sharing", "master-discard-result", "master-discard-undone"]) notices?.resolve(id); updateStatus(); },
+      disconnect() { localBaselineGeneration += 1; retireProgress(); root.PortfolioMasterPresence?.leave(); session.disconnect(); notices?.resolve("master-save-result"); notices?.resolve("master-github-connected"); notices?.resolve("master-connection-error"); lastError = ""; lastCheckedAt = 0; checkedPublication = null; lastCheckError = ""; updateStatus(); },
+      destroy() { destroyed = true; localBaselineGeneration += 1; retireProgress(); root.clearInterval(timer); session.disconnect(); for (const id of ["master-pending", "master-saving-unavailable", "master-sync-error", "master-save-result", "master-github-connected", "master-connection-error", "master-discard-result", "master-discard-undone", "plc-master-sharing"]) notices?.resolve(id); notices?.resolve("master-publication", { preserveAcknowledgment: true }); updates.remove(); dialog.remove(); },
     });
     updateStatus();
     if (teamMode && configured && session.getState().hasKey) refreshQuietly();
@@ -588,7 +636,7 @@
     }
     return active;
   }
-  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, getSummary() { return active?.getSummary() || {}; }, openUpdates() { return active?.openUpdates(); }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, adoptLocalBaseline() { active?.adoptLocalBaseline(); }, disconnect() { active?.disconnect(); } });
+  root.PortfolioMasterUI = Object.freeze({ initialize, getSession() { return active?.session || null; }, getSummary() { return active?.getSummary() || {}; }, openUpdates() { return active?.openUpdates(); }, connectShared() { return active?.connectShared(); }, connectGitHub() { return active?.connectGitHub(); }, updateStatus() { active?.updateStatus(); }, refresh() { return active?.refresh(); }, save() { return active?.save(); }, saveScoped(options) { return active?.saveScoped(options) ?? Promise.resolve({ status: "local", saved: false, code: "SHARING_NOT_CONNECTED", message: "PLC data is saved on this device. Connect shared saving to share it automatically." }); }, reviewConflicts(conflicts) { return active?.reviewConflicts(conflicts) ?? null; }, markImported(products, key) { active?.markImported(products, key); }, adoptLocalBaseline() { active?.adoptLocalBaseline(); }, disconnect() { active?.disconnect(); } });
   if (root.PortfolioMasterAdapter) {
     const openWhenReady = () => initialize({ adapter: root.PortfolioMasterAdapter });
     root.addEventListener?.("portfolio:workspace-ready", openWhenReady);

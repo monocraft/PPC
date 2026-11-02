@@ -102,7 +102,7 @@ class Element {
   set innerHTML(_) { assert.fail('Status rendering must use inert DOM nodes'); }
 }
 class HeaderElement extends Element {
-  constructor(tag, ownerDocument) { super(tag, ownerDocument); this.dataset = {}; this.style = {}; this.classList.add = name => this.classList.toggle(name, true); }
+  constructor(tag, ownerDocument) { super(tag, ownerDocument); this.dataset = {}; this.style = {}; this.disabled = false; this.classList.add = name => this.classList.toggle(name, true); }
   setAttribute(name, value) { super.setAttribute(name, value); if (name === 'class') this.className = String(value); }
   get firstChild() { return this.children[0] || null; }
   get nextSibling() { return this.parentNode?.children[this.parentNode.children.indexOf(this) + 1] || null; }
@@ -112,7 +112,7 @@ class HeaderElement extends Element {
   querySelectorAll(selector) { return this.children.flatMap(child => [child, ...child.querySelectorAll('*')]).filter(child => selector === '*' || child.matches(selector)); }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
-async function headerFixture() {
+async function headerFixture({ hasKey = true, configured = true } = {}) {
   const source = await readFile(new URL('../../public/js/master-presence.js', import.meta.url), 'utf8');
   const documentEvents = new Element();
   const documentObject = { visibilityState: 'visible', activeElement: null, addEventListener: (...args) => documentEvents.addEventListener(...args), removeEventListener: (...args) => documentEvents.removeEventListener(...args), dispatch: (...args) => documentEvents.dispatch(...args), createElement: tag => new HeaderElement(tag, documentObject), createElementNS: (_, tag) => new HeaderElement(tag, documentObject) };
@@ -120,13 +120,34 @@ async function headerFixture() {
   documentObject.querySelector = selector => selector === '.brand-block' ? brand : null;
   documentObject.getElementById = id => id === 'ascmSupervisorIndicator' ? indicator : null;
   let reply = { sessions: [{ sessionId: 'owner-tab-1234', displayName: 'Alex' }, { sessionId: 'teammate-tab-5678', displayName: 'Sam' }], pokeSupported: true, ascmSupervisor: active() }, mode = 'service', calls = 0;
-  const pokes = [], session = { getState: () => ({ configured: true, hasKey: true, accessVersion: 1, mode, pending: [], snapshot: {}, editorProfile: { sessionId: 'owner-tab-1234' } }), presence: async () => { calls += 1; if (reply instanceof Error) throw reply; return reply; } };
+  const pokes = [], session = { getState: () => ({ configured, hasKey, accessVersion: 1, mode, pending: [], snapshot: {}, editorProfile: { sessionId: 'owner-tab-1234' } }), presence: async () => { calls += 1; if (reply instanceof Error) throw reply; return reply; } };
   const sandbox = { document: documentObject, AbortController, Date: class extends Date { static now() { return start; } }, addEventListener() {}, matchMedia: () => ({ matches: false }), setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {} };
   vm.createContext(sandbox); vm.runInContext(source, sandbox);
+  let connects = 0;
+  sandbox.PortfolioMasterUI = { connectShared() { connects += 1; assert.equal(brand.querySelector('.master-presence-popover').hidden, true, 'the people popover closes before opening the unlock dialog'); } };
   const app = sandbox.PortfolioMasterPresence.initialize({ sessionProvider: () => session, onPoke: async user => { pokes.push(user.sessionId); return { status: 'queued' }; } });
   await app.refresh();
-  return { app, brand, indicator, documentObject, pokes, get calls() { return calls; }, set reply(value) { reply = value; }, set mode(value) { mode = value; } };
+  return { app, brand, indicator, documentObject, pokes, get calls() { return calls; }, get connects() { return connects; }, set hasKey(value) { hasKey = value; }, set configured(value) { configured = value; }, set reply(value) { reply = value; }, set mode(value) { mode = value; } };
 }
+
+test('a locked service connection offers one native Connect action without replacing the workspace', async () => {
+  const f = await headerFixture({ hasKey: false });
+  try {
+    const shell = f.brand.querySelector('.master-presence'), popover = shell.querySelector('.master-presence-popover');
+    const trigger = shell.querySelector('.master-presence-trigger'); trigger.click();
+    const connect = popover.querySelector('.master-presence-connect');
+    assert(connect, 'a locked service portfolio offers a connection-only action');
+    assert.equal(connect.tagName, 'BUTTON'); assert.equal(connect.type, 'button'); assert.equal(connect.textContent, 'Connect');
+    assert.equal(connect.hidden, false); assert.equal(connect.disabled, false);
+    assert.equal(f.calls, 0, 'a locked popover never sends an authenticated presence request');
+    connect.focus(); connect.click();
+    assert.equal(f.connects, 1); assert.equal(popover.hidden, true); assert.equal(f.documentObject.activeElement, trigger);
+    f.hasKey = true; await f.app.refresh(); assert.equal(connect.hidden, true, 'existing access removes the unlock action');
+    f.hasKey = false; f.configured = false; await f.app.refresh(); assert.equal(connect.hidden, true, 'unconfigured sharing cannot invite an unlock');
+    f.configured = true; f.mode = 'github'; await f.app.refresh(); assert.equal(connect.hidden, true, 'GitHub account controls remain separate');
+    assert.equal(f.connects, 1);
+  } finally { f.app.destroy(); }
+});
 
 test('enabled supervisor is visible beside header people before opening the dialog without becoming a human or poke target', async () => {
   const f = await headerFixture();

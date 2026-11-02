@@ -196,7 +196,7 @@ function harness() {
   const progressNode = (_tag, _className, textContent = "") => ({ textContent, children: [], append(...children) { this.children.push(...children); }, setAttribute() {}, addEventListener() {} });
   Object.assign(h.context, {
     running: false, discarding: false, refreshRunning: false, destroyed: false, localBaselineGeneration: 0,
-    progressState: null, progressTimer: null, modalOperation: null, modalView: "", connectingGitHub: false, githubMode: false, teamMode: false,
+    progressState: null, progressTimer: null, modalOperation: null, modalView: "", connectingAccess: false, githubMode: false, teamMode: false,
     dialog: { open: false }, saveButton: h.get("saveSharedChanges"), button: h.get("pullLatestData"), lastError: "", lastErrorWasSave: false, retryUntil: 0,
     root: { setInterval() { const id = ++nextTimer; timers.add(id); return id; }, clearInterval: id => timers.delete(id) }, element: progressNode,
     show(_title, _description, builder, options) { progressShows++; h.context.dialog.open = true; h.context.modalOperation = h.context.progressState; h.context.modalView = options.view; builder({ body: progressNode(), footer: progressNode() }); return Promise.resolve(null); },

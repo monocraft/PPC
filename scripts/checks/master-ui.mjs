@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import "../../public/js/master-model.js";
+import "../../public/js/master-client.js";
 import "../../public/js/workspace-notifications.js";
 
 const source = await readFile(new URL("../../public/js/master-ui.js", import.meta.url), "utf8");
@@ -12,7 +13,7 @@ const byClass = (node, name) => all(node).filter((entry) => String(entry.classNa
 const byTag = (node, tag) => all(node).filter((entry) => entry.tagName === tag.toUpperCase());
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
 
-function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null, mode = "service", describeChanges = model.describeChanges } = {}) {
+function createUi(initialPending, { configured = true, hasKey = true, publication = { status: "pending" }, acknowledgmentStorage = null, mode = "service", describeChanges = model.describeChanges, sessionOverride = null } = {}) {
   const listeners = new Map(), notices = new Map(), calls = { saves: [], scopedSaves: [], connects: [], disconnects: 0, refreshes: 0, adoptions: 0, discards: [], undos: [], beforeSaves: 0, packageOpens: [] };
   let now = 1700000000000, timerId = 0;
   const timers = new Map();
@@ -84,7 +85,7 @@ function createUi(initialPending, { configured = true, hasKey = true, publicatio
     async undoDiscard(undoId) { calls.undos.push(undoId); state.pending.push(...discardedPending); discardedPending = []; return true; },
   };
   const sandbox = { document, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
-    PortfolioMasterClient: { createSession: () => session }, PortfolioMasterModel: { ...model, describeChanges },
+    PortfolioMasterClient: { createSession: () => sessionOverride || session }, PortfolioMasterModel: { ...model, describeChanges },
     PortfolioPackageUI: { open: mode => calls.packageOpens.push(mode) },
     PortfolioProductMergeAdapter: { getImageSource: (id) => id === "local-image" ? "blob:local-preview" : id === "latest-image" ? "blob:latest-preview" : "" },
     PortfolioNotifications: { publish(notice) { const result = messageStore.publish(notice); syncNotices(); return result; }, resolve: messageStore.resolve, show() {} },
@@ -675,4 +676,122 @@ for (const operation of ["save", "scoped", "github-profile", "github-refresh"]) 
     assert.equal(oldUi.api.getSummary().error, false); assert.equal(oldUi.api.getSummary().busy, false); assert.equal(oldUi.state.hasKey, true);
   }
 }
-console.log("Master UI checks passed: explicit Updates/Save controls, checked/error/busy/unknown package states and exact package identity, protected drafts, accessible save/conflict/discard decisions, dismissible/reopenable progress with truthful phase timing and bounded timers, reviewed-intent fences, newer-draft preservation, publisher/scoped-sharing protections, and adoption/disconnect/teardown without fetching or stale check/save/scoped/GitHub results.");
+// A connection-only action must never enter the save review or replace the package.
+// Use the real session and product model; only the external fetch is substituted.
+function sharedConnectionUi(outcome = "success") {
+  const original = { id: "connect-product", name: "Headset", ffsDate: "2026-09-20", codename: "Original", specs: [], partSkus: [], variantGroups: [], roadmap: {} };
+  const snapshotOf = product => model.snapshot({ version: 4, categories: [{ id: "headsets", name: "Headsets", board: { products: [product] } }] });
+  let products = [{ ...structuredClone(original), ffsDate: "2026-10-01" }], baseline = snapshotOf(original).products;
+  const requests = [];
+  let reply = outcome, finish;
+  const adapter = { getProducts: () => products, getBaselineProducts: () => baseline, setBaselineProducts: value => { baseline = value; },
+    applyProductValues(changes) { products = products.map(product => { const change = changes.find(item => item.productId === product.id); return change ? model.applyProductValues(product, change.values) : product; }); } };
+  const session = globalThis.PortfolioMasterClient.createSession({ endpoint: "https://shared.example/api/master", source: { mode: "service", team: true }, adapter,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      assert.equal(url, "https://shared.example/api/master/latest", "connecting can only read team records");
+      assert.equal(options.method, "POST", "the existing authenticated latest-read protocol is retained");
+      if (reply === "held") return new Promise(resolve => { finish = resolve; });
+      if (reply === "invalid") return Response.json({}, { status: 401 });
+      if (reply === "network") throw new Error("Private upstream details must not appear");
+      return Response.json({ snapshot: snapshotOf({ ...original, ffsDate: "2026-10-02", codename: "Accepted teammate change" }) });
+    } });
+  const ui = createUi([], { hasKey: false, sessionOverride: session });
+  return { ...ui, session, requests, get products() { return products; }, get baseline() { return baseline; }, set reply(value) { reply = value; }, finish: () => finish(Response.json({ snapshot: snapshotOf(original) })) };
+}
+function assertConnectionDidNotWrite(f) {
+  assert.equal(f.calls.beforeSaves, 0, "connecting never prepares a save");
+  assert.equal(f.calls.saves.length, 0); assert.equal(f.calls.scopedSaves.length, 0);
+  assert.equal(f.calls.discards.length, 0); assert.equal(f.calls.packageOpens.length, 0);
+  assert.equal(byClass(f.dialog, "master-product-changes").length, 0, "connecting never opens the save review");
+}
+{
+  const f = sharedConnectionUi();
+  assert.equal(typeof f.publicApi.connectShared, "function", "a locked service portfolio offers a connection-only action");
+  const connecting = f.publicApi.connectShared();
+  const input = byClass(f.dialog, "master-key")[0];
+  assert.equal(input.type, "password"); assert.equal(input.autocomplete, "off");
+  assert.equal(f.requests.length, 0, "opening the unlock dialog does not contact the service");
+  input.value = "synthetic-package-key"; f.submit(); await connecting;
+  assert.equal(f.session.getState().connected, true); assert.equal(f.session.getState().hasKey, true);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.products[0].ffsDate, "2026-10-01", "connecting preserves the locally edited date");
+  assert.equal(f.products[0].codename, "Accepted teammate change", "ordinary connection reads collect unrelated accepted fields");
+  assert.equal(f.session.track().length, 1); assert.equal(f.session.track()[0].base.ffsDate, "2026-09-20", "the conflicting draft keeps its original comparison baseline");
+  assert.equal(f.api.getSummary().busy, false); assert.equal(f.dialog.open, false);
+  assertConnectionDidNotWrite(f);
+}
+{
+  const f = sharedConnectionUi(), before = structuredClone(f.products);
+  const opener = f.document.createElement("button"); f.document.body.append(opener); opener.focus();
+  const connecting = f.publicApi.connectShared();
+  byTag(f.dialog, "button").find(button => button.textContent === "Cancel").dispatchEvent({ type: "click" }); await connecting;
+  assert.equal(f.requests.length, 0); assert.equal(f.session.getState().hasKey, false);
+  assert.equal(f.document.activeElement, opener, "cancelling returns focus to the connection opener");
+  assert.deepEqual(f.products, before); assert.equal(f.session.track().length, 1); assertConnectionDidNotWrite(f);
+}
+{
+  const f = sharedConnectionUi("invalid"), before = structuredClone(f.products);
+  const connecting = f.publicApi.connectShared();
+  byClass(f.dialog, "master-key")[0].value = "synthetic-wrong-key"; f.submit(); await flush();
+  for (let attempt = 0; attempt < 10 && !byClass(f.dialog, "master-key").length; attempt += 1) await flush();
+  assert.equal(f.dialog.open, true); assert.equal(f.session.getState().hasKey, false);
+  assert.match(text(f.dialog), /unlock.*again/i); assert.equal(byClass(f.dialog, "master-key")[0].value, "", "a rejected key is not echoed into the retry field");
+  assert.deepEqual(f.products, before);
+  f.reply = "success"; byClass(f.dialog, "master-key")[0].value = "synthetic-package-key"; f.submit(); await connecting;
+  assert.equal(f.session.getState().connected, true); assert.equal(f.requests.length, 2); assert.equal(f.session.track().length, 1); assertConnectionDidNotWrite(f);
+}
+{
+  const f = sharedConnectionUi("network"), before = structuredClone(f.products), baselineBefore = structuredClone(f.baseline);
+  const connecting = f.publicApi.connectShared(); byClass(f.dialog, "master-key")[0].value = "synthetic-package-key"; f.submit(); await connecting;
+  assert.equal(f.session.getState().connected, false); assert.equal(f.session.getState().hasKey, true, "a transport failure retains in-memory unlock access");
+  assert.deepEqual(f.products, before); assert.deepEqual(structuredClone(f.baseline), baselineBefore); assert.equal(f.api.getSummary().busy, false);
+  assert.equal(f.dialog.open, false); assertConnectionDidNotWrite(f);
+}
+for (const supersede of ["disconnect", "adoptLocalBaseline"]) {
+  const f = sharedConnectionUi("held");
+  const connecting = f.publicApi.connectShared(); byClass(f.dialog, "master-key")[0].value = "synthetic-package-key"; f.submit(); await flush();
+  f.publicApi[supersede](); const before = structuredClone(f.products);
+  f.finish(); await connecting;
+  assert.deepEqual(f.products, before); assert.equal(f.api.getSummary().lastCheckedAt, 0, "an old connection cannot certify a replacement workspace");
+  assert.equal(f.api.getSummary().busy, false); assertConnectionDidNotWrite(f);
+}
+{
+  const f = sharedConnectionUi("held"), opener = f.document.createElement("button"), editor = f.document.createElement("input");
+  f.document.body.append(opener, editor); opener.focus();
+  const connecting = f.publicApi.connectShared();
+  await f.publicApi.connectShared(); assert.equal(f.dialog.open, true, "a repeated unlock action keeps the first key dialog");
+  byClass(f.dialog, "master-key")[0].value = "synthetic-package-key"; f.submit(); await flush();
+  await f.publicApi.connectShared(); assert.equal(f.api.getSummary().busy, true); assert.equal(f.requests.length, 1, "repeated connection actions do not duplicate the read");
+  byTag(f.dialog, "button").find(button => button.textContent === "Keep working").dispatchEvent({ type: "click" }); editor.focus();
+  f.finish(); await connecting;
+  assert.equal(f.document.activeElement, editor, "a hidden connection completion never steals focus from the current edit"); assertConnectionDidNotWrite(f);
+}
+{
+  const f = createUi([edited], { hasKey: false }); let finishScoped;
+  f.setScopedSave(() => new Promise(resolve => { finishScoped = resolve; }));
+  const connecting = f.publicApi.connectShared(); byClass(f.dialog, "master-key")[0].value = "synthetic-package-key"; f.submit();
+  const scoped = f.publicApi.saveScoped({}); await connecting;
+  assert.equal(f.calls.connects.length, 0, "a different operation starting after key submission owns the busy state");
+  assert.equal(f.api.getSummary().busy, true, "a blocked connection must not retire another operation");
+  finishScoped({ status: "local", saved: false }); await scoped; assert.equal(f.api.getSummary().busy, false);
+}
+for (const blockedBy of ["busy", "package", "workspace", "already-connected"]) {
+  const f = createUi([edited], { hasKey: false });
+  const connecting = f.publicApi.connectShared();
+  byClass(f.dialog, "master-key")[0].value = "synthetic-package-key";
+  if (blockedBy === "busy") f.state.busy = true;
+  if (blockedBy === "package") f.adapter.hasPendingPackageOperation = () => true;
+  if (blockedBy === "workspace") f.adapter.canRefresh = () => false;
+  if (blockedBy === "already-connected") f.state.hasKey = true;
+  f.submit(); await connecting;
+  assert.equal(f.calls.connects.length, 0, `a ${blockedBy} change while entering the key blocks the old unlock action`);
+  assert.equal(f.api.getSummary().lastCheckedAt, 0); assert.equal(f.state.pending.length, 1); assertConnectionDidNotWrite(f);
+}
+{
+  const f = createUi([edited], { hasKey: false }); f.setConnect(async () => null);
+  const connecting = f.publicApi.connectShared(); byClass(f.dialog, "master-key")[0].value = "synthetic-package-key"; f.submit(); await connecting;
+  assert.equal(f.api.getSummary().lastCheckedAt, 0, "a busy null connection result is never reported as a successful check");
+  assert.equal(f.api.getSummary().error, true); assert.equal(f.api.getSummary().busy, false); assertConnectionDidNotWrite(f);
+}
+console.log("Master UI checks passed: explicit Updates/Save controls, checked/error/busy/unknown package states and exact package identity, protected drafts, accessible save/conflict/discard decisions, dismissible/reopenable progress with truthful phase timing and bounded timers, reviewed-intent fences, newer-draft preservation, publisher/scoped-sharing protections, connection-only unlock with preserved drafts and no saves, and adoption/disconnect/teardown without fetching or stale check/save/scoped/GitHub results.");

@@ -480,11 +480,13 @@
     nameInput.value = storedName.slice(0, 60); nameLabel.append(nameInput);
     const nameSave = make("button", "quiet-button", "Apply"); nameSave.type = "submit"; nameForm.append(nameLabel, nameSave);
     const githubConnect = make("button", "quiet-button", "Connect GitHub"); githubConnect.type = "button"; githubConnect.hidden = true; githubConnect.addEventListener("click", () => root.PortfolioMasterUI?.connectGitHub());
+    const sharedConnect = make("button", "quiet-button master-presence-connect", "Connect"); sharedConnect.type = "button"; sharedConnect.hidden = true;
+    sharedConnect.addEventListener("click", () => { setOpen(false); void root.PortfolioMasterUI?.connectShared(); });
     const play = make("button", "presence-play", "Make a face"); play.type = "button"; play.title = "A little goof for your own face, just on this screen";
     const supervisorRows = make("div", "ascm-supervisor-roster");
     const supervisorHeader = make("button", "ascm-supervisor-header"); supervisorHeader.type = "button";
     supervisorHeader.setAttribute("aria-label", "ASCM supervisor. View connection status"); supervisorHeader.setAttribute("aria-haspopup", "dialog"); supervisorHeader.setAttribute("aria-expanded", "false"); supervisorHeader.setAttribute("aria-controls", popover.id);
-    popover.append(heading, connection, rows, supervisorRows, play, nameForm, githubConnect); shell.append(supervisorHeader, trigger, popover); brand.append(shell);
+    popover.append(heading, connection, sharedConnect, rows, supervisorRows, play, nameForm, githubConnect); shell.append(supervisorHeader, trigger, popover); brand.append(shell);
     const supervisorIndicator = document.getElementById("ascmSupervisorIndicator");
     const supervisorView = createAscmSupervisorView({ indicator: supervisorIndicator, rosterContainer: supervisorRows, headerControl: supervisorHeader, focusFallback: close });
     // Expression updates are entirely local. They never send an additional presence request.
@@ -578,6 +580,8 @@
       nameForm.hidden = state.mode === "github"; nameForm.style.display = state.mode === "github" ? "none" : "";
       githubConnect.hidden = state.mode !== "github"; githubConnect.style.display = state.mode === "github" ? "" : "none"; githubConnect.disabled = !state.hasKey;
       githubConnect.textContent = state.hasGitHubToken ? "Change GitHub account" : "Connect GitHub";
+      sharedConnect.hidden = state.mode === "github" || !state.configured || state.hasKey;
+      sharedConnect.style.display = sharedConnect.hidden ? "none" : "";
       const summary = connectionSummary(state);
       if (connection.textContent !== summary) connection.textContent = summary;
       trigger.title = summary;

@@ -698,6 +698,49 @@ for (const choice of ["mine", "master"]) {
     const connected = teamSession(h);
     await connected.connect({ key: ` ${accessKey} `, editorToken: "unused-team-credential" });
     assert.equal(JSON.parse(stored.get(tabAccessName)).key, accessKey, "a successful direct team connection remembers its normalized unlock");
+
+    for (const operation of ["latest", "presence"]) {
+      for (const message of ["Missing authorization header", "Invalid JWT", "Invalid Token or Protected Header formatting"]) {
+        const interrupted = harness();
+        interrupted.edit({ ffsDate: "2026-10-01" });
+        interrupted.remoteEdit({ ffsDate: "2026-10-02", codename: "Accepted while reconnecting" });
+        connected.markImported(h.baseline, accessKey);
+        const restored = teamSession(interrupted, { fetchImpl: async () => Response.json({ code: 401, message }, { status: 401 }) });
+        const productsBeforeFailure = clone(interrupted.products), baselineBeforeFailure = clone(interrupted.baseline);
+        await assert.rejects(operation === "latest" ? restored.refresh() : restored.presence({ sessionId: "restored-browser-session" }), { code: "UNAVAILABLE", status: 401 }, `${operation}: a platform auth failure must not reject the package unlock`);
+        assert.equal(restored.getState().hasKey, true, `${operation}: a platform auth failure retains in-memory access`);
+        assert.equal(JSON.parse(stored.get(tabAccessName)).key, accessKey, `${operation}: a platform auth failure retains the tab unlock`);
+        assert.deepEqual(interrupted.products, productsBeforeFailure); assert.deepEqual(interrupted.baseline, baselineBeforeFailure, "an unsuccessful reconnect preserves the draft and its comparison baseline");
+        const nextReload = teamSession(interrupted);
+        assert.equal(nextReload.getState().hasKey, true, "another same-tab reload still restores the retained unlock");
+        await nextReload.refresh();
+        assert.equal(nextReload.getState().connected, true, "the existing refresh path reconnects once the service recovers");
+        assert.equal(interrupted.products[0].ffsDate, "2026-10-01", "recovery preserves the conflicting local draft");
+        assert.equal(interrupted.products[0].codename, "Accepted while reconnecting", "recovery applies unrelated accepted changes");
+        assert.equal(nextReload.track()[0].base.ffsDate, fixture.ffsDate, "recovery retains the draft's original comparison value");
+      }
+      for (const response of [
+        () => Response.json({ code: "INVALID_KEY", message: "private key details" }, { status: 401 }),
+        () => Response.json({ code: 401, message: "Custom authentication failure" }, { status: 401 }),
+        () => Response.json({ code: "401", message: "Missing authorization header" }, { status: 401 }),
+        () => Response.json({ code: 401, message: "Missing authorization header for private key" }, { status: 401 }),
+        () => Response.json({ code: 401, message: "Missing authorization header", error: "private app rejection" }, { status: 401 }),
+        () => Response.json(null, { status: 401 }),
+        () => Response.json([{ code: 401, message: "Missing authorization header" }], { status: 401 }),
+        () => new Response("", { status: 401 }),
+        () => new Response("{invalid-json", { status: 401 }),
+        () => Response.json({ code: 401, message: "Missing authorization header" }, { status: 401, headers: { "content-length": "4096" } }),
+        () => new Response(`${JSON.stringify({ code: 401, message: "Missing authorization header" })}${" ".repeat(4096)}`, { status: 401 }),
+      ]) {
+        connected.markImported(h.baseline, accessKey);
+        const rejected = teamSession(h, { fetchImpl: async () => response() });
+        await assert.rejects(operation === "latest" ? rejected.refresh() : rejected.presence({ sessionId: "restored-browser-session" }), (error) => error.code === "INVALID_KEY" && !error.message.includes("private"));
+        assert.equal(rejected.getState().hasKey, false); assert.equal(stored.has(tabAccessName), false, "unrecognized and unreadable 401 responses still clear rejected access");
+        assert.equal(teamSession(h).getState().hasKey, false, "a rejected unlock is not restored on the next same-tab reload");
+      }
+    }
+
+    connected.markImported(h.baseline, accessKey);
     const rejected = teamSession(h, { fetchImpl: async () => Response.json({}, { status: 401 }) });
     await assert.rejects(rejected.refresh(), { code: "INVALID_KEY" });
     assert.equal(rejected.getState().hasKey, false); assert.equal(stored.has(tabAccessName), false, "a rejected restored key is cleared instead of repeatedly reconnecting");

@@ -112,7 +112,17 @@
       if (error?.name === "AbortError") throw error;
       throw errorOf("Cannot reach the master. Your changes are saved on this device; try again when connected.", "UNAVAILABLE");
     }
-    if (response.status === 401) throw errorOf("That master package key could not connect. Check the key and try again.", "INVALID_KEY", 401);
+    if (response.status === 401) {
+      let rejection;
+      try { rejection = await readJson(response, 1024); } catch {}
+      // These exact platform replies precede the app's package-key check.
+      // Preserve tab access so the existing reconnect path can recover.
+      if (rejection && !Array.isArray(rejection) && Object.keys(rejection).length === 2 && rejection.code === 401 &&
+          ["Missing authorization header", "Invalid JWT", "Invalid Token or Protected Header formatting"].includes(rejection.message)) {
+        throw errorOf("The master is unavailable. Your changes are saved on this device; try again later.", "UNAVAILABLE", 401);
+      }
+      throw errorOf("That master package key could not connect. Check the key and try again.", "INVALID_KEY", 401);
+    }
     if (response.status === 429) throw errorOf("Too many attempts. Wait a minute and try again. Your local changes are safe.", "RATE_LIMIT", 429);
     if (response.status === 404 || response.status >= 500) throw errorOf("The master is unavailable. Your changes are saved on this device; try again later.", "UNAVAILABLE", response.status);
     let data;
