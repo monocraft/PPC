@@ -27,7 +27,10 @@ create-only `<checkId>.check` file, at most1024 UTF-8 bytes, with the exact shap
 The timestamp is frozen at actual completion, canonical millisecond UTC, never
 future. The name must match its UUID. The unchanged branch emits after its source
 binding/equality proofs and before its successful termination. The staged branch
-emits after positive cursor persistence. A failed check emits no success receipt.
+emits after positive cursor persistence. Discovery/staging failure emits no
+success receipt. If creating the correct receipt succeeds but its cloud readback
+fails, that correct immutable receipt can still arrive through sync: it records
+the completed source check, not success of every subsequent delivery action.
 Do not treat unchanged staging as proof PPC accepted the workbook.
 
 The worker discovers these separate-extension files without changing the existing
@@ -50,7 +53,9 @@ Check reporting is an event-driven diagnostic POST. Persist a check-only retry
 deadline before every attempt (at least one hour apart), retain exact pending
 receipt on lost/false acknowledgement, and acknowledge durably on success.
 Preserve active source/publication priority and the six-call/eight-minute pass
-budget. A check-only pass exits before the queue GET. Failure must not alter
+budget. A pass that attempts a check-only report exits before the queue GET.
+Malformed check files and pending checks whose independent retry is not yet due
+leave the normally charged idle queue recovery available. Failure must not alter
 business retryAt or provider flags. Without a new event, the worker retains its
 existing one-hour/24-per-day metadata-only idle allowance, with no added polling,
 downloads, imports, publication or email operations.

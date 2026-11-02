@@ -215,7 +215,7 @@ test('clock age is fresh for 0–29 local days and warns at 30 with a noncolor d
       assert.equal(elapsed.hidden, true);
       assert.equal(elapsed.classList.contains('is-fresh'), false);
       assert.equal(elapsed.classList.contains('is-alert'), false);
-      assert.equal(f.indicator.querySelector('.ascm-update-tooltip').getAttribute('aria-label'), 'No ASCM update recorded.');
+      assert.equal(f.indicator.querySelector('.ascm-update-tooltip').getAttribute('aria-label'), 'No completed ASCM check recorded. No ASCM update recorded.');
       f.view.destroy();
     }
   } finally { if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone; }
@@ -351,6 +351,102 @@ test('accepted ASCM timestamp survives controller normalization and lease expiry
   }
   const idle = presence.normalizeAscmSupervisor({ enabled: true, working: false, lastUpdatedAt: '2026-10-15T12:00:00Z' }, start);
   assert.equal(idle.lastUpdatedAt, lastUpdatedAt);
+});
+
+test('completed check evidence survives controller normalization and lease expiry without another request', async () => {
+  for (const checkOutcome of ['unchanged', 'staged']) {
+    const f = setup(), lastCheckedAt = '2026-10-17T11:04:23.000Z', lastUpdatedAt = '2026-09-16T12:00:00.000Z';
+    f.reply = { sessions: [{ sessionId: 'owner-tab-1234', displayName: 'Alex' }], ascmSupervisor: active({ lastCheckedAt, checkOutcome, lastUpdatedAt }) };
+    await f.controller.heartbeat();
+    assert.equal(f.controller.getState().ascmSupervisor.lastCheckedAt, lastCheckedAt);
+    assert.equal(f.controller.getState().ascmSupervisor.checkOutcome, checkOutcome);
+    f.advance(120000);
+    assert.deepEqual(plain(f.controller.getState().ascmSupervisor), { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired: [], lastUpdatedAt, lastCheckedAt, checkOutcome });
+    assert.equal(f.calls.length, 1, 'lease expiry cannot report a new completed check');
+    assert.equal(f.controller.getState().onlineCount, 1);
+    f.reply = { sessions: [] }; await f.controller.heartbeat();
+    assert.equal(f.controller.getState().ascmSupervisor, null, 'unsupported responses clear check evidence too');
+  }
+});
+
+test('check evidence is an optional validated pair and never substitutes for the accepted update timestamp', () => {
+  const lastUpdatedAt = '2026-09-16T12:00:00.000Z';
+  for (const pair of [
+    {}, { checkOutcome: 'unchanged' }, { lastCheckedAt: '2026-10-17T11:04:23.000Z' },
+    ...[undefined, null, false, 42, {}, [], '', 'tomorrow', '2026-02-30T12:00:00.000Z', '2026-10-17T11:04:23Z', '2026-10-17T11:04:23+00:00', '2026-10-17T11:04:23.1Z', '2026-10-18T11:04:23.000Z'].map(lastCheckedAt => ({ lastCheckedAt, checkOutcome: 'unchanged' })),
+    ...[undefined, null, false, {}, [], 'accepted', 'unknown', 'UNCHANGED'].map(checkOutcome => ({ lastCheckedAt: '2026-10-17T11:04:23.000Z', checkOutcome })),
+  ]) {
+    const status = presence.normalizeAscmSupervisor(active({ ...pair, lastUpdatedAt }), start);
+    assert.equal(Object.hasOwn(status, 'lastCheckedAt'), false, JSON.stringify(pair));
+    assert.equal(Object.hasOwn(status, 'checkOutcome'), false, JSON.stringify(pair));
+    assert.equal(status.lastUpdatedAt, lastUpdatedAt);
+    assert.equal(status.working, true, 'invalid diagnostics do not suppress genuine work');
+  }
+});
+
+test('clock separates a completed no-new-report check from the older accepted ASCM update', () => {
+  const previousZone = process.env.TZ; process.env.TZ = 'America/Los_Angeles';
+  try {
+    const f = viewFixture(), lastCheckedAt = '2026-10-17T11:04:23.000Z';
+    f.view.render({ connected: true, mode: 'service', ascmSupervisor: { enabled: true, working: false, lastCheckedAt, checkOutcome: 'unchanged', lastUpdatedAt: '2026-09-16T12:00:00.000Z' } });
+    f.indicator.focus();
+    const heading = f.indicator.querySelector('.ascm-check-heading'), date = f.indicator.querySelector('.ascm-check-date'), outcome = f.indicator.querySelector('.ascm-check-outcome');
+    assert(heading && date && outcome, 'clock includes an independent completed-check row');
+    assert.equal(heading.textContent, 'Last checked');
+    assert.equal(date.textContent, 'Oct 17, 2026, 4:04 AM PDT');
+    assert.equal(date.dateTime, lastCheckedAt);
+    assert.equal(outcome.textContent, 'No new report');
+    assert.equal(date.hidden, false); assert.equal(outcome.hidden, false);
+    const elapsed = f.indicator.querySelector('.ascm-update-elapsed');
+    assert.equal(elapsed.textContent, '31 days ago');
+    assert.equal(elapsed.classList.contains('is-alert'), true, 'a recent check cannot make an old accepted update green');
+    assert.equal(elapsed.classList.contains('is-fresh'), false);
+    assert.equal(f.indicator.querySelector('.ascm-update-date').dateTime, '2026-09-16T12:00:00.000Z');
+    assert.equal(f.indicator.querySelector('.ascm-update-tooltip').getAttribute('aria-label'), 'Last checked: Oct 17, 2026, 4:04 AM PDT. No new report. Last ASCM update: 31 days ago. Sep 16, 2026. 30 or more days old.');
+    assert.equal(f.timers.size, 0);
+    f.view.destroy();
+  } finally { if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone; }
+});
+
+test('clock never describes unknown invalid future or unpaired check data as a completed check', () => {
+  for (const pair of [
+    {}, { checkOutcome: 'unchanged' }, { lastCheckedAt: '2026-10-17T11:04:23.000Z' },
+    { lastCheckedAt: 'invalid', checkOutcome: 'unchanged' }, { lastCheckedAt: '2026-10-18T11:04:23.000Z', checkOutcome: 'unchanged' },
+    { lastCheckedAt: '2026-10-17T11:04:23.000Z', checkOutcome: 'accepted' },
+  ]) {
+    const f = viewFixture();
+    f.view.render({ connected: true, mode: 'service', ascmSupervisor: { enabled: true, working: false, lastUpdatedAt: '2026-10-15T12:00:00.000Z', ...pair } });
+    f.indicator.focus();
+    const heading = f.indicator.querySelector('.ascm-check-heading'), date = f.indicator.querySelector('.ascm-check-date'), outcome = f.indicator.querySelector('.ascm-check-outcome');
+    assert(heading && date && outcome, 'unknown checks retain a quiet explanation');
+    assert.equal(heading.textContent, 'No completed ASCM check recorded.');
+    assert.equal(date.hidden, true); assert.equal(outcome.hidden, true);
+    assert.equal(date.textContent, ''); assert.equal(date.dateTime, ''); assert.equal(outcome.textContent, '');
+    assert.equal(f.indicator.querySelector('.ascm-update-elapsed').hidden, false, 'accepted update remains independent');
+    assert.match(f.indicator.querySelector('.ascm-update-tooltip').getAttribute('aria-label'), /^No completed ASCM check recorded\. Last ASCM update:/);
+    f.view.destroy();
+  }
+});
+
+test('open clock replaces check outcomes in place and clears stale evidence without adding timers', () => {
+  const f = viewFixture(), state = { connected: true, mode: 'service', ascmSupervisor: { enabled: true, working: false, lastCheckedAt: '2026-10-17T11:04:23.000Z', checkOutcome: 'unchanged' } };
+  f.view.render(state); f.indicator.focus();
+  const tooltip = f.indicator.querySelector('.ascm-update-tooltip'), date = f.indicator.querySelector('.ascm-check-date'), outcome = f.indicator.querySelector('.ascm-check-outcome');
+  assert(date && outcome);
+  assert.equal(outcome.textContent, 'No new report');
+  f.view.render({ ...state, ascmSupervisor: { ...state.ascmSupervisor, lastCheckedAt: '2026-10-17T11:45:00.000Z', checkOutcome: 'staged' } });
+  assert.equal(tooltip.hidden, false); assert.equal(outcome.textContent, 'New report found');
+  assert.equal(date.dateTime, '2026-10-17T11:45:00.000Z');
+  assert.match(tooltip.getAttribute('aria-label'), /New report found\. No ASCM update recorded\.$/, 'finding a report does not claim PPC accepted it');
+  f.view.render({ ...state, ascmSupervisor: { enabled: true, working: false } });
+  assert.equal(tooltip.hidden, false); assert.equal(date.hidden, true); assert.equal(outcome.hidden, true);
+  assert.equal(date.textContent, ''); assert.equal(date.dateTime, ''); assert.equal(outcome.textContent, '');
+  assert.equal(f.view.closeUpdateTooltip(), true);
+  f.view.render(state); assert.equal(tooltip.hidden, true, 'new check data cannot undo Escape dismissal');
+  f.indicator.blur(); f.indicator.focus(); assert.equal(outcome.hidden, false);
+  f.view.render({ ...state, connected: false }); assert.equal(tooltip.hidden, true);
+  assert.equal(f.timers.size, 0);
+  f.view.destroy();
 });
 
 test('clock offers a persistent styled hover and focus description without native title or new timer', () => {
@@ -597,16 +693,20 @@ if (process.argv.includes('--preview')) {
     const url = new URL(request.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
       const mode = ['idle', 'disabled', 'expired', 'unknown', 'reconnect', 'missing-update', 'invalid-update'].includes(url.searchParams.get('state')) ? url.searchParams.get('state') : 'active';
+      const checkMode = ['unchanged', 'staged', 'missing', 'invalid', 'future', 'unknown'].includes(url.searchParams.get('check')) ? url.searchParams.get('check') : 'unchanged';
       const requestedAge = url.searchParams.get('age'), previewAge = /^(?:0|[1-9]\d{0,2})$/.test(requestedAge || '') ? Number(requestedAge) : 2;
       const requestedReply = url.searchParams.get('reply'), previewReply = /^(?:0|[1-9]\d?)$/.test(requestedReply || '') ? Number(requestedReply) : null;
       const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASCM header face · local preview</title><link rel="stylesheet" href="css/fonts.css"><link rel="stylesheet" href="css/styles.css"><link rel="stylesheet" href="css/presence-expressions.css"><script>
 const fixtureMode=${JSON.stringify(mode)};
+const fixtureCheckMode=${JSON.stringify(checkMode)};
 const fixtureLastUpdate=new Date();fixtureLastUpdate.setDate(fixtureLastUpdate.getDate()-${previewAge});
+const fixtureCheckedAt=new Date(Date.now()+(fixtureCheckMode==='future'?86400000:-240000)).toISOString();
+const fixtureCheck=fixtureCheckMode==='missing'?{}:{lastCheckedAt:fixtureCheckMode==='invalid'?'not-a-completed-check':fixtureCheckedAt,checkOutcome:fixtureCheckMode==='staged'?'staged':fixtureCheckMode==='unknown'?'unknown':'unchanged'};
 ${previewReply === null ? '' : `Math.random=()=>${(previewReply + 0.1) / 100};`}
 const fixtureIdle=['idle','reconnect','missing-update','invalid-update'].includes(fixtureMode);
-const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!fixtureIdle,productCount:fixtureIdle||fixtureMode==='unknown'?null:12,expiresAt:fixtureIdle?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[],...(fixtureMode==='missing-update'?{}:{lastUpdatedAt:fixtureMode==='invalid-update'?'not-a-recorded-date':fixtureLastUpdate.toISOString()})}})})};
+const fixtureSession={getState:()=>({configured:true,hasKey:true,accessVersion:1,pending:[]}),presence:async body=>({sessions:[{sessionId:body.sessionId,displayName:'Alex',categoryName:'PC Gaming Audio'},{sessionId:'fixture-sam-1234',displayName:'Sam',categoryName:'Mice'}],...(fixtureMode==='disabled'?{}:{ascmSupervisor:{enabled:true,working:!fixtureIdle,productCount:fixtureIdle||fixtureMode==='unknown'?null:12,expiresAt:fixtureIdle?null:new Date(Date.now()+(fixtureMode==='expired'?-1000:120000)).toISOString(),reconnectRequired:fixtureMode==='reconnect'?['outlook']:[],...fixtureCheck,...(fixtureMode==='missing-update'?{}:{lastUpdatedAt:fixtureMode==='invalid-update'?'not-a-recorded-date':fixtureLastUpdate.toISOString()})}})})};
 globalThis.PortfolioMasterUI={getSession:()=>fixtureSession};
-</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status and ASCM update date. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Hover or focus the right-side clock for the synthetic last-update readout. The supervisor's face is visible beside the people in the main header. Select it to open the existing connection details. A lost connection adds the key alert in those details; healthy status keeps the face without a name or key. Open Connections opens the owner's Power Automate connections in a new tab; access requires the owner's Microsoft account.</section></div></main></body></html>`;
+</script><script defer src="js/presence-expressions.js"></script><script defer src="js/master-presence.js"></script></head><body><main class="app-shell"><div class="workspace-main">${toolbar.replace('<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"></div>', '<div id="categoryNavigation" class="category-navigation-host" aria-label="Product categories"><button type="button">PC Gaming Audio</button></div>')}<div id="fixtureNotice" role="status" style="padding:12px 16px;color:#BBBCC0;font-size:12px;border-top:1px solid #333538">Preview · synthetic Microsoft connection status, completed ASCM check and accepted update date. No portfolio changes or automatic external requests.</div><section style="margin:24px;border:1px solid #333538;padding:24px;color:#BBBCC0">Hover or focus the right-side clock to inspect the separate synthetic check and accepted-update rows. Use check=unchanged, staged, missing, invalid, future or unknown in the URL to compare completion evidence. The supervisor's face is visible beside the people in the main header. Select it to open the existing connection details. A lost connection adds the key alert in those details; healthy status keeps the face without a name or key. Open Connections opens the owner's Power Automate connections in a new tab; access requires the owner's Microsoft account.</section></div></main></body></html>`;
       response.setHeader('Content-Type', 'text/html'); response.end(body); return;
     }
     if (!routes.has(url.pathname)) { response.writeHead(404); response.end(); return; }

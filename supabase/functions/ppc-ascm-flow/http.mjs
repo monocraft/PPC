@@ -189,7 +189,14 @@ export function createAscmFlowHttpHandler({ env = {}, invokeAscm, invokeSharePoi
         return reply(receipt.status === 'published' ? 200 : 202, receipt);
       }
       if (path === '/api/ascm/connection') {
-        if (!strict(value, ['service', 'state']) || !['outlook', 'sharepoint'].includes(value.service) || !['available', 'reconnect_required'].includes(value.state)) throw problem(400, 'INVALID_REQUEST');
+        const legacy = strict(value, ['service', 'state']) && ['outlook', 'sharepoint'].includes(value.service) && ['available', 'reconnect_required'].includes(value.state);
+        const check = value?.check, checkedAt = typeof check?.completedAt === 'string' ? Date.parse(check.completedAt) : NaN, nowAt = Date.parse(now());
+        const completed = strict(value, ['service', 'check']) && value.service === 'sharepoint' && strict(check, ['checkId', 'completedAt', 'outcome'])
+          && typeof check.checkId === 'string' && new RegExp(`^${UUID}$`).test(check.checkId)
+          && typeof check.completedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(check.completedAt)
+          && Number.isFinite(checkedAt) && Number.isFinite(nowAt) && checkedAt <= nowAt && new Date(checkedAt).toISOString() === check.completedAt
+          && ['unchanged', 'staged'].includes(check.outcome);
+        if (!legacy && !completed) throw problem(400, 'INVALID_REQUEST');
         const reported = env.PPC_ASCM_STATUS_ENABLED === 'true' && typeof invokeConnection === 'function' ? (await invokeConnection(value))?.reported === true : false;
         return reply(200, { reported, archiveAllowed: false });
       }

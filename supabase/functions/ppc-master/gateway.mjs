@@ -155,6 +155,8 @@ function safeAscmSupervisor(value, currentTime, lastUpdatedAt) {
   if (!record(value) || value.enabled !== true || typeof value.working !== 'boolean'
     || !(value.productCount === null || Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 500)) return null;
   const nowAt = Date.parse(currentTime);
+  const lastCheck = canonicalCompletedAt(value.lastCheckedAt, nowAt) && ['unchanged', 'staged'].includes(value.checkOutcome)
+    ? { lastCheckedAt: value.lastCheckedAt, checkOutcome: value.checkOutcome } : {};
   let lastUpdate = {};
   if (typeof lastUpdatedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(lastUpdatedAt)) {
     const updatedAt = Date.parse(lastUpdatedAt);
@@ -168,12 +170,18 @@ function safeAscmSupervisor(value, currentTime, lastUpdatedAt) {
   const reconnectRequired = Array.isArray(provided) && provided.length <= 2 && provided.every(service => services.includes(service))
     && new Set(provided).size === provided.length ? services.filter(service => provided.includes(service)) : [];
   if (!value.working) return value.productCount === null && value.expiresAt === null
-    ? { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...lastUpdate } : null;
+    ? { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...lastUpdate, ...lastCheck } : null;
   if (typeof value.expiresAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.expiresAt)) return null;
   const expires = Date.parse(value.expiresAt);
   if (!Number.isFinite(expires) || !Number.isFinite(nowAt) || new Date(expires).toISOString() !== value.expiresAt || expires > nowAt + 121000) return null;
-  if (expires <= nowAt) return { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...lastUpdate };
-  return { enabled: true, working: true, productCount: value.productCount, expiresAt: value.expiresAt, reconnectRequired, ...lastUpdate };
+  if (expires <= nowAt) return { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...lastUpdate, ...lastCheck };
+  return { enabled: true, working: true, productCount: value.productCount, expiresAt: value.expiresAt, reconnectRequired, ...lastUpdate, ...lastCheck };
+}
+
+function canonicalCompletedAt(value, nowAt) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const at = Date.parse(value);
+  return Number.isFinite(at) && Number.isFinite(nowAt) && at <= nowAt && new Date(at).toISOString() === value;
 }
 
 function requireState(state) {
@@ -248,16 +256,24 @@ function defaultRpc(env, fetchImpl) {
 }
 
 /** Private diagnostics only. Call after an actual authenticated connector result. */
-export function createAscmConnectionReporter({ env = {}, fetchImpl = globalThis.fetch } = {}) {
+export function createAscmConnectionReporter({ env = {}, fetchImpl = globalThis.fetch, now = () => new Date().toISOString() } = {}) {
   const enabled = env.PPC_ASCM_STATUS_ENABLED === 'true';
   let database;
   return async payload => {
     if (!enabled) return { reported: false };
     try {
-      if (!record(payload) || Object.keys(payload).length !== 2 || Object.keys(payload).some(key => !['service', 'state'].includes(key))
-        || !['outlook', 'sharepoint'].includes(payload.service) || !['available', 'reconnect_required'].includes(payload.state)) return { reported: false };
+      if (!record(payload) || Object.keys(payload).length !== 2 || !Object.hasOwn(payload, 'service')) return { reported: false };
+      let report;
+      if (Object.hasOwn(payload, 'state') && ['outlook', 'sharepoint'].includes(payload.service) && ['available', 'reconnect_required'].includes(payload.state)) {
+        report = { service: payload.service, state: payload.state };
+      } else if (Object.hasOwn(payload, 'check') && payload.service === 'sharepoint' && record(payload.check)
+        && Object.keys(payload.check).length === 3 && ['checkId', 'completedAt', 'outcome'].every(key => Object.hasOwn(payload.check, key))
+        && typeof payload.check.checkId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(payload.check.checkId)
+        && canonicalCompletedAt(payload.check.completedAt, Date.parse(now())) && ['unchanged', 'staged'].includes(payload.check.outcome)) {
+        report = { service: 'sharepoint', check: { checkId: payload.check.checkId, completedAt: payload.check.completedAt, outcome: payload.check.outcome } };
+      } else return { reported: false };
       database ||= defaultRpc(env, fetchImpl);
-      const result = await database('ascm_connection', { service: payload.service, state: payload.state });
+      const result = await database('ascm_connection', report);
       return { reported: result?.reported === true };
     } catch { return { reported: false }; }
   };

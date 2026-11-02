@@ -209,6 +209,51 @@ test('queued exposes only fixed metadata and relative raw path; strict connectio
   const c = await h.handler(req('/api/ascm/connection', { service: 'outlook', state: 'available' })); assert.deepEqual(await c.json(), { reported: true, archiveAllowed: false });
   assert.equal((await h.handler(req('/api/ascm/connection', { service: 'outlook', state: 'unknown' }))).status, 400); assert(!h.calls.includes('import'));
 });
+
+const completedCheck = { service: 'sharepoint', check: {
+  checkId: '11111111-1111-4111-8111-111111111111', completedAt: '2026-10-17T00:59:59.000Z', outcome: 'unchanged' } };
+
+test('completed check route accepts both exact outcomes without source, queue, package or import access', async () => {
+  for (const outcome of ['unchanged', 'staged']) {
+    const payload = { ...completedCheck, check: { ...completedCheck.check, outcome } };
+    const h = harness(); const response = await h.handler(req('/api/ascm/connection', payload));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { reported: true, archiveAllowed: false });
+    assert.deepEqual(h.calls, [payload]);
+  }
+  for (const flag of [undefined, '', 'false']) {
+    const h = harness({ env: { PPC_ASCM_STATUS_ENABLED: flag } });
+    const response = await h.handler(req('/api/ascm/connection', completedCheck));
+    assert.equal(response.status, 200); assert.deepEqual(await response.json(), { reported: false, archiveAllowed: false });
+    assert.deepEqual(h.calls, []);
+  }
+});
+
+test('completed check HTTP schema rejects mixed shapes, private fields, invalid identity, time or outcome before any dependency', async () => {
+  for (const payload of [
+    { ...completedCheck, state: 'available' }, { ...completedCheck, private: 'never forward' },
+    { ...completedCheck, service: 'outlook' }, { ...completedCheck, check: null }, { ...completedCheck, check: [] },
+    ...[{ checkId: 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' }, { checkId: 'invalid' }, { checkId: 1 },
+      { completedAt: '2026-10-17T00:59:59Z' }, { completedAt: '2026-10-17T00:59:59.000+00:00' },
+      { completedAt: '2026-02-30T00:59:59.000Z' }, { completedAt: '2026-10-17T01:00:00.001Z' },
+      { completedAt: 1 }, { outcome: 'accepted' }, { outcome: null }, { private: 'never forward' }]
+      .map(change => ({ ...completedCheck, check: { ...completedCheck.check, ...change } })),
+    { service: 'sharepoint', check: { checkId: completedCheck.check.checkId, completedAt: completedCheck.check.completedAt } },
+  ]) {
+    const h = harness(); const response = await h.handler(req('/api/ascm/connection', payload));
+    assert.equal(response.status, 400); assert.deepEqual(await response.json(), { code: 'INVALID_REQUEST', archiveAllowed: false });
+    assert.deepEqual(h.calls, []);
+  }
+});
+
+test('completed check authentication and route guards reject before reading the body', async () => {
+  for (const [options, expected] of [[{ headers: { 'X-PPC-ASCM-Flow-Secret': 'bad' } }, 401],
+    [{ headers: { Origin: 'null' } }, 403], [{ method: 'PUT' }, 405]]) {
+    const h = harness(); const request = req('/api/ascm/connection', completedCheck, options);
+    Object.defineProperty(request, 'body', { get() { throw Error('Refused check must not read its body'); } });
+    assert.equal((await h.handler(request)).status, expected); assert.deepEqual(h.calls, []);
+  }
+});
 const binaryHeaders = { 'Content-Type': 'application/octet-stream', 'X-PPC-ASCM-Flow-Secret': env.PPC_ASCM_FLOW_SECRET,
   'X-PPC-Package-Generation': '2', 'X-PPC-SP-Drive-Id': 'drive', 'X-PPC-SP-Folder-Id': 'folder', 'X-PPC-SP-Item-Id': 'item',
   'X-PPC-SP-Version-Id': '1.0', 'X-PPC-SP-File-Name': publicCandidate.fileName };

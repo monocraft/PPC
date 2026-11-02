@@ -141,7 +141,9 @@
     if (!value || typeof value !== "object" || Array.isArray(value) || value.enabled !== true) return null;
     const reconnectRequired = Array.isArray(value.reconnectRequired) ? ["outlook", "sharepoint"].filter((provider) => value.reconnectRequired.includes(provider)) : [];
     const lastUpdatedAt = ascmUpdateTimestamp(value.lastUpdatedAt, time);
-    const idle = { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...(lastUpdatedAt ? { lastUpdatedAt } : {}) };
+    const lastCheckedAt = ascmUpdateTimestamp(value.lastCheckedAt, time);
+    const completedCheck = lastCheckedAt && lastCheckedAt === value.lastCheckedAt && ["unchanged", "staged"].includes(value.checkOutcome) ? { lastCheckedAt, checkOutcome: value.checkOutcome } : {};
+    const idle = { enabled: true, working: false, productCount: null, expiresAt: null, reconnectRequired, ...(lastUpdatedAt ? { lastUpdatedAt } : {}), ...completedCheck };
     const expiry = typeof value.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.expiresAt) ? Date.parse(value.expiresAt) : NaN;
     // Server leases are 120 seconds. Allow five seconds of clock skew, never an indefinite busy badge.
     if (value.working !== true || !Number.isFinite(expiry) || expiry <= time || expiry - time > 125000 || new Date(expiry).toISOString() !== value.expiresAt) return idle;
@@ -154,9 +156,11 @@
     const clock = () => { const node = make("span", "ascm-supervisor-clock"); node.setAttribute("aria-hidden", "true"); return node; };
     const label = make("span", "ascm-supervisor-label");
     const tooltip = make("span", "ascm-update-tooltip"), readout = make("span", "ascm-update-readout");
+    const checkRow = make("span", "ascm-check-row"), updateRow = make("span", "ascm-update-row");
+    const checkHeading = make("span", "ascm-check-heading"), checkDate = make("time", "ascm-check-date"), checkOutcome = make("span", "ascm-check-outcome");
     const updateHeading = make("span", "ascm-update-heading"), updateElapsed = make("span", "ascm-update-elapsed"), updateDivider = make("span", "ascm-update-divider"), updateDate = make("time", "ascm-update-date");
     tooltip.id = "ascmUpdateTooltip"; tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); tooltip.setAttribute("aria-live", "off"); updateDivider.setAttribute("aria-hidden", "true");
-    readout.append(updateHeading, updateElapsed, updateDivider, updateDate); tooltip.append(readout);
+    checkRow.append(checkHeading, checkDate, checkOutcome); updateRow.append(updateHeading, updateElapsed, updateDivider, updateDate); readout.append(checkRow, updateRow); tooltip.append(readout);
     if (indicator) { indicator.removeAttribute("title"); indicator.setAttribute("tabindex", "0"); indicator.setAttribute("aria-describedby", tooltip.id); indicator.replaceChildren(clock(), label, tooltip); }
     const row = make("div", "master-presence-row ascm-supervisor-row"), person = make("div", "master-presence-person ascm-supervisor-person");
     const reconnect = make("button", "icon-button ascm-supervisor-reconnect"), handoff = make("div", "ascm-reconnect-handoff");
@@ -233,12 +237,20 @@
       const time = now(), state = latest;
       const supervisor = state?.connected && !state.unavailable && state.mode !== "github" ? normalizeAscmSupervisor(state.ascmSupervisor, time) : null;
       const details = ascmUpdateReadout(supervisor?.lastUpdatedAt, time);
+      const checkedAt = supervisor?.lastCheckedAt;
+      const checkedDate = checkedAt ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(checkedAt)) : "";
+      const outcome = checkedAt ? supervisor.checkOutcome === "unchanged" ? "No new report" : "New report found" : "";
+      checkHeading.textContent = checkedAt ? "Last checked" : "No completed ASCM check recorded.";
+      checkDate.textContent = checkedDate; checkDate.dateTime = checkedAt || ""; checkOutcome.textContent = outcome;
+      checkDate.hidden = checkOutcome.hidden = !checkedAt;
       updateHeading.textContent = details ? "Last ASCM update" : "No ASCM update recorded.";
       updateElapsed.textContent = details?.age || ""; updateDate.textContent = details?.date || ""; updateDate.dateTime = supervisor?.lastUpdatedAt || "";
       updateElapsed.classList.toggle("is-fresh", Boolean(details && details.days < 30));
       updateElapsed.classList.toggle("is-alert", Boolean(details && details.days >= 30));
       updateElapsed.hidden = updateDivider.hidden = updateDate.hidden = !details;
-      tooltip.setAttribute("aria-label", details ? `Last ASCM update: ${details.age}. ${details.date}. ${details.days < 30 ? "Under 30 days old" : "30 or more days old"}.` : "No ASCM update recorded.");
+      const checkDescription = checkedAt ? `Last checked: ${checkedDate}. ${outcome}.` : "No completed ASCM check recorded.";
+      const updateDescription = details ? `Last ASCM update: ${details.age}. ${details.date}. ${details.days < 30 ? "Under 30 days old" : "30 or more days old"}.` : "No ASCM update recorded.";
+      tooltip.setAttribute("aria-label", `${checkDescription} ${updateDescription}`);
       if (!supervisor || documentObject.visibilityState === "hidden") { tooltipHovered = false; tooltipDismissed = false; tooltip.hidden = true; return; }
       tooltip.hidden = tooltipDismissed || (!tooltipHovered && documentObject.activeElement !== indicator);
     }

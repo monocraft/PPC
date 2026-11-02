@@ -33,6 +33,8 @@ export function evaluateOfflineExpression(expression, facts) {
   let at=0, nodes=0;
   const functions={
     body: name=>facts.body?.[name], outputs: name=>facts.outputs?.[name],
+    string: value=>typeof value==='object'&&value!==null?JSON.stringify(value):String(value),
+    base64: value=>Buffer.from(value,'utf8').toString('base64'),
     and: (...values)=>values.every(value=>value===true), or: (...values)=>values.some(value=>value===true),
     equals: (a,b)=>same(a,b), not: value=>!value, empty: value=>value==null || value==='' || (typeof value==='object' && Object.keys(value).length===0),
     greater: (a,b)=>a>b, greaterOrEquals: (a,b)=>a>=b, lessOrEquals: (a,b)=>a<=b,

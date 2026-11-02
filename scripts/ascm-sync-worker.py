@@ -32,6 +32,7 @@ import xml.etree.ElementTree as ET
 MAX_JSON = 3_145_728
 MAX_CIPHER = MAX_JSON + 65_536
 MAX_HANDOFF = 65_536
+MAX_CHECK = 1_024
 MAX_WORKBOOK = 2_097_152
 MAX_PACKAGE = 67_108_864
 MAX_SAFE_INT = 9_007_199_254_740_991
@@ -556,6 +557,16 @@ def _basename(value, extension):
     _require(_match(value, UUID_PATTERN + re.escape(extension)), "HANDOFF_NAME_INVALID")
 
 
+def _completed_check(value, now):
+    _require(_exact(value, {"schemaVersion", "kind", "checkId", "completedAt", "outcome"})
+             and type(value["schemaVersion"]) is int and value["schemaVersion"] == 1
+             and value["kind"] == "sharepoint_check" and _match(value["checkId"], UUID_PATTERN)
+             and _match(value["completedAt"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+             and value["outcome"] in ("unchanged", "staged"), "CHECK_INVALID")
+    _require(_instant(value["completedAt"]) <= now, "CHECK_INVALID")
+    return value
+
+
 def _raw_identity(raw, sha256, size, *, package=False):
     maximum, minimum = (MAX_PACKAGE, 36) if package else (MAX_WORKBOOK, 1)
     _require(type(raw) is bytes and _integer(size, minimum, maximum) and len(raw) == size
@@ -707,7 +718,8 @@ def read_handoff(root: Path, manifest_file: str, expected: dict, now: datetime):
 def _new_state():
     return {"version": 1, "source": None, "publication": None, "pending": None, "idleAttempts": [], "maxWallTime": None,
             "engine": {"retryAt": None, "providerSignal": None, "commandSubmission": None, "preSubmissionHistory": [], "deliveryDemand": None,
-                       "lastOutcome": None, "providerReported": None}}
+                       "lastOutcome": None, "providerReported": None,
+                       "checkPending": None, "checkReported": None, "checkRetryAt": None}}
 
 
 def _request_id(source):
@@ -774,11 +786,21 @@ def _state_shape(state, now):
     legacy_engine = {"retryAt", "providerSignal", "commandSubmission", "preSubmissionHistory", "deliveryDemand"}
     if type(state) is dict and type(state.get("engine")) is dict and set(state["engine"]) == legacy_engine:
         state["engine"].update(lastOutcome=None, providerReported=None)
+    previous_engine = legacy_engine | {"lastOutcome", "providerReported"}
+    if type(state) is dict and type(state.get("engine")) is dict and set(state["engine"]) == previous_engine:
+        state["engine"].update(checkPending=None, checkReported=None, checkRetryAt=None)
     _require(_exact(state, _new_state()) and type(state["version"]) is int and state["version"] == 1
              and type(state["idleAttempts"]) is list and len(state["idleAttempts"]) <= 24, "WORKER_STATE_INVALID")
-    _require(_exact(state["engine"], legacy_engine | {"lastOutcome", "providerReported"})
+    _require(_exact(state["engine"], previous_engine | {"checkPending", "checkReported", "checkRetryAt"})
              and state["engine"]["providerSignal"] in (None, "available", "reconnect_required"), "WORKER_STATE_INVALID")
     if state["engine"]["retryAt"] is not None: _instant(state["engine"]["retryAt"])
+    if state["engine"]["checkRetryAt"] is not None: _instant(state["engine"]["checkRetryAt"])
+    check_pending, check_reported = (state["engine"][key] for key in ("checkPending", "checkReported"))
+    for completion in (check_pending, check_reported):
+        if completion is not None: _completed_check(completion, now)
+    if check_pending is not None and check_reported is not None:
+        _require(check_pending["checkId"] != check_reported["checkId"]
+                 and check_pending["completedAt"] > check_reported["completedAt"], "WORKER_STATE_INVALID")
     outcome = state["engine"]["lastOutcome"]
     if outcome is not None:
         _require(_exact(outcome, {"code", "reviewReason", "statusCode", "at"})
@@ -1132,6 +1154,7 @@ class _Pass:
         self.started = self.monotonic(); self.calls = 0
         self.handoff = Path(config["handoffRoot"]); self.destination = config["destination"]
         self.was_active = False
+        self.check_error = None
 
     def now(self):
         value = _now(self.clock())
@@ -1195,7 +1218,61 @@ class _Pass:
         value = strict_json(response["body"])
         return response["status"], value
 
-    def finish(self, phase, code, *, report=True):
+    def discover_checks(self):
+        # These diagnostics have no source/publication authority. Keep malformed
+        # or incomplete sync evidence from becoming a business-work prerequisite.
+        try:
+            folder = self.handoff/"intake"
+            with _root_handles(folder):
+                names = sorted(path.name for path in folder.iterdir() if path.name.endswith(".check"))
+                _require(len(names) <= 256, "CHECK_SCAN_LIMIT")
+                completions = []
+                for name in names:
+                    _basename(name, ".check")
+                    value = _completed_check(strict_json(read_checked(folder, name, MAX_CHECK)), self.now())
+                    _require(name == value["checkId"]+".check", "CHECK_NAME_MISMATCH")
+                    completions.append(value)
+            engine = self.state["engine"]
+            completions += [value for value in (engine["checkPending"], engine["checkReported"]) if value is not None]
+            by_id, by_time = {}, {}
+            for value in completions:
+                _require(value["checkId"] not in by_id or by_id[value["checkId"]] == value, "CHECK_CONFLICT")
+                _require(value["completedAt"] not in by_time or by_time[value["completedAt"]] == value, "CHECK_CONFLICT")
+                by_id[value["checkId"]] = value; by_time[value["completedAt"]] = value
+            if completions and engine["checkPending"] is None:
+                latest = max(completions, key=lambda value: value["completedAt"])
+                previous = engine["checkReported"]
+                if previous is None or latest["completedAt"] > previous["completedAt"]:
+                    engine["checkPending"] = deepcopy(latest); self.save()
+        except WorkerError as error:
+            self.check_error = error.code
+        except (OSError, ValueError, TypeError):
+            self.check_error = "CHECK_UNAVAILABLE"
+
+    def report_check(self):
+        engine = self.state["engine"]
+        completion = engine["checkPending"]
+        if (self.check_error is not None or completion is None or self.calls >= 6
+                or self.monotonic()-self.started >= 480
+                or engine["checkRetryAt"] is not None and _instant(engine["checkRetryAt"]) > self.now()):
+            return False
+        try:
+            # Charge before the attempt, including lost acknowledgements and
+            # crashes. Diagnostic retries never borrow the business retryAt.
+            engine["checkRetryAt"] = _stamp(self.now()+timedelta(hours=1)); self.save()
+            self.fault("check_report_intent")
+            check = {key: completion[key] for key in ("checkId", "completedAt", "outcome")}
+            status, reply = self.json_call("POST", CONNECTION_ROUTE, value={"service": "sharepoint", "check": check}, idle=True, replay=False)
+            _require(status == 200 and _exact(reply, {"reported", "archiveAllowed"})
+                     and type(reply["reported"]) is bool and reply["archiveAllowed"] is False, "CHECK_REPLY_INVALID")
+            if reply["reported"]:
+                engine["checkReported"] = deepcopy(completion); engine["checkPending"] = None; self.save()
+                return True
+        except (WorkerError, OSError, ValueError, TypeError, http.client.HTTPException):
+            pass
+        return False
+
+    def finish(self, phase, code, *, report=True, check_only=False):
         signal = self.state["engine"]["providerSignal"]
         if report and self.was_active and signal is not None and self.calls < 6 and self.monotonic()-self.started < 480:
             command = (self.state["publication"] or {}).get("command")
@@ -1204,13 +1281,15 @@ class _Pass:
             previous = self.state["engine"]["providerReported"]
             if previous is not None and previous["attemptId"] == attempt and previous["state"] == signal:
                 self.state["engine"]["providerSignal"] = None; self.save()
-                return {"phase": phase, "calls": self.calls, "code": code}
-            status, result = self.json_call("POST", CONNECTION_ROUTE, value={"service": "sharepoint", "state": signal}, replay=False)
-            _require(status == 200 and _exact(result, {"reported", "archiveAllowed"}) and type(result["reported"]) is bool and result["archiveAllowed"] is False, "CONNECTION_REPLY_INVALID")
-            if result["reported"]:
-                auth_attempt = attempt if signal == "reconnect_required" else previous["authAttemptId"] if previous is not None else None
-                self.state["engine"]["providerReported"] = {"attemptId": attempt, "state": signal, "authAttemptId": auth_attempt}
-                self.state["engine"]["providerSignal"] = None; self.save()
+            else:
+                status, result = self.json_call("POST", CONNECTION_ROUTE, value={"service": "sharepoint", "state": signal}, replay=False)
+                _require(status == 200 and _exact(result, {"reported", "archiveAllowed"}) and type(result["reported"]) is bool and result["archiveAllowed"] is False, "CONNECTION_REPLY_INVALID")
+                if result["reported"]:
+                    auth_attempt = attempt if signal == "reconnect_required" else previous["authAttemptId"] if previous is not None else None
+                    self.state["engine"]["providerReported"] = {"attemptId": attempt, "state": signal, "authAttemptId": auth_attempt}
+                    self.state["engine"]["providerSignal"] = None; self.save()
+        if self.report_check() and check_only:
+            phase, code = "complete", "CHECK_REPORTED"
         return {"phase": phase, "calls": self.calls, "code": code}
 
     def discover(self):
@@ -1336,12 +1415,19 @@ class _Pass:
 
     def execute(self):
         self.now(); _state_shape(self.state, self.now())
+        self.discover_checks()
         retry = self.state["engine"]["retryAt"]
         if retry is not None and _instant(retry) > self.now(): return self.finish("waiting", "WORKER_BACKOFF", report=False)
         self.state["engine"]["retryAt"] = None
         self.discover()
         source, publication, pending = (self.state[k] for k in ("source", "publication", "pending"))
         self.was_active = (self.state["engine"]["deliveryDemand"] is not None or source is not None and source["phase"] != "complete" or publication is not None and publication["phase"] != "confirmed" or pending is not None)
+        check_retry = self.state["engine"]["checkRetryAt"]
+        if (not self.was_active and self.check_error is None and self.state["engine"]["checkPending"] is not None
+                and (check_retry is None or _instant(check_retry) <= self.now())):
+            # Only an actual diagnostic attempt replaces this pass's idle GET.
+            # Malformed files or a future retry cannot starve ordinary recovery.
+            return self.finish("waiting", "CHECK_PENDING", report=False, check_only=True)
         submission = self.state["engine"]["commandSubmission"]
         expired_presubmit = publication is not None and _instant(publication["candidate"]["expiresAt"]) <= self.now() and (
             publication["phase"] == "candidate_verified" and publication["command"] is None

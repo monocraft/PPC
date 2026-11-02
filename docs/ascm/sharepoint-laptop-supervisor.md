@@ -105,6 +105,37 @@ For an observed SharePoint authentication failure, open [Microsoft Connections](
 
 For sync delay, restore OneDrive and allow the existing bounded passes to reconcile the same immutable operation. For `CLOCK_ROLLBACK`, restore correct system time and retain the journal. For ACL, DPAPI, path, journal, task-definition or unknown-write errors, stop safely and retain the evidence for the reviewed recovery path. Do not reset the journal, fabricate a result, rename an attempt or create another publication to force progress. PPC's updating count reflects actual import work, and the clock reflects accepted-update age; neither the face nor a green clock certifies autonomous operation.
 
+### Completed-check hover extension (prepared November 2, 2026)
+
+The prepared clock hover keeps **Last ASCM update** and adds **Last checked** with
+the actual source-check completion's local date, time and zone. **No new report**
+means the SharePoint discovery matched its already-staged source; **New report
+found** means a fresh source was staged. Neither outcome certifies that PPC accepted
+or published that report. Accepted-update age retains its own date and freshness
+color. Without valid paired completion evidence, the hover says **No completed
+ASCM check recorded.** It never uses the browser heartbeat as a source check.
+
+The extension requires the new private completed-check migration, matching Flow
+and gateway source, upgraded Windows worker, frontend and two success-path receipt
+actions in the existing intake flow. `scripts/ascm-completed-check-flow.mjs`
+prepares that exact edit from the bound executable export; it does not save, run
+or activate a flow. The offline binding blueprint remains deliberately unbound.
+This checkpoint is prepared source, not deployment evidence.
+Ship the upgraded worker and its matching pinned setup helper together. The
+worker has explicit LF checkout bytes so its reviewed SHA256 stays stable. Retain
+existing protected setup and journals; this upgrade does not require a new key.
+
+The flow writes one immutable UUID `.check` file in its existing private intake
+folder after discovery/staging succeeds. The worker validates and reports it
+through the existing authenticated connection route. A check-only report never
+changes reconnect flags, accepted facts, working leases or publication state.
+Its independent retry is charged before a request and waits at least an hour on
+lost/false acknowledgement. A reporting pass makes one POST and no queue read;
+malformed receipts and not-yet-due diagnostic retries leave ordinary hourly queue
+recovery available. Once acknowledged, the same receipt produces no further POST.
+The existing five-minute Windows schedule and one-hour/24-per-day idle allowance
+remain unchanged. Local scans cap `.check` history at256files without deleting it.
+
 Local manifest scans hold at more than 256 JSON manifests (`HANDOFF_SCAN_LIMIT`); retained pre-submission history holds at 64 entries (`PRESUBMISSION_HISTORY_FULL`). Neither condition authorizes automatic deletion. Reviewed cleanup needs positive owned terminal proof and a retention policy. An expired candidate can refresh only when durable evidence proves no publication was submitted; orphan ciphertext and provenance stay retained. Submitted, unknown or legacy attempts cannot reset from expiry or absence. Delivery demand is saved before a candidate download so a lost download does not create fresh idle demand.
 
 ## Safe stop and resume

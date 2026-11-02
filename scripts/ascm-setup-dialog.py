@@ -12,7 +12,7 @@ from tkinter import messagebox, ttk
 from types import ModuleType
 
 
-ENGINE_SHA256 = "bafdcc01e571b15f6f83f37701e654fff0d53d3d1617e31805a7d2060898c118"
+ENGINE_SHA256 = "4e7aed342c9658fb8a0c2d8c660e966d8289f5c4634effbf4d1d3b1b6421ed9d"
 INSTALL_DIR = Path.home() / "AppData" / "Local" / "PPC" / "ASCM" / "worker"
 ENGINE = INSTALL_DIR / "ascm-sync-worker.py"
 HELPER = INSTALL_DIR / "ascm-setup-dialog.py"

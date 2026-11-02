@@ -33,7 +33,7 @@ and implementation decisions. No additional access, spend or polling is proposed
 Tasks1–3 can run in parallel after the contract review. Task4 depends on the
 agreed receipt format; final review depends on all implementation tasks.
 
-## Plan assumptions verified
+## Verified plan-level assumptions
 
 - Existing UI fixture and check command execute with Node directly (20baseline
   passes); existing CSS tooltip rules are in public/css/styles.css:249 onward.

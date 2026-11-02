@@ -11,6 +11,6 @@ export function createAscmFlowApplication({ env = {}, fetchImpl = globalThis.fet
     invokeAscm: request => { gateway ||= gatewayFactory({ env, fetchImpl, now }); return gateway(request); },
     invokeSharePoint: request => { gateway ||= gatewayFactory({ env, fetchImpl, now }); return gateway(request); },
     getPackageDelivery: () => { delivery ||= packageDeliveryFactory({ env, fetchImpl, now, publicationDispatcher: createPublicationDispatcher({ env, fetchImpl }) }); return delivery; },
-    invokeConnection: input => { reporter ||= connectionReporterFactory({ env, fetchImpl }); return reporter(input); },
+    invokeConnection: input => { reporter ||= connectionReporterFactory({ env, fetchImpl, now }); return reporter(input); },
   });
 }

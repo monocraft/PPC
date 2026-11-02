@@ -127,7 +127,7 @@ assert.match(text(denied.doc.getElementById('workflowAnnouncement')), /could not
 const optional = await fixture({ notices: 0 }); optional.portfolio.categories[0].board.products.push({ ...clone(currentProduct), id: 'unknown-timing', name: 'Synthetic optional product', ffsDate: '', imageAssetId: '', plc: { reportDate: '2020-01-01' } }); await optional.open();
 await optional.filter('Missing dates · optional'); assert.match(text(optional.evidence), /Unknown timing/); assert.match(text(optional.evidence), /A date is never inferred/);
 await control(optional, 'open').click(); assert.deepEqual(optional.calls.product, ['unknown-timing']);
-await optional.open(); await optional.filter('Source age · optional'); assert.match(text(optional.evidence), /2020-01-01/);
+await optional.open(); await optional.filter('Source age · optional'); await control(optional, 'select', 'stale:unknown-timing').click(); assert.match(text(optional.evidence), /2020-01-01/);
 await optional.filter('Images · optional'); assert.match(text(optional.evidence), /No assigned main image/);
 const unresolved = await fixture({ notices: 0 }); unresolved.portfolio.plcReview.entries[0].row.dates.ffsDate = { kind: 'range', value: '', raw: 'Q2 or Q3 2028?', reason: 'Two source quarters require inspection', source: { sheet: 'Synthetic source', cell: 'F4' } }; await unresolved.open();
 assert.match(text(unresolved.evidence), /Q2 or Q3 2028\?/); assert.match(text(unresolved.evidence), /Unresolved source text/);

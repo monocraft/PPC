@@ -92,6 +92,11 @@ def receipt(status="publication_pending", outcome="accepted"):
             "archiveAllowed": False, "summary": {"savedFields": 0, "savedProducts": 0}}
 
 
+def completed_check(check_id=OP, completed_at="2026-10-18T12:02:00.000Z", outcome="unchanged"):
+    return {"schemaVersion": 1, "kind": "sharepoint_check", "checkId": check_id,
+            "completedAt": completed_at, "outcome": outcome}
+
+
 class HandoffContracts(unittest.TestCase):
     def test_all_three_exact_handoffs_bind_actual_bytes(self):
         # Removing actual hash/length verification would accept altered local objects.
@@ -520,6 +525,10 @@ class WorkerPasses(unittest.TestCase):
         folder = self.handoff/"intake"; (folder/WORKBOOK).write_bytes(BOOK)
         (folder/(ATTEMPT+".json")).write_bytes(json.dumps(intake()).encode())
 
+    def stage_check(self, value=None, name=None):
+        value = completed_check() if value is None else value
+        (self.handoff/"intake"/(name or value["checkId"]+".check")).write_bytes(json.dumps(value).encode())
+
     def stage_result(self, value=None, raw=PACKAGE):
         state = w.load_journal(self.root); cmd = state["publication"]["command"]
         value = result() if value is None else value
@@ -543,6 +552,176 @@ class WorkerPasses(unittest.TestCase):
         second = self.run_pass(); self.assertEqual(second["calls"], 0)
         self.assertEqual(second["code"], "IDLE_BUDGET_HELD")
         self.assertEqual([(r[0], r[1]) for r in self.requests], [("GET", "/api/ascm/publication/queued")])
+
+    def test_completed_check_posts_once_without_queue_or_business_mutation(self):
+        # Treating a completion as idle/source work would poll or alter the accepted state.
+        self.stage_check()
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+        first = self.run_pass()
+        self.assertEqual(first["calls"], 1)
+        self.assertEqual([(r[0], r[1]) for r in self.requests], [("POST", w.CONNECTION_ROUTE)])
+        self.assertEqual(json.loads(self.requests[0][3]), {"service": "sharepoint", "check": {
+            "checkId": OP, "completedAt": "2026-10-18T12:02:00.000Z", "outcome": "unchanged"}})
+        state = w.load_journal(self.root)
+        for field in ("source", "publication", "pending"): self.assertIsNone(state[field])
+        self.assertEqual(state["idleAttempts"], [])
+        self.assertIsNone(state["engine"]["retryAt"]); self.assertIsNone(state["engine"]["providerSignal"])
+        self.assertIsNone(state["engine"]["providerReported"])
+        self.assertIsNone(state["engine"]["checkPending"])
+        self.assertEqual(state["engine"]["checkReported"], completed_check())
+        # A normal idle allowance remains separate, but rereading the file is not another POST.
+        self.now += timedelta(minutes=5); self.responses = [http_response(control())]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(len([r for r in self.requests if r[1] == w.CONNECTION_ROUTE]), 1)
+
+    def test_check_retry_is_precharged_exact_and_independent_across_restarts(self):
+        # A lost or negative acknowledgement must not create five-minute retries or business backoff.
+        for label, reply in (("lost", TimeoutError("synthetic lost acknowledgement")),
+                             ("negative", http_response({"reported": False, "archiveAllowed": False})),
+                             ("backoff", http_response({}, 503, {"retry-after": "1"})),
+                             ("malformed", http_response({"reported": "true", "archiveAllowed": False}))):
+            with self.subTest(label=label):
+                self.root = self.base/label; self.now = NOW+timedelta(minutes=3)
+                self.requests = []; self.stage_check()
+                def observe(_):
+                    frozen = w.load_journal(self.root)
+                    self.assertEqual(frozen["engine"]["checkPending"], completed_check())
+                    self.assertEqual(frozen["engine"]["checkRetryAt"], "2026-10-18T13:03:00Z")
+                    self.assertIsNone(frozen["engine"]["retryAt"])
+                    if isinstance(reply, Exception): raise reply
+                    return reply
+                self.responses = [observe]; self.assertEqual(self.run_pass()["calls"], 1)
+                pending = w.load_journal(self.root)
+                self.assertEqual(pending["engine"]["checkPending"], completed_check())
+                self.assertIsNone(pending["engine"]["checkReported"])
+                self.assertEqual(pending["idleAttempts"], [])
+                self.now += timedelta(minutes=59)
+                self.responses = [http_response(control())]
+                self.assertEqual(self.run_pass()["calls"], 1)
+                self.assertEqual(self.requests[-1][1], w.CONTROL_ROUTE)
+                self.assertEqual(self.run_pass()["calls"], 0)
+                self.now += timedelta(minutes=1)
+                self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+                self.assertEqual(self.run_pass()["calls"], 1)
+                self.assertEqual(self.requests[0][3], self.requests[-1][3])
+                self.assertIsNone(w.load_journal(self.root)["engine"]["retryAt"])
+
+    def test_check_discovery_selects_latest_without_replacing_unacknowledged_receipt(self):
+        # Losing the old acknowledgement cannot silently change the exact pending notification.
+        self.stage_check(completed_check(ATTEMPT, "2026-10-18T12:01:00.000Z", "staged"))
+        self.stage_check()
+        self.responses = [TimeoutError("synthetic")]; self.run_pass()
+        self.now += timedelta(minutes=5)
+        newest = completed_check(CANDIDATE, "2026-10-18T12:07:00.000Z", "staged")
+        self.stage_check(newest)
+        self.responses = [http_response(control())]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(self.requests[-1][1], w.CONTROL_ROUTE)
+        self.assertEqual(w.load_journal(self.root)["engine"]["checkPending"], completed_check())
+        self.now = NOW+timedelta(hours=1, minutes=3)
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]; self.run_pass()
+        self.assertEqual(json.loads(self.requests[-1][3])["check"]["checkId"], OP)
+        # A newly queued completion still respects the previous attempt's hourly fence.
+        self.now += timedelta(minutes=5); self.responses = [http_response(control())]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(self.requests[-1][1], w.CONTROL_ROUTE)
+        self.now += timedelta(minutes=55)
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]; self.run_pass()
+        self.assertEqual(json.loads(self.requests[-1][3])["check"], {
+            "checkId": CANDIDATE, "completedAt": "2026-10-18T12:07:00.000Z", "outcome": "staged"})
+
+    def test_malformed_check_never_reports_or_blocks_active_source_work(self):
+        # Diagnostic files cannot become an import prerequisite or accept forged completion shapes.
+        cases = [dict(completed_check(), outcome="accepted"), dict(completed_check(), schemaVersion=True),
+                 dict(completed_check(), completedAt="2026-10-18T12:02:00Z"),
+                 dict(completed_check(), completedAt="2026-02-30T12:02:00.000Z"),
+                 dict(completed_check(), completedAt="2026-10-18T12:04:00.000Z"),
+                 dict(completed_check(), private="SENTINEL"), dict(completed_check(), checkId=OP.upper())]
+        # OP has only digits; use an actual uppercase hexadecimal UUID to test canonical casing.
+        cases[-1]["checkId"] = "ABCDEFAB-1234-4567-8123-123456789012"
+        for index, value in enumerate(cases):
+            with self.subTest(index=index):
+                self.root = self.base/str(index); self.requests = []
+                self.stage_check(value, OP+".check")
+                self.responses = [http_response(control())]
+                self.assertEqual(self.run_pass()["calls"], 1)
+                self.assertEqual([request[1] for request in self.requests], [w.CONTROL_ROUTE])
+                self.assertEqual(self.run_pass()["calls"], 0)
+        (self.handoff/"intake"/(OP+".check")).write_bytes(b"x"*1025)
+        self.root = self.base/"active"; self.requests = []; self.stage_source()
+        self.responses = [http_response(receipt("published")), http_response(control()),
+                          http_response({"reported": True, "archiveAllowed": False})]
+        self.assertEqual(self.run_pass()["code"], "IDLE")
+        self.assertEqual(w.load_journal(self.root)["source"]["phase"], "complete")
+        self.assertEqual([r[1] for r in self.requests], [w.SOURCE_ROUTE, w.CONTROL_ROUTE, w.CONNECTION_ROUTE])
+
+    def test_check_file_identity_conflicts_and_duplicate_json_are_rejected_before_network(self):
+        # Filename substitution, duplicate keys or contradictory completions must not invent a check.
+        folder = self.handoff/"intake"
+        invalid = [json.dumps(completed_check(ATTEMPT)).encode(),
+                   b'{"schemaVersion":1,"kind":"sharepoint_check","checkId":"'+OP.encode()+
+                   b'","completedAt":"2026-10-18T12:02:00.000Z","outcome":"unchanged","outcome":"staged"}']
+        for index, raw in enumerate(invalid):
+            self.root = self.base/str(index); self.requests = []
+            (folder/(OP+".check")).write_bytes(raw)
+            self.responses = [http_response(control())]
+            self.assertEqual(self.run_pass()["calls"], 1)
+            self.assertEqual(self.requests[-1][1], w.CONTROL_ROUTE)
+        self.root = self.base/"conflict"; self.stage_check()
+        self.stage_check(completed_check(ATTEMPT))
+        self.requests = []; self.responses = [http_response(control())]
+        self.assertEqual(self.run_pass()["code"], "IDLE")
+        self.assertEqual([request[1] for request in self.requests], [w.CONTROL_ROUTE])
+        (folder/(ATTEMPT+".check")).unlink()
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]; self.run_pass()
+        # Editing a previously acknowledged ID cannot clear or replace its durable proof.
+        self.stage_check(completed_check(outcome="staged"))
+        self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(w.load_journal(self.root)["engine"]["checkReported"], completed_check())
+        self.assertEqual(len(self.requests), 2)
+
+    def test_check_intent_crash_and_pass_limit_preserve_the_precharged_receipt(self):
+        # Crashing after charge or exhausting the eight-minute limit must never immediately resend.
+        self.stage_check()
+        def crash(phase):
+            if phase == "check_report_intent": raise w.WorkerError("SYNTHETIC_CRASH")
+        self.services["fault"] = crash
+        self.assertEqual(self.run_pass()["calls"], 0)
+        charged = w.load_journal(self.root)
+        self.assertEqual(charged["engine"]["checkRetryAt"], "2026-10-18T13:03:00Z")
+        self.assertEqual(charged["engine"]["checkPending"], completed_check())
+        self.services.pop("fault"); self.now += timedelta(minutes=59)
+        self.responses = [http_response(control())]
+        self.assertEqual(self.run_pass()["calls"], 1)
+        self.assertEqual(self.requests[-1][1], w.CONTROL_ROUTE)
+        self.now += timedelta(minutes=1)
+        def expire(phase):
+            if phase == "check_report_intent": self.elapsed += 481
+        self.services["fault"] = expire
+        self.assertEqual(self.run_pass()["calls"], 0)
+        self.assertEqual(w.load_journal(self.root)["engine"]["checkRetryAt"], "2026-10-18T14:03:00Z")
+        self.assertEqual([request[1] for request in self.requests], [w.CONTROL_ROUTE])
+
+    def test_check_reporting_preserves_active_priority_provider_flags_and_business_backoff(self):
+        # A diagnostic failure after source work must not overwrite its successful outcome or retry policy.
+        self.stage_source(); self.stage_check()
+        self.responses = [http_response(receipt("published")), http_response(control()),
+                          http_response({"reported": True, "archiveAllowed": False}), TimeoutError("synthetic")]
+        output = self.run_pass()
+        self.assertEqual(output["code"], "IDLE")
+        self.assertEqual([r[1] for r in self.requests], [w.SOURCE_ROUTE, w.CONTROL_ROUTE, w.CONNECTION_ROUTE, w.CONNECTION_ROUTE])
+        self.assertEqual(json.loads(self.requests[-2][3]), {"service": "sharepoint", "state": "available"})
+        state = w.load_journal(self.root)
+        self.assertEqual(state["source"]["phase"], "complete")
+        self.assertIsNone(state["engine"]["retryAt"])
+        self.assertEqual(state["engine"]["providerReported"]["state"], "available")
+        self.assertEqual(state["engine"]["checkPending"], completed_check())
+        state["engine"]["retryAt"] = "2026-10-18T15:00:00Z"; w.save_journal(self.root, state)
+        self.now += timedelta(hours=1)
+        self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+        self.assertEqual(self.run_pass()["code"], "WORKER_BACKOFF")
+        self.assertEqual(w.load_journal(self.root)["engine"]["retryAt"], "2026-10-18T15:00:00Z")
 
     def test_clock_rollback_holds_and_forward_jump_never_catches_up(self):
         self.responses = [http_response(control())]; self.run_pass()
@@ -821,13 +1000,15 @@ class WorkerPasses(unittest.TestCase):
         self.assertEqual(w.load_journal(self.root)["engine"]["preSubmissionHistory"], [])
 
     def test_total_six_calls_includes_retries_and_deferred_provider_reporting(self):
-        self.stage_source()
+        self.stage_source(); self.stage_check()
         transient = http_response({"code": "BUSY"}, 503, {"retry-after": "1"})
         self.responses = [transient, transient, http_response(receipt(), 202), transient, transient, http_response(control("deliver"))]
         output = self.run_pass()
         self.assertEqual(output["calls"], 6); self.assertEqual(output["code"], "PASS_BUDGET_HELD")
         self.assertIsNone(w.load_journal(self.root)["publication"])
         self.assertEqual(w.load_journal(self.root)["engine"]["providerSignal"], "available")
+        self.assertEqual(w.load_journal(self.root)["engine"]["checkPending"], completed_check())
+        self.assertIsNone(w.load_journal(self.root)["engine"]["checkRetryAt"])
 
     def test_genuine_deliver_survives_lost_download_reply_inside_idle_hour(self):
         self.responses = [http_response(control("deliver")), TimeoutError("synthetic lost ciphertext response")]
@@ -947,18 +1128,37 @@ class WorkerPasses(unittest.TestCase):
         # Migration may append diagnostics, never erase frozen work, pending budget or old fields.
         self.stage_source(); self.responses = [TimeoutError("synthetic")]; self.run_pass()
         original = w.load_journal(self.root)
-        for legacy in ("engine", "pre-engine"):
+        for legacy in ("engine", "pre-engine", "pre-check"):
             state = deepcopy(original)
-            state["engine"].pop("lastOutcome", None); state["engine"].pop("providerReported", None)
+            for key in ("checkPending", "checkReported", "checkRetryAt"): state["engine"].pop(key)
+            if legacy != "pre-check":
+                state["engine"].pop("lastOutcome", None); state["engine"].pop("providerReported", None)
             if legacy == "pre-engine": state.pop("engine")
             before = deepcopy(state); w._state_shape(state, self.now)
             self.assertIn("lastOutcome", state["engine"]); self.assertIn("providerReported", state["engine"])
+            for key in ("checkPending", "checkReported", "checkRetryAt"): self.assertIsNone(state["engine"][key])
             for key in ("source", "publication", "pending", "idleAttempts", "maxWallTime"): self.assertEqual(state[key], before[key])
-            if legacy == "engine":
+            if legacy != "pre-engine":
                 for key, value in before["engine"].items(): self.assertEqual(state["engine"][key], value)
         malformed = deepcopy(original); malformed["engine"].pop("providerReported", None); malformed["engine"]["lastOutcome"] = None
         with self.assertRaises(w.WorkerError): w._state_shape(malformed, self.now)
+        for field in ("checkPending", "checkReported", "checkRetryAt"):
+            malformed = deepcopy(original); malformed["engine"].pop(field)
+            with self.subTest(field=field), self.assertRaises(w.WorkerError): w._state_shape(malformed, self.now)
         self.assertEqual(w.load_journal(self.root), original)
+
+    def test_check_journal_upgrade_preserves_business_state_and_rejects_malformed_completions(self):
+        # A protected envelope still cannot contain malformed, future or regressing diagnostic state.
+        self.stage_check(); self.responses = [http_response({"reported": True, "archiveAllowed": False})]
+        self.run_pass(); state = w.load_journal(self.root)
+        for value in (dict(completed_check(), completedAt="2099-01-01T00:00:00.000Z"),
+                      dict(completed_check(), outcome="accepted"), dict(completed_check(), extra="SENTINEL")):
+            malformed = deepcopy(state); malformed["engine"]["checkReported"] = value
+            with self.subTest(value=value), self.assertRaises(w.WorkerError): w._state_shape(malformed, self.now)
+        for value in (completed_check(), completed_check(ATTEMPT, "2026-10-18T12:01:00.000Z")):
+            malformed = deepcopy(state); malformed["engine"]["checkPending"] = value
+            with self.subTest(pending=value), self.assertRaises(w.WorkerError): w._state_shape(malformed, self.now)
+        self.assertEqual(w.load_journal(self.root), state)
 
     def test_operational_hold_validation_is_closed_and_status_is_sanitized(self):
         # A DPAPI envelope is not permission to surface attacker-controlled diagnostics.
