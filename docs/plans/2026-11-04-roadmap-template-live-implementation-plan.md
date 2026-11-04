@@ -14,7 +14,7 @@ Browser-only native export, static sanitized shell, exact reference geometry/fon
 6. Integration verification: offline loopback fixture with network blocked and actual saved snapshot kept only in ignored bin; actual browser 49-product current selection and all314; mandatory package/layout/native-table/first-party import checks and visual comparisons. Add checks to package.json using existing node scripts/checks conventions.
 7. Independent implementation review and complete release checks, then deterministic Graphify build/check. Inspect explicit staged allowlist and diff, commit, push task branch, create/merge normal PR after checks, await Pages success and verify exact deployed changed assets. Update app-manager knowledge with verified source/release facts.
 
-## Plan-level verification
+## Verified plan-level assumptions
 - Exact current app symbols exist at app.js:7749(buildPptxExportPlan),7869(syncPptxExportSummary),7933(openPptxExportDialog),7969(exportPptx),8945(submit wiring). Re-read anchors when integrating; don't copy dirty original app.
 - index.html already loads PptxGenJS, JSZip, model and editable modules before app. New modules must load after existing dependencies and before app.
 - package.json scripts.check is an explicit170-node-command chain; its exact baseline is running via Node child_process because npm isn't on PATH.
