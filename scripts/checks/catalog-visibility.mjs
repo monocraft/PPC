@@ -457,7 +457,7 @@ Object.assign(app, {
   paginateRoadmapGroupsForPptx: globalThis.PPTXPagination.paginateRoadmapGroups,
   closePopupMenus() {},
 });
-vm.runInContext(["productPagesForPptx", "buildPptxExportPlan", "exportPptx"].map(appFunction).join("\n"), app);
+vm.runInContext(["productPagesForPptx", "buildPptxExportPlan", "pptxUsesRoadmapTemplate", "exportPptx"].map(appFunction).join("\n"), app);
 const category = app.portfolio.categories[0];
 for (const [group, expected] of [["all", products.map(p => p.id)], ["launched", ["launched"]], ["unreleased", ["unreleased"]], ["eol", ["dated-eol", "stage-eol"]]]) {
   legacyGroup(appBoard, group);

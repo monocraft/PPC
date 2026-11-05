@@ -1,4 +1,18 @@
 /* Reference theme: graphite panels, clear values and restrained alarm markers. */
+.pptx-export-progress { position: fixed; inset: 0; z-index: 100000; display: grid; place-items: center; padding: 24px; background: var(--color-page); color: var(--color-text); outline: none; }
+.pptx-export-progress[hidden] { display: none; }
+.pptx-roadmap-layout[hidden] { display: none; }
+.pptx-export-progress-panel { width: min(100%, 460px); }
+.pptx-export-progress-eyebrow { color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .12em; font-size: 11px; }
+.pptx-export-progress h2 { margin: 12px 0 10px; font-size: 26px; font-weight: 500; line-height: 1.2; }
+.pptx-export-progress [data-export-status] { min-height: 2.8em; color: var(--color-text-secondary); }
+.pptx-export-progress-meter { display: flex; gap: 16px; align-items: center; margin: 24px 0; }
+.pptx-export-progress progress { appearance: none; flex: 1; height: 6px; border: 0; background: var(--color-input); color: var(--color-text); }
+.pptx-export-progress progress::-webkit-progress-bar { background: var(--color-input); }
+.pptx-export-progress progress::-webkit-progress-value { background: var(--color-text); }
+.pptx-export-progress progress::-moz-progress-bar { background: var(--color-text); }
+.pptx-export-progress [data-export-percent] { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; }
+.pptx-export-progress-note { color: var(--color-text-muted); font-size: 12px; }
 :root {
   --color-page: #1A1B1C; --color-shell: #242527; --color-surface: #242527;
   --color-surface-raised: #333538; --color-surface-hover: #333538; --color-header: #333538;

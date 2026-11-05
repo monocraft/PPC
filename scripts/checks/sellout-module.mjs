@@ -134,7 +134,11 @@ async function scanPublic(directory) {
     if (entry.isDirectory()) await scanPublic(fullPath);
     else {
       const relative = path.relative(publicRoot, fullPath).split(path.sep).join("/");
-      assert.ok(!privateFormats.test(entry.name), `Raw workbook/data must stay outside public: ${relative}`);
+      // These two reviewed export assets contain numeric font measurements and
+      // a sanitized branding manifest. Their dedicated checks pin the exact
+      // contents; no product dataset or general JSON directory is exempted.
+      const roadmapExportAsset = relative === "assets/pptx/arial-narrow-metrics.json" || relative === "assets/pptx/roadmap-template-manifest.json";
+      assert.ok(roadmapExportAsset || !privateFormats.test(entry.name), `Raw workbook/data must stay outside public: ${relative}`);
       assert.ok(!/\.pkg$/i.test(entry.name) || relative === "data/master_ppc.pkg", `Analytics packages need a separately reviewed hosting plan: ${relative}`);
     }
   }
