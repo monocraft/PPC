@@ -3,6 +3,7 @@ pwsh.log
 *.log
 
 # Local review screenshots and artifacts
+/bin/
 /artifacts/
 /outputs/sellout-dashboard/
 

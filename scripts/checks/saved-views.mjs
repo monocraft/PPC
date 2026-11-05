@@ -252,6 +252,7 @@ const categoryContainer = {};
 Object.defineProperty(categoryContainer,'innerHTML',{set(html){categoryControls=[...html.matchAll(/name="pptxExportCategory" value="([^"]+)"( checked)?/g)].map(match=>({...control(match[1]),checked:Boolean(match[2])}));}});
 exportControls.set('#pptxExportCategories',categoryContainer);
 exportControls.set('.pptx-category-shortcuts',shortcuts);
+exportControls.set('.pptx-roadmap-layout',control());
 const exportForm = {
   querySelector(selector) {
     if (selector==='input[name="pptxExportScope"]:checked') return scopes.find(input=>input.checked);
@@ -279,6 +280,9 @@ const isolatedExport = {
   board:{settings:{roadmap:{startMonth:'2026-01',endMonth:'2027-12'}}},activeCategoryId:'audio',activeView:'products',
   $:selector=>selector==='#workspaceEmpty'?{inert:false}:exportControls.get(selector), escapeHtml:value=>value,
   stopProductCardDrag(){},closePopupMenus(){},hasDedicatedHashoutView:()=>dedicated,hashoutCategoryScope:()=>hashoutScope,requestAnimationFrame:fn=>fn(),
+  // This fixture verifies the existing Hashout/standard preference route;
+  // pptx-roadmap-ui.mjs covers the new Lifecycle viewport-derived route.
+  isFfsRoadmap:()=>true,
   buildPptxExportPlan(_scope,categories,options){const plan=categories.map(category=>category.id);plan.roadmapPlan={requiresDecision:false};return plan;},
   PortfolioWorkflowAdapter:{captureView:()=>({dateRange:{start:'2027-02',end:'2028-04'}})},
   PortfolioDialogs:{alert(){}},

@@ -55,5 +55,8 @@ Before live merge: new model/viewport/pagination/missing-date/filter tests; refe
 
 Run the complete configured production check chain with required isolated PGlite, generated Supabase source parity and hosted-package closure; no live backend calls. Build/check the deterministic local graph after source changes. Independent design/plan and implementation review findings must be resolved. Publish only an explicit task file allowlist through normal PR/main/Pages. Verify exact merged SHA deployment and bounded static asset hashes. Preserve active user editing tabs and all original dirty/untracked files.
 
+## Additional requested default
+User addition on November 4: new boards default to hiding EOL products through the existing local visibility setting. Explicit saved visibility choices, including All, remain authoritative. The actual schema/accepted-fact regression verifies the default and that no accepted product changes are manufactured.
+
 ## Out of scope
 Product-card redesign, combined-deck template migration, Hashout redesign, database/accepted-data changes, publisher dispatch, Supabase access, monitoring, original bin publication, font distribution, and unrelated workspace cleanup.

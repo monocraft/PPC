@@ -157,7 +157,7 @@ Object.assign(sandbox, {
 });
 const searchPortfolio = sandbox.portfolio;
 sandbox.portfolio = { categories: [allHidden] };
-vm.runInContext(fn("exportPptx"), sandbox);
+vm.runInContext(fn("pptxUsesRoadmapTemplate") + "\n" + fn("exportPptx"), sandbox);
 await assert.rejects(sandbox.exportPptx("products", [allHidden.id]), /No visible products to export/);
 assert.equal(emptyDecks, 0, "an all-hidden product export stops before creating or downloading an empty deck");
 sandbox.portfolio = searchPortfolio;
@@ -236,7 +236,7 @@ assert.equal(board.settings.hideDiscontinued, false); assert.equal(otherCategory
 assert.equal(JSON.stringify(products), JSON.stringify(JSON.parse(dataBefore).products), "toggle updates presentation preference only");
 assert.match(source, /display\.hideDiscontinued === "boolean"\) board\.settings\.hideDiscontinued = display\.hideDiscontinued/);
 assert.match(source, /hideDiscontinued: board\.settings\.hideDiscontinued/);
-assert.match(source, /hideDiscontinued: false, \.\.\.target\.settings/);
+assert.match(source, /hideDiscontinued: true, \.\.\.target\.settings/);
 assert.match(source, /confirmPptxExportButton\.disabled = [^\n]+!plan\.length/);
 assert.match(source, /if \(!exportPlan\.length\) throw new Error\("No visible products/);
 const html = await readFile(new URL("../../public/index.html", import.meta.url), "utf8");

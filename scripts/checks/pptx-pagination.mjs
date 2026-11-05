@@ -265,6 +265,7 @@ function recordImage(kind, category, page = null) {
 }
 const limitControl = { id: "pptxRoadmapLimit", checked: false };
 const sandbox = {
+  activeView: "products",
   isFfsRoadmap: () => false,
   hasDedicatedHashoutView: () => false,
   UI_PALETTE: globalThis.PortfolioTheme.uiPalette,
@@ -295,6 +296,10 @@ const sandbox = {
 Object.assign(sandbox, { PortfolioTheme: globalThis.PortfolioTheme, UI_FONT_FACE: globalThis.PortfolioTheme.fontFace });
 vm.createContext(sandbox);
 vm.runInContext(appSource.slice(productPagesStart, productPagesEnd) + appSource.slice(sectionStart, sectionEnd), sandbox);
+// Retain this fixture's standard product/combined/legacy-roadmap pagination
+// contract. The reference lifecycle route has its own model/renderer/UI checks.
+sandbox.pptxUsesRoadmapTemplate = () => false;
+sandbox.syncPptxTemplatePeriod = () => null;
 const productBoundaryCategory = (productCount, laneCount = 1) => ({
   id: `boundary-${productCount}-${laneCount}`, name: "Pagination boundary",
   board: {

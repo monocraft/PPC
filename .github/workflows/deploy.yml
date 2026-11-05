@@ -111,7 +111,7 @@ jobs:
           cp public/js/plc-import.js public/js/plc-import-ui.js _site/js/
           cp public/css/plc-import.css _site/css/
           cp public/js/roadmap-hover.js _site/js/
-          cp public/js/view-runtime.js public/js/pptx-export-planner.js _site/js/
+          cp public/js/view-runtime.js public/js/pptx-export-planner.js public/js/pptx-roadmap-model.js public/js/pptx-roadmap-template.js _site/js/
           cp public/js/board-navigator.js _site/js/
           cp public/js/category-navigation.js _site/js/
           cp public/js/app.js public/js/app-dialogs.js public/js/workspace-ui.js public/js/portfolio-model.js public/js/master-model.js public/js/master-github.js public/js/master-client.js public/js/master-ui.js public/js/master-presence.js public/js/roadmap-interaction.js public/js/product-details.js public/js/ascm-import.js public/js/catalog-data.js public/js/pptx-pagination.js public/js/pptx-editable.js public/js/package-codec.js public/js/package-source.js public/js/package-client.js public/js/package-ui.js _site/js/
@@ -127,6 +127,12 @@ jobs:
             test -e "_site/${required_path}"
           done
           test ! -e _site/project-data/private
+          test -f _site/js/pptx-roadmap-model.js
+          test -f _site/js/pptx-roadmap-template.js
+          test -f _site/assets/pptx/roadmap-template.pptx
+          test -f _site/assets/pptx/roadmap-template-manifest.json
+          test -f _site/assets/pptx/arial-narrow-metrics.json
+          test ! -e _site/bin
           test -f _site/js/workflow-ui.js
           test -f _site/js/workflow-model.js
           test -f _site/js/planning-intake.js

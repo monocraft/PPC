@@ -1130,7 +1130,7 @@ function ensureBoardSchema(target, definition = categoryDefinition()) {
     ? target.lanes
     : definition.lanes.map((lane, order) => ({ ...lane, order }));
   target.products = Array.isArray(target.products) ? target.products : [];
-  target.settings = { showPrices: true, showSkus: true, hideDiscontinued: false, ...target.settings, freeMove: false };
+  target.settings = { showPrices: true, showSkus: true, hideDiscontinued: true, ...target.settings, freeMove: false };
   target.settings.hideDiscontinued = target.settings.hideDiscontinued === true;
   if (!["all", "launched", "unreleased", "eol"].includes(target.settings.catalogGroup)) delete target.settings.catalogGroup;
   if (Object.hasOwn(target.settings, "catalogGroups") && !PortfolioModel.normalizeCatalogGroups(target.settings.catalogGroups)) delete target.settings.catalogGroups;
@@ -7827,6 +7827,94 @@ function pptxExportScope() {
   return pptxExportForm?.querySelector('input[name="pptxExportScope"]:checked')?.value || "both";
 }
 
+function pptxUsesRoadmapTemplate(scope = pptxExportScope()) {
+  return scope === "roadmap" && !isFfsRoadmap();
+}
+
+function pptxVisibleRoadmapPeriod() {
+  if (!globalThis.PPTXRoadmapModel) throw new Error("The roadmap template module did not load. Reload the page and try again.");
+  const range = roadmapRange(), pane = activeView === "split" ? splitRoadmapScroll : roadmapScroll;
+  const period = globalThis.PPTXRoadmapModel.visibleRoadmapPeriod({
+    startMonth: globalThis.PPTXRoadmapModel.indexMonth(range.start), endMonth: globalThis.PPTXRoadmapModel.indexMonth(range.end),
+    scrollLeft: pane.scrollLeft, clientWidth: pane.clientWidth, monthWidth: roadmapMonthWidth, railWidth: ROADMAP_LEFT_WIDTH,
+  });
+  if (!period) throw new Error("Open a visible Lifecycle roadmap before exporting its timeline.");
+  return period;
+}
+
+function syncPptxTemplatePeriod() {
+  const template = pptxUsesRoadmapTemplate();
+  const start = pptxExportForm.querySelector("#pptxRoadmapStart"), end = pptxExportForm.querySelector("#pptxRoadmapEnd");
+  start.readOnly = end.readOnly = template;
+  if (!template) return null;
+  // Measuring the real pane requires it to have layout, including when opened from Products.
+  if (activeView === "products") setView("roadmap");
+  const period = pptxVisibleRoadmapPeriod();
+  start.value = period.startMonth; end.value = period.endMonth;
+  for (const input of pptxExportForm.querySelectorAll('input[name="pptxRoadmapLayout"]')) input.checked = input.value === "categories";
+  return period;
+}
+
+function buildRoadmapTemplateData(categories, period) {
+  const sections = categories.map(category => {
+    const targetBoard = category.board, definition = categoryDefinition(category.id);
+    const products = PortfolioModel.catalogProducts(targetBoard.products, targetBoard.settings);
+    return { id: category.id, name: category.name || category.id, categoryLabel: targetBoard.settings?.roadmap?.categoryLabel || category.name || category.id,
+      products: roadmapGroupsForProducts(products, targetBoard, definition).flatMap(group => group.products.map(product => {
+        const roadmap = effectiveRoadmap(product), fill = roadmapStatusColor(product);
+        const discontinued = PortfolioModel.isDiscontinued(product), status = standardizedStatus(product.statusType);
+        return { id: product.id, name: product.name, family: group.family,
+          startMonth: roadmap?.startMonth || "", endMonth: roadmap?.endMonth || "",
+          fill, textColor: PortfolioModel.productLabelColor(product, contrastTextColor(fill)),
+          statusLabel: discontinued ? "End of life" : status.label || splitRoadmapStatusLabel(roadmap?.status),
+          priceLabel: portfolio?.settings?.showRoadmapMsrp ? productPriceText(product) : "",
+          dates: Object.fromEntries(["ffsDate", "generalAvailabilityDate", "endManufacturingDate"].map(field => [field, {
+            raw: product[field] ?? null, precisionPeriod: globalThis.PortfolioDatePrecision?.currentPeriod(product, field) || null,
+          }])),
+        };
+      })),
+    };
+  });
+  return globalThis.PPTXRoadmapModel.project(sections, { ...period, showRoadmapMsrp: Boolean(portfolio?.settings?.showRoadmapMsrp) });
+}
+
+function beginPptxTemplateProgress() {
+  // Resolve after document load: app.js is also used by late-mounted preview shells.
+  const surface = document.getElementById("pptxExportProgress");
+  if (!surface) throw new Error("The export progress display did not load. Reload and try again.");
+  const progress = surface.querySelector("progress"), status = surface.querySelector("[data-export-status]"), value = surface.querySelector("[data-export-percent]");
+  const focus = document.activeElement, previousInert = pptxExportDialog.inert;
+  let percent = 0;
+  const trap = event => { if (event.key === "Tab" || event.key === "Escape") { event.preventDefault(); event.stopPropagation(); surface.focus(); } };
+  surface.addEventListener("keydown", trap);
+  pptxExportDialog.inert = true; surface.hidden = false; surface.focus();
+  progress.value = 0; value.textContent = "0%"; status.textContent = "Preparing your roadmap…";
+  return {
+    update(event) {
+      percent = Math.max(percent, Math.min(100, Number(event?.percent) || 0));
+      progress.value = percent; value.textContent = `${Math.floor(percent)}%`;
+      status.textContent = event?.message || event?.detail || "Building editable slides…";
+    },
+    close() {
+      surface.hidden = true; surface.removeEventListener("keydown", trap); pptxExportDialog.inert = previousInert;
+      if (focus?.isConnected && !focus.disabled) focus.focus();
+    },
+  };
+}
+
+async function exportRoadmapTemplate(categories) {
+  if (!globalThis.PPTXRoadmapTemplate) throw new Error("The roadmap template exporter did not load. Reload the page and try again.");
+  const period = syncPptxTemplatePeriod(), data = buildRoadmapTemplateData(categories, period);
+  const progress = beginPptxTemplateProgress();
+  try {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const result = await globalThis.PPTXRoadmapTemplate.generate(data, { onProgress: event => progress.update(event) });
+    downloadBlob(result.blob, result.fileName);
+  } finally {
+    progress.close();
+  }
+}
+
 function pptxSlideCountForScope(scope, categories) {
   return buildPptxExportPlan(scope, categories).length;
 }
@@ -7873,6 +7961,26 @@ function syncPptxExportSummary() {
   const allSelected = categories.length > 0 && categories.length === available.length;
   pptxSelectedCategoryIds = allSelected ? null : categories.map((category) => category.id);
   const scope = pptxExportScope();
+  if (pptxUsesRoadmapTemplate(scope)) {
+    let plan, error;
+    try { plan = globalThis.PPTXRoadmapModel.planRoadmapContent(buildRoadmapTemplateData(categories, syncPptxTemplatePeriod())); }
+    catch (failure) { error = failure; }
+    const count = plan?.coverage.expected ? 2 + categories.length + plan.slides.length : 0;
+    $("#pptxRoadmapOptions").hidden = false;
+    pptxExportForm.querySelector(".pptx-roadmap-layout").hidden = true;
+    $("#pptxRoadmapLimitOptions").hidden = true;
+    $("#pptxRoadmapFit").textContent = "Reference template · editable timelines · one divider per category";
+    $("#pptxRoadmapCoverage").textContent = error?.message || `The main timeline follows your visible months. Nearby years have separate timeline slides; undated products appear in TBD tables.`;
+    $("#pptxExportCategoryCount").textContent = String(categories.length);
+    $("#pptxExportSlideCount").textContent = String(count);
+    $("#pptxSelectAllCategories").textContent = allSelected ? "Clear selection" : "Select all";
+    $("#pptxExportSelectionHint").textContent = error?.message || (!categories.length ? "Select at least one category to export." : !plan.coverage.expected ? "No visible products to export. Choose categories with visible products." : `${plan.coverage.represented} products across ${categories.length} selected categories`);
+    $("#pptxExportSelectionHint").classList.toggle("is-empty", !categories.length || !count || Boolean(error));
+    confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length || !count || Boolean(error);
+    return;
+  }
+  syncPptxTemplatePeriod();
+  pptxExportForm.querySelector(".pptx-roadmap-layout").hidden = false;
   const plan = buildPptxExportPlan(scope, categories, globalThis.PPTXExportPlanner?.readOptions(pptxExportForm));
   globalThis.PPTXExportPlanner?.syncDialog(pptxExportForm, plan.roadmapPlan || {}, { includeRoadmap: scope !== "products" });
   $("#pptxExportCategoryCount").textContent = String(categories.length);
@@ -7937,6 +8045,11 @@ function openPptxExportDialog() {
   pptxReturnFocus = document.activeElement;
   if (hasDedicatedHashoutView() && activeView !== "products") pptxSelectedCategoryIds = hashoutCategoryScope();
   restorePptxExportPreferences();
+  const roadmapHint = pptxExportForm.querySelector("#pptxRoadmapScopeHint");
+  if (roadmapHint) roadmapHint.textContent = isFfsRoadmap() ? "Editable Hashout category pages or a combined timeline" : "Reference template with editable category timelines";
+  if (activeView !== "products" && !isFfsRoadmap() && !globalThis.PPCSavedViews?.readExportPreferences()?.scope) {
+    for (const input of pptxExportForm.querySelectorAll('input[name="pptxExportScope"]')) input.checked = input.value === "roadmap";
+  }
   ensurePptxCurrentViewAction();
   renderPptxExportCategories();
   const start = pptxExportForm.querySelector("#pptxRoadmapStart"), end = pptxExportForm.querySelector("#pptxRoadmapEnd");
@@ -7967,6 +8080,13 @@ function pptxExportFilename(scope) {
 }
 
 async function exportPptx(scope = "both", selectedCategoryIds = null, roadmapOptions = null) {
+  if (pptxUsesRoadmapTemplate(scope)) {
+    stopProductCardDrag(); closePopupMenus();
+    const categories = PPTXPagination.selectExportCategories(portfolio?.categories, selectedCategoryIds);
+    if (!categories.length) throw new Error("Select at least one category to export.");
+    await exportRoadmapTemplate(categories);
+    return;
+  }
   const [, exportFontReady] = await Promise.all([globalThis.PortfolioTheme.fontsReady(), PPTXEditable.fontsReady()]);
   if (exportFontReady === false && globalThis.document?.fonts) throw new Error("Install the supplied HP Forma DJR Office fonts, then reopen this page to export. PowerPoint export needs this font to measure product names correctly.");
   stopProductCardDrag();
@@ -8961,6 +9081,7 @@ pptxExportForm.addEventListener("submit", async (event) => {
   exportControls.forEach((control) => { control.disabled = true; });
   confirmPptxExportButton.textContent = "Exporting…";
   try {
+    if (pptxUsesRoadmapTemplate(scope)) syncPptxTemplatePeriod();
     const options = globalThis.PPTXExportPlanner?.readOptions(pptxExportForm);
     const preferences = pptxReusablePreferences(scope, categories, options);
     await exportPptx(scope, categories.map((category) => category.id), options);
@@ -8975,6 +9096,7 @@ pptxExportForm.addEventListener("submit", async (event) => {
     exportControls.forEach((control) => { control.disabled = false; });
     confirmPptxExportButton.textContent = originalText;
     syncPptxExportSummary();
+    if (!pptxExportDialog.classList.contains("hidden")) confirmPptxExportButton.focus();
   }
 });
 $("#closePptxExport").onclick = closePptxExportDialog;

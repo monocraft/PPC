@@ -62,6 +62,15 @@ new vm.Script(`${source.slice(0, source.indexOf("const $ ="))}
   };
 `, { filename: "actual-app-schema-and-category.js" }).runInContext(sandbox);
 const app = sandbox.integration;
+// Default visibility is local UI state. It must hide EOL without changing any
+// accepted product facts or overriding a deliberately saved All choice.
+const defaultDefinition = clone(sandbox.window.PORTFOLIO_CATALOG.categories[0]);
+const freshBoard = sandbox.ensureBoardSchema({ products: [] }, defaultDefinition);
+assert.equal(freshBoard.settings.hideDiscontinued, true, "A new board hides EOL by default");
+const explicitAllBoard = sandbox.ensureBoardSchema({ products: [], settings: { catalogGroups: ["all"], hideDiscontinued: false } }, defaultDefinition);
+assert.equal(explicitAllBoard.settings.hideDiscontinued, false, "An explicit saved visibility preference is retained");
+assert.deepEqual(Array.from(globalThis.PortfolioModel.catalogProducts([{ id: "active" }, { id: "eol", statusType: "discontinued" }], freshBoard.settings), product => product.id), ["active"], "The default excludes EOL products from shared product and roadmap projections");
+assert.equal(globalThis.PortfolioModel.catalogProducts([{ id: "eol", statusType: "discontinued" }], explicitAllBoard.settings).length, 1);
 const categories = clone(sandbox.window.PORTFOLIO_CATALOG.categories);
 assert.ok(categories.length >= 2, "The category-switch regression requires two actual catalog definitions.");
 const acceptedRows = index => [
