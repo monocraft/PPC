@@ -402,7 +402,7 @@ function datedSlide(slide, entry, plan, measureText) {
     const changeCells = children(changeRows[1], A, "tc");
     if (changeCells.length !== 2) throw new Error("The roadmap template changelog columns are invalid.");
     replaceText(changeCells[0], date.short);
-    replaceText(changeCells[1], `Roadmap refreshed from PPC: ${ids.length} products across ${manifest.categories.length} categories. ${timelineLabel(manifest.timeline)}. Additional timelines group products by nearby years; missing dates remain TBD.`);
+    replaceText(changeCells[1], `Roadmap refreshed from PPC: ${ids.length} product${ids.length === 1 ? "" : "s"} across ${manifest.categories.length} ${manifest.categories.length === 1 ? "category" : "categories"}. ${timelineLabel(manifest.timeline)}. Additional timelines group products by nearby years; missing dates remain TBD.`);
     forceWhiteText(change, table);
     logical.push({ kind: "changelog", title: "Changelog", doc: change, rels: await readXml(template, "ppt/slides/_rels/slide2.xml.rels") });
     const dividerSource = await readXml(template, "ppt/slides/slide3.xml");

@@ -7974,7 +7974,7 @@ function syncPptxExportSummary() {
     $("#pptxExportCategoryCount").textContent = String(categories.length);
     $("#pptxExportSlideCount").textContent = String(count);
     $("#pptxSelectAllCategories").textContent = allSelected ? "Clear selection" : "Select all";
-    $("#pptxExportSelectionHint").textContent = error?.message || (!categories.length ? "Select at least one category to export." : !plan.coverage.expected ? "No visible products to export. Choose categories with visible products." : `${plan.coverage.represented} products across ${categories.length} selected categories`);
+    $("#pptxExportSelectionHint").textContent = error?.message || (!categories.length ? "Select at least one category to export." : !plan.coverage.expected ? "No visible products to export. Choose categories with visible products." : `${plan.coverage.represented} product${plan.coverage.represented === 1 ? "" : "s"} across ${categories.length} selected ${categories.length === 1 ? "category" : "categories"}`);
     $("#pptxExportSelectionHint").classList.toggle("is-empty", !categories.length || !count || Boolean(error));
     confirmPptxExportButton.disabled = pptxExportInProgress || !categories.length || !count || Boolean(error);
     return;
